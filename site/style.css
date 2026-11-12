@@ -789,3 +789,5 @@ footer .brand {
     scroll-behavior: auto !important;
   }
 }
+
+.demo-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 20px;color:var(--muted);font-size:13px}.demo-options select{font:inherit;color:var(--ink);background:white;border:1px solid var(--line);border-radius:12px;padding:9px 14px}.demo-options .pill{margin-left:auto}.demo-options small{flex-basis:100%;text-align:right}@media(max-width:600px){.demo-options .pill{margin-left:0}.demo-options small{text-align:left}}

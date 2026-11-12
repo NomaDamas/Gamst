@@ -30,7 +30,8 @@
         ></a
       >
       <nav>
-        <a href="#how">How it works</a
+        <a href="promo/">Presentation</a
+        ><a href="#how">How it works</a
         ><a href="https://github.com/NomaDamas/catch-your-mind">GitHub ↗</a
         ><a class="pill small" href="#install">Get started</a>
       </nav>
@@ -79,58 +80,49 @@
       <section class="wrap lab-section" id="try">
         <div class="section-head">
           <div>
-            <div class="eyebrow">A LITTLE LESS ABSTRACT</div>
-            <h2>Your next input.<br />A live context packet.</h2>
+            <div class="eyebrow" data-demo-i18n="preview">BROWSER PREVIEW</div>
+            <h2 data-demo-i18n="heading">Your next input. A live context packet.</h2>
           </div>
-          <p class="muted">
-            Try real microphone levels and facial movement, right here.
-            Measurements stay in this browser. Full speech transcription and
-            scene descriptions run in the local app.
-          </p>
+          <p class="muted" data-demo-i18n="scope">Browser preview: microphone levels and up to four faces. Speech transcription, voice emotion, VLM and MCP run in the full local app.</p>
         </div>
-        <div class="lab">
+        <div class="demo-options"><label for="demoLanguage" data-demo-i18n="language">Demo language</label><select id="demoLanguage"><option value="en">English</option><option value="ko">한국어</option><option value="zh">中文</option></select><a class="pill small ghost" href="http://127.0.0.1:8766" target="_blank" rel="noopener" data-demo-i18n="local">Open full local demo ↗</a><small data-demo-i18n="localHint">Local installation must be running.</small></div><div class="lab">
           <div class="lab-input">
             <div class="topline">
               <span class="window-dots">● ● ●</span
-              ><span class="tiny">BROWSER PREVIEW</span>
+              ><span class="tiny" data-demo-i18n="preview">BROWSER PREVIEW</span>
             </div>
             <div class="camera">
               <video id="camera" autoplay muted playsinline></video>
               <div id="cameraHint">
                 <span class="camera-symbol">◉</span>
-                <p>Your devices are off.</p>
-                <small>You choose when to start.</small>
+                <p data-demo-i18n="devicesOff">Your devices are off.</p>
+                <small data-demo-i18n="chooseStart">You choose when to start.</small>
               </div>
             </div>
             <div class="choices">
               <label
-                ><input type="checkbox" id="mic" checked /> Microphone</label
+                ><input type="checkbox" id="mic" checked /> <span data-demo-i18n="microphone">Microphone</span></label
               ><label
-                ><input type="checkbox" id="face" /> Camera + facial
-                movement</label
+                ><input type="checkbox" id="face" /> <span data-demo-i18n="camera">Camera + facial movement</span></label
               >
             </div>
-            <p class="fine">
-              Camera mode downloads MediaPipe assets from jsDelivr and Google.
-              Frames and audio are processed here; they are not uploaded.
-            </p>
+            <p class="fine" data-demo-i18n="assets">Camera mode downloads MediaPipe assets from jsDelivr and Google. Frames and audio are processed here; they are not uploaded.</p>
             <label class="consent"
-              ><input type="checkbox" id="consent" /> I agree to process my
-              selected inputs in this browser.</label
+              ><input type="checkbox" id="consent" /> <span data-demo-i18n="consent">I agree to process my selected inputs in this browser.</span></label
             >
             <div class="cta left">
-              <button class="pill primary" id="start">Start live preview</button
-              ><button class="pill ghost" id="stop" disabled>Stop</button>
+              <button class="pill primary" id="start" data-demo-i18n="start">Start live preview</button
+              ><button class="pill ghost" id="stop" data-demo-i18n="stop" disabled>Stop</button>
             </div>
             <div class="mic-meter"><div id="volume"></div></div>
-            <label class="sr-only" for="utterance">Text to add to context</label
+            <label class="sr-only" for="utterance" data-demo-i18n="textLabel">Text to add to context</label
             ><textarea
               id="utterance"
-              placeholder="Or type: Could you explain that again?"
+              data-demo-placeholder="placeholder" placeholder="Or type: Could you explain that again?"
             ></textarea>
             <div class="cta left">
-              <button class="pill small ghost" id="add">Add text</button
-              ><button class="text-button" id="clear">Clear session</button>
+              <button class="pill small ghost" id="add" data-demo-i18n="add">Add text</button
+              ><button class="text-button" id="clear" data-demo-i18n="clear">Clear session</button>
             </div>
             <div id="error" class="error" role="alert"></div>
           </div>
@@ -139,15 +131,15 @@
               <span
                 ><span class="status-dot" id="liveDot"></span
                 ><span id="status">Ready when you are</span></span
-              ><button class="text-button" id="copy">Copy JSON</button>
+              ><button class="text-button" id="copy" data-demo-i18n="copy">Copy JSON</button>
             </div>
             <div class="stats">
-              <div><small>MIC LEVEL</small><strong id="rms">—</strong></div>
-              <div><small>FACES</small><strong id="faces">—</strong></div>
-              <div><small>UPDATES</small><strong id="updates">0</strong></div>
+              <div><small data-demo-i18n="micLevel">MIC LEVEL</small><strong id="rms">—</strong></div>
+              <div><small data-demo-i18n="faces">FACES</small><strong id="faces">—</strong></div>
+              <div><small data-demo-i18n="updates">UPDATES</small><strong id="updates">0</strong></div>
             </div>
             <div id="categoryCharts"></div>
-            <details><summary>Context JSON</summary><pre id="context" aria-label="Live context JSON">
+            <details><summary data-demo-i18n="contextJson">Context JSON</summary><pre id="context" aria-label="Live context JSON">
 {
   "source": "browser_preview",
   "observations": {},
@@ -156,19 +148,11 @@
             ></details>
             <div class="output-note">
               <span>↳</span>
-              <p>
-                Copy this context into your agent.<br /><small
-                  >The local SDK adds transcription, scene descriptions,
-                  evidence IDs and streaming.</small
-                >
-              </p>
+              <p><span data-demo-i18n="copyHint">Copy this context into your agent.</span><br /><small data-demo-i18n="sdkHint">The local SDK adds transcription, scene descriptions, evidence IDs and streaming.</small></p>
             </div>
           </div>
         </div>
-        <p class="fine centered">
-          This is a real browser measurement preview, not a simulated AI answer.
-          Facial movement scores do not establish emotion.
-        </p>
+        <p class="fine centered" data-demo-i18n="measurementHint">Live browser measurements. Facial movements are measured separately from voice emotion in the local app.</p>
       </section>
       <section class="wrap story" id="how">
         <div class="eyebrow">ONE LAYER. YOUR MODEL.</div>

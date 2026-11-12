@@ -384,14 +384,17 @@ class HumanSense:
         results = []
         for plugin in self.plugins:
             modalities = getattr(plugin, "modalities", (getattr(plugin, "modality", modality),))
-            if modality not in modalities:
+            if not getattr(plugin, "runtime_enabled", True) or modality not in modalities:
                 continue
             try:
+                plugin_generation = getattr(plugin, "runtime_generation", 0)
                 output = plugin.process(frame)
                 if inspect.isawaitable(output):
                     output = await output
                 if generation != self._generation or self.paused or self.closed:
                     return []
+                if not getattr(plugin, "runtime_enabled", True) or plugin_generation != getattr(plugin, "runtime_generation", 0):
+                    continue
                 for signal in output or []:
                     signal = dict(signal)
                     signal.setdefault("subject_id", subject_id)

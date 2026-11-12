@@ -33,6 +33,8 @@ MODEL_PATH = {"type": "string", "minLength": 1,
 def tool_definitions() -> list[dict]:
     specs = [
         ("get_stream_status", "Live media lane queue, drop and latency metrics.", {}, ()),
+        ("configure_feature", "Enable or disable an installed model while capture is paused.", {"name": {"type": "string"}, "enabled": {"type": "boolean"}}, ("name", "enabled")),
+        ("get_features", "Runtime model switches shared with dashboard settings.", {}, ()),
         ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
         ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
         ("configure_vlm", "Set temporal VLM sampling. Returns effective FPS after frame budget cap. Does not start capture.", {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60}, "window_seconds": {"type": "number", "minimum": 1, "maximum": 30}, "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
@@ -121,12 +123,17 @@ class MCPServer:
         if name == "get_stream_status":
             from .media import media_router
             return media_router(self.human).status()
+        if name in ("get_features", "configure_feature"):
+            from .settings import feature_status, configure_feature
+            return feature_status(self.human) if name == "get_features" else await configure_feature(self.human, **args)
         if name == "list_plugins":
             from .extensions import describe_plugin
             return [describe_plugin(p) for p in self.human.plugins]
         if name in ("get_vlm_status", "configure_vlm"):
             from .realtime import scene_status, configure_scene
             return scene_status(self.human) if name == "get_vlm_status" else await configure_scene(self.human, args)
+        if name in ("chat", "push_text", "push_claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text and Companion are disabled in settings")
         if name == "chat":
             if self.companion is None:
                 raise ValueError("No companion backend configured")

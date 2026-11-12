@@ -2,7 +2,7 @@ name: public-site
 on:
   push:
     branches: ["feat/humansense-20261112-154922"]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "docs/promo/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,10 +25,15 @@ jobs:
       - run: node --check site/app.js
       - run: node --check site/observability.js
       - run: node tests/dashboard_ui_test.cjs
+      - name: Include promotional slides
+        run: |
+          mkdir -p _site/promo
+          cp -R site/. _site/
+          cp -R docs/promo/. _site/promo/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

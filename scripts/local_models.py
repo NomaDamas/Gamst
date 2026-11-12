@@ -17,8 +17,10 @@ BASE = ROOT / '.local-models'
 WHISPER = '536b0662742c02347bc0e980a01041f333bce120'
 VOICE = '441a7599c3b22107314dcbd9166621c5c83f2cc5'
 VOICE_FILES = {f'voice-emotion/{f}': f'https://huggingface.co/superb/wav2vec2-base-superb-er/resolve/{VOICE}/{f}' for f in ('config.json', 'preprocessor_config.json', 'pytorch_model.bin', 'README.md')}
+POSE_FILES = {'pose/pose_landmarker.task': 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'}
 QWEN = 'ea6a11058182570be6436b9a2e4ee7f7b49f908d'
 FILES = {
+    **POSE_FILES,
     'face_landmarker.task': 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
     'silero_vad.jit': 'https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.jit',
     **{f'whisper-small/{f}': f'https://huggingface.co/Systran/faster-whisper-small/resolve/{WHISPER}/{f}' for f in ('config.json', 'model.bin', 'tokenizer.json', 'vocabulary.txt')},
@@ -51,18 +53,18 @@ def download(item):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['install', 'install-voice', 'status', 'remove', 'remove-voice'])
+    parser.add_argument('action', choices=['install', 'install-voice', 'install-pose', 'status', 'remove', 'remove-voice', 'remove-pose'])
     parser.add_argument('--yes', action='store_true', help='Confirm removal of this installer-owned model directory')
     args = parser.parse_args()
     if BASE.is_symlink() or BASE.resolve().parent != ROOT:
         raise SystemExit('Refusing a model directory outside this checkout')
     marker = BASE / 'owner.json'
-    if args.action in ('install', 'install-voice'):
+    if args.action in ('install', 'install-voice', 'install-pose'):
         if BASE.exists() and not marker.exists():
             raise SystemExit('Existing model directory has no ownership marker; will not overwrite it')
         BASE.mkdir(exist_ok=True)
         marker.write_text(json.dumps({'project': str(ROOT), 'installer': 'scripts/local_models.py'}))
-        files = dict(VOICE_FILES if args.action == "install-voice" else FILES)
+        files = dict(VOICE_FILES if args.action == "install-voice" else POSE_FILES if args.action == "install-pose" else FILES)
         if args.action == 'install' and platform.system() == 'Darwin' and platform.machine() == 'arm64':
             files['llama.tar.gz'] = 'https://github.com/ggml-org/llama.cpp/releases/download/b12318/llama-b12318-bin-macos-arm64.tar.gz'
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
@@ -92,10 +94,11 @@ def main():
                 'exclusive':True,'window_seconds':3,'hop_seconds':1}}]
             (BASE / 'voice-emotion/plugins.json').write_text(json.dumps(config,indent=2))
         print(f'Installed {len(manifest)} artifacts in {BASE}')
-    elif args.action in ('remove', 'remove-voice'):
+    elif args.action in ('remove', 'remove-voice', 'remove-pose'):
         if not marker.exists() or json.loads(marker.read_text()).get('project') != str(ROOT):
             raise SystemExit('No matching ownership marker')
-        removal = BASE / 'voice-emotion' if args.action == 'remove-voice' else BASE
+        folder = {'remove-voice': 'voice-emotion', 'remove-pose': 'pose'}.get(args.action)
+        removal = BASE / folder if folder else BASE
         if removal.is_symlink() or not removal.resolve().is_relative_to(BASE.resolve()):
             raise SystemExit('Refusing removal outside owned model directory')
         if not removal.exists():
@@ -111,11 +114,11 @@ def main():
         if not args.yes:
             raise SystemExit(f'Would remove only {removal}. Re-run with --yes.')
         shutil.rmtree(removal)
-        if args.action == 'remove-voice':
+        if folder:
             manifest_path = BASE / 'manifest.json'
             if manifest_path.exists():
                 entries = json.loads(manifest_path.read_text())
-                manifest_path.write_text(json.dumps({k:v for k,v in entries.items() if not k.startswith('voice-emotion/')},indent=2))
+                manifest_path.write_text(json.dumps({k:v for k,v in entries.items() if not k.startswith(folder + '/')},indent=2))
         print('Removed project model artifacts. Source, .venv and other projects are untouched.')
     else:
         manifest = BASE / 'manifest.json'

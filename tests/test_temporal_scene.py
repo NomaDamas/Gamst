@@ -67,6 +67,8 @@ class TemporalSceneTests(unittest.IsolatedAsyncioTestCase):
                 job = None
                 for t in range(base+10600, base+14201, 600):
                     await human.push_signal('audio.rms', .2, 'audio', timestamp_ms=t)
+                    await human.push_signal('scene.poses', [{'frame_pose_index': 0, 'track_id': 'body-1', 'landmarks': [0]*33, 'geometry': {'left_wrist_above_shoulder': True}}], 'video', timestamp_ms=t)
+                    await human.push_signal('classification.voice_emotion', {'labels': {'neu': .7, 'hap': .3}}, 'audio', timestamp_ms=t)
                     result = await plugin.prepare(InputFrame(image, 'video', t))
                     job = result or job
                 self.assertLessEqual(len(plugin.frames), 8)
@@ -74,6 +76,9 @@ class TemporalSceneTests(unittest.IsolatedAsyncioTestCase):
                 sample = job.data['frames'][-1]
                 self.assertEqual(sample['measurements']['audio.rms']['timestamp_ms'], sample['timestamp_ms'])
                 self.assertEqual(sample['measurements']['audio.rms']['value'], .2)
+                self.assertNotIn('landmarks', sample['measurements']['scene.poses']['value'][0])
+                self.assertTrue(sample['measurements']['scene.poses']['value'][0]['geometry']['left_wrist_above_shoulder'])
+                self.assertEqual(sample['measurements']['classification.voice_emotion']['value']['labels']['neu'], .7)
                 body = {}
                 class Response:
                     def __enter__(self): return self

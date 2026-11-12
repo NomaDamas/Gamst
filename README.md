@@ -315,7 +315,7 @@ python -m humansense demo
 python -m benchmarks.runtime --samples 200
 ```
 
-The streaming refactor is covered by **140 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. New Hugging Face and Ollama adapter contracts use fixtures; their model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+The streaming refactor is covered by **150 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. The Hugging Face voice adapter was exercised with real SUPERB weights and public audio fixtures; Ollama contracts use fixtures. Model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
 
 ## 📚 Documentation
 
@@ -334,3 +334,38 @@ The streaming refactor is covered by **140 Python tests** plus dashboard/categor
 ## 📄 License
 
 Original code is licensed under **Apache-2.0**. See [LICENSE](LICENSE). Review each dependency and model-weight license before redistribution.
+
+
+### Local demo settings and visual guides
+
+Open `http://127.0.0.1:8766`. Camera controls include English/Chinese/Korean/auto
+speech recognition and independent face-point/person-region overlays. Start,
+Stop and Clear are grouped together. Model switches in Settings stop actual
+inference; pause capture before changing them. Chart labels use readable names
+while MCP observation keys stay stable.
+
+Settings → **실제 모델 테스트** sends a synthetic blue-square image to the configured
+local VLM and reports its response and latency without using camera or microphone.
+Settings → **Advanced · MCP** lists the running service's tool schemas, models,
+observation keys and WebSocket address. `get_features` / `configure_feature` share
+model switches with the dashboard. The text/Companion switch gates dashboard and
+MCP text requests; ASR remains independently controlled.
+
+The dashboard includes switches for gauges, category charts and guides. Historical
+observations are retained when a model is disabled. See [tracking boundaries and
+extension plan](docs/tracking.md) for full-body/face handling, multiple people,
+SAM integration and emotion tracking. Body pose is now installed through MediaPipe (33 landmarks, up to four poses,
+geometric wrist-height indicators). SAM, trained gesture classification, speaker
+separation and face-to-speaker identity association are **not** installed features.
+
+[Settings QA](docs/qa-settings.md) · [Promotional HTML slides](docs/promo/index.html)
+
+
+The local demo defaults to English. Its interface language selector supports
+English, Korean and Chinese independently of the speech recognition language.
+Public browser preview controls have the same three language choices. User text,
+model descriptions and MCP JSON are preserved in their original form.
+
+Install body pose alone with `.venv/bin/python scripts/local_models.py install-pose`;
+the launcher automatically loads it. To remove only these weights, stop the local
+stack and run `.venv/bin/python scripts/local_models.py remove-pose --yes`.

@@ -50,7 +50,7 @@ class QueuedPlugin:
             started = time.monotonic()
             try:
                 result = await self.plugin.process(frame)
-                if generation != self.generation or self.human.paused or self.human.closed:
+                if generation != self.generation or not getattr(self, "runtime_enabled", True) or self.human.paused or self.human.closed:
                     return
                 await self.human.ingest_plugin_output(result, frame, self.plugin)
                 self.processed += 1
@@ -145,16 +145,20 @@ class LocalScenePlugin:
         if self.human:
             from .context import compact_observation
             state = await self.human.get_state(subject_id=frame.subject_id)
-            for name, record in state['signals'].items():
+            priority = ('scene.poses', 'scene.faces', 'classification.voice_emotion', 'scene.person_count', 'audio.rms', 'speech.activity')
+            ordered = sorted(state['signals'].items(), key=lambda item: priority.index(item[0]) if item[0] in priority else len(priority))
+            for name, record in ordered:
                 value = record['observation'].get('value')
                 age = now - record['timestamp_ms']
-                if 0 <= age <= 5000 and (type(value) in (int, float, bool) or name == 'scene.faces'):
+                if 0 <= age <= 5000 and (type(value) in (int, float, bool) or name in ('scene.faces', 'scene.poses', 'classification.voice_emotion')):
                     value = compact_observation(name, value)
                     if name == 'scene.faces':
                         value = [{'frame_face_index': f.get('frame_face_index'),
                                   'blendshapes': {k:v for k,v in f.get('blendshapes', {}).items()
                                       if k in ('mouthSmileLeft', 'mouthSmileRight', 'eyeBlinkLeft',
-                                               'eyeBlinkRight', 'jawOpen', 'browInnerUp')}} for f in value[:1]]
+                                               'eyeBlinkRight', 'jawOpen', 'browInnerUp')}} for f in value[:4]]
+                    elif name == 'scene.poses':
+                        value = [{k: pose.get(k) for k in ('frame_pose_index', 'track_id', 'bbox', 'geometry', 'association_quality')} for pose in value[:4]]
                     measurements[name] = dict(value=value,
                         timestamp_ms=record['timestamp_ms'], evidence_id=record['id'])
                     if len(measurements) >= 6:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "humansense-sdk"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local-first real-time human interaction observations for AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,4 +37,4 @@ Repository = "https://github.com/NomaDamas/catch-your-mind"
 include = ["humansense*"]
 
 [tool.setuptools.package-data]
-humansense = ["dashboard.html", "observability.js"]
+humansense = ["dashboard.html", "observability.js", "i18n.js"]

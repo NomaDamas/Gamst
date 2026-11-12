@@ -1,18 +1,50 @@
 # Third-party source and model policy
 
-This checkout contains original integration code and no bundled model weights or copied third-party implementations. No remote repository was accessible during implementation. In particular, REA (https://github.com/morluto/rea) has not been inspected or reverse engineered, and no claim about its license or usability is made.
+This checkout contains original integration code. Model weights are downloaded
+separately into the ignored project-owned `.local-models` directory and are not
+included in GitHub source or Python wheels. Optional dependencies retain their
+own licenses. A code license and a model-weight license are separate obligations.
 
-Optional dependencies are installed separately. Package license and model-weight license are distinct. Review the exact versions, weights, permitted uses and redistribution terms before distribution:
+Network access is available in the current host environment: official model
+artifacts have been downloaded, upstream documentation consulted, and repository
+changes pushed. Earlier documentation saying no remote access was possible
+referred to a previous sandbox. No inspected or reused REA implementation is
+claimed here.
 
-| Backend | Integration | Assets |
-| --- | --- | --- |
-| OpenCV | HOG person detection | Built-in detector in user's OpenCV distribution |
-| MediaPipe Tasks | Face landmarks and blendshapes | User-supplied local task file, SHA-256 provenance |
-| Silero VAD/PyTorch | JIT speech activity | User-supplied local licensed JIT file, SHA-256 provenance |
-| faster-whisper/CTranslate2 | Windowed transcript | User-supplied local model directory; local-files-only |
-| sounddevice/PortAudio | Native microphone capture | OS audio device and native library |
-| websockets | Optional local event transport | No model |
+## Installed integrations and artifact provenance
 
-SAM3, YOLO, Pipecat and LiveKit are not vendored. The plugin/push interfaces are extension points, not a claim of a tested native integration. Model names described as 'latest' must be checked against upstream API and licenses before integration; this environment had no network access to do so.
+- **OpenCV:** built-in HOG person detector, normalized boxes and local IoU tracking.
+- **MediaPipe Tasks:** explicit face-landmarker task file, landmarks and blendshapes.
+  Body pose is also implemented with explicit local task weights and a real
+  33-landmark fixture check; gesture interpretation and identity remain separate.
+- **Silero VAD / PyTorch:** local JIT voice-activity model.
+- **faster-whisper / CTranslate2:** local Whisper small weights, windowed ASR.
+- **Qwen3-VL / llama.cpp:** local GGUF vision-language model and projection weights,
+  served by an explicitly downloaded local runner.
+- **SUPERB / Transformers:** optional `superb/wav2vec2-base-superb-er` weights for
+  four voice-emotion scores, installed by `scripts/setup_voice.sh`.
+- **sounddevice / PortAudio:** optional native microphone I/O.
+- **websockets / httpx:** optional local streaming transports and provider clients.
 
-Closed-source implementation cannot be copied without permission. Future provider connectors should use authorized public APIs, explicit credentials, informed data-transfer consent and separately documented retention. This release is local-only.
+`scripts/local_models.py` records download URLs and SHA-256 hashes in
+`.local-models/manifest.json`; model revisions are pinned where supported. Review
+upstream asset licenses, notices and permitted redistribution terms for the exact
+artifacts. The installer downloads into the user's checkout; it does not grant a
+new license to redistribute those weights. The public browser preview separately
+loads MediaPipe code and its face-model asset from the documented external URLs.
+
+## Extension boundaries
+
+SAM3, YOLO, Pipecat and LiveKit implementations are not vendored. SAM3's upstream
+segmentation/tracking capability has been reviewed, but a working SAM3 execution
+adapter, weights and local Mac performance are not validated. The existing plugin
+interface is an integration boundary, not proof that every external model is
+plug-and-play. The LiveKit/Pipecat decoded-media bridges likewise do not establish
+compatibility with every framework release.
+
+Hugging Face and Ollama interfaces and Pipecat pipeline concepts are credited in
+[streaming architecture](streaming-and-plugins.md). These are protocol and design
+references, not claims of copied code or endorsement. Remote provider connectors
+require explicit configuration and credentials; use of a paid provider is not
+included in a local installation. Never include credentials in logs, examples or
+release assets.

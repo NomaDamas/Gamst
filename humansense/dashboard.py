@@ -17,6 +17,7 @@ class Dashboard:
         self.capture = False
         self.companion = None
         self._lock = asyncio.Lock()
+        self._vlm_test_lock = asyncio.Lock()
         from .media import media_router
         self.router = media_router(human)
 
@@ -41,6 +42,41 @@ class Dashboard:
     async def _dispatch(self, body):
         from .realtime import scene_status, configure_scene
         op = body.get("op")
+        if op == "capabilities":
+            from .mcp import tool_definitions
+            from .extensions import describe_plugin
+            return {"tools": tool_definitions(), "plugins": [describe_plugin(p) for p in self.human.plugins],
+                    "transport": "WebSocket / MCP", "scope": "shared local runtime",
+                    "observations": sorted((await self.human.get_context()).get("observations", {}))}
+        if op == "configure_feature":
+            from .settings import configure_feature
+            return await configure_feature(self.human, body.get("name"), body.get("enabled"))
+        if op == "test_vlm":
+            from .realtime import scene_worker
+            worker = scene_worker(self.human)
+            if worker is None:
+                raise ValueError("No local VLM configured")
+            if self._vlm_test_lock.locked():
+                raise ValueError("VLM test already running")
+            async with self._vlm_test_lock:
+                # A synthetic image exercises the real vision endpoint without devices
+                # or writing a test observation into the user's context.
+                import base64
+                import cv2
+                import numpy as np
+                from .plugins import InputFrame
+                sample = np.full((192, 192, 3), 255, dtype=np.uint8)
+                sample[48:144, 48:144] = (255, 0, 0)
+                ok, encoded = cv2.imencode('.jpg', sample)
+                if not ok:
+                    raise ValueError("Unable to construct VLM test frame")
+                started = time.monotonic()
+                frame = InputFrame({"frames": [{"timestamp_ms": 0, "measurements": {},
+                    "jpeg": base64.b64encode(encoded).decode()}], "settings": worker.plugin.settings()},
+                    "video", 0)
+                output = await asyncio.to_thread(worker.plugin._describe, frame)
+                return {"ok": True, "latency_ms": round((time.monotonic()-started)*1000),
+                        "description": output[0]["value"], "input": "synthetic blue square"}
         if op == "configure_asr":
             language = body.get("language")
             if language not in ("auto", "en", "zh", "ko"):
@@ -56,7 +92,8 @@ class Dashboard:
         if op == "configure_vlm":
             return await configure_scene(self.human, {k:v for k,v in body.items() if k != "op"})
         if op == "state":
-            return {"asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
+            from .settings import feature_status
+            return {"features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
                     "context": await self.human.get_context(),
                     "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
@@ -80,6 +117,8 @@ class Dashboard:
             return {"deleted": True}
         if not self.capture:
             raise ValueError("Start with consent before submitting observations")
+        if op in ("chat", "text", "claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text and Companion are disabled in settings")
         if op == "chat":
             if self.companion is None:
                 raise ValueError("No companion backend configured")
@@ -119,8 +158,8 @@ def handler_for(app):
             return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
 
         def do_GET(self):
-            if self.allowed_host() and self.path == "/observability.js":
-                return self.respond(200, Path(__file__).with_name("observability.js").read_text(), "application/javascript")
+            if self.allowed_host() and self.path in ("/observability.js", "/i18n.js"):
+                return self.respond(200, Path(__file__).with_name(self.path[1:]).read_text(), "application/javascript")
             if not self.allowed_host() or self.path != "/":
                 return self.respond(404, {"error": "Not found"})
             page = Path(__file__).with_name("dashboard.html").read_text()
@@ -159,7 +198,7 @@ def handler_for(app):
                         return
                     return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
-                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze") else 30))
+                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm") else 30))
             except Exception as exc:
                 if future is not None and not future.done():
                     future.cancel()
@@ -167,7 +206,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None):
     from . import HumanSense
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with HumanSense(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
@@ -192,6 +231,9 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
                     plugin.language = asr_language
                     plugin = QueuedPlugin(human, plugin, capacity=4)
                 human.register(plugin)
+        if pose_model:
+            from .providers.pose import MediaPipePosePlugin
+            human.register(QueuedPlugin(human, MediaPipePosePlugin(pose_model), capacity=1))
         if plugins_config:
             from .extensions import register_config
             register_config(human, json.loads(Path(plugins_config).read_text()))
@@ -230,11 +272,12 @@ def main():
     parser.add_argument('--scene-url', help='Opt-in loopback VLM chat-completions URL; sends camera frames locally')
     parser.add_argument('--scene-model', default='local-vlm')
     parser.add_argument('--websocket-port', type=int, help='Expose the SAME runtime to local agent WebSocket clients')
+    parser.add_argument('--pose-model', help='Local MediaPipe pose model path')
     parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
     parser.add_argument("--plugins-config", help="Explicit JSON list of installed plugin factories and local model options")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:
