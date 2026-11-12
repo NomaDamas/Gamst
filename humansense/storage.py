@@ -22,6 +22,8 @@ class Store:
         self.connection.execute("CREATE INDEX IF NOT EXISTS subject_time ON records(subject,ts)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS record_time ON records(ts)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS subject_kind_time ON records(subject,kind,ts)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS signal_name_time ON records(subject,kind,json_extract(payload,'$.observation.name'),ts)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS numeric_signal_time ON records(subject,ts) WHERE kind='observation.signal' AND json_type(payload, '$.observation.value') IN ('integer','real')")
         self.connection.commit()
 
     def add(self, record):

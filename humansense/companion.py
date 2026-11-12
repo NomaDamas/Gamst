@@ -54,6 +54,7 @@ def _bounded_context(context: dict, inference: dict) -> dict:
     if isinstance(consistency, dict):
         consistency = {key: consistency[key] for key in ("status", "candidates", "contradiction_detected", "verification_status", "deception_assessed") if key in consistency}
     selected = {"summary": summary, "modalities": inference.get("modalities", {}),
+                "observations": context.get("observations", {}),
                 "conversation": conversation, "consistency": consistency,
                 "recommended_strategy": inference.get("recommended_action"),
                 "uncertainty_policy": "hypotheses_are_unverified"}

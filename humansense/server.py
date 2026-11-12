@@ -26,6 +26,11 @@ async def handle_connection(server, socket):
             await socket.send(json.dumps(message, ensure_ascii=False, allow_nan=False))
 
     async def publish(kind):
+        if kind == 'context':
+            while True:
+                await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
+                            'params': await server.human.get_context(window='5m')})
+                await asyncio.sleep(.25)
         async for record in getattr(server.human, allowed[kind])():
             await send({"jsonrpc": "2.0", "method": f"notifications/humansense/{kind}", "params": record})
 
@@ -53,8 +58,8 @@ async def handle_connection(server, socket):
                     else:
                         params = request.get("params", {})
                         kinds = params.get("types") if isinstance(params, dict) else None
-                        if not isinstance(kinds, list) or len(kinds) > 3 or any(type(kind) is not str or kind not in allowed for kind in kinds) or len(set(kinds)) != len(kinds):
-                            response = server.error(ident, -32602, "types must select unique event, signal, inference values")
+                        if not isinstance(kinds, list) or len(kinds) > 4 or any(type(kind) is not str or kind not in (*allowed, 'context') for kind in kinds) or len(set(kinds)) != len(kinds):
+                            response = server.error(ident, -32602, "types must select unique event, signal, inference, context values")
                         else:
                             await subscribe(kinds)
                             response = {"jsonrpc": "2.0", "id": ident, "result": {"types": kinds}}

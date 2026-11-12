@@ -8,10 +8,11 @@ from collections import Counter
 from humansense import HumanSense
 from humansense.capture import CaptureSession
 from humansense.plugins import AudioLevelPlugin, OpenCVPersonPlugin, MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
+from humansense.realtime import QueuedPlugin, LocalScenePlugin
 
 
 async def verify(args):
-    async with HumanSense(consent=args.consent) as human:
+    async with HumanSense(consent=args.consent, sensor_inference_interval_ms=250) as human:
         if args.camera is not None:
             human.register(MediaPipeFacePlugin(args.face_model) if args.face_model else OpenCVPersonPlugin())
         if args.audio:
@@ -19,7 +20,9 @@ async def verify(args):
             if args.vad_model:
                 human.register(SileroVADPlugin(args.vad_model))
             if args.asr_model:
-                human.register(FasterWhisperPlugin(args.asr_model))
+                human.register(QueuedPlugin(human, FasterWhisperPlugin(args.asr_model, language=args.language)))
+        if args.scene_url:
+            human.register(QueuedPlugin(human, LocalScenePlugin(args.scene_url, 'local-vlm'), capacity=1))
         counts = Counter()
         async def collect():
             async for record in human.signals():
@@ -50,6 +53,7 @@ async def verify(args):
         report = {'passed': passed, 'elapsed_s': round(elapsed, 3),
                   'signal_counts': dict(counts), 'capture': active_status,
                   'modalities': state['modalities'], 'plugin_errors': state['plugin_errors'],
+                  'workers': [p.status() for p in human.plugins if hasattr(p, 'status')],
                   'raw_media_saved': False,
                   'notes': ['Speech transcript absence can reflect silence.',
                             'Detection count zero is a measurement, not proof that no person is present.',
@@ -67,6 +71,8 @@ if __name__ == '__main__':
     parser.add_argument('--face-model')
     parser.add_argument('--asr-model')
     parser.add_argument('--vad-model')
+    parser.add_argument('--language')
+    parser.add_argument('--scene-url')
     args = parser.parse_args()
     if not (args.camera is not None or args.audio):
         parser.error('Select --camera and/or --audio')

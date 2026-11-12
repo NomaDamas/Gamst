@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "humansense-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first real-time human interaction observations for AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ websocket = ["websockets>=13,<16"]
 humansense = "humansense.cli:main"
 humansense-serve = "humansense.server:main"
 humansense-mcp = "humansense.mcp:main"
+humansense-mcp-live = "humansense.mcp_live:main"
 humansense-dashboard = "humansense.dashboard:main"
 
 [project.urls]

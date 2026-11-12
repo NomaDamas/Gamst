@@ -251,8 +251,14 @@ class FasterWhisperPlugin(PerceptionPlugin):
                         if generation != self._generation:
                             return ""
                         segments, _ = self.model.transcribe(np.asarray(chunk, dtype=np.float32),
-                                                           language=self.language, vad_filter=True)
-                        return " ".join(segment.text.strip() for segment in segments).strip()
+                                                           language=self.language, vad_filter=True,
+                                                           beam_size=1, best_of=1, temperature=0,
+                                                           condition_on_previous_text=False)
+                        # Short live windows must abstain on weak/no-speech output.
+                        return " ".join(segment.text.strip() for segment in segments
+                                        if getattr(segment, 'avg_logprob', 0) >= -1.2
+                                        and getattr(segment, 'no_speech_prob', 0) <= .6
+                                        and getattr(segment, 'compression_ratio', 0) <= 2.4).strip()
                 try:
                     text = await asyncio.to_thread(transcribe)
                 except asyncio.CancelledError:

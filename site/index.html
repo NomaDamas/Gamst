@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#fbfbfd" />
+    <title>Catch Your Mind — Give your agent the moment.</title>
+    <meta
+      name="description"
+      content="Real-time multimodal context for your AI agent. Bring speech, voice activity, facial movement and surroundings into your LLM or VLM workflow. Local-first. Open source."
+    />
+    <meta
+      property="og:title"
+      content="Catch Your Mind — Give your agent the moment."
+    />
+    <meta
+      property="og:description"
+      content="A local-first context layer for AI agents. Try live browser measurements, then run the full stack locally."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="nav">
+      <a class="brand" href="#top"
+        ><span class="mark">c</span> catch your mind<span class="brand-dot"
+          >.</span
+        ></a
+      >
+      <nav>
+        <a href="#how">How it works</a
+        ><a href="https://github.com/NomaDamas/catch-your-mind">GitHub ↗</a
+        ><a class="pill small" href="#install">Get started</a>
+      </nav>
+    </header>
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="ambient"></div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="orbit o1"></div>
+          <div class="orbit o2"></div>
+          <div class="orb">
+            <svg viewBox="0 0 150 150">
+              <path
+                d="M49 64v13M101 64v13"
+                stroke="#34304e"
+                stroke-width="9"
+                stroke-linecap="round"
+              />
+              <path
+                d="M57 97q18 14 36 0"
+                fill="none"
+                stroke="#34304e"
+                stroke-width="6"
+                stroke-linecap="round"
+              />
+            </svg>
+          </div>
+          <span class="float voice"
+            ><i></i><i></i><i></i><i></i><i></i> Voice</span
+          ><span class="float scene">◌ Surroundings</span
+          ><span class="float expression">⌁ Expression</span>
+        </div>
+        <div class="eyebrow">THE REAL-TIME CONTEXT LAYER FOR AI AGENTS</div>
+        <h1>Give your agent<br /><span class="rainbow">the moment.</span></h1>
+        <p class="lede">
+          What you say. How you move. What’s around you.<br />Bring the context
+          between the words to your LLM or VLM.
+        </p>
+        <div class="cta">
+          <a class="pill primary" href="#try"
+            >Try it in your browser <span>↗</span></a
+          ><a class="pill ghost" href="#install">Run locally</a>
+        </div>
+        <p class="fine">Open source · Local-first · v0.2.0 Alpha</p>
+      </section>
+      <section class="wrap lab-section" id="try">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">A LITTLE LESS ABSTRACT</div>
+            <h2>Your next input.<br />A live context packet.</h2>
+          </div>
+          <p class="muted">
+            Try real microphone levels and facial movement, right here.
+            Measurements stay in this browser. Full speech transcription and
+            scene descriptions run in the local app.
+          </p>
+        </div>
+        <div class="lab">
+          <div class="lab-input">
+            <div class="topline">
+              <span class="window-dots">● ● ●</span
+              ><span class="tiny">BROWSER PREVIEW</span>
+            </div>
+            <div class="camera">
+              <video id="camera" autoplay muted playsinline></video>
+              <div id="cameraHint">
+                <span class="camera-symbol">◉</span>
+                <p>Your devices are off.</p>
+                <small>You choose when to start.</small>
+              </div>
+            </div>
+            <div class="choices">
+              <label
+                ><input type="checkbox" id="mic" checked /> Microphone</label
+              ><label
+                ><input type="checkbox" id="face" /> Camera + facial
+                movement</label
+              >
+            </div>
+            <p class="fine">
+              Camera mode downloads MediaPipe assets from jsDelivr and Google.
+              Frames and audio are processed here; they are not uploaded.
+            </p>
+            <label class="consent"
+              ><input type="checkbox" id="consent" /> I agree to process my
+              selected inputs in this browser.</label
+            >
+            <div class="cta left">
+              <button class="pill primary" id="start">Start live preview</button
+              ><button class="pill ghost" id="stop" disabled>Stop</button>
+            </div>
+            <div class="mic-meter"><div id="volume"></div></div>
+            <label class="sr-only" for="utterance">Text to add to context</label
+            ><textarea
+              id="utterance"
+              placeholder="Or type: Could you explain that again?"
+            ></textarea>
+            <div class="cta left">
+              <button class="pill small ghost" id="add">Add text</button
+              ><button class="text-button" id="clear">Clear session</button>
+            </div>
+            <div id="error" class="error" role="alert"></div>
+          </div>
+          <div class="lab-output">
+            <div class="topline">
+              <span
+                ><span class="status-dot" id="liveDot"></span
+                ><span id="status">Ready when you are</span></span
+              ><button class="text-button" id="copy">Copy JSON</button>
+            </div>
+            <div class="stats">
+              <div><small>MIC LEVEL</small><strong id="rms">—</strong></div>
+              <div><small>FACES</small><strong id="faces">—</strong></div>
+              <div><small>UPDATES</small><strong id="updates">0</strong></div>
+            </div>
+            <pre id="context" aria-label="Live context JSON">
+{
+  "source": "browser_preview",
+  "observations": {},
+  "raw_media_included": false
+}</pre
+            >
+            <div class="output-note">
+              <span>↳</span>
+              <p>
+                Copy this context into your agent.<br /><small
+                  >The local SDK adds transcription, scene descriptions,
+                  evidence IDs and streaming.</small
+                >
+              </p>
+            </div>
+          </div>
+        </div>
+        <p class="fine centered">
+          This is a real browser measurement preview, not a simulated AI answer.
+          Facial movement scores do not establish emotion.
+        </p>
+      </section>
+      <section class="wrap story" id="how">
+        <div class="eyebrow">ONE LAYER. YOUR MODEL.</div>
+        <h2>
+          Observe locally.<br /><span class="rainbow"
+            >Understand in context.</span
+          >
+        </h2>
+        <div class="flow">
+          <article>
+            <span class="step">01</span>
+            <h3>Catch the signals</h3>
+            <p>
+              Speech transcripts, voice activity, facial movement and
+              model-described surroundings. Each input keeps its source and
+              time.
+            </p>
+            <div class="tags">
+              <span>Whisper</span><span>Silero</span><span>MediaPipe</span
+              ><span>Local VLM</span>
+            </div>
+          </article>
+          <span class="arrow">→</span>
+          <article>
+            <span class="step">02</span>
+            <h3>Keep the moment</h3>
+            <p>
+              Bounded queues keep slow inference off the capture path. Context
+              snapshots mark old observations and expose dropped work.
+            </p>
+            <div class="tags">
+              <span>Freshness</span><span>Evidence</span
+              ><span>Backpressure</span>
+            </div>
+          </article>
+          <span class="arrow">→</span>
+          <article>
+            <span class="step">03</span>
+            <h3>Give it to your agent</h3>
+            <p>
+              Read through the SDK or MCP. Subscribe over WebSocket. Let your
+              existing LLM or VLM decide when to respond.
+            </p>
+            <div class="tags">
+              <span>Python</span><span>MCP</span><span>WebSocket</span>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="split wrap">
+        <div>
+          <div class="eyebrow">CONTEXT FIRST</div>
+          <h2>A companion is<br />one possibility.</h2>
+          <p class="lede">
+            Your agent is the destination.<br />You choose what it does next.
+          </p>
+        </div>
+        <div class="explain">
+          <p>
+            Catch Your Mind packages observations. It doesn’t replace your
+            model, train on your conversations, or automatically connect to an
+            agent’s subscription.
+          </p>
+          <p>
+            Use the optional Companion to test context-aware replies against a
+            configured model. Or keep your existing agent and simply give it the
+            stream.
+          </p>
+          <blockquote>
+            “Could you explain that again?”<br /><span
+              >→ transcript + recent observations + evidence<br />→ your agent’s
+              next response</span
+            >
+          </blockquote>
+        </div>
+      </section>
+      <section class="install-section" id="install">
+        <div class="wrap">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">YOURS TO RUN. YOURS TO REMOVE.</div>
+              <h2>From checkout<br />to live context.</h2>
+            </div>
+            <p class="muted">
+              The full setup downloads roughly 3 GB of model artifacts inside
+              your checkout. The bundled local VLM runner supports Apple
+              Silicon. Python 3.10+ required.
+            </p>
+          </div>
+          <div class="install-grid">
+            <div class="install-card">
+              <div class="row">
+                <h3>Full local stack</h3>
+                <button id="copyInstall" class="text-button">
+                  Copy commands
+                </button>
+              </div>
+              <pre id="installCode">
+git clone https://github.com/NomaDamas/catch-your-mind.git
+cd catch-your-mind
+sh scripts/setup_local.sh
+.venv/bin/python scripts/run_local.py</pre
+              >
+              <p>
+                Open <code>http://127.0.0.1:8766</code>, give consent and start
+                observation.
+              </p>
+              <p class="fine">
+                Includes speech transcription, voice activity, face landmarks, a
+                local scene VLM, and optional Companion replies. Model inference
+                speed depends on your machine.
+              </p>
+            </div>
+            <div class="install-card secondary">
+              <h3>Connect an agent</h3>
+              <pre>python examples/live_context.py</pre>
+              <p>
+                With the local stack running, the WebSocket example subscribes
+                to the same runtime at <code>ws://127.0.0.1:8765</code>.
+              </p>
+              <p class="fine">
+                MCP stdio is also available. A separately started MCP process
+                has its own session; it does not automatically share the
+                dashboard.
+              </p>
+              <a
+                class="text-link"
+                href="https://github.com/NomaDamas/catch-your-mind/blob/feat/humansense-20261112-154922/docs/local-setup.md"
+                >Read the integration guide ↗</a
+              >
+            </div>
+          </div>
+          <div class="remove">
+            <p>
+              <strong>Done experimenting?</strong> Stop the local stack with
+              Ctrl-C, then remove its model files.
+            </p>
+            <code>.venv/bin/python scripts/local_models.py remove --yes</code>
+            <p class="fine">
+              Removal checks project ownership and open files. It keeps your
+              source code and Python environment.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section class="wrap faq">
+        <div>
+          <div class="eyebrow">CLEAR BOUNDARIES</div>
+          <h2>What to expect.</h2>
+        </div>
+        <div>
+          <details>
+            <summary>Is this real-time?</summary>
+            <p>
+              The local stream publishes context snapshots every 250 ms. That is
+              the delivery cadence, not a promise that every model finishes
+              within 250 ms. Speech uses three-second windows; scene
+              descriptions run in the background. Queue depth, processing time
+              and freshness are visible.
+            </p>
+          </details>
+          <details>
+            <summary>Does it recognize how I feel?</summary>
+            <p>
+              It measures expression-related facial movements and other
+              observable signals. These are not proof of inner emotions, intent
+              or deception. Optional model interpretations remain unverified.
+            </p>
+          </details>
+          <details>
+            <summary>Does installing it connect my LLM automatically?</summary>
+            <p>
+              No. Register MCP tools or consume the WebSocket stream in your
+              existing agent. The full local launcher separately configures its
+              bundled VLM for scene descriptions and Companion testing.
+            </p>
+          </details>
+          <details>
+            <summary>What leaves my computer?</summary>
+            <p>
+              This browser preview downloads code and model assets but does not
+              upload camera frames, audio or typed text. The default full local
+              stack processes media on loopback and stores observations in
+              memory. Using an explicitly configured remote provider sends the
+              selected text and context to that provider.
+            </p>
+          </details>
+          <details>
+            <summary>Is it ready for production?</summary>
+            <p>
+              This is an alpha release. Automated tests and fixture inference
+              check the implemented paths, but cannot establish accuracy across
+              people, languages, devices or environments. Review the release QA
+              notes before integrating.
+            </p>
+          </details>
+        </div>
+      </section>
+      <section class="closing">
+        <div class="ambient"></div>
+        <h2>
+          More context.<br /><span class="rainbow"
+            >More considered responses.</span
+          >
+        </h2>
+        <div class="cta">
+          <a class="pill primary" href="#install">Start building</a
+          ><a
+            class="pill ghost"
+            href="https://github.com/NomaDamas/catch-your-mind/releases"
+            >Get the release ↗</a
+          >
+        </div>
+      </section>
+    </main>
+    <footer class="wrap">
+      <span class="brand">catch your mind.</span
+      ><span>Apache-2.0 · Built for your agent, on your terms.</span
+      ><a href="https://github.com/NomaDamas/catch-your-mind">GitHub ↗</a>
+    </footer>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

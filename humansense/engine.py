@@ -32,7 +32,7 @@ def _window_ms(value):
 class HumanSense:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
-                 capabilities=None):
+                 capabilities=None, sensor_inference_interval_ms=0):
         if not isinstance(consent, bool):
             raise TypeError("consent must be an explicit boolean")
         if save_raw_media:
@@ -59,6 +59,10 @@ class HumanSense:
         self._metric_directions = {}
         self.dropped_records = 0
         self.plugin_errors = []
+        if not isinstance(sensor_inference_interval_ms, (int, float)) or not 0 <= sensor_inference_interval_ms <= 5000:
+            raise ValueError('sensor_inference_interval_ms must be between 0 and 5000')
+        self.sensor_inference_interval_ms = sensor_inference_interval_ms
+        self._sensor_refresh = {}
 
     async def __aenter__(self):
         if self.closed:
@@ -179,6 +183,12 @@ class HumanSense:
                 self._event("speech.started", subject_id, ts, {"speaking": True}, [record["id"]])
             elif not value and prior and prior["observation"]["value"] is True:
                 self._event("speech.stopped", subject_id, ts, {"speaking": False}, [prior["id"], record["id"]])
+        # Preserve every signal and speech transition. Full SQL aggregation and
+        # inference are sampled for live sensor streams, never for text input.
+        now = timestamp()
+        if self.sensor_inference_interval_ms and now - self._sensor_refresh.get(subject_id, 0) < self.sensor_inference_interval_ms:
+            return record
+        self._sensor_refresh[subject_id] = now
         trends = await self.get_trends(subject_id, self.window_ms, end_ms=ts)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and record["quality"]["status"] == "sufficient":
             metric = next((m for m in trends["metrics"].values() if m["metric"] == name and m["model_id"] == model_id and m["model_version"] == model_version and m["modality"] == modality), {})
@@ -400,6 +410,20 @@ class HumanSense:
                 raise
         return results
 
+    async def ingest_plugin_output(self, output, frame, plugin):
+        """Commit output from a bounded background perception worker."""
+        for signal in output or []:
+            signal = dict(signal)
+            signal.setdefault('subject_id', frame.subject_id)
+            signal.setdefault('timestamp_ms', frame.timestamp_ms)
+            signal.setdefault('modality', frame.modality)
+            signal.setdefault('model_id', plugin.name)
+            signal.setdefault('model_version', getattr(plugin, 'version', 'unspecified'))
+            is_text = signal.pop('type', None) == 'text' or signal.get('name') in ('text.transcript', 'speech.transcript')
+            await self.push_signal(**signal)
+            if is_text:
+                await self.push_text(str(signal['value']), subject_id=signal['subject_id'], timestamp_ms=signal['timestamp_ms'])
+
     async def push_video(self, frame, subject_id="local-user", timestamp_ms=None):
         return await self._push_media(frame, "video", subject_id, timestamp_ms)
 
@@ -483,7 +507,10 @@ class HumanSense:
         result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
             evidence=[{"record_id": r["id"]} for r in events])
         result["models"] = self._models_for(records, result["models"])
-        result.update({"summary": {"event_counts": counts, "event_count": total_events,
+        from .context import observation_packet
+        result.update({"observations": observation_packet(records, now),
+                       "context_policy": {"raw_media_included": False, "hypotheses_verified": False, "freshness_ms": 5000},
+                       "summary": {"event_counts": counts, "event_count": total_events,
                                    "evidence_count": len(events), "max_evidence_per_event_type": 8,
                                    "evidence_truncated": total_events > len(events),
                                    "record_count": self.store.count(subject_id, start, now), "method": "deterministic_aggregate"},
@@ -519,6 +546,10 @@ class HumanSense:
         self._generation += 1
         deleted = self.store.delete(subject_id)
         await self._reset_plugins()
+        if subject_id is None:
+            self._sensor_refresh.clear()
+        else:
+            self._sensor_refresh.pop(subject_id, None)
         # Imported aggregate artifacts cannot be untrained for one subject. Drop
         # active calibration for every deletion rather than retain unknown contributions.
         for definition in self.prediction_definitions.values():

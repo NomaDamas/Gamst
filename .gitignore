@@ -13,3 +13,5 @@ dist/
 *.mp4
 *.webm
 models/
+.local-models/
+.local-run/

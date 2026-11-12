@@ -5,6 +5,7 @@ import base64
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,6 +31,9 @@ class Dashboard:
                     "context": await self.human.get_context(),
                     "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
+                    "analysis_available": self.human.analysis_backend is not None,
+                    "plugins": [p.name for p in self.human.plugins],
+                    "workers": [p.status() for p in self.human.plugins if callable(getattr(p, 'status', None))],
                     "latest_inference": (await self.human.get_history(type="human.inference", limit=1)),
                     "events": await self.human.get_history(type="observation.event", limit=20)}
         if op == "start":
@@ -124,6 +128,22 @@ def handler_for(app):
                 body = json.loads(self.rfile.read(size))
                 if not isinstance(body, dict):
                     raise ValueError("Expected an object")
+                if body.get('op') == 'stream':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-ndjson')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    try:
+                        while not app.human.closed:
+                            future = asyncio.run_coroutine_threadsafe(app.dispatch({'op': 'state'}), app.loop)
+                            data = future.result(timeout=5)
+                            self.wfile.write((json.dumps(data, ensure_ascii=False) + '\n').encode())
+                            self.wfile.flush()
+                            time.sleep(.25)
+                    except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        return
+                    return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
                 self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze") else 30))
             except Exception as exc:
@@ -133,10 +153,10 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None):
     from . import HumanSense
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
-    async with HumanSense(consent=True, store=store) as human:
+    async with HumanSense(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
         from .reasoning import backend_from_env
         backend = backend_from_env()
         if backend is not None:
@@ -150,9 +170,23 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None):
             except (ImportError, RuntimeError) as exc:
                 app.errors.append(str(exc))
         from .plugins import MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
+        from .realtime import QueuedPlugin, LocalScenePlugin
         for path, factory in ((face_model, MediaPipeFacePlugin), (asr_model, FasterWhisperPlugin), (vad_model, SileroVADPlugin)):
             if path:
-                human.register(factory(path))
+                plugin = factory(path)
+                if factory is FasterWhisperPlugin:
+                    plugin.language = asr_language
+                    plugin = QueuedPlugin(human, plugin, capacity=4)
+                human.register(plugin)
+        if scene_url:
+            human.register(QueuedPlugin(human, LocalScenePlugin(scene_url, scene_model), capacity=1))
+        websocket_task = None
+        if websocket_port:
+            from .server import serve_websocket
+            from .mcp import MCPServer
+            adapter = MCPServer(human)
+            adapter.companion = app.companion
+            websocket_task = asyncio.create_task(serve_websocket(adapter, websocket_port))
         await human.pause()
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_for(app))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -161,6 +195,9 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None):
         try:
             await asyncio.Event().wait()
         finally:
+            if websocket_task:
+                websocket_task.cancel()
+                await asyncio.gather(websocket_task, return_exceptions=True)
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
@@ -173,9 +210,13 @@ def main():
     parser.add_argument("--face-model", help="Local MediaPipe task file")
     parser.add_argument("--asr-model", help="Local faster-whisper model directory")
     parser.add_argument("--vad-model", help="Local Silero JIT file")
+    parser.add_argument('--scene-url', help='Opt-in loopback VLM chat-completions URL; sends camera frames locally')
+    parser.add_argument('--scene-model', default='local-vlm')
+    parser.add_argument('--websocket-port', type=int, help='Expose the SAME runtime to local agent WebSocket clients')
+    parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:

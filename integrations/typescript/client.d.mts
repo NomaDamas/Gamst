@@ -1,4 +1,4 @@
-export type OutputType = 'event' | 'signal' | 'inference';
+export type OutputType = 'event' | 'signal' | 'inference' | 'context';
 export interface ClientOptions {
   WebSocketImpl?: typeof WebSocket;
   timeoutMs?: number;

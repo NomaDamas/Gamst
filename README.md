@@ -2,9 +2,9 @@
 
 # 👁️ Catch Your Mind
 
-### Human interaction context for AI agents — in real time.
+### Real-time multimodal context for your LLM or VLM.
 
-Turn video, voice, and conversation into structured observations, interaction hypotheses, and context-aware responses.
+Turn speech, voice activity, facial movement, and surroundings into bounded, timestamped context for your existing AI agent.
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
@@ -14,9 +14,35 @@ Turn video, voice, and conversation into structured observations, interaction hy
 
 ---
 
-HumanSense gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. It combines a versioned output contract, local temporal memory, optional perception backends, and agent integrations.
+Catch Your Mind gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The Python import remains `humansense` for compatibility. The product's core is context delivery; Companion replies are optional.
 
-**Status: v0.1 alpha.** The SDK, MCP, and integration logic are tested. Live camera/microphone runs and optional model execution still need validation. Model weights are supplied separately; no trained emotion or intent model is bundled.
+**Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
+
+## Run the complete local stack
+
+On Apple Silicon with Python 3.10+:
+
+```bash
+sh scripts/setup_local.sh
+.venv/bin/python scripts/run_local.py --language ko
+```
+
+Open **http://127.0.0.1:8766**, choose camera/microphone inputs, consent, and start. Omit `--language ko` for automatic speech language detection, or use `--language en`. Pinning a language improves short-window transcription stability.
+
+The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landmarker, Qwen3-VL 2B and a local llama.cpp runner into **`.local-models/`**. It does not configure global agent settings or start device capture. The local launcher connects Companion to the same local VLM; existing agents can consume context without using Companion.
+
+```bash
+# Live context from the SAME session (4 Hz delivery, inference has its own latency)
+.venv/bin/python examples/live_context.py
+
+# MCP stdio bridge to that running session
+.venv/bin/python -m humansense.mcp_live
+
+# Stop the stack with Ctrl-C, then remove installer-owned models
+.venv/bin/python scripts/local_models.py remove --yes
+```
+
+[Setup, agent integration and removal](docs/local-setup.md) · [Realtime behavior](docs/realtime.md) · [Public browser preview](https://nomadamas.github.io/catch-your-mind/)
 
 ## ✨ What it provides
 
