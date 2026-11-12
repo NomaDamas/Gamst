@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👁️ HumanSense
+# 👁️ Catch Your Mind
 
 ### Human interaction context for AI agents — in real time.
 
