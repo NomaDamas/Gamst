@@ -1,6 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 class Element {
  constructor(){this.textContent='';this.style={setProperty(k,v){this[k]=v}};this.children=[];this.value='';this.checked=false;this.parentElement={setAttribute(){},removeAttribute(){}};this.classList={add(){},remove(){}}}
+ getAttribute(k){return this[k]} showModal(){this.open=true} close(){this.open=false;this.onclose?.()}
  focus(){this.focused=true} getBoundingClientRect(){return {width:1000,left:0}} setPointerCapture(){} hasPointerCapture(){return true} releasePointerCapture(){}
  append(...els){this.children.push(...els)} replaceChildren(...els){this.children=els} setAttribute(k,v){this[k]=v}
 }
@@ -28,10 +29,10 @@ vm.runInContext('testCharts.clear()',context);assert.equal(context.testCharts.hi
 console.log('Category charts: proportions, dominant label, bounded history and shared public asset passed');
 
 vm.runInContext("selectTab('vlm')",context);assert.equal(get('panel-vlm').hidden,false);assert.equal(get('panel-context').hidden,true);assert.equal(get('tab-vlm')['aria-selected'],'true');
-get('tab-vlm').onkeydown({key:'ArrowRight',preventDefault(){}});assert.equal(get('tab-settings')['aria-selected'],'true');get('tab-settings').onkeydown({key:'ArrowRight',preventDefault(){}});assert.equal(get('tab-observability')['aria-selected'],'true');
+get('tab-vlm').onkeydown({key:'ArrowRight',preventDefault(){}});assert.equal(get('tab-observability')['aria-selected'],'true');
 vm.runInContext('setCameraRatio(90)',context);assert.equal(get('splitter')['aria-valuenow'],'65');
 get('splitter').onpointerdown({button:0,pointerId:1,preventDefault(){}});get('splitter').onpointermove({clientX:400});get('splitter').onpointerup({pointerId:1});assert.equal(get('splitter')['aria-valuenow'],'40');
-vm.runInContext('setCaptureStatus(true)',context);assert.equal(get('statusPill')['data-active'],'true');assert.equal(get('cameraState').textContent,'관찰 중');vm.runInContext('setCaptureStatus(false)',context);assert.equal(get('statusPill')['data-active'],'false');
+vm.runInContext('setCaptureStatus(true)',context);assert.equal(get('statusPill')['data-active'],'true');assert.equal(get('status').textContent,'Observing');vm.runInContext('setCaptureStatus(false)',context);assert.equal(get('statusPill')['data-active'],'false');
 vm.runInContext('testCharts.render(categories)',context);const buttons=context.testCharts.tabCache.get(context.testCharts.detailNav).buttons;buttons[1].onclick();const oldHistory=context.testCharts.history.get('classification.emotion_fixture').length;vm.runInContext('testCharts.render(categories)',context);assert.equal(context.testCharts.history.get('classification.emotion_fixture').length,oldHistory);assert.equal(context.testCharts.tabCache.get(context.testCharts.detailNav).buttons[1],buttons[1]);assert.equal(buttons[1]['aria-selected'],'true');
 console.log('Main/detail tabs, pointer resizing, rainbow states and preserved history passed');
 
@@ -44,3 +45,10 @@ context.overlayFixture.state.paused=true;vm.runInContext('drawGuides(overlayFixt
 console.log('Friendly labels and camera overlay visibility/coordinates passed');
 
 assert.equal(context.CymI18n.text('설정','en'),'Settings');assert.equal(context.CymI18n.text('설정','zh'),'设置');assert.equal(context.CymI18n.text('VLM connection test','ko'),'VLM 연결 테스트');
+
+assert(!html.includes('id="liveDot"'));assert(!html.includes('id="tab-settings"'));assert(!html.includes('type="checkbox"'));
+get('openSettings').onclick();assert.equal(get('settingsDialog').open,true);get('closeSettings').onclick();assert.equal(get('settingsDialog').open,false);assert.equal(get('openSettings').focused,true);
+get('consent').onclick();assert.equal(get('consent').checked,true);assert.equal(get('consent')['aria-pressed'],'true');get('consent').onclick();assert.equal(get('consent').checked,false);
+get('useVideo').disabled=true;const before=get('useVideo').checked;get('useVideo').onclick();assert.equal(get('useVideo').checked,before);
+assert(html.indexOf('id="scene"')<html.indexOf('id="vlmOptions"'));
+console.log('Modal settings, semantic toggle buttons and compact VLM layout passed');
