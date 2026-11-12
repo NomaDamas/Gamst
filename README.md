@@ -2,6 +2,10 @@
 
 # 👁️ Catch Your Mind
 
+<img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
+
+<img src="docs/images/live-context.png" alt="Live multimodal context with timestamped signals and body tracking" width="100%">
+
 ### Real-time multimodal context for your LLM or VLM.
 
 Turn speech, voice activity, facial movement, and surroundings into bounded, timestamped context for your existing AI agent.
