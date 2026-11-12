@@ -84,7 +84,9 @@ def main():
     elif args.action == 'remove':
         if not marker.exists() or json.loads(marker.read_text()).get('project') != str(ROOT):
             raise SystemExit('No matching ownership marker')
-        subprocess.run(['git', 'status', '--short'], cwd=ROOT, check=True)
+        # Source archives have no .git; still inspect status, then enforce the
+        # same canonical-path and installer-ownership checks above.
+        subprocess.run(['git', 'status', '--short'], cwd=ROOT, check=False)
         handles = subprocess.run(['lsof', '+D', str(BASE)], capture_output=True, text=True)
         if handles.returncode == 0 or handles.stdout.strip():
             raise SystemExit('Model files are open. Stop the local stack before removal.')
