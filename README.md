@@ -8,7 +8,7 @@ Turn video, voice, and conversation into structured observations, interaction hy
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
-[Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
+[Agent setup](docs/agent-setup.md) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
 
 </div>
 
@@ -115,6 +115,8 @@ Every record carries a subject ID, timestamp, schema version, model provenance, 
 
 ## 🔌 MCP for AI agents
 
+**Start here:** [Agent setup: install → capture → inspect → stop](docs/agent-setup.md) covers dependencies, actual model paths, remote-client placement, realtime collection and model configuration.
+
 Start the stdio server:
 
 ```bash
@@ -151,7 +153,7 @@ Camera and microphone capture require explicit consent and installed extras. Exa
 {"consent": true, "video": 0, "audio": true, "subject_id": "local-user"}
 ```
 
-Use `video: null` for microphone-only capture. Optional local model paths are `face_model_path`, `vad_model_path`, and `asr_model_path`. Capture and queries share the same MCP runtime. Separately started MCP and dashboard processes do not share live capture.
+Use `video: null` for microphone-only capture. Optional local model paths are `face_model_path`, `vad_model_path`, `asr_model_path`, and one person detector path (`yolo_model_path` or `onnx_model_path`). Capture and queries share the same MCP runtime. Separately started MCP and dashboard processes do not share live capture.
 
 ## 🎥 Vision & voice
 
@@ -229,6 +231,7 @@ Verified locally: **153 Python tests**, **3 JavaScript client tests**, wheel ins
 
 | Guide | Contents |
 | --- | --- |
+| [Agent setup](docs/agent-setup.md) | End-to-end installation, MCP capture and model configuration |
 | [Additional models](docs/additional-models.md) | YOLO, ONNX and image-model configuration |
 | [Latency measurements](docs/latency.md) | Actual MCP results, telemetry and model/live benchmarks |
 | [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
