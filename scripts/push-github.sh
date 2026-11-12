@@ -12,10 +12,32 @@ fi
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/humansense-publish.XXXXXX")
 printf 'Preparing a separate checkout at %s\n' "$work_dir"
 git clone "$bundle_path" "$work_dir/source"
-git clone "$remote_url" "$work_dir/remote"
+if test -n "${HUMANSENSE_BASE_BRANCH:-}"; then
+    git clone --branch "$HUMANSENSE_BASE_BRANCH" "$remote_url" "$work_dir/remote"
+else
+    git clone "$remote_url" "$work_dir/remote"
+fi
 git -C "$work_dir/remote" switch -c "$branch_name"
-empty_tree=$(git -C "$work_dir/source" hash-object -t tree /dev/null)
-git -C "$work_dir/source" diff --binary "$empty_tree" HEAD > "$work_dir/implementation.patch"
+base_commit=""
+if git -C "$work_dir/remote" rev-parse --verify HEAD >/dev/null 2>&1; then
+    remote_tree=$(git -C "$work_dir/remote" rev-parse 'HEAD^{tree}')
+    while IFS= read -r candidate; do
+        if test "$(git -C "$work_dir/source" rev-parse "$candidate^{tree}")" = "$remote_tree"; then
+            base_commit="$candidate"
+            break
+        fi
+    done < <(git -C "$work_dir/source" rev-list HEAD)
+fi
+if test -n "$base_commit"; then
+    git -C "$work_dir/source" diff --binary "$base_commit" HEAD > "$work_dir/implementation.patch"
+else
+    empty_tree=$(git -C "$work_dir/source" hash-object -t tree /dev/null)
+    git -C "$work_dir/source" diff --binary "$empty_tree" HEAD > "$work_dir/implementation.patch"
+fi
+if ! test -s "$work_dir/implementation.patch"; then
+    printf '%s\n' 'Remote already matches this delivery snapshot. Nothing to push.'
+    exit 0
+fi
 # Root bundle commit supplies additions; existing-file conflicts are not overwritten.
 if ! git -C "$work_dir/remote" apply --index --3way "$work_dir/implementation.patch"; then
   printf '\nPatch conflicts need review in %s. Nothing was pushed.\n' "$work_dir/remote" >&2

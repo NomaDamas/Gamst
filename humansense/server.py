@@ -87,6 +87,10 @@ async def _main(args):
     async with HumanSense(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
         adapter = MCPServer(human)
         try:
+            from .remotevision import vision_from_env
+            vision = vision_from_env()
+            if vision is not None:
+                human.register(vision)
             from .reasoning import backend_from_env
             backend = backend_from_env()
             if backend is not None:

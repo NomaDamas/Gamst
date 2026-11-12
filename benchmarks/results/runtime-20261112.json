@@ -1,0 +1,85 @@
+{
+  "schema_version": "0.1",
+  "benchmark": "synthetic-sdk-runtime",
+  "measured_at_utc": "2026-11-12T10:03:22.736444+00:00",
+  "environment": {
+    "python": "3.12.3",
+    "implementation": "CPython",
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "logical_cpu_count": 8,
+    "cpu_model": "x86_64",
+    "humansense_version": "0.1.0"
+  },
+  "configuration": {
+    "samples_requested": 200,
+    "samples_completed": 200,
+    "warmup": 20,
+    "duration_seconds_requested": null,
+    "store": ":memory:",
+    "retention_hours": 24,
+    "queue_capacity": 8,
+    "synthetic": true,
+    "capture_devices_opened": false,
+    "external_models_enabled": false,
+    "pacing": "unpaced_sequential_cycles",
+    "payload": "unique explicit clarification text plus numeric audio.rms measurement",
+    "subject_count": 1,
+    "window_ms": 30000
+  },
+  "latency": {
+    "text_input": {
+      "count": 200,
+      "retained_timing_samples": 200,
+      "percentile_method": "nearest_rank_on_deterministic_reservoir",
+      "p50_ms": 4.8989,
+      "p95_ms": 10.4042,
+      "max_ms": 16.990975,
+      "mean_ms": 5.445196929999998
+    },
+    "signal_input": {
+      "count": 200,
+      "retained_timing_samples": 200,
+      "percentile_method": "nearest_rank_on_deterministic_reservoir",
+      "p50_ms": 2.541484,
+      "p95_ms": 5.479998,
+      "max_ms": 9.253704,
+      "mean_ms": 2.7572649650000005
+    },
+    "state_query": {
+      "count": 200,
+      "retained_timing_samples": 200,
+      "percentile_method": "nearest_rank_on_deterministic_reservoir",
+      "p50_ms": 0.826085,
+      "p95_ms": 1.488345,
+      "max_ms": 2.890316,
+      "mean_ms": 0.8492502749999998
+    }
+  },
+  "resources": {
+    "wall_seconds": 1.8145090136677027,
+    "process_cpu_seconds": 1.814447473,
+    "process_cpu_percent_of_one_core": 99.99660841212476,
+    "peak_rss_bytes_before_measurement": 28028928,
+    "peak_rss_bytes_after_measurement": 33931264,
+    "rss_semantics": "process_lifetime_high_water_mark_including_interpreter_and_warmup",
+    "sqlite_allocated_bytes": 3575808,
+    "stored_record_count": 1080
+  },
+  "backpressure": {
+    "stalled_event_subscribers": 1,
+    "first_event_received": true,
+    "max_observed_queue_depth": 8,
+    "queue_capacity": 8,
+    "dropped_deliveries": 191,
+    "scope": "subscriber_deliveries_not_sensor_frames"
+  },
+  "limitations": [
+    "Synthetic inputs; no sensor or model accuracy measurement",
+    "Sequential unpaced workload; not a concurrent application load test",
+    "No ASR, camera, VAD, transport, GPU, or external reasoning latency included",
+    "RSS is a process lifetime peak, not a precise SDK allocation measurement",
+    "Duration mode does not certify an 8-hour soak unless actually run for that duration",
+    "Timing reservoirs hold at most 10000 observations per operation"
+  ]
+}

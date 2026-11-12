@@ -25,6 +25,8 @@ class CaptureSession:
         self.human, self.video, self.audio = human, video, audio
         self.consent, self.sample_rate, self.fps = consent, sample_rate, fps
         self.subject_id = subject_id
+        from .metrics import LatencyMonitor
+        self.latency = LatencyMonitor()
         self._camera = self._mic = None
         self._tasks: list[asyncio.Task] = []
         self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
@@ -127,7 +129,7 @@ class CaptureSession:
         if self._audio_queue.full():
             self._audio_queue.get_nowait()
             self._counts["dropped_audio_windows"] += 1
-        self._audio_queue.put_nowait((payload, timestamp))
+        self._audio_queue.put_nowait((payload, timestamp, time.perf_counter_ns()))
 
     async def _camera_loop(self):
         while self._running:
@@ -136,21 +138,27 @@ class CaptureSession:
                 await asyncio.sleep(.05)
                 continue
             generation = self._capture_generation
-            ok, image = await asyncio.to_thread(self._read_camera, self._camera)
+            with self.latency.measure("capture.camera_read"):
+                ok, image = await asyncio.to_thread(self._read_camera, self._camera)
             if not ok:
                 raise RuntimeError("Camera frame read failed")
             if self._running and not self._paused and generation == self._capture_generation:
-                await self.human.push_video(image, subject_id=self.subject_id,
-                                            timestamp_ms=time.time_ns() // 1_000_000)
+                with self.latency.measure("capture.video_processing"):
+                    await self.human.push_video(image, subject_id=self.subject_id,
+                                                timestamp_ms=time.time_ns() // 1_000_000)
                 self._counts["video_frames"] += 1
             await asyncio.sleep(max(0, 1 / self.fps - (asyncio.get_running_loop().time() - started)))
 
     async def _microphone_loop(self):
         while self._running:
-            payload, timestamp = await self._audio_queue.get()
+            item = await self._audio_queue.get()
+            payload, timestamp = item[:2]
+            if len(item) > 2:
+                self.latency.record("capture.audio_queue_wait", (time.perf_counter_ns()-item[2])/1_000_000)
             if not self._paused:
-                await self.human.push_audio(payload, subject_id=self.subject_id,
-                                            timestamp_ms=timestamp, sample_rate=self.sample_rate)
+                with self.latency.measure("capture.audio_processing"):
+                    await self.human.push_audio(payload, subject_id=self.subject_id,
+                                                timestamp_ms=timestamp, sample_rate=self.sample_rate)
                 self._counts["audio_windows"] += 1
 
     async def pause(self):
@@ -236,7 +244,7 @@ class CaptureSession:
                 "microphone": self._mic is not None and self._running and not self._paused,
                 "consent": self.consent, "subject_id": self.subject_id,
                 "identity_verified": False, "raw_media_saved": False,
-                "errors": list(self._errors), **self._counts}
+                "latency": self.latency.snapshot(), "errors": list(self._errors), **self._counts}
 
     async def __aenter__(self):
         return await self.start()

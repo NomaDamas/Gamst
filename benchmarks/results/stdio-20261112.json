@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-11-12T10:02:13.878167+00:00",
+  "workload": "synthetic_text_actual_mcp_stdio",
+  "python": "3.12.3",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+  "startup_roundtrip_ms": 85.397387,
+  "wall_seconds": 0.3598200771957636,
+  "roundtrips": {
+    "push_text": {
+      "count": 100,
+      "mean_ms": 2.10334891,
+      "p50_ms": 2.071653,
+      "p95_ms": 3.561375,
+      "p99_ms": 3.764253,
+      "max_ms": 4.376219
+    },
+    "get_state": {
+      "count": 100,
+      "mean_ms": 0.46042106,
+      "p50_ms": 0.440729,
+      "p95_ms": 0.71949,
+      "p99_ms": 0.843934,
+      "max_ms": 0.99963
+    },
+    "get_metrics": {
+      "count": 1,
+      "mean_ms": 0.187865,
+      "p50_ms": 0.187865,
+      "p95_ms": 0.187865,
+      "p99_ms": 0.187865,
+      "max_ms": 0.187865
+    }
+  },
+  "runtime_metrics": {
+    "latency": {
+      "schema_version": "0.1",
+      "unit": "milliseconds",
+      "clock": "perf_counter_ns",
+      "capacity_per_stage": 10000,
+      "max_stages": 128,
+      "stage_count": 2,
+      "stages": {
+        "sdk.push_text": {
+          "count": 100,
+          "total_ms": 184.1347030000001,
+          "mean_ms": 1.8413470300000008,
+          "max_ms": 4.069175,
+          "window_count": 100,
+          "p50_ms": 1.834978,
+          "p95_ms": 3.288564,
+          "p99_ms": 3.495315,
+          "percentile_scope": "last_capacity_observations",
+          "aggregate_scope": "since_last_reset",
+          "percentile_method": "nearest_rank"
+        },
+        "sdk.get_state": {
+          "count": 100,
+          "total_ms": 24.846493000000017,
+          "mean_ms": 0.24846493000000017,
+          "max_ms": 0.761225,
+          "window_count": 100,
+          "p50_ms": 0.23441,
+          "p95_ms": 0.469404,
+          "p99_ms": 0.607472,
+          "percentile_scope": "last_capacity_observations",
+          "aggregate_scope": "since_last_reset",
+          "percentile_method": "nearest_rank"
+        }
+      }
+    },
+    "dropped_records": 0,
+    "clock": "perf_counter_monotonic",
+    "interpretation": "runtime_measurements_not_model_accuracy"
+  },
+  "limitations": [
+    "No camera/audio/model inference",
+    "Includes JSON serialization, pipe transport and SDK processing",
+    "Synchronous one-client requests; not concurrent transport throughput",
+    "No FPS/ASR/8h validation"
+  ]
+}

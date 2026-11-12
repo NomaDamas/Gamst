@@ -6,6 +6,8 @@ Optional dependencies are installed separately. Package license and model-weight
 
 | Backend | Integration | Assets |
 | --- | --- | --- |
+| Ultralytics | Local YOLO inference | User-supplied trusted weights; review upstream AGPL/commercial and model terms |
+| ONNX Runtime | Explicit exported detector/features contracts | User-supplied ONNX graph and metadata |
 | OpenCV | HOG person detection | Built-in detector in user's OpenCV distribution |
 | MediaPipe Tasks | Face landmarks and blendshapes | User-supplied local task file, SHA-256 provenance |
 | Silero VAD/PyTorch | JIT speech activity | User-supplied local licensed JIT file, SHA-256 provenance |
@@ -13,6 +15,6 @@ Optional dependencies are installed separately. Package license and model-weight
 | sounddevice/PortAudio | Native microphone capture | OS audio device and native library |
 | websockets | Optional local event transport | No model |
 
-SAM3, YOLO, Pipecat and LiveKit are not vendored. The plugin/push interfaces are extension points, not a claim of a tested native integration. Model names described as 'latest' must be checked against upstream API and licenses before integration; this environment had no network access to do so.
+SAM3, YOLO, Pipecat and LiveKit are not vendored. YOLO is optionally integrated through the installed Ultralytics API, not copied source. The plugin/push interfaces are extension points, not a claim of a tested native integration. Model names described as 'latest' must be checked against upstream API and licenses before integration; this environment had no network access to do so.
 
 Closed-source implementation cannot be copied without permission. Future provider connectors should use authorized public APIs, explicit credentials, informed data-transfer consent and separately documented retention. This release is local-only.

@@ -14,6 +14,7 @@ The original goal remains active. A passing software test suite is not proof of 
 | Real-time camera/microphone | CaptureSession code and mocked lifecycle tests | Hardware unavailable; real input validation missing |
 | MediaPipe / Whisper / Silero | explicit local weights adapters and request/model mocks | Models absent; real inference unverified |
 | Person tracking / association | stream-local geometric tracker tests | IoU implemented; identity, re-identification and speaker association missing |
+| Additional YOLO/ONNX/VLM backends | Adapter parsing, local model contract and HTTP request tests | Implemented; actual weights/runtime unavailable |
 | SAM3/latest model backend | no upstream inspection, weights or dependencies accessible | Missing; requires network/assets/license verification |
 | REA reuse / third-party source | no remote repository reachable | Not inspected or copied |
 | Closed provider integration | opt-in HTTPS JSON completions adapter, injected-opener tests | Actual authorized endpoint execution unverified |
@@ -22,7 +23,7 @@ The original goal remains active. A passing software test suite is not proof of 
 | WebSocket / TypeScript | Server subscription handler tests and Node client RPC/order/error/timeout tests | Runtime logic verified without sockets; live transport and TS compilation unavailable |
 | LiveKit/Pipecat | Duck-typed native/decoded boundaries, PCM conversion/clock mapping tests | Bridge implemented; native SDK compatibility unverified |
 | Timing/fusion / multiple subjects | aligned timestamps and explicit subject separation tests | Automatic A/V ownership, diarization and clock alignment missing |
-| Engineering performance targets | Reproducible measured synthetic core benchmark; evidence growth fixed | Synthetic results documented; hardware/model latency and eight-hour soak unverified |
+| Engineering performance targets | Reproducible measured synthetic core benchmark; evidence growth fixed | Synthetic core and actual MCP stdio results committed; per-stage telemetry and model/live replay harness implemented. Hardware/model latency and eight-hour soak unverified |
 | Model/product evaluation | evaluation plan only | Dataset, task-success/satisfaction/accuracy evidence missing |
 | GitHub remote history and push | repeated DNS failures, read-only empty .git mount; local bundle commits | Remote verification and push blocked |
 

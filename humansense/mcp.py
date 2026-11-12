@@ -32,6 +32,7 @@ MODEL_PATH = {"type": "string", "minLength": 1,
 
 def tool_definitions() -> list[dict]:
     specs = [
+        ("get_metrics", "Measured runtime processing p50/p95/p99 and delivery drops; excludes unmeasured hardware/model stages.", {}, ()),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
@@ -42,7 +43,7 @@ def tool_definitions() -> list[dict]:
         ("record_feedback", "Record an explicit observed outcome for a retained inference; never silently recalibrates models.", {"subject_id": SUBJECT, "inference_id": {"type": "string", "minLength": 1}, "outcome": {"type": "boolean"}, "prediction": {"type": "string", "minLength": 1}}, ("inference_id", "outcome")),
         ("push_text", "Supply a conversation turn; no camera or microphone needed.", {"subject_id": SUBJECT, "text": {"type": "string", "minLength": 1}, "timestamp_ms": TIME, "role": {"type": "string", "enum": ["user", "assistant"]}}, ("text",)),
         ("push_claim", "Compare explicit structured statements; conflicts are not deception judgments.", {"subject_id": SUBJECT, "key": {"type": "string", "minLength": 1}, "value": {}, "timestamp_ms": TIME, "scope": {"type": "string", "minLength": 1, "default": "session"}, "source": {"type": "string", "minLength": 1, "default": "user"}}, ("key", "value")),
-        ("start_capture", "Start local devices only with explicit consent. Optional local model paths are fixed until server restart; omitted paths reuse selected models. VAD is bound to one subject stream. Session IDs are not real-world identities.", {"consent": {"type": "boolean", "const": True}, "video": {"type": ["integer", "string", "null"], "default": 0}, "audio": {"type": "boolean", "default": False}, "subject_id": SUBJECT, "fps": {"type": "number", "minimum": 1, "maximum": 60, "default": 10}, "vad_model_path": MODEL_PATH, "asr_model_path": MODEL_PATH, "face_model_path": MODEL_PATH}, ("consent",)),
+        ("start_capture", "Start local devices only with explicit consent. Optional local model paths are fixed until server restart; omitted paths reuse selected models. VAD is bound to one subject stream. Session IDs are not real-world identities.", {"consent": {"type": "boolean", "const": True}, "video": {"type": ["integer", "string", "null"], "default": 0}, "audio": {"type": "boolean", "default": False}, "subject_id": SUBJECT, "fps": {"type": "number", "minimum": 1, "maximum": 60, "default": 10}, "vad_model_path": MODEL_PATH, "asr_model_path": MODEL_PATH, "face_model_path": MODEL_PATH, "onnx_model_path": MODEL_PATH, "yolo_model_path": MODEL_PATH}, ("consent",)),
         ("stop_capture", "Stop collection and release devices.", {}, ()),
         ("get_capture_status", "Collection status and device errors.", {}, ()),
         ("pause_capture", "Pause collection without discarding history.", {}, ()),
@@ -128,19 +129,25 @@ class MCPServer:
             from .capture import CaptureSession
             from .plugins import (AudioLevelPlugin, OpenCVPersonPlugin,
                                   SileroVADPlugin, FasterWhisperPlugin, MediaPipeFacePlugin)
+            from .onnx import ONNXPersonPlugin
+            from .yolo import UltralyticsYOLOPlugin
             subject = args.get("subject_id", "local-user")
             video, audio = args.get("video", 0), args.get("audio", False)
             if "vad" in self._capture_plugins and self._capture_plugins["vad"][0][1] != subject:
                 raise ValueError("Selected VAD model is bound to another subject; restart the server to change streams")
             factories = []
-            if video is not None:
+            if "onnx_model_path" in args and "yolo_model_path" in args:
+                raise ValueError("Select one person detector: ONNX or YOLO")
+            if video is not None and not any(k in args for k in ("onnx_model_path", "yolo_model_path")):
                 factories.append(("video", (), OpenCVPersonPlugin))
             if audio:
                 factories.append(("audio", (), AudioLevelPlugin))
             for arg, key, factory, enabled in (
                     ("vad_model_path", "vad", SileroVADPlugin, audio),
                     ("asr_model_path", "asr", FasterWhisperPlugin, audio),
-                    ("face_model_path", "face", MediaPipeFacePlugin, video is not None)):
+                    ("face_model_path", "face", MediaPipeFacePlugin, video is not None),
+                    ("onnx_model_path", "onnx", ONNXPersonPlugin, video is not None),
+                    ("yolo_model_path", "yolo", UltralyticsYOLOPlugin, video is not None)):
                 if arg not in args:
                     continue
                 if not enabled:
@@ -310,6 +317,10 @@ async def _main(args: argparse.Namespace) -> None:
         backend = backend_from_env()
         if backend is not None:
             human.set_analysis_backend(backend)
+        from .remotevision import vision_from_env
+        vision = vision_from_env()
+        if vision is not None:
+            human.register(vision)
         adapter = MCPServer(human)
         from .companion import Companion, companion_backend_from_env
         adapter.companion = Companion(human, companion_backend_from_env())

@@ -158,6 +158,9 @@ Use `video: null` for microphone-only capture. Optional local model paths are `f
 | Backend | Install extra | Measurements / requirements |
 | --- | --- | --- |
 | OpenCV | `vision` | HOG person boxes, counts, stream-local IoU tracks |
+| YOLO / Ultralytics | `yolo` | Local trusted detection weights, boxes and stream-local tracks |
+| ONNX Runtime | `onnx` | Contract-validated person detector or explicitly mapped feature scores |
+| Image-model server | `vision` + configured endpoint | Rate-limited unverified visual descriptions and expression scores |
 | MediaPipe Tasks | `mediapipe` | Face landmarks and blendshapes; local `.task` file |
 | Audio level | None for supplied PCM; `audio` for native capture | RMS, dBFS, energy activity — not speech recognition |
 | Silero VAD | `vad` | Speech activity and start/stop events; local JIT file |
@@ -172,7 +175,7 @@ human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
 # await human.push_audio(normalized_mono_pcm, sample_rate=16000)
 ```
 
-No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 and biometric re-identification are not included.
+No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 and biometric re-identification are not included. See [additional model configuration](docs/additional-models.md) for YOLO, ONNX and image-model adapters.
 
 ## 🤝 Context-aware Companion
 
@@ -217,14 +220,17 @@ python -m unittest discover -s tests -v
 node integrations/typescript/client.test.mjs
 python -m humansense demo
 python -m benchmarks.runtime --samples 200
+python -m benchmarks.stdio --samples 100
 ```
 
-Verified locally: **116 Python tests**, **3 JavaScript client tests**, wheel installation, and actual MCP stdio subprocess communication. Optional backends use mock fixtures; real device/model execution is deferred. The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+Verified locally: **146 Python tests**, **3 JavaScript client tests**, wheel installation, and actual MCP stdio subprocess communication. Optional backends use mock fixtures; real device/model execution is deferred. The [synthetic benchmark](docs/runtime-benchmark.md) and [latency reports](docs/latency.md) include actual SDK/MCP processing measurements. `get_metrics` exposes runtime/plugin p50/p95/p99; capture status includes audio queue wait. These are not claims of camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
 
 ## 📚 Documentation
 
 | Guide | Contents |
 | --- | --- |
+| [Additional models](docs/additional-models.md) | YOLO, ONNX and image-model configuration |
+| [Latency measurements](docs/latency.md) | Actual MCP results, telemetry and model/live benchmarks |
 | [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
 | [Predictions & feedback](docs/predictions.md) | Target registration, outcomes, held-out calibration |
 | [Model reasoning](docs/reasoning.md) | Local/provider analysis and citation validation |

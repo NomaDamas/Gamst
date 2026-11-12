@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import time
+from functools import wraps
 import re
 from collections import Counter
 from copy import deepcopy
@@ -29,6 +31,16 @@ def _window_ms(value):
     return duration
 
 
+def _timed(stage):
+    def decorate(method):
+        @wraps(method)
+        async def wrapped(self, *args, **kwargs):
+            with self.latency.measure(stage):
+                return await method(self, *args, **kwargs)
+        return wrapped
+    return decorate
+
+
 class HumanSense:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
@@ -43,6 +55,8 @@ class HumanSense:
         if capabilities is not None and (isinstance(capabilities, str) or set(capabilities)-supported):
             raise ValueError("supported capabilities: conversation, behavior, consistency")
         self.capabilities = tuple(capabilities or ("conversation", "behavior", "consistency"))
+        from .metrics import LatencyMonitor
+        self.latency = LatencyMonitor()
         self.consent = bool(consent)
         self.paused = False
         self.closed = False
@@ -106,6 +120,7 @@ class HumanSense:
             result["quality"]["flags"].append("out_of_order")
         return result
 
+    @_timed("sdk.push_text")
     async def push_text(self, text, subject_id="local-user", timestamp_ms=None, role="user"):
         self._check()
         if not isinstance(text, str) or not text.strip():
@@ -151,6 +166,7 @@ class HumanSense:
         result["name"] = name
         return self._emit(result)
 
+    @_timed("sdk.push_signal")
     async def push_signal(self, name, value, modality, subject_id="local-user", timestamp_ms=None,
                           model_id="external", model_version="unspecified", quality=None):
         self._check()
@@ -195,6 +211,7 @@ class HumanSense:
         await self._infer(subject_id, ts, trends=trends)
         return record
 
+    @_timed("sdk.push_claim")
     async def push_claim(self, key, value, subject_id="local-user", timestamp_ms=None,
                          scope="session", source="user"):
         self._check()
@@ -245,6 +262,19 @@ class HumanSense:
                 "contradiction_detected": bool(conflicts), "verification_status": "not_checked",
                 "method": "explicit_structured_claim_comparison", "conflicts": [{"event_id": r["id"], **r["observation"], "evidence": r["evidence"]} for r in conflicts],
                 "deception_assessed": False}}
+        visual = next((r for r in signals if r["observation"].get("name") == "scene.model_description"), None)
+        if visual is not None:
+            value = visual["observation"].get("value", {})
+            if isinstance(value, dict) and value.get("interpretation") == "unverified_model_hypotheses":
+                result["predictions"]["conversation"]["expressions"] = {
+                    "status": "model_hypotheses", "items": deepcopy(value.get("expressions", [])),
+                    "evidence_ids": [visual["id"]], "probability": None,
+                    "calibrated": False, "verified": False}
+                result["predictions"]["behavior"]["visual_hypotheses"] = {
+                    "observations": deepcopy(value.get("observations", [])),
+                    "evidence_ids": [visual["id"]], "verified": False,
+                    "interpretation": "model_interpretation_not_baseline_measurement"}
+                result["evidence"].append({"record_id": visual["id"], "type": "visual_model_interpretation"})
         result["recommended_action"] = ({"type": "ask_clarifying_question", "requires_confirmation": False,
             "text": "핵심을 짧게 다시 설명해 드릴까요?", "evidence_ids": [r["id"] for r in interaction_evidence]}
             if interaction_evidence else None)
@@ -321,6 +351,7 @@ class HumanSense:
         self.analysis_backend = backend
         return self
 
+    @_timed("model.analysis")
     async def analyze(self, subject_id="local-user", window="5m"):
         """Explicit model pass over retained text/measurements; does not block capture scheduling."""
         self._check()
@@ -377,9 +408,10 @@ class HumanSense:
             if modality not in modalities:
                 continue
             try:
-                output = plugin.process(frame)
-                if inspect.isawaitable(output):
-                    output = await output
+                with self.latency.measure("plugin."+str(getattr(plugin, "name", type(plugin).__name__))):
+                    output = plugin.process(frame)
+                    if inspect.isawaitable(output):
+                        output = await output
                 if generation != self._generation or self.paused or self.closed:
                     return []
                 for signal in output or []:
@@ -400,9 +432,11 @@ class HumanSense:
                 raise
         return results
 
+    @_timed("sdk.push_video")
     async def push_video(self, frame, subject_id="local-user", timestamp_ms=None):
         return await self._push_media(frame, "video", subject_id, timestamp_ms)
 
+    @_timed("sdk.push_audio")
     async def push_audio(self, samples, subject_id="local-user", timestamp_ms=None, sample_rate=16000):
         return await self._push_media(samples, "audio", subject_id, timestamp_ms, sample_rate)
 
@@ -430,10 +464,15 @@ class HumanSense:
     def signals(self):
         return self._stream(("observation.signal",))
 
+    async def get_metrics(self):
+        return {"latency": self.latency.snapshot(), "dropped_records": self.dropped_records,
+                "clock": "perf_counter_monotonic", "interpretation": "runtime_measurements_not_model_accuracy"}
+
     async def get_history(self, subject_id="local-user", hours=24, limit=100, start_ms=None, end_ms=None, type=None):
         self._prune()
         return self.store.query(subject_id, start_ms if start_ms is not None else timestamp()-int(hours*3_600_000), end_ms, type, limit)
 
+    @_timed("sdk.get_state")
     async def get_state(self, subject_id="local-user"):
         self._prune()
         now = timestamp()
@@ -473,6 +512,7 @@ class HumanSense:
         return {"status": "available" if metrics else "insufficient", "metrics": metrics,
                 "window_ms": duration, "interpretation": "observed_patterns_only"}
 
+    @_timed("sdk.get_context")
     async def get_context(self, subject_id="local-user", window="1h", include=None):
         self._prune()
         now = timestamp()
@@ -519,6 +559,7 @@ class HumanSense:
         self._generation += 1
         deleted = self.store.delete(subject_id)
         await self._reset_plugins()
+        self.latency.reset()
         # Imported aggregate artifacts cannot be untrained for one subject. Drop
         # active calibration for every deletion rather than retain unknown contributions.
         for definition in self.prediction_definitions.values():

@@ -28,6 +28,7 @@ class Dashboard:
         if op == "state":
             return {"state": await self.human.get_state(),
                     "context": await self.human.get_context(),
+                    "metrics": await self.human.get_metrics(),
                     "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
                     "latest_inference": (await self.human.get_history(type="human.inference", limit=1)),
@@ -133,7 +134,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, onnx_model=None, yolo_model=None):
     from . import HumanSense
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with HumanSense(consent=True, store=store) as human:
@@ -144,7 +145,16 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None):
         app = Dashboard(human, asyncio.get_running_loop())
         from .companion import Companion, companion_backend_from_env
         app.companion = Companion(human, companion_backend_from_env())
-        for factory in (AudioLevelPlugin, OpenCVPersonPlugin):
+        if onnx_model and yolo_model:
+            raise ValueError("Select one person detector: ONNX or YOLO")
+        from .onnx import ONNXPersonPlugin
+        from .yolo import UltralyticsYOLOPlugin
+        from .remotevision import vision_from_env
+        vision = vision_from_env()
+        if vision is not None:
+            human.register(vision)
+        detector = (lambda: ONNXPersonPlugin(onnx_model)) if onnx_model else (lambda: UltralyticsYOLOPlugin(yolo_model)) if yolo_model else OpenCVPersonPlugin
+        for factory in (AudioLevelPlugin, detector):
             try:
                 human.register(factory())
             except (ImportError, RuntimeError) as exc:
@@ -173,9 +183,11 @@ def main():
     parser.add_argument("--face-model", help="Local MediaPipe task file")
     parser.add_argument("--asr-model", help="Local faster-whisper model directory")
     parser.add_argument("--vad-model", help="Local Silero JIT file")
+    parser.add_argument("--onnx-model", help="Local postprocessed ONNX detector")
+    parser.add_argument("--yolo-model", help="Local trusted YOLO weights")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.onnx_model, args.yolo_model))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:
