@@ -18,6 +18,32 @@ Catch Your Mind gives agents a shared layer for observing behavior, tracking cha
 
 **Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
+## A context layer for an ecosystem of tools
+
+Connect vision, voice and other perception tools once; reuse their timestamped
+observations in dashboards, LLM/VLM prompts, MCP agents and streaming applications.
+Models, transports and consuming applications can evolve independently.
+
+**Application examples:** AI companions; travel assistants describing surroundings;
+interview or interrogation-session transcription and timeline review; health and
+wellness observation; accessibility; robotics; user research. These are possible
+integrations, not built-in claims of diagnosis, emotion accuracy or lie detection.
+Application-specific analysis belongs to the selected model and consuming app.
+
+**Current extension architecture:** independent bounded audio/video lanes; shared
+PCM/JPEG transport validation; explicit package-entry-point plugins; optional local
+Hugging Face classifiers; Ollama token streaming; SDK/WebSocket/MCP context output.
+The browser demos show gauges, category bars/donuts, leading score categories and
+rolling time series. Classification categories come from the connected model;
+the bundled face model outputs facial movements.
+
+The design adapts ideas from [Pipecat's frame processing](https://docs.pipecat.ai/pipecat/learn/pipeline),
+[Hugging Face's task pipelines](https://huggingface.co/docs/transformers/main_classes/pipelines)
+and [Ollama's streaming API](https://docs.ollama.com/api/streaming). It is original
+implementation, not a fork or endorsement of those projects.
+
+**[Streaming protocols, plugin authoring, provider setup and examples →](docs/streaming-and-plugins.md)**
+
 ## Run the complete local stack
 
 On Apple Silicon with Python 3.10+:
@@ -140,6 +166,35 @@ Every record carries a subject ID, timestamp, schema version, model provenance, 
 
 **Scores have distinct meanings:** `model_score` is a pattern score; `probability` requires a registered calibration artifact and held-out validation. Without that evidence, probabilities remain `null`. See the [output contract](docs/contract.md) and [prediction/feedback workflow](docs/predictions.md).
 
+### Live dashboard and temporal VLM
+
+The local dashboard shows the transmitted context as a live table, with circular
+expression, audio-level and speech-activity gauges. Start capture with the input
+checkboxes; VLM can be toggled independently. Configure its analysis interval
+(1–60 seconds), observation window (1–30 seconds), and sampling rate (0.2–4 FPS).
+The buffer holds at most 8 frames; the displayed sampling cap is
+`min(requested_fps, 8 / window_seconds)`. Actual frame count, span and FPS are
+reported separately, including partial windows during startup.
+
+Each local VLM request includes timestamped frames and up to six corresponding
+numeric/face observations per frame. The output context contains
+`scene.description` and `scene.window` (time range, sampling settings and
+`measurements_series` with evidence IDs), never image bytes. The local launcher
+allocates 16,384 context tokens across two llama.cpp slots for temporal input.
+Run `PYTHONPATH=. .venv/bin/python scripts/qa_temporal.py` to verify the
+8-frame VLM → MCP path with the local portrait fixture (no device access).
+Changing settings or stopping capture clears the buffer and invalidates queued
+results. Already-running HTTP inference may finish, but its output is discarded.
+
+Agents connected to the same runtime through `humansense.mcp_live` can use:
+
+```json
+{"name":"configure_vlm","arguments":{"enabled":true,"interval":3,"window_seconds":4,"sample_fps":2}}
+```
+
+`get_vlm_status` returns applied settings; `get_context` and the WebSocket context
+subscription include the temporal result. Settings do not start camera capture.
+
 ## 🔌 MCP for AI agents
 
 Start the stdio server:
@@ -246,7 +301,7 @@ python -m humansense demo
 python -m benchmarks.runtime --samples 200
 ```
 
-Verified locally: **116 Python tests**, **3 JavaScript client tests**, wheel installation, and actual MCP stdio subprocess communication. Optional backends use mock fixtures; real device/model execution is deferred. The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+The streaming refactor is covered by **138 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. New Hugging Face and Ollama adapter contracts use fixtures; their model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
 
 ## 📚 Documentation
 

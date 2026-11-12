@@ -17,6 +17,11 @@ from .mcp import MAX_MESSAGE_BYTES, MCPServer
 
 async def handle_connection(server, socket):
     """One WebSocket connection; custom subscriptions are separate from MCP."""
+    from .media import media_router, decode_media
+    import uuid
+    router = media_router(server.human)
+    source = "ws-" + uuid.uuid4().hex
+    streaming = False
     lock = asyncio.Lock()
     publishers = []
     allowed = {"event": "events", "signal": "signals", "inference": "observe"}
@@ -27,10 +32,10 @@ async def handle_connection(server, socket):
 
     async def publish(kind):
         if kind == 'context':
-            while True:
+            async for context in server.human.contexts():
                 await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
-                            'params': await server.human.get_context(window='5m')})
-                await asyncio.sleep(.25)
+                            'params': context})
+            return
         async for record in getattr(server.human, allowed[kind])():
             await send({"jsonrpc": "2.0", "method": f"notifications/humansense/{kind}", "params": record})
 
@@ -63,14 +68,49 @@ async def handle_connection(server, socket):
                         else:
                             await subscribe(kinds)
                             response = {"jsonrpc": "2.0", "id": ident, "result": {"types": kinds}}
+                elif isinstance(request, dict) and request.get('method') in (
+                        'humansense/stream/start', 'humansense/stream/stop', 'humansense/stream/status', 'humansense/media'):
+                    ident = request.get('id')
+                    try:
+                        if request.get('jsonrpc') != '2.0' or type(ident) not in (str,int):
+                            raise ValueError('Media operations require a JSON-RPC request ID')
+                        params = request.get('params', {})
+                        if not isinstance(params, dict):
+                            raise ValueError('params must be an object')
+                        method = request['method']
+                        if method == 'humansense/stream/start':
+                            if params.get('consent') is not True:
+                                raise ValueError('Explicit consent required')
+                            await server.human.resume()
+                            streaming = True
+                            result = {'streaming': True, 'source': source}
+                        elif method == 'humansense/stream/stop':
+                            streaming = False
+                            await router.clear(source)
+                            result = {'streaming': False}
+                        elif method == 'humansense/stream/status':
+                            result = {'streaming': streaming, 'routing': router.status()}
+                        else:
+                            if not streaming:
+                                raise ValueError('Start this media stream with consent first')
+                            modality, data, rate = decode_media(params)
+                            result = await router.submit(modality, data, source=source,
+                                subject_id=params.get('subject_id','local-user'),
+                                sequence=params.get('sequence'), timestamp_ms=params.get('timestamp_ms'), sample_rate=rate)
+                        response = {'jsonrpc':'2.0', 'id':ident, 'result':result}
+                    except (ValueError, TypeError, RuntimeError, PermissionError, ImportError) as exc:
+                        response = server.error(ident, -32602, str(exc))
                 else:
                     response = await server.handle(request)
             if response is not None:
                 await send(response)
     finally:
-        for task in publishers:
-            task.cancel()
-        await asyncio.gather(*publishers, return_exceptions=True)
+        try:
+            await router.clear(source)
+        finally:
+            for task in publishers:
+                task.cancel()
+            await asyncio.gather(*publishers, return_exceptions=True)
 
 
 async def serve_websocket(server: MCPServer, port: int = 8765,

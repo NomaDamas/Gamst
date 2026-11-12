@@ -3,10 +3,16 @@ import math
 
 
 def compact_observation(name, value):
+    if isinstance(name, str) and name.startswith('classification.'):
+        from .extensions import classification
+        return classification(value['labels'], score_kind=value.get('score_kind','score'), exclusive=value.get('exclusive',False))
     if name == 'scene.faces' and isinstance(value, list):
         return [{'frame_face_index': face.get('frame_face_index'),
                  'blendshapes': dict(sorted(face.get('blendshapes', {}).items(),
-                                           key=lambda item: item[1], reverse=True)[:8])}
+                                           key=lambda item: item[1], reverse=True)[:8],
+                                    **{k: v for k, v in face.get('blendshapes', {}).items()
+                                       if k in ('mouthSmileLeft', 'mouthSmileRight', 'eyeBlinkLeft',
+                                                'eyeBlinkRight', 'jawOpen', 'browInnerUp')})}
                 for face in value[:4]]
     if isinstance(value, str):
         return value[:2000]
@@ -29,7 +35,13 @@ def observation_packet(records, now):
     for record in sorted(records, key=lambda r: r['timestamp_ms']):
         name = record.get('observation', {}).get('name')
         value = record.get('observation', {}).get('value')
-        safe = type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks')
+        is_classification = isinstance(name,str) and name.startswith('classification.')
+        if is_classification:
+            try:
+                compact_observation(name,value)
+            except (ValueError,TypeError,KeyError):
+                continue
+        safe = is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks')
         if name and safe and record.get('type') == 'observation.signal':
             latest[name] = record
     output = {}
@@ -39,5 +51,5 @@ def observation_packet(records, now):
                         'timestamp_ms': record['timestamp_ms'], 'age_ms': age,
                         'fresh': age <= 5000, 'evidence_id': record['id'],
                         'models': record.get('models', [])[:4],
-                        'interpretation': 'model_description_unverified' if name == 'scene.description' else 'observation_not_inner_state'}
+                        'interpretation': 'model_description_unverified' if name in ('scene.description', 'scene.window') else 'model_classification_score' if name.startswith('classification.') else 'observation_not_inner_state'}
     return output

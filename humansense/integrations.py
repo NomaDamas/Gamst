@@ -164,7 +164,7 @@ class InputBridge:
     """
 
     def __init__(self, human, *, subject_id, video_decoder=None,
-                 video_clock=None, audio_clock=None, audio_converter=None):
+                 video_clock=None, audio_clock=None, audio_converter=None, routed=False):
         if not isinstance(subject_id, str) or not subject_id.strip():
             raise ValueError("An explicit non-empty subject_id is required")
         self.human, self.subject_id = human, subject_id
@@ -172,6 +172,12 @@ class InputBridge:
         self.video_clock, self.audio_clock = video_clock, audio_clock
         self.audio_converter = audio_converter or PCMConverter()
         self._generation = 0
+        self.router = None
+        if routed:
+            import uuid
+            from .media import media_router
+            self.router = media_router(human)
+            self.source = "bridge-" + uuid.uuid4().hex
         register = getattr(human, "register", None)
         if register is not None:
             register(_BridgeLifecycle(self))
@@ -199,6 +205,8 @@ class InputBridge:
                 frame = await frame
         if generation != self._generation:
             return []
+        if self.router:
+            return await self.router.submit("video", frame, source=self.source, subject_id=self.subject_id, timestamp_ms=timestamp)
         return await self.human.push_video(frame, subject_id=self.subject_id, timestamp_ms=timestamp)
 
     async def push_audio(self, samples, *, sample_rate, channels=1,
@@ -207,12 +215,20 @@ class InputBridge:
         converted = self.audio_converter.convert(samples, sample_rate=sample_rate, channels=channels)
         if not converted:
             return []
+        if self.router:
+            return await self.router.submit("audio", converted, source=self.source,
+                sample_rate=self.audio_converter.output_rate, subject_id=self.subject_id, timestamp_ms=timestamp)
         return await self.human.push_audio(converted, sample_rate=self.audio_converter.output_rate,
                                           subject_id=self.subject_id, timestamp_ms=timestamp)
 
     async def push_text(self, text, *, timestamp_ms=None, role="user"):
         return await self.human.push_text(text, subject_id=self.subject_id,
                                          timestamp_ms=self._timestamp(timestamp_ms, None, None), role=role)
+
+    async def close(self):
+        if self.router:
+            await self.router.clear(self.source)
+        self._clear_state()
 
     async def reset(self):
         """Discard audio interpolation state; caller resets source clocks explicitly."""

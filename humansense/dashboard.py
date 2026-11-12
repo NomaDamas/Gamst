@@ -1,7 +1,6 @@
 """Loopback-only browser demo. Raw browser media is processed, never persisted."""
 import argparse
 import asyncio
-import base64
 import json
 import secrets
 import threading
@@ -18,6 +17,8 @@ class Dashboard:
         self.capture = False
         self.companion = None
         self._lock = asyncio.Lock()
+        from .media import media_router
+        self.router = media_router(human)
 
     async def dispatch(self, body):
         # Model calls must not hold a transport-wide lock: stop/delete need to
@@ -25,9 +26,12 @@ class Dashboard:
         return await self._dispatch(body)
 
     async def _dispatch(self, body):
+        from .realtime import scene_status, configure_scene
         op = body.get("op")
+        if op == "configure_vlm":
+            return await configure_scene(self.human, {k:v for k,v in body.items() if k != "op"})
         if op == "state":
-            return {"state": await self.human.get_state(),
+            return {"routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
                     "context": await self.human.get_context(),
                     "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
@@ -63,27 +67,10 @@ class Dashboard:
             return await self.human.push_text(str(body["text"])[:16000], role=body.get("role", "user"))
         if op == "claim":
             return await self.human.push_claim(str(body["key"]), body["value"], scope=body.get("scope", "session"))
-        if op == "audio":
-            samples = body.get("samples", [])
-            if not isinstance(samples, list) or len(samples) > 96000:
-                raise ValueError("Audio block exceeds 96000 samples")
-            rate = int(body.get("sample_rate", 16000))
-            if rate < 8000 or rate > 96000:
-                raise ValueError("Invalid sample rate")
-            return await self.human.push_audio(samples, sample_rate=rate)
-        if op == "video":
-            encoded = body.get("jpeg", "")
-            if not isinstance(encoded, str) or len(encoded) > 1_000_000:
-                raise ValueError("Invalid video payload")
-            try:
-                import cv2
-                import numpy as np
-            except ImportError as exc:
-                raise ValueError('Install "humansense-sdk[vision]" for video analysis') from exc
-            frame = cv2.imdecode(np.frombuffer(base64.b64decode(encoded, validate=True), dtype=np.uint8), cv2.IMREAD_COLOR)
-            if frame is None or frame.shape[0] > 1080 or frame.shape[1] > 1920:
-                raise ValueError("Invalid video dimensions")
-            return await self.human.push_video(frame)
+        if op in ('audio', 'video'):
+            from .media import decode_media
+            modality, data, rate = decode_media(body)
+            return await self.router.submit(modality, data, source='dashboard', sample_rate=rate)
         raise ValueError("Unknown operation")
 
 
@@ -107,6 +94,8 @@ def handler_for(app):
             return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
 
         def do_GET(self):
+            if self.allowed_host() and self.path == "/observability.js":
+                return self.respond(200, Path(__file__).with_name("observability.js").read_text(), "application/javascript")
             if not self.allowed_host() or self.path != "/":
                 return self.respond(404, {"error": "Not found"})
             page = Path(__file__).with_name("dashboard.html").read_text()
@@ -153,7 +142,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None):
     from . import HumanSense
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with HumanSense(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
@@ -178,8 +167,11 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
                     plugin.language = asr_language
                     plugin = QueuedPlugin(human, plugin, capacity=4)
                 human.register(plugin)
+        if plugins_config:
+            from .extensions import register_config
+            register_config(human, json.loads(Path(plugins_config).read_text()))
         if scene_url:
-            human.register(QueuedPlugin(human, LocalScenePlugin(scene_url, scene_model), capacity=1))
+            human.register(QueuedPlugin(human, LocalScenePlugin(scene_url, scene_model, human=human), capacity=1))
         websocket_task = None
         if websocket_port:
             from .server import serve_websocket
@@ -214,9 +206,10 @@ def main():
     parser.add_argument('--scene-model', default='local-vlm')
     parser.add_argument('--websocket-port', type=int, help='Expose the SAME runtime to local agent WebSocket clients')
     parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
+    parser.add_argument("--plugins-config", help="Explicit JSON list of installed plugin factories and local model options")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:

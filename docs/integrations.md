@@ -36,3 +36,16 @@ The video decoder is deliberately injected: verify your installed LiveKit SDK's 
 ## Pipecat boundary
 
 `PipecatBridge` exposes `on_video(decoded_pixels, ...)`, `on_audio(pcm, sample_rate=..., channels=...)` and `on_transcript(text, ...)` to invoke from your application's processor. It is not an unverified subclass of Pipecat's evolving processor API. Your processor must still forward its original frames. Decoded-media/runtime tests pass; upstream SDK/runtime validation remains required.
+
+## Bounded routing mode
+
+Pass `routed=True` to `InputBridge`, `LiveKitBridge` or `PipecatBridge` to feed
+converted media into the shared independent audio/video lanes. The return value
+is then an acceptance ACK, not an inference result. Read `human.contexts()` or
+subscribe through WebSocket/MCP for observations; inspect `get_stream_status`
+for queue, drop and latency metrics. Call `await bridge.close()` when its stream
+ends to release its lanes. Routed mode allows one source/subject per modality;
+use separate runtimes for independent participants. The default direct mode is
+retained for compatibility.
+
+See [streaming contracts and plugin providers](streaming-and-plugins.md).

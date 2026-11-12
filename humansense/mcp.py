@@ -32,6 +32,10 @@ MODEL_PATH = {"type": "string", "minLength": 1,
 
 def tool_definitions() -> list[dict]:
     specs = [
+        ("get_stream_status", "Live media lane queue, drop and latency metrics.", {}, ()),
+        ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
+        ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
+        ("configure_vlm", "Set temporal VLM sampling. Returns effective FPS after frame budget cap. Does not start capture.", {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60}, "window_seconds": {"type": "number", "minimum": 1, "maximum": 30}, "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
@@ -114,6 +118,15 @@ class MCPServer:
         _validate(args, self.tools[name]["inputSchema"])
         if "start_ms" in args and "end_ms" in args and args["start_ms"] > args["end_ms"]:
             raise ValueError("start_ms must not exceed end_ms")
+        if name == "get_stream_status":
+            from .media import media_router
+            return media_router(self.human).status()
+        if name == "list_plugins":
+            from .extensions import describe_plugin
+            return [describe_plugin(p) for p in self.human.plugins]
+        if name in ("get_vlm_status", "configure_vlm"):
+            from .realtime import scene_status, configure_scene
+            return scene_status(self.human) if name == "get_vlm_status" else await configure_scene(self.human, args)
         if name == "chat":
             if self.companion is None:
                 raise ValueError("No companion backend configured")

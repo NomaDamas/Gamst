@@ -28,6 +28,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         result = await self.app.dispatch({"op": "text", "text": "help me"})
         self.assertEqual(set(result["predictions"]), {"conversation", "behavior", "consistency"})
         await self.app.dispatch({"op": "audio", "samples": [.1] * 512, "sample_rate": 16000})
+        await self.app.router.drain()
         state = await self.app.dispatch({"op": "state"})
         self.assertEqual(state["state"]["modalities"]["audio"], "available")
         self.assertEqual(state["state"]["modalities"]["video"], "unavailable")
@@ -77,7 +78,8 @@ class HTTPBoundaryTests(unittest.TestCase):
         self.assertEqual(handler.response[0], 200)
         self.assertIn("const token='secret'", handler.response[1])
         self.assertNotIn("__SESSION_TOKEN__", handler.response[1])
-        self.assertNotIn("<script src=", handler.response[1])
+        self.assertNotIn('<script src="http', handler.response[1])
+        self.assertIn('<script src="/observability.js"', handler.response[1])
 
 
 class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):

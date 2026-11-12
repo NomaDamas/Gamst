@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--language', help='Pin speech recognition language, e.g. ko; default auto')
     parser.add_argument('--stop', action='store_true', help='Stop only the verified launcher belonging to this checkout')
+    parser.add_argument('--plugins-config', help='Explicit JSON file for additional perception plugins')
     args = parser.parse_args()
     marker = ROOT / '.local-run/launcher.json'
     if args.stop:
@@ -64,7 +65,7 @@ def main():
     try:
         vlm = start([binaries[0], '--model', models/'qwen3-vl/Qwen3-VL-2B-Instruct-Q8_0.gguf',
             '--mmproj', models/'qwen3-vl/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf',
-            '--host', '127.0.0.1', '--port', '18767', '--ctx-size', '8192', '--parallel', '2', '--alias', 'local-vlm'], 'vlm')
+            '--host', '127.0.0.1', '--port', '18767', '--ctx-size', '16384', '--parallel', '2', '--alias', 'local-vlm'], 'vlm')
         for _ in range(120):
             if vlm.poll() is not None:
                 raise RuntimeError('VLM exited; see .local-run/vlm.log')
@@ -81,7 +82,8 @@ def main():
         app = start([sys.executable, '-m', 'humansense.dashboard', '--face-model', models/'face_landmarker.task',
             '--asr-model', models/'whisper-small', '--vad-model', models/'silero_vad.jit',
             '--scene-url', 'http://127.0.0.1:18767/v1/chat/completions', '--scene-model', 'local-vlm',
-            '--websocket-port', '8765', *(['--asr-language', args.language] if args.language else [])], 'dashboard', env)
+            '--websocket-port', '8765', *(['--asr-language', args.language] if args.language else []),
+            *(['--plugins-config', str(Path(args.plugins_config).resolve())] if args.plugins_config else [])], 'dashboard', env)
         print('Dashboard: http://127.0.0.1:8766\nLive context: ws://127.0.0.1:8765\nLocal VLM: http://127.0.0.1:18767\nDevices remain OFF until consent. Ctrl-C stops this stack.', flush=True)
         while all(p.poll() is None for p in children):
             time.sleep(1)

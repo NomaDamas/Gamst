@@ -445,6 +445,14 @@ class HumanSense:
         finally:
             self._subscribers.discard(subscriber)
 
+    async def contexts(self, subject_id="local-user", window="5m", interval=.25):
+        """Bounded-cadence derived context snapshots; never raw media."""
+        if type(interval) not in (int, float) or not math.isfinite(interval) or not .05 <= interval <= 60:
+            raise ValueError("context interval must be .05..60 seconds")
+        while not self.closed:
+            yield await self.get_context(subject_id=subject_id, window=window)
+            await asyncio.sleep(interval)
+
     def observe(self):
         return self._stream(("human.inference",))
 
@@ -574,6 +582,8 @@ class HumanSense:
         return {"deleted_records": deleted, "subject_id": subject_id}
 
     async def _reset_plugins(self):
+        if hasattr(self, "_media_router"):
+            await self._media_router.clear()
         for plugin in self.plugins:
             reset = getattr(plugin, "reset", None)
             if reset:
@@ -592,6 +602,8 @@ class HumanSense:
             return
         self.closed = True
         self._generation += 1
+        if hasattr(self, "_media_router"):
+            await self._media_router.clear()
         for queue, _ in self._subscribers:
             if queue.full():
                 queue.get_nowait()

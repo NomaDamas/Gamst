@@ -146,13 +146,14 @@
               <div><small>FACES</small><strong id="faces">—</strong></div>
               <div><small>UPDATES</small><strong id="updates">0</strong></div>
             </div>
-            <pre id="context" aria-label="Live context JSON">
+            <div id="categoryCharts"></div>
+            <details><summary>Context JSON</summary><pre id="context" aria-label="Live context JSON">
 {
   "source": "browser_preview",
   "observations": {},
   "raw_media_included": false
 }</pre
-            >
+            ></details>
             <div class="output-note">
               <span>↳</span>
               <p>
@@ -388,6 +389,7 @@ sh scripts/setup_local.sh
       ><span>Apache-2.0 · Built for your agent, on your terms.</span
       ><a href="https://github.com/NomaDamas/catch-your-mind">GitHub ↗</a>
     </footer>
+    <script src="./observability.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

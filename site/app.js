@@ -15,7 +15,9 @@ let packet = {
 function error(e) {
   $("error").textContent = e.message || String(e);
 }
+const charts = new ContextCharts($("categoryCharts"), "en");
 function paint() {
+  charts.render(packet.observations, active);
   $("context").textContent = JSON.stringify(packet, null, 2);
   $("updates").textContent = String(count);
 }
@@ -128,7 +130,6 @@ $("start").onclick = async () => {
             blendshapes: Object.fromEntries(
               [...f.categories]
                 .sort((a, b) => b.score - a.score)
-                .slice(0, 6)
                 .map((x) => [x.categoryName, Number(x.score.toFixed(3))]),
             ),
           }));
