@@ -150,8 +150,9 @@ human.register(QueuedPlugin(human, plugin, capacity=1))
 
 Alternatively supply an already constructed Transformers pipeline to the adapter.
 For audio, use `modality="audio"`; choose an input block duration suitable for that
-model. Arbitrary audio classifiers do not automatically receive ASR-style rolling
-windows. Input resampling requirements belong to the chosen pipeline.
+model. Audio classifiers can opt into bounded rolling windows using `window_seconds`
+and `hop_seconds`; the default analyzes individual blocks. See [voice analysis](voice-analysis.md).
+Input resampling requirements belong to the chosen pipeline.
 
 Load plugins into the local dashboard with an explicit JSON file:
 

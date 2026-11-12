@@ -166,6 +166,17 @@ Every record carries a subject ID, timestamp, schema version, model provenance, 
 
 **Scores have distinct meanings:** `model_score` is a pattern score; `probability` requires a registered calibration artifact and held-out validation. Without that evidence, probabilities remain `null`. See the [output contract](docs/contract.md) and [prediction/feedback workflow](docs/predictions.md).
 
+### Dashboard workspace
+
+Camera controls stay in the left panel. Drag the divider to resize camera and
+analysis panels; arrow keys resize it when focused. On narrow screens they stack.
+The right panel has Observability, Context, Categories/Time series, Text/Companion
+and VLM tabs. Category plots have observation and individual-label subtabs.
+Tab changes preserve live capture, context streaming and chart history. The
+active observation state uses rainbow colors; stopped state is gray.
+
+See [current voice analysis and rolling emotion-classifier integration](docs/voice-analysis.md).
+
 ### Live dashboard and temporal VLM
 
 The local dashboard shows the transmitted context as a live table, with circular
@@ -301,7 +312,7 @@ python -m humansense demo
 python -m benchmarks.runtime --samples 200
 ```
 
-The streaming refactor is covered by **138 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. New Hugging Face and Ollama adapter contracts use fixtures; their model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+The streaming refactor is covered by **139 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. New Hugging Face and Ollama adapter contracts use fixtures; their model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
 
 ## 📚 Documentation
 

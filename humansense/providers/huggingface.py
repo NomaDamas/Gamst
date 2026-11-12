@@ -1,16 +1,26 @@
 """Adapt an explicitly constructed Transformers classification pipeline."""
 import asyncio
 import threading
+import math
 from ..extensions import PluginManifest, classification, classification_name
-from ..plugins import _signal
+from ..plugins import _signal, InputFrame, _pcm_floats
 
 
 class HuggingFaceClassifier:
-    def __init__(self, pipeline, *, modality, name, model_id, revision, exclusive=False):
+    def __init__(self, pipeline, *, modality, name, model_id, revision, exclusive=False, window_seconds=0, hop_seconds=1):
         if modality not in ('video','audio'):
             raise ValueError('modality must be video or audio')
         if not callable(pipeline) or not model_id or not revision:
             raise ValueError('An explicit pipeline, model ID and revision are required')
+        if any(type(v) not in (int,float) or not math.isfinite(v) for v in (window_seconds,hop_seconds)) or not 0 <= window_seconds <= 10 or not .1 <= hop_seconds <= 10:
+            raise ValueError('window_seconds must be 0..10 and hop_seconds .1..10')
+        if window_seconds and (modality != 'audio' or hop_seconds > window_seconds):
+            raise ValueError('Rolling windows require audio and hop <= window')
+        self.window_seconds,self.hop_seconds = window_seconds,hop_seconds
+        self._audio_buffer=[]
+        self._audio_owner=None
+        self._audio_since=0
+        self._audio_emitted=False
         self.pipeline, self.modality = pipeline, modality
         self.modalities, self.name = (modality,), classification_name(name)
         self.model_id, self.version, self.exclusive = model_id, revision, exclusive
@@ -25,6 +35,21 @@ class HuggingFaceClassifier:
         async with self._lock:
             if generation != self._generation:
                 return []
+            if self.window_seconds:
+                if type(frame.sample_rate) is not int or not 8000 <= frame.sample_rate <= 96000:
+                    raise ValueError('Rolling audio requires a valid sample rate')
+                owner=(frame.subject_id,frame.sample_rate)
+                if owner != self._audio_owner:
+                    self._audio_buffer=[];self._audio_since=0;self._audio_emitted=False
+                    self._audio_owner=owner
+                block=_pcm_floats(frame.data)
+                count=int(self.window_seconds*frame.sample_rate)
+                self._audio_buffer=(self._audio_buffer+block)[-count:]
+                self._audio_since+=len(block)
+                if len(self._audio_buffer)<count or (self._audio_emitted and self._audio_since<int(self.hop_seconds*frame.sample_rate)):
+                    return []
+                self._audio_since=0;self._audio_emitted=True
+                frame=InputFrame(list(self._audio_buffer),'audio',frame.timestamp_ms,frame.subject_id,frame.sample_rate)
             def run_pipeline(data):
                 with self._inference_lock:
                     if generation != self._generation:
@@ -48,9 +73,13 @@ class HuggingFaceClassifier:
 
     def reset(self):
         self._generation += 1
+        self._audio_buffer=[]
+        self._audio_owner=None
+        self._audio_since=0
+        self._audio_emitted=False
 
     @classmethod
-    def from_local(cls, *, path, modality, name, revision, exclusive=False):
+    def from_local(cls, *, path, modality, name, revision, exclusive=False, window_seconds=0, hop_seconds=1):
         """Load only an existing model directory; no Hub download or remote code."""
         from pathlib import Path
         model_path = Path(path).expanduser().resolve()
@@ -69,4 +98,4 @@ class HuggingFaceClassifier:
             backend = pipeline('audio-classification', model=model, feature_extractor=processor, device='cpu')
         else:
             raise ValueError('modality must be video or audio')
-        return cls(backend,modality=modality,name=name,model_id=model_path.name,revision=revision,exclusive=exclusive)
+        return cls(backend,modality=modality,name=name,model_id=model_path.name,revision=revision,exclusive=exclusive,window_seconds=window_seconds,hop_seconds=hop_seconds)

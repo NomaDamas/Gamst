@@ -1,11 +1,12 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 class Element {
- constructor(){this.textContent='';this.style={};this.children=[];this.value='';this.checked=false;this.parentElement={setAttribute(){},removeAttribute(){}};this.classList={add(){},remove(){}}}
+ constructor(){this.textContent='';this.style={setProperty(k,v){this[k]=v}};this.children=[];this.value='';this.checked=false;this.parentElement={setAttribute(){},removeAttribute(){}};this.classList={add(){},remove(){}}}
+ focus(){this.focused=true} getBoundingClientRect(){return {width:1000,left:0}} setPointerCapture(){} hasPointerCapture(){return true} releasePointerCapture(){}
  append(...els){this.children.push(...els)} replaceChildren(...els){this.children=els} setAttribute(k,v){this[k]=v}
 }
 const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
 const html=fs.readFileSync('humansense/dashboard.html','utf8');
-const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element()},window:{addEventListener(){}},AbortController,fetch:()=>new Promise(()=>{}),setTimeout,clearInterval});
+const context=vm.createContext({document:{body:new Element(),getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element()},window:{addEventListener(){}},AbortController,fetch:()=>new Promise(()=>{}),setTimeout,clearInterval});
 assert.equal(fs.readFileSync('humansense/observability.js','utf8'),fs.readFileSync('site/observability.js','utf8'));
 vm.runInContext(fs.readFileSync('humansense/observability.js','utf8'),context);
 vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
@@ -20,7 +21,15 @@ context.categoryMount=new Element();
 vm.runInContext("globalThis.testCharts=new ContextCharts(categoryMount)",context);
 for(let i=0;i<70;i++){context.categories={'classification.emotion_fixture':{value:{labels:{joy:.6,neutral:.3,sadness:.1}},timestamp_ms:i*250,fresh:true}};vm.runInContext('testCharts.render(categories)',context)}
 assert.equal(context.testCharts.history.get('classification.emotion_fixture').length,60);
-const section=context.categoryMount.children[0],summary=section.children[1];
+const section=context.testCharts.plot.children[0],summary=section.children[1];
 assert.equal(summary.children[0].children[0].textContent,'60%');assert.equal(summary.children[1].children[0].textContent,'joy');
 vm.runInContext('testCharts.clear()',context);assert.equal(context.testCharts.history.size,0);
 console.log('Category charts: proportions, dominant label, bounded history and shared public asset passed');
+
+vm.runInContext("selectTab('vlm')",context);assert.equal(get('panel-vlm').hidden,false);assert.equal(get('panel-context').hidden,true);assert.equal(get('tab-vlm')['aria-selected'],'true');
+get('tab-vlm').onkeydown({key:'ArrowRight',preventDefault(){}});assert.equal(get('tab-observability')['aria-selected'],'true');
+vm.runInContext('setCameraRatio(90)',context);assert.equal(get('splitter')['aria-valuenow'],'65');
+get('splitter').onpointerdown({button:0,pointerId:1,preventDefault(){}});get('splitter').onpointermove({clientX:400});get('splitter').onpointerup({pointerId:1});assert.equal(get('splitter')['aria-valuenow'],'40');
+vm.runInContext('setCaptureStatus(true)',context);assert.equal(get('statusPill')['data-active'],'true');assert.equal(get('cameraState').textContent,'관찰 중');vm.runInContext('setCaptureStatus(false)',context);assert.equal(get('statusPill')['data-active'],'false');
+vm.runInContext('testCharts.render(categories)',context);const buttons=context.testCharts.tabCache.get(context.testCharts.detailNav).buttons;buttons[1].onclick();const oldHistory=context.testCharts.history.get('classification.emotion_fixture').length;vm.runInContext('testCharts.render(categories)',context);assert.equal(context.testCharts.history.get('classification.emotion_fixture').length,oldHistory);assert.equal(context.testCharts.tabCache.get(context.testCharts.detailNav).buttons[1],buttons[1]);assert.equal(buttons[1]['aria-selected'],'true');
+console.log('Main/detail tabs, pointer resizing, rainbow states and preserved history passed');
