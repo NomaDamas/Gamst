@@ -1,8 +1,8 @@
 # Voice analysis and real-time context
 
 The installed stack currently uses Whisper small for transcripts, Silero VAD for
-speech activity, and AudioLevelPlugin for RMS/dBFS/energy. It does not currently
-load a voice emotion, pitch, tremor or clinical voice-state model.
+speech activity, and AudioLevelPlugin for RMS/dBFS/energy. The optional SUPERB Wav2Vec2 emotion model can now be installed into this
+checkout. Pitch, tremor and clinical voice-state models are not bundled.
 
 The important runtime contract is continuous context delivery. Audio collection
 and context streaming continue independently of a classifier. A classifier's
@@ -22,7 +22,47 @@ of these paths.
   Apache-2.0 declaration. It needs its own adapter; it is not claimed to work
   through the Transformers adapter or installed by default.
 
-These are model options, not newly installed or accuracy-validated backends.
+SUPERB is the supported optional local install. emotion2vec+ remains an adapter
+candidate. Neither has a project-specific accuracy certification.
+
+## Install, use and remove
+
+```bash
+sh scripts/setup_voice.sh
+# After stopping any active capture:
+.venv/bin/python scripts/run_local.py --stop
+.venv/bin/python scripts/run_local.py --language ko
+```
+
+The launcher detects `.local-models/voice-emotion/plugins.json` and loads the
+classifier automatically unless `--without-voice-emotion` is specified. An explicit
+`--plugins-config` takes precedence. Existing installed models are preserved.
+Only the project virtual environment and owned model directory are changed.
+
+In the dashboard, select Microphone, consent and Start. After the first 3 seconds,
+Observability shows the latest four voice scores. Choose **시계열 보기**, or open
+Categories/Time series → `classification.voice_emotion`, for bars, relative-score
+donut and per-category histories. MCP context includes the same named observation.
+Labels are `neu` (neutral), `hap` (happy), `ang` (angry), `sad` (sad).
+
+```bash
+.venv/bin/python scripts/run_local.py --stop
+.venv/bin/python scripts/local_models.py remove-voice --yes
+```
+
+This removes only the voice model folder and its manifest entries. The optional
+Python libraries stay in `.venv`; removing all models still uses `remove --yes`.
+
+## Measured local verification
+
+On the Apple M2 Pro, real public model-card WAV fixtures produced all four scores
+and evidence IDs through MCP. Median model-call latency was about 130 ms for a
+3-second window with two Torch CPU threads. The example happy clip's final window
+had `hap=0.929`; the neutral clip had `neu=0.534`. These are fixture outputs, not
+an accuracy evaluation or claims about Korean speech. Reproduce with
+`PYTHONPATH=. .venv/bin/python scripts/qa_voice.py` after placing the model-card
+fixtures in `.local-run/qa/` as described in that script.
+
 
 ## Rolling-window classification
 

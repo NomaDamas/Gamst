@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--language', help='Pin speech recognition language, e.g. ko; default auto')
     parser.add_argument('--stop', action='store_true', help='Stop only the verified launcher belonging to this checkout')
     parser.add_argument('--plugins-config', help='Explicit JSON file for additional perception plugins')
+    parser.add_argument('--without-voice-emotion', action='store_true', help='Skip an installed voice classifier')
     args = parser.parse_args()
     marker = ROOT / '.local-run/launcher.json'
     if args.stop:
@@ -43,6 +44,9 @@ def main():
     binaries = list((models / 'llama').glob('*/llama-server'))
     if not binaries:
         raise SystemExit('Run python scripts/local_models.py install first (bundled VLM server: Apple Silicon).')
+    voice_config = models / 'voice-emotion/plugins.json'
+    if not args.plugins_config and voice_config.exists() and not args.without_voice_emotion:
+        args.plugins_config = str(voice_config)
     logs = ROOT / '.local-run'
     logs.mkdir(exist_ok=True)
     if marker.exists():

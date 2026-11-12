@@ -26,7 +26,8 @@
       for(const [name,scores,obs,kind] of groups.slice(0,8)){
         const all=Object.entries(scores).filter(([k,v])=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1).sort((a,b)=>b[1]-a[1]);
         if(!all.length)continue;
-        const choice=this.labels.get(name)||'*',selectedLabel=all.some(([label])=>label===choice)?choice:'*';labelOptions.set(name,[['*',t('전체','All')],...all.map(([key])=>[key,key]).sort((a,b)=>a[0].localeCompare(b[0]))]);
+        const labelTitle=label=>name==='classification.voice_emotion'?({neu:t('중립','Neutral'),hap:t('기쁨','Happy'),ang:t('분노','Angry'),sad:t('슬픔','Sad')}[label]||label):label;
+        const choice=this.labels.get(name)||'*',selectedLabel=all.some(([label])=>label===choice)?choice:'*';labelOptions.set(name,[['*',t('전체','All')],...all.map(([key])=>[key,labelTitle(key)]).sort((a,b)=>a[0].localeCompare(b[0]))]);
         const ranked=all.slice(0,8),visible=selectedLabel==='*'?ranked:all.filter(([label])=>label===selectedLabel),total=all.reduce((s,x)=>s+x[1],0),section=el('section');
         section.style.cssText='padding:16px 0;border-bottom:1px solid #e7e7ed';
         const title=el('div',name);title.style.cssText='font-weight:650;font-size:13px;margin-bottom:12px';section.append(title);
@@ -36,14 +37,14 @@
         ranked.forEach(([label,value],i)=>{const next=edge+(total?value/total*100:0);stops.push(`${colorFor(label)} ${edge}% ${next}%`);edge=next});
         stops.push(`#e7e7ed ${edge}% 100%`);donut.style.background=`conic-gradient(${stops.join(',')})`;
         const center=el('div',live&&obs.fresh!==false?(total?Math.round(ranked[0][1]/total*100)+'%':'—'):'—');center.style.cssText='position:absolute;inset:12px;border-radius:50%;background:white;display:grid;place-items:center;font-size:20px;font-weight:650';donut.append(center);donut.setAttribute('aria-label',name+' '+t('상대 점수 비중','relative score share'));
-        const info=el('div');info.append(el('strong',ranked[0][0]),el('div',`${t('최대 점수','Top score')} ${ranked[0][1].toFixed(3)} · ${kind==='model'?t('모델 출력','model output'):t('관측값','measurement')}`),el('small',t('점수 합계 기준 비중 · ','Share of score total · ')+(live&&obs.fresh!==false?'LIVE':'STOPPED / STALE')));summary.append(donut,info);section.append(summary);
+        const info=el('div');info.append(el('strong',labelTitle(ranked[0][0])),el('div',`${t('최대 점수','Top score')} ${ranked[0][1].toFixed(3)} · ${kind==='model'?t('모델 출력','model output'):t('관측값','measurement')}`),el('small',t('점수 합계 기준 비중 · ','Share of score total · ')+(live&&obs.fresh!==false?'LIVE':'STOPPED / STALE')));summary.append(donut,info);section.append(summary);
         const history=this.history.get(name)||[];
         if(live&&this.last.get(name)!==obs.timestamp_ms){history.push({time:obs.timestamp_ms,scores:{...scores}});if(history.length>60)history.shift();this.history.set(name,history);this.last.set(name,obs.timestamp_ms)}
         const first=history[0]?.time||0,last=history.at(-1)?.time||first,span=Math.max(1,last-first);
         const graph=document.createElementNS('http://www.w3.org/2000/svg','svg');graph.setAttribute('viewBox','0 0 300 60');graph.setAttribute('role','img');graph.setAttribute('aria-label',name+' '+t('시계열','time series'));graph.style.cssText='width:100%;height:60px;margin:12px 0;background:#fafafd;border-radius:8px';
         visible.forEach(([label,value],i)=>{
           const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');line.setAttribute('fill','none');line.setAttribute('stroke',colorFor(label));line.setAttribute('stroke-width','1.5');line.setAttribute('points',history.filter(p=>Number.isFinite(p.scores[label])).map(p=>`${(p.time-first)/span*300},${58-p.scores[label]*56}`).join(' '));graph.append(line);
-          const row=el('div');row.style.cssText='display:grid;grid-template-columns:minmax(90px,1fr) 2fr 48px;gap:10px;align-items:center;margin-top:7px;font-size:11px';const track=el('div'),bar=el('div');track.style.cssText='height:5px;background:#f0f0f5;border-radius:9px';bar.style.cssText=`height:5px;border-radius:9px;background:${colorFor(label)};width:${value*100}%`;track.append(bar);row.append(el('span',label),track,el('span',value.toFixed(3)));section.append(row)
+          const row=el('div');row.style.cssText='display:grid;grid-template-columns:minmax(90px,1fr) 2fr 48px;gap:10px;align-items:center;margin-top:7px;font-size:11px';const track=el('div'),bar=el('div');track.style.cssText='height:5px;background:#f0f0f5;border-radius:9px';bar.style.cssText=`height:5px;border-radius:9px;background:${colorFor(label)};width:${value*100}%`;track.append(bar);row.append(el('span',labelTitle(label)),track,el('span',value.toFixed(3)));section.append(row)
         });section.append(graph,el('small',`${(span/1000).toFixed(1)}s · ${history.length} samples`));nodes.push(section);names.push(name)
       }
       // Arbitrary scalar sensors retain their own units rather than becoming percentages.

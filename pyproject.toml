@@ -19,7 +19,7 @@ audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]
 asr = ["faster-whisper>=1.0,<2"]
 mediapipe = ["mediapipe>=0.10,<0.11"]
-huggingface = ["transformers>=4.45,<6", "torch>=2.2,<3", "Pillow>=10", "numpy>=1.24"]
+huggingface = ["transformers>=4.45,<5", "torch>=2.2,<3", "Pillow>=10", "numpy>=1.24"]
 providers = ["httpx>=0.27,<1"]
 websocket = ["websockets>=13,<16"]
 
