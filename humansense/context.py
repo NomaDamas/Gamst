@@ -14,6 +14,11 @@ def compact_observation(name, value):
                                        if k in ('mouthSmileLeft', 'mouthSmileRight', 'eyeBlinkLeft',
                                                 'eyeBlinkRight', 'jawOpen', 'browInnerUp')})}
                 for face in value[:4]]
+    if name == 'scene.poses' and isinstance(value, list):
+        return [{**{k: pose.get(k) for k in ('frame_pose_index', 'track_id', 'bbox', 'geometry', 'association_quality')},
+                 'landmark_count': len(pose.get('landmarks', []))} for pose in value[:4]]
+    if name == 'scene.segments' and isinstance(value, list):
+        return [{k: item.get(k) for k in ('bbox', 'score', 'prompt', 'track_id')} for item in value[:16]]
     if isinstance(value, str):
         return value[:2000]
     if isinstance(value, (bool, int)) or value is None:
@@ -41,7 +46,7 @@ def observation_packet(records, now):
                 compact_observation(name,value)
             except (ValueError,TypeError,KeyError):
                 continue
-        safe = is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks')
+        safe = is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
         if name and safe and record.get('type') == 'observation.signal':
             latest[name] = record
     output = {}

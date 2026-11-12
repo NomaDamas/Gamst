@@ -18,6 +18,8 @@ class Dashboard:
         self.companion = None
         self._lock = asyncio.Lock()
         self._vlm_test_lock = asyncio.Lock()
+        self._guide_test_lock = asyncio.Lock()
+        self.fixture_image = None
         from .media import media_router
         self.router = media_router(human)
 
@@ -28,6 +30,14 @@ class Dashboard:
             if isinstance(plugin, FasterWhisperPlugin):
                 return plugin
         return None
+
+    def sam3_status(self):
+        worker = next((p for p in self.human.plugins if p.name == "sam3_segmentation"), None)
+        plugin = getattr(worker, "plugin", worker)
+        loaded = bool(getattr(plugin, "loaded", False))
+        error = getattr(plugin, "last_error", None)
+        return {"configured": worker is not None, "loaded": loaded, "last_error": error,
+                "message": error or ("SAM3 connected" if loaded else "SAM3 ready · waiting for first inference" if worker else "SAM3 not installed")}
 
     def asr_settings(self):
         plugin = self.asr_plugin()
@@ -51,6 +61,37 @@ class Dashboard:
         if op == "configure_feature":
             from .settings import configure_feature
             return await configure_feature(self.human, body.get("name"), body.get("enabled"))
+        if op == "test_guides":
+            if not self.human.paused:
+                raise ValueError("Stop capture before the sample-image test")
+            if self.fixture_image is None or not self.fixture_image.is_file():
+                raise ValueError("Sample image is not installed")
+            if self._guide_test_lock.locked():
+                raise ValueError("Guide test already running")
+            async with self._guide_test_lock:
+                import cv2, base64
+                from .plugins import InputFrame
+                image = cv2.imread(str(self.fixture_image))
+                if image is None:
+                    raise ValueError("Unable to read the sample image")
+                now = time.time_ns() // 1_000_000
+                guides = {}
+                started = time.monotonic()
+                for worker in self.human.plugins:
+                    if worker.name not in ('mediapipe_face_landmarker', 'mediapipe_pose_landmarker', 'opencv_hog_person'):
+                        continue
+                    plugin = getattr(worker, 'plugin', worker)
+                    for signal in await plugin.process(InputFrame(image, 'video', now, 'guide-preview')):
+                        if signal['name'] in ('scene.faces', 'scene.poses', 'scene.person_tracks'):
+                            guides[signal['name']] = dict(value=signal['value'], timestamp_ms=now, fresh=True, age_ms=0)
+                ok, encoded = cv2.imencode('.jpg', image)
+                if not ok:
+                    raise ValueError("Unable to encode sample image")
+                return {'preview': True, 'guides': guides, 'state': {'paused': True},
+                        'image': 'data:image/jpeg;base64,'+base64.b64encode(encoded).decode(),
+                        'width': image.shape[1], 'height': image.shape[0],
+                        'latency_ms': round((time.monotonic()-started)*1000),
+                        'source': 'Public MediaPipe pose sample; actual local model output'}
         if op == "test_vlm":
             from .realtime import scene_worker
             worker = scene_worker(self.human)
@@ -93,9 +134,11 @@ class Dashboard:
             return await configure_scene(self.human, {k:v for k,v in body.items() if k != "op"})
         if op == "state":
             from .settings import feature_status
-            return {"features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
+            from .visualization import guide_packet
+            state = await self.human.get_state()
+            return {"sam3": self.sam3_status(), "features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": state, "guides": guide_packet(state),
                     "context": await self.human.get_context(),
-                    "capture": self.capture, "adapter_errors": self.errors,
+                    "guide_test_available": self.fixture_image is not None, "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
                     "analysis_available": self.human.analysis_backend is not None,
                     "plugins": [p.name for p in self.human.plugins],
@@ -103,6 +146,8 @@ class Dashboard:
                     "latest_inference": (await self.human.get_history(type="human.inference", limit=1)),
                     "events": await self.human.get_history(type="observation.event", limit=20)}
         if op == "start":
+            if self._guide_test_lock.locked():
+                raise ValueError("Wait for the guide sample test to finish")
             if body.get("consent") is not True:
                 raise ValueError("Explicit consent is required")
             await self.human.resume()
@@ -198,7 +243,7 @@ def handler_for(app):
                         return
                     return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
-                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm") else 30))
+                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm", "test_guides") else 30))
             except Exception as exc:
                 if future is not None and not future.done():
                     future.cancel()
@@ -206,7 +251,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None):
     from . import HumanSense
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with HumanSense(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
@@ -215,6 +260,9 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
         if backend is not None:
             human.set_analysis_backend(backend)
         app = Dashboard(human, asyncio.get_running_loop())
+        fixture = Path.cwd() / '.local-run/qa/pose.jpg'
+        if fixture.is_file():
+            app.fixture_image = fixture
         from .companion import Companion, companion_backend_from_env
         app.companion = Companion(human, companion_backend_from_env())
         for factory in (AudioLevelPlugin, OpenCVPersonPlugin):
@@ -234,6 +282,9 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
         if pose_model:
             from .providers.pose import MediaPipePosePlugin
             human.register(QueuedPlugin(human, MediaPipePosePlugin(pose_model), capacity=1))
+        if sam3_config:
+            from .providers.sam3 import LocalSAM3Plugin
+            human.register(QueuedPlugin(human, LocalSAM3Plugin(**json.loads(Path(sam3_config).read_text())), capacity=1))
         if plugins_config:
             from .extensions import register_config
             register_config(human, json.loads(Path(plugins_config).read_text()))
@@ -275,9 +326,10 @@ def main():
     parser.add_argument('--pose-model', help='Local MediaPipe pose model path')
     parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
     parser.add_argument("--plugins-config", help="Explicit JSON list of installed plugin factories and local model options")
+    parser.add_argument("--sam3-config", help="Installed local SAM3 ready.json")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model, args.sam3_config))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:

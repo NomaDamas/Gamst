@@ -24,6 +24,6 @@ Sources:
 
 ## Screenshots
 
-The nine slide screenshots are actual browser captures of the English HTML deck. Native screen capture includes display padding, which the gallery hides with CSS; original JPEG captures are unchanged.
+The nine slide screenshots are actual browser captures of the English HTML deck. Native captures include display padding. The gallery now uses matching crop rectangles for previews and PNG downloads, with embedded captures so export also works when opened from disk. Original JPEGs remain unchanged. The slides export at 2560×1440. The dashboard captures predate the latest modal/toggle redesign.
 
 Dashboard QA completed a real synthetic-image VLM call in 397 ms. Model and overlay switches were toggled off and restored; camera/microphone capture remained stopped. The two additional dashboard screenshots show English settings (including the successful test and MCP schemas) and the idle observability dashboard. These screenshots show capture stopped; zero gauges are not live measurements.

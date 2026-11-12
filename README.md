@@ -268,7 +268,7 @@ human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
 # await human.push_audio(normalized_mono_pcm, sample_rate=16000)
 ```
 
-No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 and biometric re-identification are not included.
+No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 is an optional gated-model provider; biometric re-identification is not included.
 
 ## 🤝 Context-aware Companion
 
@@ -355,10 +355,12 @@ The dashboard includes switches for gauges, category charts and guides. Historic
 observations are retained when a model is disabled. See [tracking boundaries and
 extension plan](docs/tracking.md) for full-body/face handling, multiple people,
 SAM integration and emotion tracking. Body pose is now installed through MediaPipe (33 landmarks, up to four poses,
-geometric wrist-height indicators). SAM, trained gesture classification, speaker
-separation and face-to-speaker identity association are **not** installed features.
+geometric wrist-height indicators). Optional [SAM3 installation](docs/sam3.md) adds
+text-prompt object outlines through an isolated local worker. Trained gesture
+classification, speaker separation and face-to-speaker identity association are
+**not** installed features.
 
-[Settings QA](docs/qa-settings.md) · [Promotional HTML slides](docs/promo/index.html)
+[Settings QA](docs/qa-settings.md) · [One-page feature overview](docs/promo/one-page.html)
 
 
 The local demo defaults to English. Its interface language selector supports
@@ -369,3 +371,39 @@ model descriptions and MCP JSON are preserved in their original form.
 Install body pose alone with `.venv/bin/python scripts/local_models.py install-pose`;
 the launcher automatically loads it. To remove only these weights, stop the local
 stack and run `.venv/bin/python scripts/local_models.py remove-pose --yes`.
+
+
+The camera guide renderer receives full display geometry separately from compact
+agent context. Body context includes bounding boxes, landmark counts and geometric
+wrist-height flags; the display channel retains the 33 points needed to draw bones.
+**Test guides** runs installed face/body models on the local public sample
+`.local-run/qa/pose.jpg` while capture is paused. The image is clearly labeled as a
+sample; this does not open devices or add observations to user history.
+
+The launcher automatically detects `.local-models/sam3/ready.json` after installation.
+Settings distinguishes downloaded/configured SAM3 from a model that has actually
+completed inference. SAM3 object boundaries are not body joints or emotions.
+
+### Bounded live data retention
+
+Raw camera/audio buffers are not stored in the record database. Capture queues,
+model windows and subscriber queues are bounded; older pending input is replaced
+when processing or consumers fall behind. Sending context is not an instruction
+to delete it: concurrent consumers and change analysis need a short shared window.
+
+The local dashboard uses an in-memory store with a 10-minute retention window.
+The SDK default is 24 hours. Both now also enforce **5,000 records** and **32 MiB of
+serialized UTF-8 record payload**, whichever limit is reached first. Oldest inserted
+records are evicted; a single oversized record can be streamed but is not retained.
+These limits bound retained payload, not total process RAM or model weight memory.
+They are configurable via `HumanSense(max_records=..., max_payload_bytes=...)`.
+Age expiry is applied on ingestion and reads. Storage counters are exposed in
+`get_state().storage`; summaries describe retained evidence, not an unlimited archive.
+
+Agent context contains latest observations, bounded event examples/counts, and
+numeric means / baseline-relative changes where enough retained samples exist.
+There is no automatic permanent memory or long-term summary archive. Text
+transcripts and derived observations remain subject to the same storage limits.
+Disk-backed SQLite may retain allocated free pages for reuse after expiry; payload
+limits are not a physical database-file-size guarantee. Downstream agents and LLM
+providers control their own retention independently.

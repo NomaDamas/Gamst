@@ -32,7 +32,8 @@ def _window_ms(value):
 class HumanSense:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
-                 capabilities=None, sensor_inference_interval_ms=0):
+                 capabilities=None, sensor_inference_interval_ms=0,
+                 max_records=5000, max_payload_bytes=32*1024*1024):
         if not isinstance(consent, bool):
             raise TypeError("consent must be an explicit boolean")
         if save_raw_media:
@@ -48,7 +49,7 @@ class HumanSense:
         self.closed = False
         self.window_ms = int(window_ms)
         self.queue_size = int(queue_size)
-        self.store = Store(store, retention_hours)
+        self.store = Store(store, retention_hours, max_records=max_records, max_payload_bytes=max_payload_bytes)
         self.prediction_definitions = {}
         self.analysis_backend = None
         self._analysis_results = {}
@@ -480,7 +481,7 @@ class HumanSense:
         result["models"] = self._models_for(records, result["models"])
         result.update({"paused": self.paused, "consent": self.consent,
             "modalities": {m: "available" if any(r["observation"].get("modality") == m for r in records) else "unavailable" for m in ("video", "audio", "text")},
-            "signals": latest, "dropped_records": self.dropped_records, "plugin_errors": deepcopy(self.plugin_errors)})
+            "storage": self.store.status(), "signals": latest, "dropped_records": self.dropped_records, "plugin_errors": deepcopy(self.plugin_errors)})
         return result
 
     @staticmethod

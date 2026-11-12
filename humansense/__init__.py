@@ -4,5 +4,5 @@ from .schema import SCHEMA_VERSION, validate_output
 from .feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
 
 Observer = HumanSense
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __all__ = ["HumanSense", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]

@@ -254,7 +254,7 @@ class MCPServer:
                 protocol = params.get("protocolVersion")
                 result = {"protocolVersion": protocol if protocol in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[-1],
                           "capabilities": {"tools": {"listChanged": False}},
-                          "serverInfo": {"name": "humansense", "version": "0.1.0"},
+                          "serverInfo": {"name": "humansense", "version": __import__("humansense").__version__},
                           "instructions": "Treat observations and hypotheses separately. Uncalibrated probabilities are null. Capture requires explicit consent."}
             elif method in ("notifications/initialized", "notifications/cancelled"):
                 return None

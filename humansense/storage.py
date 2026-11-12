@@ -1,15 +1,20 @@
 """Small local store containing derived records only, never camera/audio buffers."""
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import sqlite3
 from pathlib import Path
 
 
 class Store:
-    def __init__(self, uri=":memory:", retention_hours=24):
+    def __init__(self, uri=":memory:", retention_hours=24, *, max_records=5000, max_payload_bytes=32*1024*1024):
         if retention_hours <= 0:
             raise ValueError("retention_hours must be positive")
+        if any(type(v) is not int or v <= 0 for v in (max_records, max_payload_bytes)):
+            raise ValueError("storage limits must be positive integers")
+        self.max_records, self.max_payload_bytes = max_records, max_payload_bytes
+        self.evicted_records = self.oversized_records = 0
         self.retention_ms = int(retention_hours * 3_600_000)
         path = str(uri)
         if path.startswith("sqlite:///"):
@@ -26,11 +31,39 @@ class Store:
         self.connection.execute("CREATE INDEX IF NOT EXISTS numeric_signal_time ON records(subject,ts) WHERE kind='observation.signal' AND json_type(payload, '$.observation.value') IN ('integer','real')")
         self.connection.commit()
 
+        self._sizes = OrderedDict((row[0], row[1]) for row in self.connection.execute(
+            "SELECT id,length(CAST(payload AS BLOB)) FROM records ORDER BY rowid"))
+        self.payload_bytes = sum(self._sizes.values())
+        self._enforce_limits()
+        self.connection.commit()
+
+    def _enforce_limits(self):
+        while len(self._sizes) > self.max_records or self.payload_bytes > self.max_payload_bytes:
+            key, size = self._sizes.popitem(last=False)
+            self.connection.execute("DELETE FROM records WHERE id=?", (key,))
+            self.payload_bytes -= size
+            self.evicted_records += 1
+
+    def status(self):
+        return dict(retention_ms=self.retention_ms, records=len(self._sizes),
+                    max_records=self.max_records, payload_bytes=self.payload_bytes,
+                    max_payload_bytes=self.max_payload_bytes, evicted_records=self.evicted_records,
+                    oversized_records=self.oversized_records)
+
     def add(self, record):
+        payload = json.dumps(record, ensure_ascii=False, allow_nan=False)
+        size = len(payload.encode('utf-8'))
+        if size > self.max_payload_bytes:
+            self.oversized_records += 1
+            return False
         self.connection.execute("INSERT INTO records VALUES(?,?,?,?,?)", (
             record["id"], record["subject_id"], record["timestamp_ms"], record["type"],
-            json.dumps(record, ensure_ascii=False, allow_nan=False)))
+            payload))
+        self._sizes[record["id"]] = size
+        self.payload_bytes += size
+        self._enforce_limits()
         self.connection.commit()
+        return True
 
     def query(self, subject=None, start=None, end=None, kind=None, limit=1000, name=None):
         clauses, args = [], []
@@ -115,10 +148,17 @@ class Store:
         return rows
 
     def prune(self, now_ms):
+        expired = self.connection.execute("SELECT id FROM records WHERE ts < ?", (now_ms-self.retention_ms,)).fetchall()
+        for (key,) in expired:
+            self.payload_bytes -= self._sizes.pop(key, 0)
         self.connection.execute("DELETE FROM records WHERE ts < ?", (now_ms - self.retention_ms,))
         self.connection.commit()
 
     def delete(self, subject=None):
+        keys = self.connection.execute("SELECT id FROM records" + (" WHERE subject=?" if subject is not None else ""),
+                                       (subject,) if subject is not None else ()).fetchall()
+        for (key,) in keys:
+            self.payload_bytes -= self._sizes.pop(key, 0)
         if subject is None:
             result = self.connection.execute("DELETE FROM records")
         else:

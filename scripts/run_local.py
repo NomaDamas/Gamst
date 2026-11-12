@@ -88,6 +88,7 @@ def main():
             '--scene-url', 'http://127.0.0.1:18767/v1/chat/completions', '--scene-model', 'local-vlm',
             '--websocket-port', '8765', *(['--asr-language', args.language] if args.language else []),
             *(['--pose-model', str(models/'pose/pose_landmarker.task')] if (models/'pose/pose_landmarker.task').exists() else []),
+            *(['--sam3-config', str(models/'sam3/ready.json')] if (models/'sam3/ready.json').is_file() else []),
             *(['--plugins-config', str(Path(args.plugins_config).resolve())] if args.plugins_config else [])], 'dashboard', env)
         print('Dashboard: http://127.0.0.1:8766\nLive context: ws://127.0.0.1:8765\nLocal VLM: http://127.0.0.1:18767\nDevices remain OFF until consent. Ctrl-C stops this stack.', flush=True)
         while all(p.poll() is None for p in children):

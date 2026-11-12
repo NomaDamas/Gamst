@@ -38,7 +38,7 @@ console.log('Main/detail tabs, pointer resizing, rainbow states and preserved hi
 
 assert.equal(context.observationTitle('scene.person_count','ko'),'감지된 사람 수');
 get('video').videoWidth=640;get('video').videoHeight=360;get('faceGuide').checked=true;get('personGuide').checked=true;
-context.overlayFixture={state:{paused:false},context:{observations:{'scene.faces':{fresh:true,value:[{landmarks:[{x:.5,y:.25}]}]},'scene.person_tracks':{fresh:true,value:[{visible:true,bbox:{x:.1,y:.1,width:.4,height:.8},track_id:'camera:person-1',association_quality:'matched'}]}}}};
+context.overlayFixture={state:{paused:false},guides:{'scene.faces':{fresh:true,value:[{landmarks:[{x:.5,y:.25}]}]},'scene.person_tracks':{fresh:true,value:[{visible:true,bbox:{x:.1,y:.1,width:.4,height:.8},track_id:'camera:person-1',association_quality:'matched'}]}}};
 vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,3);assert.equal(get('cameraOverlay').children[0].cx,'320');
 get('faceGuide').checked=false;vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,2);
 context.overlayFixture.state.paused=true;vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,0);
@@ -52,3 +52,8 @@ get('consent').onclick();assert.equal(get('consent').checked,true);assert.equal(
 get('useVideo').disabled=true;const before=get('useVideo').checked;get('useVideo').onclick();assert.equal(get('useVideo').checked,before);
 assert(html.indexOf('id="scene"')<html.indexOf('id="vlmOptions"'));
 console.log('Modal settings, semantic toggle buttons and compact VLM layout passed');
+get('bodyGuide').checked=true;get('segmentGuide').checked=true;
+context.overlayFixture={preview:true,width:640,height:360,state:{paused:true},guides:{'scene.poses':{fresh:true,value:[{landmarks:Array.from({length:33},()=>({x:.5,y:.5,visibility:1,presence:1})),geometry:{left_wrist_above_shoulder:true}}]},'scene.segments':{fresh:true,value:[{polygons:[[[.1,.1],[.2,.1],[.2,.2]]]}]}}};
+vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,51);assert(get('cameraOverlay').children.some(n=>n.textContent.includes('Left hand raised')));
+get('bodyGuide').checked=false;vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,1);assert.equal(get('cameraOverlay').children[0].points,'64,36 128,36 128,72');
+console.log('Body joints, action labels, sample preview and SAM3 polygons passed');
