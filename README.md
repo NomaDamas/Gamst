@@ -38,7 +38,8 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 # MCP stdio bridge to that running session
 .venv/bin/python -m humansense.mcp_live
 
-# Stop the stack with Ctrl-C, then remove installer-owned models
+# Stop this checkout's stack, then remove installer-owned models
+.venv/bin/python scripts/run_local.py --stop
 .venv/bin/python scripts/local_models.py remove --yes
 ```
 

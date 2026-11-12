@@ -1,6 +1,9 @@
 """Run isolated local perception, VLM, dashboard and agent stream. Ctrl-C stops all children."""
 import os
 import argparse
+import json
+import signal
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -12,13 +15,45 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--language', help='Pin speech recognition language, e.g. ko; default auto')
+    parser.add_argument('--stop', action='store_true', help='Stop only the verified launcher belonging to this checkout')
     args = parser.parse_args()
+    marker = ROOT / '.local-run/launcher.json'
+    if args.stop:
+        if not marker.exists():
+            raise SystemExit('No launcher recorded for this checkout.')
+        owner = json.loads(marker.read_text())
+        if owner.get('root') != str(ROOT) or not owner.get('running'):
+            raise SystemExit('No active launcher owned by this checkout.')
+        pid = int(owner['pid'])
+        command = subprocess.run(['ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True).stdout.strip()
+        started = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], capture_output=True, text=True).stdout.strip()
+        executable = subprocess.run(['ps', '-p', str(pid), '-o', 'comm='], capture_output=True, text=True).stdout.strip()
+        cwd = subprocess.run(['lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'], capture_output=True, text=True)
+        if (command != owner.get('command') or started != owner.get('started')
+                or len(shlex.split(command)) < 2
+                or shlex.split(command)[1] not in ('scripts/run_local.py', str(Path(__file__).resolve()))
+                or not Path(executable).name.lower().startswith('python')
+                or 'n' + str(ROOT) not in cwd.stdout.splitlines()):
+            raise SystemExit('Process identity no longer matches; refusing to signal it.')
+        os.kill(pid, signal.SIGINT)
+        print('Stop requested for this checkout. Wait for model handles to close before removal.')
+        return
     models = ROOT / '.local-models'
     binaries = list((models / 'llama').glob('*/llama-server'))
     if not binaries:
         raise SystemExit('Run python scripts/local_models.py install first (bundled VLM server: Apple Silicon).')
     logs = ROOT / '.local-run'
     logs.mkdir(exist_ok=True)
+    if marker.exists():
+        previous = json.loads(marker.read_text())
+        if previous.get('running'):
+            running = subprocess.run(['ps', '-p', str(previous.get('pid', 0)), '-o', 'command='], capture_output=True, text=True).stdout.strip()
+            if running and running == previous.get('command'):
+                raise SystemExit('This checkout already has a running launcher. Use --stop first.')
+    owner = {'root': str(ROOT), 'pid': os.getpid(), 'running': True,
+             'command': subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'command='], text=True).strip(),
+             'started': subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip()}
+    marker.write_text(json.dumps(owner))
     children, handles = [], []
     def start(args, name, env=None):
         handle = (logs / (name + '.log')).open('w')
@@ -65,6 +100,8 @@ def main():
                 process.wait()
         for handle in handles:
             handle.close()
+        owner['running'] = False
+        marker.write_text(json.dumps(owner))
 
 if __name__ == '__main__':
     main()

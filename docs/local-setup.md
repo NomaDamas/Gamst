@@ -52,7 +52,7 @@ Model sources are pinned in `scripts/local_models.py`: [MediaPipe](https://ai.go
 
 ## Stop and remove
 
-Press Ctrl-C in the launcher terminal. It terminates only the child processes it started and releases the models. Then:
+Press Ctrl-C in the launcher terminal, or run `.venv/bin/python scripts/run_local.py --stop` from another terminal. The stop command verifies the recorded process identity and checkout directory before signalling the launcher. It terminates only the child processes it started and releases the models. Then:
 
 ```bash
 .venv/bin/python scripts/local_models.py status

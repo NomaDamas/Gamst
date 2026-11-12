@@ -16,6 +16,8 @@ Tested on an Apple M2 Pro Mac with 32 GB memory, Python 3.10, on 2026-11-13 (Asi
 - VLM backpressure intentionally replaced 39 pending video frames in the native smoke test. It does not attempt to describe every camera frame. Latest-frame replacement and freshness are part of the contract.
 - Public frontend JavaScript syntax and external model asset availability were checked. HTTP deployment checks and package smoke tests are recorded in the GitHub release.
 
+- Verified the launcher stop command against its owned processes, then restarted the stack. Model removal refused while model files were open.
+
 ## Limits and follow-up
 
 - Native browser control was unavailable in this session. Desktop/mobile visual QA and browser permission/button interactions were **not** automated. The reference design was inspected through its HTML/CSS; no pixel-perfect comparison is claimed.
