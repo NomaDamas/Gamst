@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "humansense-sdk"
+version = "0.1.0"
+description = "Local-first real-time human interaction observations for AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "HumanSense contributors"}]
+dependencies = []
+classifiers = ["Programming Language :: Python :: 3", "Development Status :: 3 - Alpha"]
+
+[project.optional-dependencies]
+vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
+audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
+vad = ["torch>=2.2,<3"]
+asr = ["faster-whisper>=1.0,<2"]
+mediapipe = ["mediapipe>=0.10,<0.11"]
+websocket = ["websockets>=13,<16"]
+
+[project.scripts]
+humansense = "humansense.cli:main"
+humansense-serve = "humansense.server:main"
+humansense-mcp = "humansense.mcp:main"
+humansense-dashboard = "humansense.dashboard:main"
+
+[project.urls]
+Repository = "https://github.com/NomaDamas/catch-your-mind"
+
+[tool.setuptools.packages.find]
+include = ["humansense*"]
+
+[tool.setuptools.package-data]
+humansense = ["dashboard.html"]

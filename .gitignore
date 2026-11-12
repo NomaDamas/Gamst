@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.wav
+*.mp4
+*.webm
+models/

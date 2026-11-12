@@ -1,0 +1,11 @@
+# v0.1 local delivery status
+
+Implemented: stdlib Python SDK, SQLite memory, 4 observation layers, conversation/behavior/structured-consistency outputs, modular local camera/audio/model plugins, MCP stdio server, optional WebSocket transport, browser dashboard and TypeScript client source. Additional modules implement stream-local IoU person tracking, explicit model-assisted semantic analysis with citation validation, custom score-target registration, outcome feedback, and held-out histogram calibration. Context-aware Companion replies, external decoded-media/clock/audio bridges, WebSocket subscription selection and a tested JavaScript RPC runtime are also provided. Synthetic runtime performance is measured in docs/runtime-benchmark.md. These integrations do not establish real-model validity.
+
+Verified in the development environment: deterministic core/plugin/MCP/dashboard-boundary tests, actual MCP stdio subprocess, CLI demo, Python compilation, JavaScript syntax, wheel build and offline installation in a clean virtual environment.
+
+Not verified: real camera or microphone access; optional model inference; browser HTTP/WebSocket connectivity; TypeScript compilation; camera/model target FPS/latency; eight-hour soak; predictive validity or calibration. Optional backend tests use mocks. This sandbox denies AF_INET socket creation and DNS/network access. Accordingly, HTTP startup in this sandbox reports a permission error; run the dashboard in the normal host terminal after installation.
+
+GitHub source inspection, fetching REA/SAM3, remote history reconciliation and pushing were blocked by network restrictions. The checkout's root .git is a protected empty mount, so it is not a usable repository inside this session. A standalone local Git commit and bundle can be delivered using a temporary repository without modifying protected metadata. Do not force-push an unrelated history onto an existing remote. See README for implementation limits and docs/evaluation.md for release gates.
+
+This alpha is not the entire validated product in the proposal. It provides working local infrastructure and measured/rule-based outputs on which the remaining models and evaluations can be built.
