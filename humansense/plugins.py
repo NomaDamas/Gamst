@@ -225,6 +225,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
         self.window_seconds = window_seconds
         self.language = language
         self.buffers: dict[str, list[float]] = {}
+        self._buffer_end_ms: dict[str, int] = {}
         self._native_lock = threading.Lock()
         self._process_lock = asyncio.Lock()
         self._generation = 0
@@ -239,40 +240,72 @@ class FasterWhisperPlugin(PerceptionPlugin):
                 return []
             buf = self.buffers.setdefault(frame.subject_id, [])
             buf.extend(values)
+            self._buffer_end_ms[frame.subject_id] = frame.timestamp_ms
             size = int(self.window_seconds * 16000)
             output = []
             while len(buf) >= size:
                 chunk = buf[:size]
                 del buf[:size]
                 end_ms = max(0, frame.timestamp_ms - round(len(buf) / 16))
-                def transcribe():
-                    import numpy as np
-                    with self._native_lock:
-                        if generation != self._generation:
-                            return ""
-                        segments, _ = self.model.transcribe(np.asarray(chunk, dtype=np.float32),
-                                                           language=self.language, vad_filter=True)
-                        return " ".join(segment.text.strip() for segment in segments).strip()
-                try:
-                    text = await asyncio.to_thread(transcribe)
-                except asyncio.CancelledError:
-                    self.reset()
-                    raise
+                output.extend(await self._transcribe_chunk(chunk, frame.subject_id, end_ms, generation))
                 if generation != self._generation:
                     return []
-                if text:
-                    window = InputFrame(None, "audio", end_ms, frame.subject_id, 16000)
-                    version = f"{_version('faster-whisper')}:sha256:{self.model_hash}"
-                    output.append(_signal(window, "text.transcript", text, self.name, version))
-                    words = len(text.split())
-                    output.append(_signal(window, "speech.transcribed_word_count", words, self.name, version))
-                    output.append(_signal(window, "speech.transcribed_words_per_minute", words*60/self.window_seconds,
-                                          self.name, version))
             return output
+
+    async def _transcribe_chunk(self, chunk, subject_id, end_ms, generation):
+        def transcribe():
+            import numpy as np
+            with self._native_lock:
+                if generation != self._generation:
+                    return ""
+                segments, _ = self.model.transcribe(np.asarray(chunk, dtype=np.float32),
+                                                   language=self.language, vad_filter=True)
+                return " ".join(segment.text.strip() for segment in segments).strip()
+        try:
+            text = await asyncio.to_thread(transcribe)
+        except asyncio.CancelledError:
+            self.reset()
+            raise
+        if generation != self._generation or not text:
+            return []
+        window = InputFrame(None, "audio", end_ms, subject_id, 16000)
+        version = f"{_version('faster-whisper')}:sha256:{self.model_hash}"
+        words = len(text.split())
+        duration_seconds = len(chunk)/16000
+        return [_signal(window, "text.transcript", text, self.name, version),
+                _signal(window, "speech.transcribed_word_count", words, self.name, version),
+                _signal(window, "speech.transcribed_words_per_minute", words*60/duration_seconds,
+                        self.name, version)]
+
+    async def flush(self, subject_id="local-user", timestamp_ms=None):
+        """Transcribe this subject's residual window at an utterance boundary.
+
+        Residuals shorter than 100ms (1600 samples) are discarded without model
+        inference. Already emitted full windows are never transcribed again.
+        The default timestamp is the last received audio-block end, preserving
+        capture time rather than assigning the later time of this method call.
+        Word rate divides by actual residual audio duration, including silence;
+        it is a transcript/window measurement, not a speaking-only rate.
+        """
+        if not isinstance(subject_id, str) or not subject_id.strip():
+            raise ValueError("subject_id must be a non-empty string")
+        if timestamp_ms is not None and (isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, int) or timestamp_ms < 0):
+            raise ValueError("timestamp_ms must be a nonnegative integer")
+        generation = self._generation
+        async with self._process_lock:
+            if generation != self._generation:
+                return []
+            chunk = self.buffers.pop(subject_id, [])
+            captured_end_ms = self._buffer_end_ms.pop(subject_id, None)
+            if len(chunk) < 1600:
+                return []
+            end_ms = timestamp_ms if timestamp_ms is not None else captured_end_ms
+            return await self._transcribe_chunk(chunk, subject_id, end_ms, generation)
 
     def reset(self):
         self._generation += 1
         self.buffers.clear()
+        self._buffer_end_ms.clear()
 
 
 class SileroVADPlugin(PerceptionPlugin):

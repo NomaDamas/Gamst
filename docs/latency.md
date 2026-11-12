@@ -52,3 +52,11 @@ python scripts/verify_live.py --consent --camera 0 --audio \
 This reports actual frame count/FPS, plugin p50/p95/p99, callback queue wait, drops and state-query processing time. Per-operation target comparisons are explicitly named; unmeasured stages are `not_measured`. Fixed-window ASR processing is **not** measured end-of-speech-to-text delay. The v0.1 Whisper default buffers 3 seconds, so a <=1 second speech-end update goal is not established by these timings. Ground-truth speech-end labels and streaming behavior need separate implementation/evaluation.
 
 No real model replay/live hardware report has been generated in this environment: devices, models and optional dependencies are absent and network access is blocked. The core/MCP measurements above are actual results within that narrower scope. Eight-hour camera/model soak, real ASR speech-end latency and predictive validity remain incomplete.
+
+## Speech-finalization path
+
+`await human.flush_audio(subject_id=...)` finalizes residual audio for plugins supporting flush. The Whisper adapter consumes the selected subject's remaining >=100ms audio using its actual duration; shorter residuals are discarded. Empty/already-consumed buffers produce no duplicate transcript. The default transcript timestamp is the last captured audio-block end, not the later wall-clock time at flush.
+
+With a registered VAD emitting `speech.stopped`, `push_audio` processes the complete block through all plugins first, then flushes residual ASR buffers. This permits shorter-than-window utterances to be transcribed at an observed activity transition. The measured stage `pipeline.speech_stop_decision_to_flushed_transcript` uses a monotonic clock from the runtime VAD decision to flush transcript publication. It excludes acoustic speech-end detection delay and hardware callback buffering, and therefore is not the full <=1s user-perceived latency target. A new speech-start clears stale timing anchors; pause/reset/delete invalidates pending finalization.
+
+A mock-model regression proves ordering, residual consumption, subject isolation and no duplicate finalization. Actual Whisper/Silero replay and ground-truth end-of-speech latency remain unverified until the host can supply dependencies, assets and consented audio.

@@ -37,3 +37,41 @@ class RuntimeTelemetryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result['predictions']['conversation']['expressions']['probability'])
             self.assertEqual(result['predictions']['behavior']['metrics'],{})
             self.assertFalse(result['predictions']['behavior']['visual_hypotheses']['verified'])
+
+    async def test_vad_end_flushes_short_utterance_and_records_decision_to_text(self):
+        class VAD:
+            name='fixture_vad'
+            modalities=('audio',)
+            calls=0
+            async def process(self,frame):
+                self.calls+=1
+                return [dict(name='speech.activity',value=self.calls==1,modality='audio',
+                             model_id=self.name,model_version='1')]
+        class ASR:
+            name='fixture_asr'
+            modalities=('audio',)
+            received=0
+            flushed=0
+            async def process(self,frame):
+                self.received+=len(frame.data)
+                return []
+            async def flush(self,subject_id,timestamp_ms):
+                self.flushed+=1
+                if self.received:
+                    self.received=0
+                    return [dict(name='text.transcript',value='Please clarify',modality='audio',
+                                 model_id=self.name,model_version='1')]
+                return []
+        async with HumanSense(consent=True) as human:
+            asr=ASR(); human.register(VAD()); human.register(asr)
+            await human.push_audio([.2]*1600)
+            self.assertEqual(asr.flushed,0)
+            await human.push_audio([0.]*1600)
+            self.assertEqual(asr.flushed,1)
+            self.assertEqual(asr.received,0)
+            metric=(await human.get_metrics())['latency']['stages']['pipeline.speech_stop_decision_to_flushed_transcript']
+            self.assertEqual(metric['count'],1)
+            result=(await human.get_history(type='human.inference'))[-1]
+            self.assertEqual(result['recommended_action']['type'],'ask_clarifying_question')
+            await human.flush_audio()
+            self.assertEqual((await human.get_metrics())['latency']['stages']['pipeline.speech_stop_decision_to_flushed_transcript']['count'],1)

@@ -36,6 +36,10 @@ The endpoint must accept JPEG image messages and structured JSON completions. `V
 
 For an authorized remote image provider, explicitly set `HUMANSENSE_VISION_ALLOW_REMOTE=true` and optionally `HUMANSENSE_VISION_KEY_ENV=YOUR_KEY_VARIABLE`. This **transmits images**, unlike text-only reasoning, and requires participant consent for that transfer. Credentials remain in environment variables. Rate limiting limits request frequency, not worst-case inference latency: a slow VLM still delays that video processing call. Use a separate low-frequency video observer if a high-frequency detector must continue independently.
 
+## Audio finalization
+
+The existing faster-whisper adapter now supports residual `flush`; HumanSense automatically finalizes after a VAD stop decision, or applications can call `await human.flush_audio()` at an externally verified utterance boundary. See [latency scope](latency.md#speech-finalization-path).
+
 ## Verification boundary
 
 Unit tests inject native runtimes or HTTP responses to exercise preprocessing contracts, output parsing, subject isolation, cancellation and provenance. They do not prove the corresponding actual model ran. Use the model replay and hardware measurement commands in [latency](latency.md) on a host with installed backends and licensed assets. SAM3, diarization and biometric association are still not implemented or validated.

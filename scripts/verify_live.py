@@ -84,8 +84,15 @@ async def verify(args):
                 'status':'not_measured' if not value else 'within_target' if value['p95_ms'] <= target else 'exceeds_target',
                 'observed_p95_ms':value['p95_ms'] if value else None,
                 'sample_count':value['count'] if value else 0}
+        flush_stage=stages.get('pipeline.speech_stop_decision_to_flushed_transcript')
+        report['asr_vad_decision_to_transcript'] = {
+            'status':'measured' if flush_stage else 'not_measured',
+            'p95_ms':flush_stage['p95_ms'] if flush_stage else None,
+            'sample_count':flush_stage['count'] if flush_stage else 0,
+            'includes':'After speech.stopped decision through residual ASR flush and runtime publication',
+            'excludes':'True acoustic speech-end detection delay, audio callback buffering and ground-truth annotation error'}
         report['asr_end_of_speech_latency'] = {'status':'not_measured',
-            'reason':'Windowed ASR processing time is not end-of-speech-to-transcript latency'}
+            'reason':'Ground-truth acoustic speech-end labels are not available in a live smoke test'}
         if args.output:
             with Path(args.output).open('x',encoding='utf-8') as handle:
                 json.dump(report,handle,ensure_ascii=False,indent=2)

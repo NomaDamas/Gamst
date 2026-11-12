@@ -260,6 +260,72 @@ class WhisperTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(transcripts[0]["models"][0]["id"], "faster_whisper")
                     self.assertIn("sha256:", transcripts[0]["models"][0]["version"])
 
+    async def test_flush_transcribes_residual_once_and_uses_actual_duration(self):
+        async def inline(function, *args, **kwargs): return function(*args, **kwargs)
+        fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = self.make_plugin(directory)
+            plugin.window_seconds = 3
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", inline):
+                self.assertEqual(await plugin.process(InputFrame([0.] * 8000, "audio", 2000, "alice", 16000)), [])
+                result = await plugin.flush("alice")
+                values = {signal["name"]: signal["value"] for signal in result}
+                self.assertEqual(values["text.transcript"], "utterance 1")
+                self.assertEqual(values["speech.transcribed_word_count"], 2)
+                self.assertEqual(values["speech.transcribed_words_per_minute"], 240)
+                self.assertTrue(all(signal["timestamp_ms"] == 2000 for signal in result))
+                self.assertEqual(await plugin.flush("alice"), [])
+                self.assertEqual(plugin.model.calls, 1)
+
+    async def test_flush_removes_only_selected_subject_and_never_replays_full_windows(self):
+        async def inline(function, *args, **kwargs): return function(*args, **kwargs)
+        fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = self.make_plugin(directory)
+            plugin.window_seconds = .25
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", inline):
+                full = await plugin.process(InputFrame([0.] * 6000, "audio", 3000, "alice", 16000))
+                self.assertEqual(next(signal["value"] for signal in full if signal["name"] == "text.transcript"), "utterance 1")
+                await plugin.process(InputFrame([0.] * 2000, "audio", 3100, "bob", 16000))
+                flushed = await plugin.flush("alice", timestamp_ms=3200)
+                self.assertEqual(next(signal["value"] for signal in flushed if signal["name"] == "text.transcript"), "utterance 2")
+                self.assertEqual(len(plugin.buffers["bob"]), 2000)
+                self.assertNotIn("alice", plugin.buffers)
+                self.assertTrue(all(signal["timestamp_ms"] == 3200 for signal in flushed))
+                self.assertEqual(await plugin.flush("alice"), [])
+                await plugin.flush("bob")
+                self.assertEqual(plugin.model.calls, 3)
+                self.assertEqual(plugin.buffers, {})
+
+    async def test_flush_discards_very_short_residual_without_running_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = self.make_plugin(directory)
+            plugin.window_seconds = 3
+            await plugin.process(InputFrame([0.] * 1599, "audio", 2000, "alice", 16000))
+            self.assertEqual(await plugin.flush("alice"), [])
+            self.assertEqual(plugin.model.calls, 0)
+            self.assertNotIn("alice", plugin.buffers)
+
+    async def test_reset_discards_inflight_flush_result(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def delayed(function, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return function(*args, **kwargs)
+        fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = self.make_plugin(directory)
+            plugin.window_seconds = 3
+            await plugin.process(InputFrame([0.] * 2000, "audio", 2000, "alice", 16000))
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", delayed):
+                task = asyncio.create_task(plugin.flush("alice"))
+                await entered.wait()
+                plugin.reset()
+                release.set()
+                self.assertEqual(await task, [])
+                self.assertEqual(plugin.model.calls, 0)
+                self.assertEqual(plugin.buffers, {})
+
 
 class SileroTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

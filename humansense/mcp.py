@@ -32,6 +32,7 @@ MODEL_PATH = {"type": "string", "minLength": 1,
 
 def tool_definitions() -> list[dict]:
     specs = [
+        ("flush_audio", "Finalize residual audio in registered ASR plugins; no transcript is invented for silence or empty buffers.", {"subject_id": SUBJECT, "timestamp_ms": TIME}, ()),
         ("get_metrics", "Measured runtime processing p50/p95/p99 and delivery drops; excludes unmeasured hardware/model stages.", {}, ()),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),

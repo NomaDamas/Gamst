@@ -223,7 +223,7 @@ python -m benchmarks.runtime --samples 200
 python -m benchmarks.stdio --samples 100
 ```
 
-Verified locally: **146 Python tests**, **3 JavaScript client tests**, wheel installation, and actual MCP stdio subprocess communication. Optional backends use mock fixtures; real device/model execution is deferred. The [synthetic benchmark](docs/runtime-benchmark.md) and [latency reports](docs/latency.md) include actual SDK/MCP processing measurements. `get_metrics` exposes runtime/plugin p50/p95/p99; capture status includes audio queue wait. These are not claims of camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+Verified locally: **153 Python tests**, **3 JavaScript client tests**, wheel installation, and actual MCP stdio subprocess communication. Optional backends use mock fixtures; real device/model execution is deferred. The [synthetic benchmark](docs/runtime-benchmark.md) and [latency reports](docs/latency.md) include actual SDK/MCP processing measurements. `get_metrics` exposes runtime/plugin p50/p95/p99; capture status includes audio queue wait. VAD stop decisions can finalize residual ASR through `flush_audio`; timing distinguishes decision-to-transcript from acoustic speech-end delay. These are not claims of camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
 
 ## 📚 Documentation
 

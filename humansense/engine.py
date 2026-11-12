@@ -71,6 +71,7 @@ class HumanSense:
         self._last_ts = {}
         self._generation = 0
         self._metric_directions = {}
+        self._speech_stops = {}
         self.dropped_records = 0
         self.plugin_errors = []
 
@@ -94,6 +95,7 @@ class HumanSense:
         now = timestamp()
         self.store.prune(now)
         cutoff = now-self.store.retention_ms
+        self._speech_stops = {subject: value for subject,value in self._speech_stops.items() if value[2] >= cutoff}
         self._analysis_results = {subject: record for subject, record in self._analysis_results.items() if record["timestamp_ms"] >= cutoff}
         self._last_ts = {subject: ts for subject, ts in self._last_ts.items() if ts >= cutoff}
         self._metric_directions = {key: value for key, value in self._metric_directions.items() if value[1] >= cutoff}
@@ -192,9 +194,11 @@ class HumanSense:
                         if r["id"] != record["id"] and r["quality"]["status"] == "sufficient"]
             prior = activity[-1] if activity else None
             if value and (prior is None or prior["observation"]["value"] is False):
+                self._speech_stops.pop(subject_id,None)
                 self._event("speech.started", subject_id, ts, {"speaking": True}, [record["id"]])
             elif not value and prior and prior["observation"]["value"] is True:
-                self._event("speech.stopped", subject_id, ts, {"speaking": False}, [prior["id"], record["id"]])
+                event = self._event("speech.stopped", subject_id, ts, {"speaking": False}, [prior["id"], record["id"]])
+                self._speech_stops[subject_id] = (event["id"], time.perf_counter_ns(), ts)
         trends = await self.get_trends(subject_id, self.window_ms, end_ms=ts)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and record["quality"]["status"] == "sufficient":
             metric = next((m for m in trends["metrics"].values() if m["metric"] == name and m["model_id"] == model_id and m["model_version"] == model_version and m["modality"] == modality), {})
@@ -438,7 +442,48 @@ class HumanSense:
 
     @_timed("sdk.push_audio")
     async def push_audio(self, samples, subject_id="local-user", timestamp_ms=None, sample_rate=16000):
-        return await self._push_media(samples, "audio", subject_id, timestamp_ms, sample_rate)
+        prior_stop = self._speech_stops.get(subject_id)
+        records = await self._push_media(samples, "audio", subject_id, timestamp_ms, sample_rate)
+        stop = self._speech_stops.get(subject_id)
+        if stop is not None and stop != prior_stop:
+            # Process this entire audio block before flushing: ASR may follow VAD
+            # in the plugin list, and needs the just-ended speech samples first.
+            records.extend(await self.flush_audio(subject_id=subject_id))
+        return records
+
+    @_timed("sdk.flush_audio")
+    async def flush_audio(self, subject_id="local-user", timestamp_ms=None):
+        """Finalize residual ASR windows; no artificial transcript on silence."""
+        self._check()
+        generation = self._generation
+        records = []
+        for plugin in self.plugins:
+            flush = getattr(plugin, "flush", None)
+            if flush is None or "audio" not in getattr(plugin, "modalities", ()):
+                continue
+            with self.latency.measure("plugin."+str(getattr(plugin,"name",type(plugin).__name__))+".flush"):
+                output = flush(subject_id=subject_id, timestamp_ms=timestamp_ms)
+                if inspect.isawaitable(output):
+                    output = await output
+            if generation != self._generation or self.paused or self.closed:
+                return []
+            for item in output or []:
+                signal = dict(item)
+                signal.setdefault("modality", "audio")
+                signal.setdefault("subject_id", subject_id)
+                signal.setdefault("model_id", getattr(plugin,"name",type(plugin).__name__))
+                signal.setdefault("model_version", getattr(plugin,"version","unspecified"))
+                measured = await self.push_signal(**signal)
+                records.append(measured)
+                if signal.get("name") in ("text.transcript", "speech.transcript"):
+                    records.append(await self.push_text(str(signal["value"]),subject_id=subject_id,
+                                                       timestamp_ms=signal.get("timestamp_ms",timestamp_ms)))
+                    stop = self._speech_stops.get(subject_id)
+                    if stop is not None:
+                        self.latency.record("pipeline.speech_stop_decision_to_flushed_transcript",
+                                            (time.perf_counter_ns()-stop[1])/1_000_000)
+                        self._speech_stops.pop(subject_id,None)
+        return records
 
     async def _stream(self, kinds):
         if self.closed:
@@ -543,6 +588,7 @@ class HumanSense:
     async def pause(self):
         self.paused = True
         self._analysis_results.clear()
+        self._speech_stops.clear()
         self._generation += 1
         await self._reset_plugins()
         return {"paused": True}
@@ -566,9 +612,11 @@ class HumanSense:
             definition["calibration"] = None
         if subject_id is None:
             self._analysis_results.clear()
+            self._speech_stops.clear()
             self._last_ts.clear()
             self._metric_directions.clear()
         else:
+            self._speech_stops.pop(subject_id,None)
             self._analysis_results.pop(subject_id, None)
             self._last_ts.pop(subject_id, None)
             self._metric_directions = {key: value for key, value in self._metric_directions.items() if key[0] != subject_id}
@@ -594,6 +642,7 @@ class HumanSense:
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
         self._generation += 1
+        self._speech_stops.clear()
         await self._reset_plugins()
         return {"processing_reset": True}
 
