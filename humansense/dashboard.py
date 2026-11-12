@@ -20,6 +20,19 @@ class Dashboard:
         from .media import media_router
         self.router = media_router(human)
 
+    def asr_plugin(self):
+        from .plugins import FasterWhisperPlugin
+        for worker in self.human.plugins:
+            plugin = getattr(worker, "plugin", worker)
+            if isinstance(plugin, FasterWhisperPlugin):
+                return plugin
+        return None
+
+    def asr_settings(self):
+        plugin = self.asr_plugin()
+        return {"available": plugin is not None,
+                "language": (plugin.language or "auto") if plugin else "auto"}
+
     async def dispatch(self, body):
         # Model calls must not hold a transport-wide lock: stop/delete need to
         # invalidate in-flight work immediately, not after a provider timeout.
@@ -28,10 +41,22 @@ class Dashboard:
     async def _dispatch(self, body):
         from .realtime import scene_status, configure_scene
         op = body.get("op")
+        if op == "configure_asr":
+            language = body.get("language")
+            if language not in ("auto", "en", "zh", "ko"):
+                raise ValueError("Choose auto, en, zh or ko")
+            if not self.human.paused:
+                raise ValueError("Stop capture before changing speech language")
+            plugin = self.asr_plugin()
+            if plugin is None:
+                raise ValueError("Speech recognition model is not installed")
+            plugin.reset()
+            plugin.language = None if language == "auto" else language
+            return self.asr_settings()
         if op == "configure_vlm":
             return await configure_scene(self.human, {k:v for k,v in body.items() if k != "op"})
         if op == "state":
-            return {"routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
+            return {"asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": await self.human.get_state(),
                     "context": await self.human.get_context(),
                     "capture": self.capture, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,

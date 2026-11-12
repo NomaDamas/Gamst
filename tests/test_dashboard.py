@@ -37,6 +37,29 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         await self.app.dispatch({"op": "delete"})
         self.assertEqual(await self.human.get_history(), [])
 
+    async def test_speech_language_selection(self):
+        from unittest.mock import patch
+        from humansense.plugins import FasterWhisperPlugin
+        plugin = FasterWhisperPlugin.__new__(FasterWhisperPlugin)
+        plugin.language = "ko"
+        plugin.buffers = {"local-user": [0.1]}
+        plugin._generation = 0
+        with patch.object(self.app, "asr_plugin", return_value=plugin):
+            for language in ("en", "zh", "ko", "auto"):
+                result = await self.app.dispatch({"op": "configure_asr", "language": language})
+                self.assertEqual(result, {"available": True, "language": language})
+                self.assertEqual(plugin.language, None if language == "auto" else language)
+                self.assertEqual(plugin.buffers, {})
+                self.assertEqual((await self.app.dispatch({"op": "state"}))["asr"], result)
+            with self.assertRaises(ValueError):
+                await self.app.dispatch({"op": "configure_asr", "language": "invalid"})
+            await self.app.dispatch({"op": "start", "consent": True})
+            with self.assertRaises(ValueError):
+                await self.app.dispatch({"op": "configure_asr", "language": "en"})
+        await self.app.dispatch({"op": "stop"})
+        with self.assertRaises(ValueError):
+            await self.app.dispatch({"op": "configure_asr", "language": "en"})
+
     async def test_media_size_boundaries(self):
         await self.app.dispatch({"op": "start", "consent": True})
         for body in ({"op": "audio", "samples": [0] * 96001},

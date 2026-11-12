@@ -39,7 +39,9 @@ classifier automatically unless `--without-voice-emotion` is specified. An expli
 `--plugins-config` takes precedence. Existing installed models are preserved.
 Only the project virtual environment and owned model directory are changed.
 
-In the dashboard, select Microphone, consent and Start. After the first 3 seconds,
+In the dashboard camera panel, choose the speech recognition language: English (`en`), Chinese (`zh`), Korean (`ko`), or automatic detection. Stop capture before changing language; the next capture uses the new setting without a server restart. This controls Whisper transcription, not the voice emotion model or interface language.
+
+Select Microphone, consent and Start. After the first 3 seconds,
 Observability shows the latest four voice scores. Choose **시계열 보기**, or open
 Categories/Time series → `classification.voice_emotion`, for bars, relative-score
 donut and per-category histories. MCP context includes the same named observation.
