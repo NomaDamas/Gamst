@@ -6,6 +6,12 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'qwen3.asr':
+        from .qwen_artifact import artifact_version
+        from .providers.qwen_asr import QwenStreamingASR
+        if set(config) != {'path', 'files'} or type(config['path']) is not str:
+            raise ValueError('qwen3.asr requires only local path and file hashes')
+        return QwenStreamingASR.capability(artifact_version(config['files']))
     if profile == 'rfdetr.nano':
         from .providers.detection import RFDETRObjects
         import re
@@ -24,4 +30,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events or silero.activity')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity or qwen3.asr')
