@@ -29,3 +29,4 @@ jobs:
       - run: python -c "import cv2, numpy; print(cv2.__version__, numpy.__version__)"
       - run: python -m unittest discover -s tests -p test_motion_provider.py -v
       - run: python -m unittest discover -s tests -p test_prosody_provider.py -v
+      - run: python -m unittest discover -s tests -p test_detection_provider.py -v
