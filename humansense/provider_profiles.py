@@ -6,6 +6,10 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'efficienttam.tiny512':
+        from .providers.efficienttam_native import configuration
+        from .providers.efficienttam_context import EfficientTAMContext
+        return EfficientTAMContext.capability(**configuration(config))
     if profile == 'yoloe.local':
         from .providers.yoloe_native import configuration
         from .providers.yoloe import YOLOEContext

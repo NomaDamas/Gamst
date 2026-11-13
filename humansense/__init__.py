@@ -19,5 +19,8 @@ __all__ += ['transcript_capability']
 from .object_appearance import ObjectAppearancePipeline
 __all__ += ['ObjectAppearancePipeline']
 
+from .mask_tracking import MaskTrackingPipeline
+__all__ += ['MaskTrackingPipeline']
+
 from .audiovisual import TalkNetWindows, decode_talknet_window, talknet_stream_frame
 __all__ += ['TalkNetWindows', 'decode_talknet_window', 'talknet_stream_frame']

@@ -14,6 +14,7 @@ dependencies = []
 classifiers = ["Programming Language :: Python :: 3", "Development Status :: 3 - Alpha"]
 
 [project.optional-dependencies]
+efficienttam = ["torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"]
 yoloe = ["ultralytics==8.4.212", "torch==2.8.0", "torchvision==0.23.0", "numpy>=1.24", "Pillow>=10"]
 talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
