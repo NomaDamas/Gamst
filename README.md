@@ -447,3 +447,8 @@ and audiovisual active-speaker association remain open.
 bounded local worker inputs for the [windowed TalkNet provider](docs/talknet-context.md).
 The local worker emits capture-timed audiovisual activity scores through SDK/MCP;
 actual trained-model, synchronization and quality acceptance remain in#118.
+
+[Classic ESP32 CSI channel-variation context](docs/esp32-csi.md) decodes an explicit
+20MHz receiver profile and exposes bounded amplitude/phase/temporal features
+through SDK/MCP. Real hardware validation remains open; channel variation does
+not establish human presence, range or through-wall objects.

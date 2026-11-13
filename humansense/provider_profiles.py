@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'esp32.csi':
+        from .providers.csi import ESP32CSI
+        return ESP32CSI.capability(**config)
     if profile == 'talknet.local':
         from .providers.talknet import TalkNetContext
         if (not {'source_dir', 'checkpoint_path', 'checkpoint_sha256'} <= set(config) or
