@@ -171,3 +171,34 @@ class Context(unittest.IsolatedAsyncioTestCase):
             result=await MCPServer(human).call_tool('get_observations',{'capability_id':p.spec.id})
             self.assertEqual(result['items'][0]['observation']['value']['processing']['status'],'unavailable_reference')
             await streams.clear();self.assertTrue(p.closed)
+
+
+@unittest.skipIf(np is None,'optional numpy absent')
+class Smoke(unittest.TestCase):
+    def test_paired_wave_runner_preservation_and_partial_block_rejection(self):
+        import importlib.util,json,tempfile,wave
+        import importlib.metadata
+        from pathlib import Path
+        spec=importlib.util.spec_from_file_location('duplex_smoke',Path(__file__).resolve().parents[1]/'examples/validate_duplex.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        original_version=importlib.metadata.version
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve()
+            def write(name,value,count=480):
+                path=root/name
+                with wave.open(str(path),'wb') as f:
+                    f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000)
+                    f.writeframes(np.full(count,value,dtype='<i2').tobytes())
+                return str(path)
+            args=SimpleNamespace(microphone=write('mic.wav',16384),render=write('render.wav',8192),
+                output=str(root/'report.json'),delay_ms=40)
+            p=WebRTCDuplex(lambda:SimpleNamespace(process=lambda near,far:near-far),stream_delay_ms=40)
+            with patch.object(module.WebRTCDuplex,'from_installed',return_value=p),patch('importlib.metadata.version',
+                    side_effect=lambda name:'0.2.0' if name=='pywebrtc-audio' else original_version(name)):
+                module.run(args)
+            report=json.loads(Path(args.output).read_text())
+            self.assertEqual(report['blocks'],3);self.assertTrue(report['ambient_preserved']);self.assertTrue(p.closed)
+            self.assertFalse(report['echo_reduction_verified']);self.assertEqual(report['output_samples_clipped'],0)
+            self.assertEqual(report['last_context']['processing']['speech_rms'],.25)
+            partial=write('partial.wav',0,161)
+            with self.assertRaises(ValueError):module.read_pcm(partial)
