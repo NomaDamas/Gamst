@@ -32,7 +32,7 @@ Streaming modes must distinguish native stateful, rolling window, independent fr
 
 ## Candidate inventory and integration expectations
 
-Candidates are alternatives and research extension targets, not a requirement to run all models simultaneously. Each inventory row must ultimately map to executable provider coverage or an explicitly open limitation issue. A generic callable or a catalog entry alone is not a validated model integration.
+Candidates are alternatives and research extension targets, not a requirement to run all models simultaneously. Each inventory row must ultimately map to executable provider coverage or an explicitly open limitation issue. A generic callable or a catalog entry alone is not a validated model integration. The delivery floor is executable, validated coverage for every capability named below, including experimental sensor capabilities; an extension contract alone does not meet it. Alternative models may share adapters, but every named candidate retains its own execution/compatibility status. Open required-capability limitations prevent overall completion; they are not approved deferrals. Only Halo demonstrations are deferred.
 
 ### Vision
 
@@ -71,7 +71,7 @@ Candidates are alternatives and research extension targets, not a requirement to
 - Through-wall research: RF-Pose/RF-Action with required specialized hardware; no generic through-wall object classification claim. https://rfpose.csail.mit.edu/ ; https://rf-action.csail.mit.edu/
 - Touch: DIGIT/GelSight streams, Sparsh representations and task-specific contact/slip heads. https://github.com/facebookresearch/sparsh
 - Gas: BME688/BME690 measured environmental channels and trained gas-pattern classifiers; sensor response times and training environment matter. https://www.bosch-sensortec.com/en/software-tools/software/bme688-and-bme690-software
-- Frontier extension contracts: OpenEB event cameras; EfficientPhys rPPG sustained windows; Visual Microphone high-speed vibration/audio reconstruction. These remain experimental until hardware/model validation succeeds. https://github.com/prophesee-ai/openeb ; https://arxiv.org/abs/2110.04447 ; https://people.csail.mit.edu/mrub/VisualMic/
+- Frontier providers: OpenEB event cameras; EfficientPhys rPPG sustained windows; Visual Microphone high-speed vibration/audio reconstruction. Implement executable supported paths and retain offline/hardware constraints; extension contracts alone are insufficient. These remain experimental until hardware/model validation succeeds. https://github.com/prophesee-ai/openeb ; https://arxiv.org/abs/2110.04447 ; https://people.csail.mit.edu/mrub/VisualMic/
 
 ## Object memory
 
@@ -85,8 +85,10 @@ Track requested, recommended and applied delivery intervals separately. Profile 
 
 Compare identical recorded inputs and tasks against a declared VLM-only baseline. Report hardware, model/version/precision, sample rate, window/lookahead, warm/cold state, p50/p95 end-to-end observation latency, VLM calls/tokens, measured cost when a price is configured, memory, drops and task quality. No claim of quality preservation from synthetic timing tests alone. Report unknown pricing as unknown. Establish task-specific non-inferiority tolerance before an evaluation; preserve rare events, OCR facts, object identity and ASR revisions. Policy remains user-selectable; savings must not silently suppress required modalities.
 
+Initial engineering acceptance targets, fixed before the matched evaluation: at least 20% fewer VLM input tokens or measured VLM cost, at least 10% lower p95 task-answer-ready latency, no regression on the deterministic critical-fact suite, and no decrease in aggregate scored task quality on the same held-out examples. Report paired uncertainty intervals and sample counts; inconclusive quality evidence is not a pass. Do not change datasets, baseline settings, tolerances or routing policy after observing results to manufacture a pass. Include local provider compute and queueing in latency/resource reporting, and distinguish VLM cost from total compute cost. Model availability or hardware constraints cannot turn this gate into a mock benchmark.
+
 ## Review and completion gates
 
-Every implementation PR links its issue and acceptance requirements, includes focused failure-path tests and relevant existing regressions, and receives an independent GPT-6.1 Sol High review. Record reviewed commit SHA and findings; resolve findings and re-review changed scope before merging. CI and a plan-compliance checklist must pass. No implementation agent self-approval.
+Every PR, including documentation and tooling PRs, links its issue and acceptance requirements and receives an independent GPT-6.1 Sol High review. Implementation PRs include focused failure-path tests and relevant existing regressions. Record reviewed commit SHA and findings; resolve findings and re-review changed scope before merging. CI and a plan-compliance checklist must pass. No implementation agent self-approval.
 
 Keep implementation, mocked contract tests, actual model execution, and physical-device validation as separate evidence levels. Missing sensor hardware, unavailable checkpoints, incompatible licenses or unverified research runtime become detailed linked open subissues, not completed boxes. The overall goal stays incomplete while required acceptance remains unmet. Preserve the user's pre-existing uncommitted workspace changes by developing in an isolated worktree.
