@@ -35,6 +35,32 @@ class PerceptionAPI(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(human.consent)
             self.assertFalse(hasattr(human, '_media_router'))
 
+    async def test_capability_pages_are_bounded_and_revision_checked(self):
+        async with HumanSense(consent=False) as human:
+            for name in ('z', 'a', 'm'):
+                human.register_capability(CapabilitySpec(name, name, 'imu', 'fixture', '1',
+                    (OutputField('value', 'number'),), 'native'))
+            server = MCPServer(human)
+            first = await server.call_tool('list_capabilities', {'limit': 1})
+            self.assertEqual([x['id'] for x in first['capabilities']], ['a'])
+            second = await human.list_capabilities(offset=first['next_offset'],
+                revision=first['revision'], limit=1)
+            self.assertEqual([x['id'] for x in second['capabilities']], ['m'])
+            last = await human.list_capabilities(offset=second['next_offset'], revision=first['revision'])
+            self.assertEqual([x['id'] for x in last['capabilities']], ['z'])
+            self.assertIsNone(last['next_offset'])
+            bounded = await human.list_capabilities(max_bytes=1024)
+            self.assertLessEqual(sum(len(json.dumps(x, ensure_ascii=True).encode())
+                for x in bounded['capabilities']), 1024)
+            for args in ({'offset': True}, {'offset': 1}, {'limit': 0}, {'max_bytes': 100},
+                         {'revision': 'bad'}, {'offset': 4, 'revision': first['revision']}):
+                with self.assertRaises(ValueError):
+                    await human.list_capabilities(**args)
+            human.register_capability(CapabilitySpec('b', 'b', 'imu', 'fixture', '1',
+                (OutputField('value', 'number'),), 'native'))
+            with self.assertRaisesRegex(ValueError, 'registry changed'):
+                await server.call_tool('list_capabilities', {'offset': 1, 'revision': first['revision']})
+
     async def test_filtered_history_bounds_and_no_legacy_raw_payloads(self):
         async with HumanSense(consent=True) as human:
             server = MCPServer(human)
