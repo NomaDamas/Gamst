@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from benchmarks.paired_replay import run, validate_collection
+from benchmarks.paired_replay import run, validate_collection, _execute, _stop_owned
 from benchmarks.perception_comparison import plan_digest
 from test_perception_comparison import fixture
 
@@ -111,6 +111,99 @@ class Collection(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(processes),1)
             self.assertIsNotNone(processes[0].returncode)
             self.assertFalse((root/'run/complete.json').exists())
+
+    async def test_group_permission_error_is_retried_but_not_silently_ignored(self):
+        proc=await asyncio.create_subprocess_exec(sys.executable,'-c','import time; time.sleep(60)',
+            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,start_new_session=True)
+        original=os.killpg; count=0
+        def transient(pid,sig):
+            nonlocal count
+            count+=1
+            if count==1: raise PermissionError('fixture transient')
+            return original(pid,sig)
+        try:
+            with patch('benchmarks.paired_replay.os.killpg',side_effect=transient): await _stop_owned(proc)
+            self.assertEqual(count,2); self.assertIsNotNone(proc.returncode)
+            with patch('benchmarks.paired_replay.os.killpg',side_effect=PermissionError('fixture persistent')):
+                with self.assertRaises(PermissionError): await _stop_owned(proc)
+        finally:
+            if proc.returncode is None: await _stop_owned(proc)
+
+    async def _assert_child_stopped(self,pid):
+        import subprocess
+        for _ in range(100):
+            state=subprocess.run(['ps','-p',str(pid),'-o','stat='],capture_output=True,text=True).stdout.strip()
+            if not state or state.startswith('Z'): return
+            await asyncio.sleep(.01)
+        self.fail('owned descendant is still executing')
+
+    def _descendant_command(self,root,status):
+        script=root/'descendant.py'; marker=root/'pid.json'
+        script.write_text("import subprocess,sys,os,json\nfrom pathlib import Path\n"
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+            "Path(sys.argv[1]).write_text(json.dumps([os.getpid(),child.pid]))\n"
+            "print(json.dumps(dict(schema_version=1,status=sys.argv[2],answer='done',measurements={})),flush=True)\n")
+        return dict(argv=[sys.executable,str(script),str(marker),status],cwd=str(root),environment={}),marker
+
+    async def _wait_marker(self,marker):
+        for _ in range(200):
+            if marker.exists():
+                try: return json.loads(marker.read_text())
+                except json.JSONDecodeError: pass
+            await asyncio.sleep(.01)
+        self.fail('fixture did not start its owned descendant')
+
+    async def test_success_and_error_response_exit_clean_detached_stdio_descendants(self):
+        import signal
+        for status in ('success','error'):
+            with tempfile.TemporaryDirectory(dir='.') as directory:
+                root=Path(directory).resolve(); command,marker=self._descendant_command(root,status)
+                try:
+                    result=await _execute(command,{},1000)
+                    group,child=await self._wait_marker(marker)
+                    self.assertEqual(result['status'],status)
+                    await self._assert_child_stopped(child)
+                finally:
+                    if marker.exists():
+                        try: os.killpg(json.loads(marker.read_text())[0],signal.SIGKILL)
+                        except ProcessLookupError: pass
+
+    async def test_cancel_and_timeout_during_native_pipe_connection_retain_group_handle(self):
+        import signal
+        for mode in ('cancel','timeout'):
+            with tempfile.TemporaryDirectory(dir='.') as directory:
+                root=Path(directory).resolve(); command,marker=self._descendant_command(root,'success')
+                loop=asyncio.get_running_loop(); original=loop.connect_write_pipe
+                entered,release=asyncio.Event(),asyncio.Event()
+                async def delayed(*args,**kwargs):
+                    result=await original(*args,**kwargs)
+                    entered.set(); await release.wait(); return result
+                task=None
+                try:
+                    with patch.object(loop,'connect_write_pipe',side_effect=delayed):
+                        task=asyncio.create_task(_execute(command,{},100 if mode=='timeout' else 1000))
+                        await asyncio.wait_for(entered.wait(),2)
+                        group,child=await self._wait_marker(marker)
+                        if mode=='cancel':
+                            task.cancel(); await asyncio.sleep(.01); task.cancel()
+                        else: await asyncio.sleep(.15)
+                        await asyncio.sleep(.01)
+                        self.assertFalse(task.done())  # must own unfinished creation until release
+                        release.set()
+                        if mode=='cancel':
+                            with self.assertRaises(asyncio.CancelledError): await task
+                        else: self.assertEqual((await task)['status'],'timeout')
+                    await self._assert_child_stopped(child)
+                finally:
+                    release.set()
+                    if task is not None:
+                        if not task.done(): task.cancel()
+                        await asyncio.gather(task,return_exceptions=True)
+                    if marker.exists():
+                        try: os.killpg(json.loads(marker.read_text())[0],signal.SIGKILL)
+                        except ProcessLookupError: pass
 
 
 class Validation(unittest.TestCase):

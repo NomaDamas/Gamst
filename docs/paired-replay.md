@@ -100,7 +100,16 @@ this boundary as persistent-session latency without an appropriate integration.
 Pair order alternates baseline/candidate then candidate/baseline, in frozen task
 order. This reduces fixed ordering bias but is not a randomized experimental design.
 Every pair is retained, including failed/timeout runs. The timeout covers invocation
-and response/exit; owned process groups are stopped on failures/timeouts/cancellation.
+and response/exit; owned process groups are stopped after every invocation, including successful
+commands that left descendants with detached stdio. Spawn is shielded: cancellation
+or timeout waits to acquire the creation handle, then cleans the owned group.
+Cleanup may exceed the configured response deadline; an OS-level spawn that never
+returns can delay cleanup. Repeated cancellation cannot abandon the owned cleanup.
+On macOS, the [XNU group signal implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c)
+can return EPERM for a group containing only zombie members. Group signalling is
+retried briefly; persistent permission failure aborts collection and is never
+silently treated as successful cleanup. Commands must not escape the owned process
+group or elevate privileges; this runner is not a sandbox or job-control service.
 Failures require the frozen failure-scoring/latency policy, never a favourable fast
 error or success-only subset. An externally cancelled collector leaves an incomplete
 run without `complete.json`; incomplete runs cannot be compared as complete evidence.

@@ -105,19 +105,44 @@ async def _drain(stream, limit):
 
 async def _stop_owned(process):
     # The child starts its own process group. Never signal an unrelated process.
-    try: os.killpg(process.pid,signal.SIGKILL)
-    except ProcessLookupError: pass
-    await process.wait()
+    for attempt in range(10):
+        try:
+            os.killpg(process.pid,signal.SIGKILL)
+            break
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            # XNU excludes SZOMB group members and can transiently return EPERM
+            # while the owned leader is being reaped. Never ignore persistent EPERM.
+            if attempt==9: raise
+            await asyncio.sleep(.01)
+    if process.stdin: process.stdin.close()
+    transport=process._transport
+    for descriptor in (1,2):
+        pipe=transport.get_pipe_transport(descriptor)
+        if pipe is not None: pipe.close()
+    try:
+        await process.wait()
+    finally:
+        transport.close()
+
+
+async def _finish_owned(task):
+    while True:
+        try: return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done(): return task.result()
 
 
 async def _execute(command, request, timeout_ms):
     started=time.perf_counter_ns()
-    proc=None; jobs=[]; output=b''; error=b''; response=None
+    proc=None; spawn=None; jobs=[]; output=b''; error=b''; response=None
     status='error'; diagnostic=None; answer_ready_ms=None
     try:
-        proc=await asyncio.wait_for(asyncio.create_subprocess_exec(*command['argv'],cwd=command['cwd'],
+        spawn=asyncio.create_task(asyncio.create_subprocess_exec(*command['argv'],cwd=command['cwd'],
             env=command['environment'],stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True), timeout_ms/1000)
+            stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True))
+        proc=await asyncio.wait_for(asyncio.shield(spawn),timeout_ms/1000)
         async def send():
             proc.stdin.write(_encoded(request)+b'\n')
             await proc.stdin.drain(); proc.stdin.close()
@@ -165,12 +190,24 @@ async def _execute(command, request, timeout_ms):
         response=None  # malformed/unbounded responses never enter source traces
         diagnostic=type(exc).__name__  # no environment/credential text in public errors
     finally:
-        if proc is not None and (proc.returncode is None or status=='timeout' or diagnostic is not None):
-            # Also reap owned descendants retaining pipes after the direct child exits.
-            await _stop_owned(proc)
-        for job in jobs:
-            if not job.done(): job.cancel()
-        if jobs: await asyncio.gather(*jobs,return_exceptions=True)
+        async def cleanup():
+            nonlocal proc
+            if proc is None and spawn is not None:
+                try: proc=await spawn
+                except Exception: pass
+            if proc is not None:
+                # Every invocation owns its group, including descendants with
+                # detached stdio after a successful direct-child exit.
+                await _stop_owned(proc)
+            for job in jobs:
+                if not job.done(): job.cancel()
+            if jobs: await asyncio.gather(*jobs,return_exceptions=True)
+        cleanup_task=asyncio.create_task(cleanup())
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            await _finish_owned(cleanup_task)
+            raise
     elapsed=(time.perf_counter_ns()-started)/1e6
     return dict(status=status,diagnostic=diagnostic,response=response,
         answer_ready_ms=answer_ready_ms,process_lifetime_ms=elapsed,
