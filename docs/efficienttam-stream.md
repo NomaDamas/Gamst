@@ -1,16 +1,16 @@
 # EfficientTAM bounded streaming bridge
 
-gamst's required [mask-tracking family #19](https://github.com/NomaDamas/Gamst/issues/19) needs a video path in addition to sampled SAM image segmentation. `EfficientTAMStream` is the internal state-management component for that path. **It is not yet a registered provider, a verified checkpoint loader, or evidence of real model execution.** Remaining integration and actual acceptance are required in [#127](https://github.com/NomaDamas/Gamst/issues/127).
+gamst's required [mask-tracking family #19](https://github.com/NomaDamas/Gamst/issues/19) needs a video path in addition to sampled SAM image segmentation. `EfficientTAMStream` provides bounded state management; `efficienttam.tiny512` is now a concrete isolated-worker profile with a verified local loader and capture-bound context adapter. `MaskTrackingPipeline` connects RF-DETR seed detection to this tracker for SensorStreams/MCP. **Trained-checkpoint quality, native full-clip parity and measured live performance remain unverified** and required in [#127](https://github.com/NomaDamas/Gamst/issues/127).
 
 ## Responsibility and boundaries
 
 ```mermaid
 flowchart LR
-    C[Capture ownership and gap checks: integration pending] --> B[EfficientTAMStream: bounded forward state]
-    P[Exact-capture seed boxes: integration pending] --> B
-    B --> M[Pinned tiny512 predictor: native loader pending]
+    C[EfficientTAMContext: capture ownership and gap checks] --> B[EfficientTAMStream: bounded forward state]
+    P[Exact-capture seed boxes] --> B
+    B --> M[Verified local tiny512 predictor]
     M --> O[Boolean current-frame masks]
-    O --> S[Context schema and worker integration: pending]
+    O --> S[Compact context: SensorStreams and MCP]
 ```
 
 The bridge accepts one owned BGR uint8 image per `step`, with axes 32..2048 and at most 1,048,576 pixels. The initial call requires one to four pixel `xyxy` boxes on that image. Subsequent calls cannot add objects or correct old frames. Returns are owned boolean `N×H×W` masks in initial prompt order; IDs 1..N are session-local indices, not recognized identities. Thresholding uses native mask logits `>0`, not calibrated confidence. There is no automatic object detection, presence certainty, reidentification or box reuse after reset.
@@ -33,4 +33,59 @@ Preprocessing follows the pinned JPEG loader's arithmetic on predecoded pixels: 
 
 Run `python3 -m unittest discover -s tests -p test_efficienttam_stream.py -v` with NumPy, Pillow and Torch available. Tests exercise 1,000 frames/two objects, all prior-memory addresses needed by the fixed attention policy, cache/metadata bounds, malformed output and late generator errors, fresh-prompt requirements, input limits, policy drift, terminal close and exact preprocessing arithmetic. Model math is substituted. No EfficientTAM package or weights were installed for these tests.
 
-The next implementation must add verified local source/config/checkpoint loading in an isolated runtime, a concrete `ProcessProvider` profile, capture-bound `process_regions` seeds, `needs_prompt` after gaps, compact mask context, SensorStreams/MCP integration and actual model acceptance. Merely accepting an arbitrary predictor here does not satisfy the family deliverable. Existing `sam3.py` remains the sampled image path; neither this internal bridge nor SAM image inference is advertised as completed video tracking.
+The registered profile now supplies the verified loader, context adapter and worker integration described below. Tests of the internal predictor contract alone still do not establish actual checkpoint quality. Existing `sam3.py` remains the separate sampled image path.
+
+## Local runtime and context profile
+
+Model installation remains a separate explicit step. In a dedicated environment, the optional `.[efficienttam]` dependencies select Torch 2.8.0, TorchVision 0.23.0, Hydra 1.3.2, OmegaConf 2.3.0, NumPy, Pillow and tqdm. Do not install the upstream demo package into an existing environment: its Gradio/Hugging Face/demo dependencies are not needed by this path. Supply a checkout of the pinned revision and an official tiny512 checkpoint separately, with a recorded SHA256 and license/provenance. The loader has no download path.
+
+```python
+from humansense import ProcessProvider
+
+config = {
+    "source_dir": "/absolute/EfficientTAM",  # contains efficient_track_anything/
+    "checkpoint_path": "/absolute/efficienttam_ti_512x512.pt",
+    "checkpoint_sha256": "<64 lowercase hexadecimal characters>",
+    "runtime_root": "/absolute/existing/task-directory",
+    "device": "cpu",  # or explicit cuda; no silent fallback
+    "max_gap_ms": 1000,
+    "max_frames": 1000000,
+}
+spec = ProcessProvider.capability("efficienttam.tiny512", config)  # no model startup
+worker = await ProcessProvider.open("/absolute/runtime/bin/python", "efficienttam.tiny512", config)
+# Explicitly close worker in finally when done.
+```
+
+The worker verifies 32 pinned Python/config file hashes, snapshots only those files into its own temporary directory, and builds only the tiny512 video predictor with fixed overrides. It reads at most 256 MiB of checkpoint data, uses Torch's `weights_only=True`, requires the exact `{"model": state_dict}` wrapper, every tensor key/shape/dtype and finite values, then loads strictly. Fresh worker/module/Hydra state is required. CPU and CUDA are selectable; CPU execution was exercised, CUDA execution remains unverified. Runtime dependencies are trusted separately from upstream-source integrity. Closing removes only this worker's temporary snapshot; user source/checkpoint files and global caches are untouched.
+
+Call `worker.process(frame)` for ongoing images. An unseeded or discontinuous stream returns `summary.status="needs_prompt"` and no observed objects. Supply `worker.process_regions(frame, region_evidence(...))` with one to four `track_id`, `label` and normalized `location.bbox` rows belonging to that exact capture. `region_evidence` is from `humansense.providers.region_appearance`; its capture hash/metadata bind pixels and source, not the correctness of the caller's boxes. A seed may follow `needs_prompt` on the exact same capture; other repeated or backwards captures are rejected. A new seed always starts new session-local track IDs.
+
+The adapter checks capture sequence (original `capture_sequence` when supplied), increasing timestamps, ownership, coordinate/calibration identity, geometry and configured gap/session limits. Gaps clear prior masks/prompts and return `needs_prompt`; no stale box is automatically reused. Each nonempty current mask becomes an object with a normalized bounding box, 16×16 coverage bytes and exact foreground-pixel/area statistics. The lossy coverage grid is context, not a full-resolution mask or calibrated confidence. Empty masks appear only in bounded `summary.empty_tracks`, never as observed objects, so they cannot refresh memory's `last_seen`. Empty masks do not prove absence. `complete_snapshot=False` means the output is not a complete scene census; historical visibility expires according to the existing object-memory freshness policy unless explicitly invalidated.
+
+`MaskTrackingPipeline.open(detector_python, detector_config, tracker_python, config)` owns both RF-DETR and EfficientTAM workers. Register its `spec` and factory with `SensorStreams` as with other providers. It requests detector boxes only when the tracker needs a seed, selects at most four in detector order, and reports omitted and subpixel/unseedable counts. Valid subpixel detections are skipped, not treated as a fatal worker error. If none are eligible, it stays unseeded and tries the next capture. It does not discover newly entering objects during an active track session; reset/reseed explicitly for a fresh scene. Errors/cancellation close both owned workers. Separate runtimes prevent dependency conflicts.
+
+## Reproduction and evidence
+
+Contract and managed-path checks:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_efficienttam*.py' -v
+```
+
+These cover exact-frame seed rejection, same-frame prompt handshake, source/gap/geometry changes, session-local IDs, compact payload limits, empty-mask memory expiry, subpixel boxes, cancellation, worker protocol/reaping, strict checkpoint tensors and SensorStreams→MCP memory. The native profile also executed three CPU frames with an **untrained generated test checkpoint** through the real 17,866,018-parameter upstream graph and real isolated worker; reset returned `needs_prompt`. This verifies graph/loader wiring only. No trained weights were downloaded or installed, and empty masks from random parameters are not quality evidence. The generated checkpoint was a temporary test artifact removed after the run.
+
+With an explicitly supplied trained checkpoint, replay ordered images:
+
+For the separate untrained graph check, run `OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 PYTHONPATH=. python examples/validate_efficienttam_fixture.py --source-dir /absolute/EfficientTAM --runtime-root /absolute/existing/task-directory --output /absolute/new-fixture-report.json`. It creates and removes only its own temporary random checkpoint. Use the next command with a trained checkpoint for actual replay; neither command alone establishes quality acceptance.
+
+```sh
+PYTHONPATH=. python examples/validate_efficienttam.py \
+  --python /absolute/runtime/bin/python --source-dir /absolute/EfficientTAM \
+  --checkpoint /absolute/efficienttam_ti_512x512.pt --sha256 CHECKPOINT_SHA256 \
+  --runtime-root /absolute/existing/task-directory \
+  --image /absolute/frame0.png --image /absolute/frame1.png --image /absolute/frame2.png \
+  --box 0.1 0.1 0.5 0.5 --label cup --period-ms 40 --gap-at 2 \
+  --output /absolute/new-report.json
+```
+
+The box is normalized xywh for frame zero only. The injected gap must return `needs_prompt`, never replay that box at frame two. The report includes input/checkpoint hashes, context and processing duration. Its timestamps are synthetic replay times; processing duration is not live capture-to-context latency. Real annotated masks, occlusion/re-entry quality, full-clip parity, long-stream CPU/GPU resource bounds and capture-to-context p50/p95 remain mandatory #127 work. This runner does not automatically certify those gates.

@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'yoloe.local':
+    if profile == 'efficienttam.tiny512':
+        from .providers.efficienttam_native import load_worker
+        provider = load_worker(config)
+    elif profile == 'yoloe.local':
         from .providers.yoloe_native import load_worker
         provider = load_worker(config)
     elif profile == 'ti.radar':
