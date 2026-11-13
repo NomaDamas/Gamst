@@ -5,7 +5,8 @@ preview. The capture integration must verify radiometry/TLinear configuration,
 remove telemetry and suppress frames during FFC before submission.
 """
 import math
-import struct
+from array import array
+import sys
 
 from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, identifier
 
@@ -70,21 +71,25 @@ class TLinearThermal:
         if len(frame.data) != self.width*self.height*2:
             raise ValueError('payload must exactly match configured dimensions; strip transport headers/telemetry upstream')
         # One bounded decoded image, reused by at most 16 ROIs. Endianness is explicit.
-        prefix = '<' if self.byteorder == 'little' else '>'
-        pixels = struct.unpack(f'{prefix}{self.width*self.height}H', frame.data)
+        pixels = array('H')
+        if pixels.itemsize != 2:
+            raise RuntimeError('TLinear requires a platform with 16-bit unsigned short')
+        pixels.frombytes(frame.data)
+        if self.byteorder != sys.byteorder:
+            pixels.byteswap()
         regions = []
         for name, rect in self.rois:
             left, top, right, bottom = rect
             count, total, low, high = 0, 0, 65535, 0
             for y in range(top, bottom):
-                for x in range(left, right):
-                    value = pixels[y*self.width+x]
-                    # Reserved/extreme codes cannot establish a temperature.
-                    if value in (0, 65535):
-                        continue
-                    count += 1
-                    total += value
-                    low, high = min(low, value), max(high, value)
+                # Native reductions avoid per-pixel Python min/max calls. Keep
+                # only one row of temporary integers, not a whole ROI copy.
+                row = [value for value in pixels[y*self.width+left:y*self.width+right]
+                       if value not in (0, 65535)]
+                if row:
+                    count += len(row)
+                    total += sum(row)
+                    low, high = min(low, min(row)), max(high, max(row))
             size = (right-left)*(bottom-top)
             regions.append(dict(name=name, bounds=list(rect), valid_pixels=count,
                 invalid_pixels=size-count, valid_fraction=count/size,

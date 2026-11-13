@@ -45,6 +45,32 @@ class Thermal(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             p.process(frame())
 
+    def test_randomized_roi_statistics_match_scalar_reference(self):
+        import random
+        rng = random.Random(20261114)
+        width, height = 37, 23
+        values = [rng.choice((0, 65535, rng.randrange(1, 65535)))
+                  for _ in range(width*height)]
+        rois = {'all': (0, 0, width, height), 'middle': (3, 4, 29, 19),
+                'edge': (36, 22, 37, 23), 'row': (0, 0, width, 1)}
+        for endian, prefix in (('little', '<'), ('big', '>')):
+            for scale in (.01, .1):
+                p = provider(width=width, height=height, byteorder=endian,
+                             kelvin_per_count=scale, rois=rois)
+                f = InputFrame(struct.pack(prefix+str(len(values))+'H', *values),
+                    'thermal', 0, sensor=SensorMetadata('test', 'thermal', 0,
+                                                      calibration_id='fixture'))
+                results = p.process(f)['temperature']['regions']
+                for result in results:
+                    left, top, right, bottom = rois[result['name']]
+                    valid = [values[y*width+x] for y in range(top, bottom)
+                             for x in range(left, right) if values[y*width+x] not in (0, 65535)]
+                    self.assertEqual(result['valid_pixels'], len(valid))
+                    self.assertEqual(result['invalid_pixels'], (right-left)*(bottom-top)-len(valid))
+                    self.assertEqual(result['min_celsius'], min(valid)*scale-273.15 if valid else None)
+                    self.assertEqual(result['max_celsius'], max(valid)*scale-273.15 if valid else None)
+                    self.assertEqual(result['mean_celsius'], sum(valid)/len(valid)*scale-273.15 if valid else None)
+
     def test_invalid_config_and_payloads(self):
         for args in ({'width': True}, {'height': 513}, {'kelvin_per_count': 1},
                      {'byteorder': 'native'}, {'emissivity': float('nan')}, {'emissivity': 0},
