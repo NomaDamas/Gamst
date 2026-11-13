@@ -24,7 +24,7 @@ async def demo():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HumanSense local interaction SDK")
+    parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
     parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket"])
     args, extra = parser.parse_known_args()
     if args.command == "demo":

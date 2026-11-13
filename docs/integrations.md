@@ -1,6 +1,6 @@
 # External media bridges
 
-HumanSense accepts existing media streams without opening another camera. The decoded-media bridges bind inputs to a known participant and normalize audio/timestamps. They do not automatically identify people or associate a camera face with a microphone speaker.
+gamst accepts existing media streams without opening another camera. The decoded-media bridges bind inputs to a known participant and normalize audio/timestamps. They do not automatically identify people or associate a camera face with a microphone speaker.
 
 ```python
 from humansense.integrations import InputBridge, ClockMapper

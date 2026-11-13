@@ -1,6 +1,6 @@
 # Approved perception SDK expansion plan
 
-Approved 2026-11-13. HumanSense supplies real-time sensory context to an existing LLM. Product priorities are broader perception, lower VLM cost and latency, and preserved task quality. Halo demonstrations are out of scope for this delivery. This plan records the approved research scope; naming a candidate does not assert an implemented or validated provider.
+Approved 2026-11-13. gamst supplies real-time sensory context to an existing LLM. Product priorities are broader perception, lower VLM cost and latency, and preserved task quality. Halo demonstrations are out of scope for this delivery. This plan records the approved research scope; naming a candidate does not assert an implemented or validated provider.
 
 ## Architecture and responsibilities
 

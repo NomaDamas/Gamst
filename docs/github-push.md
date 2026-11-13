@@ -5,9 +5,9 @@ This development sandbox cannot resolve github.com and masks the root .git metad
 First inspect the normal terminal (not the restricted development shell):
 
 ```bash
-cd ~/Desktop/catch-your-mind
+cd ~/Desktop/Gamst
 git status --short --branch
-git ls-remote https://github.com/NomaDamas/catch-your-mind.git HEAD
+git ls-remote https://github.com/NomaDamas/Gamst.git HEAD
 ```
 
 If HTTPS prompts for credentials, use your configured Git credential manager or GitHub CLI `gh auth login` followed by `gh auth setup-git` if gh is installed. GitHub account passwords do not authenticate Git HTTPS operations. Never paste a token or password into an assistant conversation. For SSH, configure your own GitHub SSH key and use your authenticated SSH remote separately.

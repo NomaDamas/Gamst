@@ -1,6 +1,6 @@
 # Streaming and plugin architecture
 
-Catch Your Mind is a context runtime, not a fixed companion app or a single emotion
+gamst is a context runtime, not a fixed companion app or a single emotion
 model. Capture owns device I/O; model plugins own inference; the runtime owns
 bounded routing, provenance and context; the consuming app owns its decisions.
 

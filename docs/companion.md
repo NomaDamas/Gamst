@@ -1,6 +1,6 @@
 # Context-aware Companion
 
-The Companion uses the same HumanSense runtime and retention store as perception. A real configured chat-completions endpoint generates the assistant's response; there is no canned fallback pretending to be a model. Generation is not proof of the reply's factual correctness.
+The Companion uses the same gamst runtime and retention store as perception. A real configured chat-completions endpoint generates the assistant's response; there is no canned fallback pretending to be a model. Generation is not proof of the reply's factual correctness.
 
 ```python
 from humansense import HumanSense

@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "humansense-sdk"
 version = "0.3.1"
-description = "Local-first real-time human interaction observations for AI agents"
+description = "gamst: local-first real-time sensory context for AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
-authors = [{name = "HumanSense contributors"}]
+authors = [{name = "gamst contributors"}]
 dependencies = []
 classifiers = ["Programming Language :: Python :: 3", "Development Status :: 3 - Alpha"]
 
@@ -26,6 +26,11 @@ environment-audio = ["mediapipe==0.10.35", "numpy>=1.24"]
 websocket = ["websockets>=13,<16"]
 
 [project.scripts]
+gamst = "humansense.cli:main"
+gamst-serve = "humansense.server:main"
+gamst-mcp = "humansense.mcp:main"
+gamst-mcp-live = "humansense.mcp_live:main"
+gamst-dashboard = "humansense.dashboard:main"
 humansense = "humansense.cli:main"
 humansense-serve = "humansense.server:main"
 humansense-mcp = "humansense.mcp:main"
@@ -33,7 +38,7 @@ humansense-mcp-live = "humansense.mcp_live:main"
 humansense-dashboard = "humansense.dashboard:main"
 
 [project.urls]
-Repository = "https://github.com/NomaDamas/catch-your-mind"
+Repository = "https://github.com/NomaDamas/Gamst"
 
 [tool.setuptools.packages.find]
 include = ["humansense*"]

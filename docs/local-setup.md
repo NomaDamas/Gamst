@@ -1,14 +1,14 @@
 # Local setup and removal
 
-Catch Your Mind packages multimodal context for your existing agent. Installing it does not automatically register MCP, inherit another app's subscription, or transmit observations to a remote provider.
+gamst packages multimodal context for your existing agent. Installing it does not automatically register MCP, inherit another app's subscription, or transmit observations to a remote provider.
 
 ## Full local stack (Apple Silicon)
 
 Requirements: Python 3.10+, approximately 3 GB for model artifacts plus Python dependencies, and free memory for concurrent inference. The tested host has 32 GB RAM. Other platforms can use the SDK and perception backends with a separately supplied compatible model server; the installer currently bundles a VLM runner only for macOS ARM64.
 
 ```bash
-git clone https://github.com/NomaDamas/catch-your-mind.git
-cd catch-your-mind
+git clone https://github.com/NomaDamas/Gamst.git
+cd Gamst
 sh scripts/setup_local.sh
 .venv/bin/python scripts/run_local.py --language ko
 ```
@@ -26,10 +26,10 @@ Keep the local stack running. Register the bridge with your MCP client using abs
 ```json
 {
   "mcpServers": {
-    "catch-your-mind": {
-      "command": "/absolute/path/catch-your-mind/.venv/bin/python",
+    "gamst": {
+      "command": "/absolute/path/Gamst/.venv/bin/python",
       "args": ["-m", "humansense.mcp_live"],
-      "cwd": "/absolute/path/catch-your-mind"
+      "cwd": "/absolute/path/Gamst"
     }
   }
 }

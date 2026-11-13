@@ -3,7 +3,7 @@
 This checkout targets **v0.3.0** (2026-11-13), including streaming, voice emotion,
 body pose, multilingual settings and the English presentation. The previous
 release was v0.2.0. Downloadable tags, wheels and publication state are listed on
-[GitHub releases](https://github.com/NomaDamas/catch-your-mind/releases).
+[GitHub releases](https://github.com/NomaDamas/Gamst/releases).
 
 ## Implemented and exercised
 
