@@ -13,7 +13,17 @@ from .plugins import InputFrame
 from .schema import timestamp
 
 
-async def _call(function, *args, cleanup_on_cancel=False):
+async def _finish(task):
+    """Finish owned work despite repeated cancellation of its waiter."""
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return task.result()
+
+
+async def _call(function, *args, cleanup_on_cancel=None):
     """Never reset/close a synchronous backend while its worker is still running."""
     if inspect.iscoroutinefunction(function):
         return await function(*args)
@@ -22,9 +32,9 @@ async def _call(function, *args, cleanup_on_cancel=False):
         result = await asyncio.shield(task)
     except asyncio.CancelledError:
         try:
-            result = await task
-            if cleanup_on_cancel and callable(getattr(result, 'close', None)):
-                await _call(result.close)
+            result = await _finish(task)
+            if cleanup_on_cancel:
+                await cleanup_on_cancel(result)
         finally:
             raise
     if inspect.isawaitable(result):
@@ -87,6 +97,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         self._lock = asyncio.Lock()
         if not hasattr(human, '_sensor_streams'):
             human._sensor_streams = []
+            human._sensor_provider_owners = {}
         if len(human._sensor_streams) >= 4 or human.closed:
             raise RuntimeError('runtime closed or sensor managers limit reached')
         human._sensor_streams.append(self)
@@ -98,6 +109,21 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             raise ValueError('provider already registered or provider limit reached')
         self.human.register_capability(spec)
         self.factories[spec.id] = factory
+
+    async def _discard_unowned(self, provider):
+        # A cancelled factory must not dispose a singleton already used elsewhere.
+        if id(provider) not in self.human._sensor_provider_owners:
+            close = getattr(provider, 'close', None)
+            if close:
+                await _call(close)
+
+    async def _dispose(self, provider):
+        try:
+            close = getattr(provider, 'close', None)
+            if close:
+                await _call(close)
+        finally:
+            self.human._sensor_provider_owners.pop(id(provider), None)
 
     async def open(self, source_id, sensor_id, capabilities, *, subject_id='local-user'):
         """Explicitly construct providers; discovery and submit never load them."""
@@ -116,11 +142,12 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             lanes = []
             try:
                 for spec in specs:
-                    provider = await _call(self.factories[spec.id], cleanup_on_cancel=True)
-                    owned = [l['provider'] for manager in self.human._sensor_streams
-                             for s in manager.streams.values() for l in s['lanes']]+[l['provider'] for l in lanes]
-                    if any(provider is p for p in owned):
+                    provider = await _call(self.factories[spec.id], cleanup_on_cancel=self._discard_unowned)
+                    owners = self.human._sensor_provider_owners
+                    if id(provider) in owners:
                         raise ValueError('factory must return an isolated provider instance')
+                    # Reserve before awaiting the next factory, including across managers.
+                    owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
                                 task=None, gap=False, accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
@@ -133,10 +160,14 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 self.streams[key] = dict(subject=subject_id, modality=specs[0].modality,
                                         sequence=-1, timestamp=-1, lanes=lanes, generation=0)
             except BaseException:
+                errors = []
                 for lane in lanes:
-                    close = getattr(lane['provider'], 'close', None)
-                    if close:
-                        await _call(close)
+                    try:
+                        await self._dispose(lane['provider'])
+                    except Exception as exc:
+                        errors.append(exc)
+                if errors:
+                    raise RuntimeError('provider construction cleanup failed') from errors[0]
                 raise
 
     async def submit(self, frame):
@@ -213,6 +244,14 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         await asyncio.gather(*(l['queue'].join() for s in self.streams.values() for l in s['lanes']))
 
     async def clear(self, source_id=None, sensor_id=None):
+        cleanup = asyncio.create_task(self._clear(source_id, sensor_id))
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await _finish(cleanup)
+            raise
+
+    async def _clear(self, source_id=None, sensor_id=None):
         async with self._lock:
             keys = [k for k in self.streams if (source_id is None or k[0] == source_id)
                     and (sensor_id is None or k[1] == sensor_id)]
@@ -228,12 +267,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         _, size, _, _ = lane['queue'].get_nowait()
                         self.buffer_bytes -= size
                         lane['queue'].task_done()
-                    close = getattr(lane['provider'], 'close', None)
-                    if close:
-                        try:
-                            await _call(close)
-                        except Exception as exc:
-                            errors.append(exc)
+                    try:
+                        await self._dispose(lane['provider'])
+                    except Exception as exc:
+                        errors.append(exc)
                 del self.streams[key]
             if errors:
                 raise RuntimeError('sensor provider cleanup failed') from errors[0]

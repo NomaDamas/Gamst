@@ -204,3 +204,77 @@ class Streams(unittest.IsolatedAsyncioTestCase):
         await runtime.submit(self.frame(data={}))
         await runtime.drain()
         self.assertEqual(runtime.buffer_bytes, 0)
+
+    async def test_pending_open_reserves_provider_across_managers(self):
+        shared = Counter()
+        waiting, release = asyncio.Event(), asyncio.Event()
+        async def delayed():
+            waiting.set()
+            await release.wait()
+            return Counter()
+        self.runtime.register(spec('imu.shared'), lambda: shared)
+        self.runtime.register(spec('imu.delayed'), delayed)
+        other = SensorStreams(self.human)
+        other.register(spec('imu.shared'), lambda: shared)
+        opening = asyncio.create_task(self.runtime.open('s1', 'imu', ['imu.shared', 'imu.delayed']))
+        await waiting.wait()
+        try:
+            with self.assertRaises(ValueError):
+                await other.open('s2', 'imu', ['imu.shared'])
+            self.assertFalse(shared.closed)
+        finally:
+            release.set()
+            await opening
+
+    async def test_repeated_clear_cancellation_never_closes_active_worker(self):
+        entered, release = threading.Event(), threading.Event()
+        premature = []
+        class Slow(Counter):
+            def process(self, frame):
+                entered.set()
+                release.wait(3)
+                return super().process(frame)
+            def close(self):
+                premature.append(not release.is_set())
+                super().close()
+        self.runtime.register(spec('imu.cancel'), Slow)
+        await self.runtime.open('s1', 'imu', ['imu.cancel'])
+        await self.runtime.submit(self.frame())
+        self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+        clearing = asyncio.create_task(self.runtime.clear())
+        await asyncio.sleep(.01)
+        clearing.cancel()
+        await asyncio.sleep(.01)
+        clearing.cancel()
+        retry = asyncio.create_task(self.runtime.clear())
+        try:
+            await asyncio.sleep(.01)
+            self.assertFalse(clearing.done())
+            self.assertEqual(premature, [])
+        finally:
+            release.set()
+            await asyncio.gather(clearing, retry, return_exceptions=True)
+        self.assertEqual(premature, [False])
+        self.assertEqual(self.runtime.buffer_bytes, 0)
+        self.assertEqual(self.human._sensor_provider_owners, {})
+
+    async def test_delete_cleans_all_managers_even_when_one_backend_close_fails(self):
+        class Broken(Counter):
+            def close(self):
+                raise RuntimeError('device cleanup failed')
+        self.runtime.register(spec('imu.broken'), Broken)
+        await self.runtime.open('s1', 'imu', ['imu.broken'])
+        other = SensorStreams(self.human)
+        counter = Counter()
+        other.register(spec('imu.other'), lambda: counter)
+        await other.open('s2', 'imu', ['imu.other'])
+        await other.submit(self.frame('s2'))
+        await other.drain()
+        with self.assertRaises(RuntimeError):
+            await self.human.delete_data()
+        self.assertTrue(counter.closed)
+        self.assertEqual(other.status()['streams'], [])
+        self.assertEqual(self.human._sensor_provider_owners, {})
+        self.assertEqual((await self.human.get_context())['observations'], {})
+        with self.assertRaises(ValueError):
+            await other.submit(self.frame('s2', 1))

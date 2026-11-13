@@ -594,7 +594,11 @@ class HumanSense:
     async def delete_data(self, subject_id=None):
         self._generation += 1
         deleted = self.store.delete(subject_id)
-        await self._reset_plugins()
+        reset_error = None
+        try:
+            await self._reset_plugins()
+        except Exception as exc:
+            reset_error = exc
         if subject_id is None:
             self._sensor_refresh.clear()
         else:
@@ -620,19 +624,33 @@ class HumanSense:
                     retained.append(record)
             for record in retained:
                 queue.put_nowait(record)
+        if reset_error is not None:
+            raise reset_error
         return {"deleted_records": deleted, "subject_id": subject_id}
 
     async def _reset_plugins(self):
+        errors = []
         for streams in getattr(self, '_sensor_streams', ()):
-            await streams.clear()
+            try:
+                await streams.clear()
+            except Exception as exc:
+                errors.append(exc)
         if hasattr(self, "_media_router"):
-            await self._media_router.clear()
+            try:
+                await self._media_router.clear()
+            except Exception as exc:
+                errors.append(exc)
         for plugin in self.plugins:
             reset = getattr(plugin, "reset", None)
             if reset:
-                result = reset()
-                if inspect.isawaitable(result):
-                    await result
+                try:
+                    result = reset()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    errors.append(exc)
+        if errors:
+            raise RuntimeError(f'{len(errors)} processing reset operation(s) failed') from errors[0]
 
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
