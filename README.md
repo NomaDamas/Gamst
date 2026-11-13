@@ -411,3 +411,5 @@ transcripts and derived observations remain subject to the same storage limits.
 Disk-backed SQLite may retain allocated free pages for reuse after expiry; payload
 limits are not a physical database-file-size guarantee. Downstream agents and LLM
 providers control their own retention independently.
+
+Optional [local gaze context](docs/gaze-context.md) connects L2CS gaze heads to bounded MediaPipe face crops through the `l2cs.gaze` worker profile. Actual checkpoint accuracy and calibrated camera conventions remain pending; model files are supplied explicitly.

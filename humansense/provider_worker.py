@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video'):
+    if profile == 'l2cs.gaze':
+        from .providers.gaze import L2CSGaze
+        provider = L2CSGaze.from_local(**config)
+    elif profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video'):
         from .providers.landmarker_video import MediaPipeVideoContext
         provider = MediaPipeVideoContext.from_local(profile.split('.')[1], **config)
     elif profile == 'mediapipe.face':
