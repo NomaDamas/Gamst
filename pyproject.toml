@@ -34,6 +34,8 @@ retrieval = ["transformers==4.57.6", "torch==2.8.0", "torchvision==0.23.0", "hug
 
 duplex = ["pywebrtc-audio==0.2.0", "numpy>=1.24"]
 
+piv = ["openpiv==0.26.1"]
+
 [project.scripts]
 gamst = "humansense.cli:main"
 gamst-serve = "humansense.server:main"

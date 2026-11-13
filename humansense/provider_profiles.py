@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'openpiv.flow':
+        from .providers.piv import OpenPIVFlow
+        return OpenPIVFlow.capability(**config)
     if profile == 'webrtc.aec3':
         from .providers.duplex import WebRTCDuplex
         if set(config)-{'sample_rate','stream_delay_ms','ambient_sensor_id','speech_sensor_id'}:
