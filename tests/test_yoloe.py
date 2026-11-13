@@ -2,6 +2,7 @@ import dataclasses
 import asyncio
 import contextlib
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -47,7 +48,8 @@ def frame(i=0,h=33,w=47):
 class Labels(unittest.TestCase):
     def test_order_normalization_and_rejection(self):
         self.assertEqual(prompt_labels(['cafe\u0301','컵']),('café','컵'))
-        for value in ([],['x']*17,['x','x'],['café','cafe\u0301'],[' x'],['x\n'],['x\x00'],['x\u200b'],[True]):
+        self.assertEqual(prompt_labels(['컵'*128]),('컵'*128,))
+        for value in ([],['x']*17,['x','x'],['café','cafe\u0301'],[' x'],['x\n'],['x\x00'],['x\u200b'],[True],['😀'*65]):
             with self.assertRaises(ValueError): prompt_labels(value)
 
     def test_configuration_is_dependency_light_and_hash_binds_prompt_assets(self):
@@ -86,6 +88,22 @@ assert not {'torch','ultralytics'}&sys.modules.keys()
 
 @unittest.skipIf(np is None,'NumPy optional runtime is unavailable')
 class Context(unittest.TestCase):
+    def test_maximum_escaped_labels_masks_and_fractional_coordinates_fit_context(self):
+        labels=[chr(0x1f600+i)*64 for i in range(16)]
+        h,w=511,1023; rng=np.random.default_rng(0)
+        boxes=np.asarray([[rng.uniform(.1,10),rng.uniform(.1,10),rng.uniform(w/2,w),
+            rng.uniform(h/2,h),rng.uniform(.3,.9),i] for i in range(16)],np.float32)
+        masks=np.zeros((16,h,w),np.uint8);masks[:,:,::3]=1
+        backend=Backend();backend.output=boxes,masks
+        p=YOLOEContext(backend,**dict(CONFIG,labels=labels,mode='exemplar'))
+        f=frame(h=h,w=w);f=dataclasses.replace(f,timestamp_ms=2**53-1,
+            sensor=dataclasses.replace(f.sensor,coordinate_frame='x'*128))
+        result=p.process(f)
+        self.assertEqual(len(result['objects']),16)
+        self.assertLess(len(json.dumps(result,ensure_ascii=True).encode()),65536)
+        with self.assertRaises(ValueError):
+            YOLOEContext(backend,**dict(CONFIG,labels=[chr(0x1f600+i)*128 for i in range(16)],mode='exemplar'))
+
     def test_native_call_bridge_preserves_reference_once_and_mask_shape(self):
         # This verifies API arguments/result conversion, not Ultralytics inference.
         class Tensor:

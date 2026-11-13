@@ -97,8 +97,10 @@ source/subject/epoch/coordinate declaration start a new capture guard. Errors
 and reset clear the guard. Prompt embeddings remain immutable across reset;
 close/reopen with a new configuration to change prompts. Close is permanent.
 
-Prompt labels are1..16 ordered NFC strings,1..128characters each, without control
-characters, duplicates or edge whitespace. Exemplar mode permits1..32nonempty
+Prompt labels are1..16 ordered NFC strings,1..128characters and at most768escaped
+JSON bytes each (excluding the surrounding quotes), without control characters,
+duplicates or edge whitespace. This permits128Hangul characters or64astral
+symbols per label while bounding repeated labels in shared context. Exemplar mode permits1..32nonempty
 in-image boxes; class IDs are sequential0..N-1 and every label must be represented.
 Several boxes can belong to the same class. A prompt hash binds normalized labels,
 model SHA, encoder or reference SHA, example geometry, runtime and inference size.

@@ -29,6 +29,10 @@ def prompt_labels(labels):
                 any(unicodedata.category(c).startswith('C') for c in value)):
             raise ValueError('prompt labels must be bounded visible text without edge whitespace')
         label = unicodedata.normalize('NFC',value)
+        # Labels appear in both the prompt table and detections. Bound JSON
+        # escaping too: astral characters expand to12 ASCII bytes per character.
+        if len(json.dumps(label,ensure_ascii=True))-2 > 768:
+            raise ValueError('each prompt label must fit768 escaped JSON bytes')
         if label in result:
             raise ValueError('duplicate normalized prompt label')
         result.append(label)
