@@ -107,7 +107,7 @@ PYTHONPATH=. /path/to/audio/runtime/bin/python examples/validate_duplex.py \
 
 Inputs must be mono PCM16 at the same selected rate/length, contain whole10ms blocks,
 and last at most30s; files are bounded to16MiB. The script opens no devices and
-exclusively creates a report with file/runtime hashes, ambient-preservation check,
+exclusively creates a report with file hashes and runtime versions, ambient-preservation check,
 output PCM hashes, native processing timings and last context. It does not write raw
 audio. Synthetic replay timestamps are declared. Per-call p50/p95 are processing
 measurements, not capture-to-ASR latency, live synchronization or acoustic quality.
