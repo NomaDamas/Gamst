@@ -66,6 +66,24 @@ class Prosody(unittest.TestCase):
         self.assertEqual(result['features']['sample_rate'], 8000)
         self.assertEqual(result['features']['window_samples'], 640)
 
+    def test_short_overlap_and_gap_do_not_form_false_contiguous_window(self):
+        for timestamps in ((1000, 1001, 1002, 1003), (1000, 1020, 1043, 1063)):
+            provider = AudioProsody()
+            for ts in timestamps:
+                self.assertIsNone(provider.process(self.frame(self.tone(duration_ms=20), ts=ts)))
+            self.assertLess(len(provider.buffer), 1280)
+
+    def test_integer_timestamp_rounding_is_supported(self):
+        provider = AudioProsody()
+        rate, count = 44100, 500
+        result = None
+        for index in range(8):
+            samples = .2*np.sin(2*np.pi*220*(np.arange(count)+index*count)/rate)
+            ts = round(1000+(index+1)*count*1000/rate)
+            result = provider.process(self.frame(samples, ts=ts, rate=rate))
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result['features']['pitch_hz'], 220, delta=1.)
+
     def test_rejects_invalid_pcm_and_lifecycle(self):
         provider = AudioProsody()
         for data in ([float('nan')], [1.1], [float('inf')]):

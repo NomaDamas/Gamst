@@ -85,7 +85,10 @@ class AudioProsody:
         if self.last_ts is not None and ts <= self.last_ts:
             raise ValueError('capture end timestamps must increase')
         duration = len(values)*1000/rate
-        if self.rate is not None and (rate != self.rate or abs(ts-self.last_ts-duration) > max(40, duration*.2)):
+        # End timestamps describe sample capture, not callback arrival time.
+        # Allow millisecond rounding, but never merge overlapping short blocks.
+        tolerance_ms = max(1., 2000/rate)
+        if self.rate is not None and (rate != self.rate or abs(ts-self.last_ts-duration) > tolerance_ms):
             self.reset()
         self.rate, self.last_ts = rate, ts
         count = round(rate*self.window_ms/1000)
