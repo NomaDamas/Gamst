@@ -37,7 +37,7 @@ class ProcessProvider:
         self._close_task = None
         self._sequence, self.closed = 0, False
         worker_environment = os.environ.copy()
-        if profile == 'qwen3.asr':
+        if profile in ('qwen3.asr', 'qwen3.asr.endpoint'):
             worker_environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
                                       HF_HUB_DISABLE_TELEMETRY='1', VLLM_NO_USAGE_STATS='1',
                                       VLLM_ENABLE_V1_MULTIPROCESSING='0')

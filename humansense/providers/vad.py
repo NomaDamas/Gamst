@@ -39,7 +39,7 @@ class SileroActivity:
         return 'jit.sha256.'+sha256
 
     @classmethod
-    def from_local(cls, path, sha256, **kwargs):
+    def verify_local(cls, path, sha256):
         version = cls.artifact_version(sha256)
         path = Path(path).expanduser().resolve()
         if not path.is_file() or not 0 < path.stat().st_size <= 32*1024*1024:
@@ -50,6 +50,11 @@ class SileroActivity:
                 digest.update(block)
         if digest.hexdigest() != sha256:
             raise ValueError('Silero checkpoint SHA256 mismatch')
+        return path, version
+
+    @classmethod
+    def from_local(cls, path, sha256, **kwargs):
+        path, version = cls.verify_local(path, sha256)
         try:
             import torch
         except ImportError as exc:

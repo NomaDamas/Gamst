@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'qwen3.asr':
+    if profile == 'qwen3.asr.endpoint':
+        from .providers.endpoint_asr import SileroEndpointASR
+        provider = SileroEndpointASR.from_local(**config)
+    elif profile == 'qwen3.asr':
         from .providers.qwen_asr import QwenStreamingASR
         provider = QwenStreamingASR.from_local(**config)
     elif profile == 'rfdetr.nano':

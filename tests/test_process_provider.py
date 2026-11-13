@@ -94,10 +94,52 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             "assert os.environ['VLLM_ENABLE_V1_MULTIPROCESSING'] == '0'\n"
             "w.main()")
         config = dict(path='/fixture-not-installed', files={name:'0'*64 for name in REQUIRED})
-        with self.fixture(code):
-            provider = await ProcessProvider.open(sys.executable, 'qwen3.asr', config)
-            await provider.close()
+        endpoint = dict(asr=config, vad=dict(path='/fixture-not-installed',sha256='1'*64),
+                        minimum_speech_ms=160,silence_ms=640)
+        for profile, selected in (('qwen3.asr',config),('qwen3.asr.endpoint',endpoint)):
+            with self.fixture(code):
+                provider = await ProcessProvider.open(sys.executable, profile, selected)
+                await provider.close()
         self.assertEqual(dict(os.environ), before)
+
+    @unittest.skipIf(np is None,'numpy not installed')
+    async def test_endpoint_composition_over_real_child_pipe_with_engine_doubles(self):
+        from humansense.qwen_artifact import REQUIRED
+        code = """
+import sys
+sys.path.insert(0,'tests')
+from test_qwen_asr import EngineDouble
+from test_qwen_endpoint import ActivityModel
+from humansense import provider_worker as w
+from humansense.providers.endpoint_asr import SileroEndpointASR
+from humansense.providers.qwen_asr import QwenStreamingASR
+from humansense.providers.vad import SileroActivity
+from humansense.qwen_artifact import artifact_version
+
+def construct(profile,config):
+    asr=QwenStreamingASR(EngineDouble(),model_version=artifact_version(config['asr']['files']))
+    model=ActivityModel([.9,.9,.1,.1])
+    vad=SileroActivity(model,model.score,version=SileroActivity.artifact_version(config['vad']['sha256']))
+    provider=SileroEndpointASR(asr,vad,minimum_speech_ms=config['minimum_speech_ms'],silence_ms=config['silence_ms'])
+    return provider,w.capability(profile,config)
+w._construct=construct
+w.main()
+"""
+        selected=dict(asr=dict(path='/not-installed',files={name:'0'*64 for name in REQUIRED}),
+            vad=dict(path='/not-installed',sha256='1'*64),minimum_speech_ms=64,silence_ms=64)
+        with self.fixture(code):
+            provider=await ProcessProvider.open(sys.executable,'qwen3.asr.endpoint',selected)
+            try:
+                for i in range(7):
+                    f=replace(frame(np.full(320,1000,dtype=np.int16),ts=1000+(i+1)*20,sequence=i),
+                              sensor=SensorMetadata('mic','device',i,channels=('mono',)))
+                    result=await provider.process(f)
+                self.assertEqual(result['finalization_reason'],'vad_endpoint')
+                self.assertEqual(result['end_ms'],1140)
+                self.assertIsNone(await provider.finish())
+                await provider.reset()
+            finally:
+                await provider.close()
 
     async def test_finish_roundtrip_and_absent_finalizer(self):
         code = FAKE_WORKER.replace('    def reset(self): pass',

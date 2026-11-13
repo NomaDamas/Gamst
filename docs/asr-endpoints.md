@@ -21,9 +21,10 @@ language configuration, Silero thresholds, endpoint durations and policy version
 Code/model licenses remain separate: Qwen is Apache-2.0, Silero MIT. See their
 individual local runtime guides for trusted file checks and dependency pins. The
 combined Torch/vLLM/device runtime has not been executed; compatibility and real
-quality/latency evidence are required in #68/#76. The current ProcessProvider
-profiles do not load this composite; this is an in-process provider run off the
-SensorStreams event loop. A hung native call cannot be forcibly timed out here.
+quality/latency evidence are required in #68/#76. Direct instances run off the
+SensorStreams event loop, where a hung native call cannot be forcibly timed out.
+The explicit `qwen3.asr.endpoint` ProcessProvider profile adds an owned child with
+startup/inference timeouts; see the activation example below.
 
 ## Capture-time policy
 
@@ -83,8 +84,55 @@ manual/cap precedence, contiguous revisions, source/gap resets, backend errors,
 policy identity and two successive finals through SensorStreams and MCP while the
 stream stays open. It proves control flow, not VAD/ASR accuracy or native execution.
 
-#76 retains isolated composite profile loading, serialized remote manual endpoint
+#76 retains serialized remote manual endpoint
 control, concurrency/overload/clear evidence and actual speech-boundary validation.
 #68 retains real Korean/English recognition, false splits/merges, endpoint and
 capture-to-context latency, runtime compatibility and resource/process-tree evidence.
 No required family or overall goal is complete from these fixture tests.
+
+## Explicit isolated profile
+
+```python
+from humansense import ProcessProvider
+
+config = {
+    'asr': {'path': '/absolute/qwen-bundle', 'files': qwen_file_sha256_manifest},
+    'vad': {'path': '/absolute/silero_vad.jit', 'sha256': silero_checkpoint_sha256},
+    'minimum_speech_ms': 160,
+    'silence_ms': 640,
+}
+spec = ProcessProvider.capability('qwen3.asr.endpoint', config)  # metadata only
+provider = await ProcessProvider.open(
+    '/absolute/selected-runtime/bin/python', 'qwen3.asr.endpoint', config,
+    startup_timeout=120, inference_timeout=30)
+# Use this provider in one SensorStreams lane; close it when finished.
+```
+
+All four top-level config keys are required; unknown keys are rejected. This fixed
+profile uses Qwen 20 ms hops, 2000 ms decode chunks, 30000 ms cap and automatic
+language, with Silero .6/.35 activity thresholds. Its schema/fingerprint is identical
+to an in-process composition with those exact settings. The parent must have the
+same SDK version as the selected child interpreter. Discovery neither reads files
+nor imports optional ML dependencies. See [Qwen local runtime](qwen-local-runtime.md)
+for the fixed Qwen artifact layout and source-audited version pins. No additional
+Torch/vLLM compatibility claim is made for the composite.
+
+The small Silero artifact is hash-checked before Qwen engine allocation, and again
+before its own trusted JIT load. Qwen performs its existing manifest/offline/version
+validation. A failed second load or mismatching constructed contract closes already
+created providers. Child startup failure or timeout also invokes ProcessProvider's
+owned-process teardown. Python close drops engine references; it does not prove
+native GPU allocations are synchronously released. Actual native descendant-process
+and GPU/resource behavior remains a device acceptance gate.
+
+The child alone receives the Qwen profile's offline/telemetry flags and disabled
+vLLM V1 multiprocessing setting; parent environment is unchanged. Environment flags
+are not a network sandbox. JIT loading requires an explicitly trusted artifact;
+SHA-256 integrity alone does not establish trust or model authenticity. No implicit
+download occurs in this loader.
+
+Profile tests verify metadata-only discovery in a clean Python process, strict
+config validation, pre-load hash rejection and partial ownership cleanup with
+explicit loader doubles. A real Python child also executes the concrete endpoint
+composition over framed PCM16 IPC using labeled engine/scoring doubles; this verifies
+pipe integration and finalization, not real Torch/vLLM/model execution.
