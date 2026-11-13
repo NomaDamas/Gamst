@@ -423,3 +423,5 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 [Object appearance memory](docs/object-appearance-memory.md) connects separate RF-DETR and DINOv3 workers on the exact same capture, with bounded crop-history candidates and explicit ingestion into last-seen object memory. Similarity does not establish identity or current location.
 
 [Playback-reference duplex audio](docs/duplex-audio.md) adds an optional WebRTC AEC3 transform with separate preserved ambient and cleaned-speech lanes. Missing reference is explicit; actual acoustic and live duplex acceptance remains pending.
+
+[Metric track motion context: velocity, acceleration and approach](docs/metric-kinematics.md).
