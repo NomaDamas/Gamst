@@ -9,6 +9,7 @@ from collections import deque
 from urllib.request import Request
 
 from .plugins import _signal, InputFrame
+from .vlm_metrics import VLMCallMetrics
 from .reasoning import ChatCompletionsBackend, MAX_RESPONSE_BYTES
 
 
@@ -100,6 +101,7 @@ class LocalScenePlugin:
         self.transport = ChatCompletionsBackend(endpoint, model, timeout=60)
         self.human = human
         self.enabled = True
+        self.call_metrics = VLMCallMetrics()
         self.interval = interval
         self.window_seconds = 4
         self.sample_fps = 2
@@ -182,6 +184,18 @@ class LocalScenePlugin:
         return await asyncio.to_thread(self._describe, frame)
 
     def _describe(self, frame):
+        token = self.call_metrics.start()
+        metadata = {}
+        success = False
+        try:
+            result = self._describe_request(frame, metadata)
+            success = True
+            return result
+        finally:
+            self.call_metrics.finish(token, success=success, usage=metadata.get('usage'),
+                                     request_started=metadata.get('request_started', False))
+
+    def _describe_request(self, frame, metadata):
         frames = frame.data['frames']
         content = [{'type': 'text', 'text':
             'Describe visible environment, posture and actions, including changes across these timestamped frames, '
@@ -193,11 +207,15 @@ class LocalScenePlugin:
         body = {'model': self.transport.model, 'temperature': 0, 'max_tokens': 160,
                 'messages': [{'role': 'user', 'content': content}]}
         request = Request(self.transport.endpoint, data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+        metadata['request_started'] = True
+        self.call_metrics.http_attempt()
         with self.transport._opener(request, timeout=60) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError('VLM response too large')
-        text = json.loads(raw)['choices'][0]['message']['content']
+        payload = json.loads(raw)
+        metadata['usage'] = payload.get('usage')
+        text = payload['choices'][0]['message']['content']
         if not isinstance(text, str) or not text.strip():
             raise ValueError('VLM did not return a description')
         duration = (frames[-1]['timestamp_ms']-frames[0]['timestamp_ms']) / 1000
@@ -221,7 +239,7 @@ def scene_worker(human):
 
 def scene_status(human):
     worker = scene_worker(human)
-    return worker.plugin.settings() if worker else {'available': False, 'enabled': False}
+    return dict(worker.plugin.settings(), call_metrics=worker.plugin.call_metrics.snapshot()) if worker else {'available': False, 'enabled': False}
 
 
 async def configure_scene(human, settings):
