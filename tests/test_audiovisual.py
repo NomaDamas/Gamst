@@ -94,6 +94,25 @@ class Alignment(unittest.TestCase):
             with self.assertRaises(ValueError):
                 TalkNetWindows(clock_id='capture', **config)
 
+    def test_staggered_start_discards_irrecoverable_prefix_without_overflow(self):
+        for delayed in ('audio', 'video'):
+            join = TalkNetWindows(clock_id='capture')
+            output = []
+            if delayed == 'audio':
+                join.push_audio(audio(0, 1000, 1000), clock_id='capture')
+                for i in range(50):
+                    output += join.push_face(video(i, i*40), track_id='f', clock_id='capture')
+                output += join.push_audio(audio(1, 2000, 40), clock_id='capture')
+                self.assertEqual(join.status()['unsupported_prefix_face_frames'], 25)
+            else:
+                for i in range(25):
+                    join.push_face(video(i, 1000+i*40), track_id='f', clock_id='capture')
+                for i in range(51):
+                    output += join.push_audio(audio(i, i*40), clock_id='capture')
+            self.assertEqual(len(output), 1)
+            self.assertEqual(decode_talknet_window(output[0].data)[0]['start_ms'], 1000)
+            self.assertEqual(join.status()['resets'], 0)
+
     def test_irregular_pcm_blocks_wait_for_lookahead_without_padding(self):
         join = TalkNetWindows(clock_id='capture')
         for i in range(25):

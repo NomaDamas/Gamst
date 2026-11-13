@@ -60,6 +60,8 @@ def _metadata(value):
         if (type(pair) is not list or len(pair) != 2 or
                 any(type(v) is not int or not 0 <= v <= 2**63-1 for v in pair) or pair[1] < pair[0]):
             raise ValueError('invalid audiovisual sequence range')
+        if lane == 'video' and pair[1]-pair[0] != n-1:
+            raise ValueError('video sequence range must cover every face frame')
     return value
 
 
@@ -219,6 +221,10 @@ class TalkNetWindows:
                 data = frame.data
                 if type(data) is not self.np.ndarray or data.dtype != self.np.uint8 or data.shape != (112, 112):
                     raise ValueError('explicit112x112grayscale uint8 face crop required')
+                start = frame.timestamp_ms-40
+                if self._next is not None and start < self._next:
+                    self._prefix_drops += 1
+                    return []
                 if len(self._video)+1 > self.window_frames+25:
                     self._reset('buffer_overflow')
                     seq = self._frame(frame, 'video', clock_id, 40)
@@ -244,6 +250,9 @@ class TalkNetWindows:
             self._next += steps*40
             self._prefix_drops += sum(k < self._next for k in self._video)
             self._video = {k: v for k, v in self._video.items() if k >= self._next}
+        # Neither lane needs media before the next possible window. Keeping an
+        # unsupported audio prefix could trigger overflow just before a match.
+        self._audio = {k: v for k, v in self._audio.items() if k >= self._next}
         output = []
         n = self.window_frames
         while True:
