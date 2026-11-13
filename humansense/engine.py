@@ -14,6 +14,7 @@ from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata
 from .memory import ObjectMemory
+from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from dataclasses import asdict
 
 
@@ -60,6 +61,7 @@ class HumanSense:
         self.plugins = []
         self.perception_capabilities = CapabilityRegistry()
         self.object_memory = ObjectMemory()
+        self.transcript_memory = TranscriptMemory(retention_ms=min(86400000, self.store.retention_ms))
         self._subscribers = set()
         self._last_ts = {}
         self._generation = 0
@@ -98,7 +100,14 @@ class HumanSense:
 
     def _emit(self, record):
         validate_output(record)
-        self.store.add(record)
+        transcript = None
+        if record.get("observation", {}).get("name") == TRANSCRIPT_OUTPUT:
+            transcript = self.transcript_memory.prepare(record)
+        stored = self.store.add(record)
+        if transcript is not None and not stored:
+            raise ValueError('transcript record exceeds storage capacity')
+        if transcript is not None:
+            self.transcript_memory.commit(transcript)
         self._last_ts[record["subject_id"]] = max(record["timestamp_ms"], self._last_ts.get(record["subject_id"], 0))
         for queue, kinds in self._subscribers:
             if record["type"] not in kinds:
@@ -557,12 +566,14 @@ class HumanSense:
         start = now-_window_ms(window)
         counts, events = self.store.event_summary(subject_id, start, now, per_kind=8)
         total_events = sum(counts.values())
-        records = self.store.latest_signals(subject_id, start, now)+events
+        records = [r for r in self.store.latest_signals(subject_id, start, now)+events
+                   if r.get("observation", {}).get("name") != TRANSCRIPT_OUTPUT]
         result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
             evidence=[{"record_id": r["id"]} for r in events])
         result["models"] = self._models_for(records, result["models"])
         from .context import observation_packet
         result.update({"observations": observation_packet(records, now),
+                       "transcripts": self.transcript_memory.snapshot(subject_id, now_ms=now, start_ms=start),
                        "context_policy": {"raw_media_included": False, "hypotheses_verified": False, "freshness_ms": 5000},
                        "summary": {"event_counts": counts, "event_count": total_events,
                                    "evidence_count": len(events), "max_evidence_per_event_type": 8,
@@ -633,6 +644,7 @@ class HumanSense:
         self._generation += 1
         deleted = self.store.delete(subject_id)
         self.object_memory.clear(subject_id)
+        self.transcript_memory.clear(subject_id)
         reset_error = None
         try:
             await self._reset_plugins()
@@ -678,6 +690,7 @@ class HumanSense:
 
     async def _reset_all_plugins(self):
         self.object_memory.invalidate_visibility()
+        self.transcript_memory.interrupt()
         errors = []
         for streams in getattr(self, '_sensor_streams', ()):
             try:
@@ -723,6 +736,7 @@ class HumanSense:
             return
         self.closed = True
         self.object_memory.clear()
+        self.transcript_memory.clear()
         self._generation += 1
         if hasattr(self, "_media_router"):
             await self._media_router.clear()

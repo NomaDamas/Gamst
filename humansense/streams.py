@@ -229,9 +229,12 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     lane['gap'] = False
                     if lane['spec'].stateful:
                         await _call(lane['provider'].reset)
-                        lane['epoch'] = uuid.uuid4().hex
                         self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                             frame.sensor.sensor_id, lane['spec'].id)
+                        self.human.transcript_memory.interrupt(frame.sensor.source_id,
+                            frame.sensor.sensor_id, lane['spec'].id,
+                            subject_id=frame.subject_id, epoch=lane['epoch'])
+                        lane['epoch'] = uuid.uuid4().hex
                         lane['resets'] += 1
                 frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
                 result = await _call(lane['provider'].process, frame)
@@ -250,6 +253,9 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 lane['gap'] = True
                 self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                     frame.sensor.sensor_id, lane['spec'].id)
+                self.human.transcript_memory.interrupt(frame.sensor.source_id,
+                    frame.sensor.sensor_id, lane['spec'].id,
+                    subject_id=frame.subject_id, epoch=lane['epoch'])
             finally:
                 self.buffer_bytes -= size
                 queue.task_done()
@@ -278,6 +284,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     if lane['task']:
                         lane['task'].cancel()
                         await asyncio.gather(lane['task'], return_exceptions=True)
+                    self.human.transcript_memory.interrupt(*key, lane['spec'].id,
+                        subject_id=stream['subject'], epoch=lane['epoch'])
                     while not lane['queue'].empty():
                         _, size, _, _ = lane['queue'].get_nowait()
                         self.buffer_bytes -= size
