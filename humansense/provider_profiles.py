@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'webrtc.aec3':
+        from .providers.duplex import WebRTCDuplex
+        if set(config)-{'sample_rate','stream_delay_ms','ambient_sensor_id','speech_sensor_id'}:
+            raise ValueError('unknown duplex profile option')
+        return WebRTCDuplex.capability(**config)
     if profile == 'dinov3.regions':
         from .providers.region_appearance import RegionAppearance
         if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','capacity','retention_ms','max_regions','top_k'} or type(config['path']) is not str):
