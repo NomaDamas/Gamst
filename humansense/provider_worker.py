@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'talknet.local':
+    if profile == 'esp32.csi':
+        from .providers.csi import ESP32CSI
+        provider = ESP32CSI(**config)
+    elif profile == 'talknet.local':
         from .providers.talknet import TalkNetContext
         provider = TalkNetContext.from_local(**config)
     elif profile == 'nemotron3.diarization':
