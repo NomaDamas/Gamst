@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'opencv.fill':
+        from .providers.fill import CalibratedColorFill
+        return CalibratedColorFill.capability(**config)
     if profile == 'openpiv.flow':
         from .providers.piv import OpenPIVFlow
         return OpenPIVFlow.capability(**config)

@@ -427,3 +427,5 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 [Metric track motion context: velocity, acceleration and approach](docs/metric-kinematics.md).
 
 [Calibrated planar particle-flow context (OpenPIV)](docs/piv-flow.md).
+
+[Calibrated container level and volume context](docs/calibrated-fill.md).
