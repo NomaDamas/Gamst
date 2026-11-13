@@ -23,7 +23,9 @@ MAX_OUTPUTS = 23
 # name, unit, engineering sanity bound (not physical accuracy/operating range).
 MEASUREMENTS = {
     6: ('sensor_temperature', 'degC', -100, 200),
-    7: ('pressure', 'Pa', 1, 200000),
+    # Pinned header declares Pa, but the wrapper divides pressure by100 before
+    # passing it to BSEC. Do not guess the binary's output conversion.
+    7: ('pressure_vendor_signal', 'vendor_unverified', 1, 200000),
     8: ('relative_humidity', 'percent', 0, 100),
     9: ('gas_resistance', 'ohm', 0, 1e12),
 }
@@ -171,8 +173,8 @@ class BoschBSEC2:
                 if owner==self.owner and self.last:
                     old_ts,old_ns,old_seq,old_fw=self.last
                     fw_delta=(firmware_seq-old_fw)&0xffffffff
-                    if latest<=old_ts or latest_ns<=old_ns or seq<=old_seq or fw_delta==0 or fw_delta>=2**31:
-                        raise ValueError('BSEC capture/firmware sequence must advance')
+                    if latest<old_ts or latest_ns<old_ns or seq<=old_seq or fw_delta==0 or fw_delta>=2**31:
+                        raise ValueError('BSEC time must not regress and capture/firmware sequence must advance')
                     continuous=seq==old_seq+1 and fw_delta==1 and latest-old_ts<=self.max_gap_ms
                 if not continuous:self.segment=uuid.uuid4().hex
                 measurements=[];estimates=[];statuses={};gas={}
@@ -198,6 +200,7 @@ class BoschBSEC2:
                         calibrated_probabilities_verified=False,concentration_measured=False),
                     summary=dict(sensor_model='BME688',bsec_version='.'.join(map(str,version)),config_sha256=digest,
                         configuration_attested=False,physical_accuracy_verified=False,model_quality_verified=False,
+                        pressure_si_available=False,
                         firmware_sequence=firmware_seq,state_segment=self.segment,continuous=continuous,
                         firmware_state_reset=False,firmware_window_ms=None,clock_calibration_verified=False,
                         capture_timestamp_ms=latest,sensor_timestamp_ns=str(latest_ns),statuses=statuses,

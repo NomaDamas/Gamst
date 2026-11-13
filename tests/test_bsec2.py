@@ -34,7 +34,9 @@ def frame(i=0,**kwargs):
 class BSEC(unittest.TestCase):
     def test_units_estimates_and_complete_classification(self):
         p=BoschBSEC2(**CONFIG);value=p.process(frame())
-        self.assertEqual([r['unit'] for r in value['measurements']],['degC','Pa','percent','ohm'])
+        self.assertEqual([r['unit'] for r in value['measurements']],['degC','vendor_unverified','percent','ohm'])
+        self.assertEqual(value['measurements'][1]['name'],'pressure_vendor_signal')
+        self.assertFalse(value['summary']['pressure_si_available'])
         self.assertEqual(value['classification']['status'],'prediction_available')
         self.assertEqual(value['classification']['candidates'],[dict(label='clean',score=.25),dict(label='coffee',score=.75)])
         self.assertFalse(value['summary']['configuration_attested'])
@@ -82,6 +84,17 @@ class BSEC(unittest.TestCase):
         self.assertEqual(result,[p,packet(1)])
         stream.feed(b'GBSC001');stream.reset();self.assertEqual(stream.buffer,b'')
         with self.assertRaises(ValueError):stream.feed(b'x'*4097)
+
+    def test_callback_time_resolution_preserved_without_inventing_time(self):
+        p=BoschBSEC2(**CONFIG);p.process(frame())
+        f=replace(frame(),data=packet(number=1),sensor=replace(frame().sensor,sequence=1))
+        self.assertTrue(p.process(f)['summary']['continuous'])
+        f=replace(f,data=packet(number=2,rows=[(1,25.,6,0,1)]),sensor=replace(f.sensor,sequence=2))
+        result=p.process(f)
+        self.assertEqual(result['summary']['capture_timestamp_ms'],1000)
+        self.assertEqual(result['summary']['sensor_timestamp_ns'],'1')
+        backward=replace(f,data=packet(number=3),sensor=replace(f.sensor,sequence=3))
+        with self.assertRaises(ValueError):p.process(backward)
 
     def test_integer_ns_and_discovery_without_optional_packages(self):
         ns=2**53+123
