@@ -178,6 +178,25 @@ class Context(unittest.TestCase):
 
 @unittest.skipIf(np is None,'NumPy optional runtime is unavailable')
 class Managed(unittest.IsolatedAsyncioTestCase):
+    async def test_real_loader_missing_assets_fails_and_reaps_without_runtime_writes(self):
+        from humansense import ProcessProvider
+        children=[];real_spawn=asyncio.create_subprocess_exec
+        async def spawn(*args,**kw):
+            child=await real_spawn(*args,**kw);children.append(child);return child
+        with tempfile.TemporaryDirectory(dir='.') as root:
+            config=dict(NATIVE,runtime_root=str(Path(root).resolve()),
+                checkpoint_path=str((Path(root)/'missing.pt').resolve()),
+                encoder_path=str((Path(root)/'missing.ts').resolve()))
+            try:
+                with patch('asyncio.create_subprocess_exec',spawn):
+                    with self.assertRaises(RuntimeError):
+                        await ProcessProvider.open(sys.executable,'yoloe.local',config)
+                self.assertTrue(children and all(c.returncode is not None for c in children))
+                self.assertEqual(list(Path(root).iterdir()),[])
+            finally:
+                for child in children:
+                    if child.returncode is None:child.kill();await child.wait()
+
     async def test_owned_worker_context_to_mcp_with_explicit_test_backend(self):
         from humansense import HumanSense,ProcessProvider,SensorStreams
         from humansense.mcp import MCPServer
