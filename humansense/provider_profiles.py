@@ -6,6 +6,17 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'qwen3.asr.endpoint':
+        from .providers.endpoint_asr import endpoint_capability
+        from .providers.vad import SileroActivity
+        if set(config) != {'asr', 'vad', 'minimum_speech_ms', 'silence_ms'}:
+            raise ValueError('endpoint profile requires asr, vad and both endpoint durations')
+        vad = config['vad']
+        if type(vad) is not dict or set(vad) != {'path', 'sha256'} or type(vad['path']) is not str:
+            raise ValueError('endpoint vad requires only local path and checkpoint hash')
+        return endpoint_capability(capability('qwen3.asr', config['asr']),
+            SileroActivity.capability(SileroActivity.artifact_version(vad['sha256'])),
+            minimum_speech_ms=config['minimum_speech_ms'], silence_ms=config['silence_ms'])
     if profile == 'qwen3.asr':
         from .qwen_artifact import artifact_version
         from .providers.qwen_asr import QwenStreamingASR
@@ -30,4 +41,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity or qwen3.asr')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr or qwen3.asr.endpoint')

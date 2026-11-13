@@ -53,6 +53,6 @@ semantic sentence completeness, VAD accuracy or recognition correctness. No audi
 sample or capture timestamp is invented for either operation. A final exactly at
 the cap keeps `segment_limit`; a subsequent empty finish produces no second final.
 The [Silero/Qwen endpoint composition](asr-endpoints.md) implements a local
-nonterminal VAD/manual hop-boundary path. Remote manual controls, isolated composite
-loading and real speech-boundary evidence remain required in #76; this field alone
+nonterminal VAD/manual hop-boundary path. Remote manual controls and real speech-boundary evidence remain required in #76;
+the explicit isolated composite loader does not establish runtime compatibility. This field alone
 does not establish those gates.
