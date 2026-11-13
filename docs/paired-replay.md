@@ -125,12 +125,15 @@ response, timings and explicit `quality_status=unscored`. Retain the final hash 
 an independent record. The hash chain detects changes relative to a trusted final
 hash; it is not tamper-proof storage or proof of held-out provenance.
 
-There is deliberately no automatic conversion to passing evaluator rows. Independently
+The [reviewed evidence join](replay-evidence.md) binds externally assessed rows to
+complete source traces and the predeclared rubric. It does not automatically score
+answers or verify measurement truth. Independently
 score answers using the frozen rubric, retain failure cases, verify actual inference
 and all accounting/resource scopes, and bind those audited records to trace hashes
 before generating comparison rows. Unknown accounting or missing whole-pipeline
 resource measurements leave acceptance incomplete. Concrete VLM-only versus SDK+VLM
-commands, larger recorded-input transport, scoring join and the real paired run are
+commands, larger recorded-input transport, independently audited scoring/accounting
+evidence and the real paired run are
 still required under [#57](https://github.com/NomaDamas/Gamst/issues/57).
 
 Tests launch real isolated Python subprocesses containing explicit synthetic fixture
