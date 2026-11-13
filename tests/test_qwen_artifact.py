@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,7 @@ class Artifacts(unittest.TestCase):
         with patch.dict(os.environ,{'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1','VLLM_ENABLE_V1_MULTIPROCESSING':'0'}):
             with patch('importlib.metadata.version',return_value='wrong'):
                 with self.assertRaises(RuntimeError): QwenStreamingASR.from_local(str(self.root),self.files)
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'optional numpy not installed')
     def test_exact_loader_arguments_with_explicit_double_not_inference(self):
         captured={}
         engine=SimpleNamespace(backend='vllm',sampling_params=SimpleNamespace(max_tokens=128),
