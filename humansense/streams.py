@@ -152,7 +152,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
                                 epoch=uuid.uuid4().hex,
-                                task=None, gap=False, accepted=0, processed=0, dropped=0,
+                                task=None, gap=False, output_sequence=-1, endpoint_control=None,
+                                accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
                     lanes.append(lane)
                     declared = getattr(provider, 'spec', None)
@@ -220,7 +221,12 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
 
     async def _run(self, stream, lane):
         queue = lane['queue']
-        while not queue.empty():
+        while not queue.empty() or lane['endpoint_control'] is not None:
+            control = lane['endpoint_control']
+            if control is not None and (queue.empty() or
+                    queue._queue[0][0].sensor.sequence > control['sequence']):
+                await self._run_endpoint(stream, lane, control)
+                continue
             frame, size, gap, generation = queue.get_nowait()
             started = time.monotonic()
             try:
@@ -242,8 +248,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 if generation != self.human._generation or stream.get('closing') or self.human.paused or self.human.closed:
                     continue
                 if result is not None:
-                    await self.human.push_observation(lane['spec'].id, result, sensor=frame.sensor,
-                        subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+                    await self._publish(lane, result, frame, frame.sensor.sequence)
                 lane['last_capture'] = (replace(frame, data=None), generation)
                 lane['processed'] += 1
                 lane['last_latency_ms'] = round((time.monotonic()-started)*1000, 3)
@@ -262,8 +267,97 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 self.buffer_bytes -= size
                 queue.task_done()
 
+    async def _publish(self, lane, result, frame, minimum_sequence):
+        # Capture order belongs to the provider input. Publication also includes
+        # no-input control results, so its sequence must advance independently.
+        sequence = max(minimum_sequence, lane['output_sequence']+1)
+        sensor = replace(frame.sensor, sequence=sequence, capture_sequence=frame.sensor.sequence)
+        await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
+            subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+        lane['output_sequence'] = sequence
+
+    async def endpoint(self, source_id, sensor_id, capability_id, *, stream_epoch, after_sequence=None):
+        """Finalize one lane after an exact accepted-input barrier; keep capture open."""
+        self.human._check()
+        for value in (source_id, sensor_id, capability_id, stream_epoch): identifier(value)
+        if after_sequence is not None and (type(after_sequence) is not int or not 0 <= after_sequence <= 2**63-1):
+            raise ValueError('after_sequence must be a nonnegative capture sequence')
+        stream = self.streams.get((source_id, sensor_id))
+        if self.closed or stream is None or stream.get('closing') or stream.get('finishing'):
+            raise ValueError('sensor stream is not open')
+        if after_sequence is None:
+            after_sequence = stream['sequence']
+        if after_sequence < 0:
+            raise ValueError('endpoint requires at least one accepted input')
+        lane = next((l for l in stream['lanes'] if l['spec'].id == capability_id), None)
+        if lane is None or lane['epoch'] != stream_epoch or stream['sequence'] != after_sequence:
+            raise ValueError('stale or unknown endpoint target')
+        if lane['endpoint_control'] is not None or not callable(getattr(lane['provider'], 'endpoint', None)):
+            raise ValueError('endpoint pending or provider does not support endpoints')
+        control = dict(sequence=after_sequence, epoch=stream_epoch, generation=self.human._generation,
+                       cancelled=False, future=asyncio.get_running_loop().create_future())
+        lane['endpoint_control'] = control
+        if lane['task'] is None or lane['task'].done():
+            lane['task'] = asyncio.create_task(self._run(stream, lane))
+        try:
+            outcome = await asyncio.shield(control['future'])
+        except asyncio.CancelledError:
+            control['cancelled'] = True
+            await _finish(control['future'])
+            raise
+        if 'error' in outcome:
+            raise RuntimeError(outcome['error'])
+        return outcome
+
+    def _reject_endpoint(self, lane):
+        control = lane['endpoint_control']
+        if control is not None:
+            lane['endpoint_control'] = None
+            if not control['future'].done():
+                control['future'].set_result({'error': 'endpoint invalidated by stream cleanup'})
+
+    async def _run_endpoint(self, stream, lane, control):
+        outcome = {'error': 'endpoint invalidated before publication'}
+        invoked = False
+        captured = lane.get('last_capture')
+        def valid():
+            return (not control['cancelled'] and not stream.get('closing') and not self.closed and
+                not self.human.closed and not self.human.paused and not lane['gap'] and
+                control['generation'] == self.human._generation and lane['epoch'] == control['epoch'])
+        try:
+            if (not valid() or captured is None or captured[1] != control['generation'] or
+                    captured[0].sensor.sequence != control['sequence']):
+                return
+            frame = captured[0]
+            invoked = True
+            result = await _call(lane['provider'].endpoint)
+            if not valid():
+                return
+            if result is not None:
+                await self._publish(lane, result, frame, control['sequence']+1)
+            outcome = {'published': result is not None, 'closed': False,
+                       'capability_id': lane['spec'].id, 'after_sequence': control['sequence']}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            lane['errors'] += 1
+            lane['last_error'] = type(exc).__name__
+            outcome = {'error': 'sensor endpoint failed'}
+        finally:
+            if invoked and 'error' in outcome:
+                lane['gap'] = True
+                self.human.transcript_memory.interrupt(captured[0].sensor.source_id,
+                    captured[0].sensor.sensor_id, lane['spec'].id,
+                    subject_id=stream['subject'], epoch=lane['epoch'])
+            if lane['endpoint_control'] is control:
+                lane['endpoint_control'] = None
+            if not control['future'].done():
+                control['future'].set_result(outcome)
+
     async def drain(self):
-        await asyncio.gather(*(l['queue'].join() for s in self.streams.values() for l in s['lanes']))
+        lanes = [l for s in self.streams.values() for l in s['lanes']]
+        await asyncio.gather(*(l['queue'].join() for l in lanes))
+        await asyncio.gather(*(asyncio.shield(l['task']) for l in lanes if l['task']), return_exceptions=True)
 
     async def finish(self, source_id, sensor_id):
         """Drain, finalize eligible providers once, then terminally close this stream.
@@ -300,6 +394,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             published, skipped, errors = [], [], []
             try:
                 await asyncio.gather(*(lane['queue'].join() for lane in stream['lanes']))
+                await asyncio.gather(*(asyncio.shield(lane['task']) for lane in stream['lanes'] if lane['task']),
+                                     return_exceptions=True)
                 for lane in stream['lanes']:
                     finish = getattr(lane['provider'], 'finish', None)
                     captured = lane.get('last_capture')
@@ -314,16 +410,13 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     try:
                         # This stream terminates; reserve a distinct output sequence
                         # without injecting or inventing another captured audio frame.
-                        sensor = replace(frame.sensor, sequence=stream['sequence']+1)
                         result = await _call(finish)
                         if (control['cancelled'] or stream.get('closing') or self.closed or self.human.closed or
                             self.human.paused or generation != self.human._generation):
                             skipped.append(lane['spec'].id)
                             continue
                         if result is not None:
-                            await self.human.push_observation(lane['spec'].id, result,
-                                sensor=sensor, subject_id=frame.subject_id,
-                                timestamp_ms=frame.timestamp_ms)
+                            await self._publish(lane, result, frame, stream['sequence']+1)
                             published.append(lane['spec'].id)
                     except Exception as exc:
                         lane['errors'] += 1
@@ -370,6 +463,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     if lane['task']:
                         lane['task'].cancel()
                         await asyncio.gather(lane['task'], return_exceptions=True)
+                    self._reject_endpoint(lane)
                     self.human.transcript_memory.interrupt(*key, lane['spec'].id,
                         subject_id=stream['subject'], epoch=lane['epoch'])
                     while not lane['queue'].empty():
@@ -395,6 +489,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             streams=[dict(source_id=key[0], sensor_id=key[1], subject_id=s['subject'],
                 modality=s['modality'], last_sequence=s['sequence'],
                 providers=[dict(capability_id=l['spec'].id, queued=l['queue'].qsize(),
+                    stream_epoch=l['epoch'], output_sequence=l['output_sequence'],
+                    endpoint_pending=l['endpoint_control'] is not None,
                     **{k: l[k] for k in ('accepted', 'processed', 'dropped', 'errors', 'resets',
                                         'last_latency_ms', 'last_error')}) for l in s['lanes']])
                 for key, s in self.streams.items()])

@@ -217,6 +217,37 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                         if ident==1: self.assertEqual(data['published'],[spec.id])
                         else: self.assertEqual(data['utterances'][0]['update']['text'],'final tail')
 
+    async def test_nonterminal_endpoint_tool_over_actual_websocket(self):
+        from test_managed_endpoints import Provider
+        from humansense.plugins import InputFrame
+        async with HumanSense(consent=True) as human:
+            streams=SensorStreams(human)
+            spec=transcript_capability('manual.asr','fixture','1',streaming_mode='native')
+            streams.register(spec,Provider)
+            await streams.open('source','mic',[spec.id])
+            await streams.submit(InputFrame(b'fixture','audio',timestamp()-100,
+                sample_rate=16000,sensor=SensorMetadata('source','mic',0)))
+            await streams.drain()
+            server=MCPServer(human)
+            async with serve(lambda socket: handle_connection(server,socket),'127.0.0.1',0,
+                             origins=[None],max_size=1048576,max_queue=16) as listener:
+                async with connect('ws://127.0.0.1:'+str(listener.sockets[0].getsockname()[1])) as socket:
+                    async def call(ident,name,args):
+                        await socket.send(json.dumps(dict(jsonrpc='2.0',id=ident,method='tools/call',
+                            params=dict(name=name,arguments=args))))
+                        response=json.loads(await asyncio.wait_for(socket.recv(),2))
+                        self.assertFalse(response['result']['isError'])
+                        return json.loads(response['result']['content'][0]['text'])
+                    status=await call(1,'get_sensor_status',{})
+                    manager=status['managers'][0]; stream=manager['streams'][0]
+                    result=await call(2,'endpoint_sensor_stream',dict(manager_id=manager['manager_id'],
+                        source_id='source',sensor_id='mic',capability_id=spec.id,
+                        stream_epoch=stream['providers'][0]['stream_epoch']))
+                    self.assertTrue(result['published']); self.assertFalse(result['closed'])
+                    entry=(await call(3,'get_transcripts',{}))['utterances'][0]
+                    self.assertEqual(entry['update']['finalization_reason'],'manual_endpoint')
+                    self.assertIn(('source','mic'),streams.streams)
+
     async def test_actual_websocket_tool_context_and_reconnect(self):
         async with HumanSense(consent=True) as human:
             adapter = MCPServer(human)

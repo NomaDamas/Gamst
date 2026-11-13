@@ -17,6 +17,13 @@ def thermal(**changes):
 
 
 class Contracts(unittest.TestCase):
+    def test_capture_sequence_is_optional_bounded_integer(self):
+        self.assertIsNone(SensorMetadata('source','sensor',0).capture_sequence)
+        for value in (0,2**63-1):
+            self.assertEqual(SensorMetadata('source','sensor',1,capture_sequence=value).capture_sequence,value)
+        for value in (-1,True,1.5,2**63):
+            with self.assertRaises(ValueError): SensorMetadata('source','sensor',1,capture_sequence=value)
+
     def test_registry_is_metadata_only_and_defensive(self):
         registry = CapabilityRegistry()
         spec = thermal()
