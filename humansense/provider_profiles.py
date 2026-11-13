@@ -18,7 +18,10 @@ def capability(profile, config):
     if profile == 'opencv.flow':
         from .providers.motion import OpenCVFlow
         return OpenCVFlow.capability(config.get('method', 'lucas_kanade'))
+    if profile == 'silero.activity':
+        from .providers.vad import SileroActivity
+        return SileroActivity.capability(SileroActivity.artifact_version(config.get('sha256')))
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow or yamnet.events')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events or silero.activity')

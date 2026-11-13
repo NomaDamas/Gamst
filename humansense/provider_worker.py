@@ -14,6 +14,9 @@ def _construct(profile, config):
     elif profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         provider = AudioProsody(**config)
+    elif profile == 'silero.activity':
+        from .providers.vad import SileroActivity
+        provider = SileroActivity.from_local(**config)
     elif profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         provider = YAMNetEvents.from_local(**config)
