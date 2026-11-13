@@ -49,8 +49,10 @@ async def run(args):
             value = record['observation']['value']
             await human.remember_objects(record['id'], complete_snapshot=value['summary']['complete_snapshot'])
             context = await human.get_context()
+            fresh = sum(entry['fresh'] for entry in context['observations'].values())
             report['frames'].append(dict(sequence=index, submit_to_observation_ms=elapsed,
-                fresh_context_observations=len(context['observations']), value=value))
+                fresh_context_observations=fresh,
+                stale_context_observations=len(context['observations'])-fresh, value=value))
         report['memory'] = await human.find_objects()
         assert report['frames'][0]['value']['objects'], 'Fixture must produce detections'
         assert not report['frames'][-1]['value']['objects'], 'Blank frame unexpectedly produced detections'
