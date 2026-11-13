@@ -50,7 +50,7 @@ Candidates are alternatives and research extension targets, not a requirement to
 ### Audio and audiovisual
 
 - VAD: existing Silero; TEN-VAD alternative. https://github.com/snakers4/silero-vad ; https://github.com/TEN-framework/ten-vad
-- Native ASR: Nemotron 3.5 ASR Streaming 0.6B and Qwen3-ASR 0.6B; partial/final/revision contract, declared language and timestamp support. Existing FasterWhisper remains windowed. https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b ; https://huggingface.co/Qwen/Qwen3-ASR-0.6B
+- Streaming ASR candidates: Nemotron 3.5 ASR Streaming 0.6B and Qwen3-ASR 0.6B; partial/final/revision contract, declared language and timestamp support. Existing FasterWhisper remains windowed. Qwen's audited vLLM streaming path re-feeds accumulated audio; it is not evidence of constant-work cached-encoder inference. Enforce bounded segments and retain the native streaming requirement; see [the source-verified execution contract](asr-streaming-contract.md). https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b ; https://huggingface.co/Qwen/Qwen3-ASR-0.6B
 - SenseVoice Small: transcription/emotion/events candidate; pseudo-streaming implementations are explicitly labeled. https://github.com/QwenAudio/SenseVoice
 - Diarization: Streaming Sortformer. Active speaker: TalkNet with explicit temporal/lookahead constraints; speaker labels are not real-world identity. https://github.com/NVIDIA-NeMo/Speech ; https://github.com/TaoRuijie/TalkNet-ASD
 - Environmental sound: YAMNet and PANNs, rolling-window outputs. https://github.com/tensorflow/models/blob/master/research/audioset/yamnet/README.md ; https://github.com/qiuqiangkong/audioset_tagging_cnn
