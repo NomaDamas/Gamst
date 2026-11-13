@@ -232,6 +232,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         lane['epoch'] = uuid.uuid4().hex
                         self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                             frame.sensor.sensor_id, lane['spec'].id)
+                        self.human.transcript_memory.interrupt(frame.sensor.source_id,
+                            frame.sensor.sensor_id, lane['spec'].id)
                         lane['resets'] += 1
                 frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
                 result = await _call(lane['provider'].process, frame)
@@ -249,6 +251,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 lane['last_error'] = type(exc).__name__
                 lane['gap'] = True
                 self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
+                    frame.sensor.sensor_id, lane['spec'].id)
+                self.human.transcript_memory.interrupt(frame.sensor.source_id,
                     frame.sensor.sensor_id, lane['spec'].id)
             finally:
                 self.buffer_bytes -= size
@@ -274,6 +278,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 stream = self.streams[key]
                 stream['closing'] = True
                 self.human.object_memory.invalidate_visibility(*key)
+                self.human.transcript_memory.interrupt(*key)
                 for lane in stream['lanes']:
                     if lane['task']:
                         lane['task'].cancel()

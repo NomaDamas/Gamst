@@ -12,3 +12,6 @@ __all__ = ["HumanSense", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "vali
 __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetadata']
 __all__ += ['SensorStreams']
 __all__ += ['ProcessProvider']
+
+from .transcripts import transcript_capability
+__all__ += ['transcript_capability']
