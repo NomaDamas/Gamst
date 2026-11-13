@@ -111,6 +111,12 @@ class EfficientTAMStreaming(unittest.TestCase):
         batch -= torch.tensor([.485, .456, .406], dtype=torch.float32)[:, None, None]
         batch /= torch.tensor([.229, .224, .225], dtype=torch.float32)[:, None, None]
         self.assertTrue(torch.equal(_normalize(image), batch[0]))
+        original_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.float64)
+            self.assertTrue(torch.equal(_normalize(image), batch[0]))
+        finally:
+            torch.set_default_dtype(original_dtype)
 
     def test_failures_drop_all_state_and_close_generator(self):
         for failure in ('nan', 'extra', 'late'):

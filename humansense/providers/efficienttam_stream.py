@@ -44,8 +44,8 @@ def _normalize(image):
     # Upstream divides uint8 in float64, then assigns into a float32 batch before
     # normalization. Preserve this order, including its rounding behavior.
     tensor = torch.from_numpy(np.array(rgb)/255.0).permute(2, 0, 1).float()
-    tensor.sub_(torch.tensor([.485, .456, .406])[:, None, None])
-    tensor.div_(torch.tensor([.229, .224, .225])[:, None, None])
+    tensor.sub_(torch.tensor([.485, .456, .406], dtype=torch.float32, device='cpu')[:, None, None])
+    tensor.div_(torch.tensor([.229, .224, .225], dtype=torch.float32, device='cpu')[:, None, None])
     return tensor
 
 
