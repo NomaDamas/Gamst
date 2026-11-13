@@ -143,6 +143,10 @@ class QwenStreamingASR:
             self.reset()
             raise
 
+    def endpoint(self):
+        """Finalize the current utterance without new audio or resetting capture order."""
+        return self._finish_segment('manual_endpoint')
+
     def finish(self):
         """Flush once without new audio; caller must publish with a new output sequence."""
         return self._finish_segment('input_end')

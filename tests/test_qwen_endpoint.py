@@ -96,6 +96,27 @@ class EndpointPolicy(unittest.TestCase):
         self.assertTrue(p.asr.closed and p.vad.closed)
         with self.assertRaises(RuntimeError): p.process(frame(0))
 
+    def test_endpoint_without_audio_preserves_capture_order_and_restarts_utterance(self):
+        p=pipeline([.9]*30)
+        self.assertIsNone(p.endpoint())
+        for i in range(6): p.process(frame(i))
+        before=len(p.asr.engine.calls)
+        final=p.endpoint()
+        self.assertEqual(final['finalization_reason'],'manual_endpoint')
+        self.assertEqual(final['end_ms'],1120)
+        self.assertEqual(final['revision'],1)
+        self.assertEqual(len(p.asr.engine.calls),before)
+        self.assertIsNone(p.endpoint())
+        self.assertFalse(p.armed)
+        self.assertIsNone(p.vad.owner)
+        for i in range(6,11): partial=p.process(frame(i))
+        self.assertNotEqual(partial['utterance_id'],final['utterance_id'])
+        self.assertEqual(partial['start_ms'],final['end_ms'])
+        self.assertEqual(partial['revision'],0)
+        with self.assertRaises(ValueError): p.process(frame(10))
+        p.close()
+        with self.assertRaises(RuntimeError): p.endpoint()
+
     def test_backend_error_resets_both_states(self):
         for failing in ('vad','asr'):
             p=pipeline([.9]*10)

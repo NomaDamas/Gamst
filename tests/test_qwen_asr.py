@@ -99,6 +99,31 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot['utterances'][0]['status'],'final')
             self.assertEqual(snapshot['utterances'][0]['update']['text'],'안녕하세요!')
 
+    async def test_manual_endpoint_publication_uses_distinct_output_sequences(self):
+        from humansense.mcp import MCPServer
+        async with HumanSense(consent=True) as human:
+            p=provider(); human.register_capability(p.spec)
+            start=timestamp()-1000; output_sequence=0
+            async def publish(value,f):
+                nonlocal output_sequence
+                if value is not None:
+                    await human.push_observation(p.spec.id,value,
+                        sensor=replace(f.sensor,sequence=output_sequence,stream_epoch='manual-run'),
+                        timestamp_ms=f.timestamp_ms)
+                    output_sequence+=1
+            for i in range(6):
+                f=frame(i,start); await publish(p.process(f),f)
+            await publish(p.endpoint(),f)
+            for i in range(6,12):
+                f=frame(i,start); await publish(p.process(f),f)
+            await publish(p.finish(),f)
+            entries=(await MCPServer(human).call_tool('get_transcripts'))['utterances']
+            self.assertEqual(len(entries),2)
+            self.assertTrue(all(e['status']=='final' for e in entries))
+            self.assertEqual({e['update']['finalization_reason'] for e in entries},{'manual_endpoint','input_end'})
+            self.assertEqual(len({e['sequence'] for e in entries}),2)
+            self.assertEqual(sorted(e['update']['start_ms'] for e in entries),[start,start+120])
+
     async def test_empty_partial_retracts_previously_published_text(self):
         class RetractionEngine(EngineDouble):
             def streaming_transcribe(self, pcm, state):
