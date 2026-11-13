@@ -84,6 +84,59 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             return process
         return patch('asyncio.create_subprocess_exec', spawn)
 
+    async def test_finish_roundtrip_and_absent_finalizer(self):
+        code = FAKE_WORKER.replace('    def reset(self): pass',
+            "    def finish(self): return {'features': {'final': True}}\n    def reset(self): pass")
+        with self.fixture(code):
+            provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+            await provider.process(frame())
+            self.assertEqual(await provider.finish(), {'features': {'final': True}})
+            await provider.close()
+        with self.fixture():
+            provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+            self.assertIsNone(await provider.finish())
+            await provider.close()
+
+    async def test_invalid_finish_output_and_timeout_stop_owned_child(self):
+        for body, timeout, expected in (
+            ("return {'features': {'raw': 'forbidden'}}", 2, RuntimeError),
+            ("time.sleep(1); return None", .05, asyncio.TimeoutError)):
+            code = FAKE_WORKER.replace('    def reset(self): pass',
+                '    def finish(self): '+body+'\n    def reset(self): pass')
+            with self.fixture(code):
+                provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {}, inference_timeout=timeout)
+                with self.assertRaises(expected): await provider.finish()
+                self.assertTrue(provider.closed)
+                self.assertIsNotNone(self.children[-1].returncode)
+                await provider.close()
+
+    async def test_parent_revalidates_successful_finish_payload(self):
+        code = FAKE_WORKER.replace('    def reset(self): pass',
+            "    def finish(self): return {'features': {'raw': 'forbidden'}}\n    def reset(self): pass")
+        code = code.replace('w.main()',
+            'from humansense.capabilities import CapabilitySpec\nCapabilitySpec.validate = lambda self, value: value\nw.main()')
+        with self.fixture(code):
+            provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+            with self.assertRaises(ValueError): await provider.finish()
+            self.assertTrue(provider.closed)
+            self.assertIsNotNone(self.children[-1].returncode)
+
+    async def test_finish_integrates_with_managed_stream_close(self):
+        code = FAKE_WORKER.replace('    def reset(self): pass',
+            "    def finish(self): return {'features': {'final': True}}\n    def reset(self): pass")
+        with self.fixture(code):
+            async with HumanSense(consent=True) as human:
+                streams = SensorStreams(human)
+                contract = ProcessProvider.capability('audio.prosody', {})
+                streams.register(contract, lambda: ProcessProvider.open(sys.executable, 'audio.prosody', {}))
+                await streams.open('mic','device',[contract.id])
+                await streams.submit(frame(ts=timestamp()-100))
+                result = await streams.finish('mic','device')
+                self.assertEqual(result['published'],[contract.id])
+                observation = next(iter((await human.get_context())['observations'].values()))
+                self.assertTrue(observation['value']['features']['final'])
+                self.assertIsNotNone(self.children[-1].returncode)
+
     async def test_native_stdout_is_not_protocol_and_reopen_is_explicit(self):
         with self.fixture():
             provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
