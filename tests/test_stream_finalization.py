@@ -93,3 +93,20 @@ class Finalization(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError): await self.streams.finish('source','mic')
         self.assertEqual(self.human._sensor_provider_owners,{})
         self.assertEqual((await self.human.get_transcripts())['utterances'][0]['status'],'interrupted')
+
+    async def test_scoped_clear_aborts_blocked_final_before_waiting_for_lock(self):
+        await self.streams.open('source','other',[spec().id])
+        await self.streams.submit(self.frame()); await self.streams.drain()
+        p=self.instances[0]; p.release=threading.Event()
+        task=asyncio.create_task(self.streams.finish('source','mic'))
+        self.assertTrue(await asyncio.to_thread(p.started.wait,2))
+        clear=asyncio.create_task(self.streams.clear('source','mic'))
+        await asyncio.sleep(.01)
+        self.assertFalse(p.closed)
+        await self.streams.submit(self.frame(sensor='other')); await self.streams.drain()
+        p.release.set(); result=await task; await clear
+        self.assertEqual(result['published'],[])
+        entries=(await self.human.get_transcripts())['utterances']
+        self.assertEqual({e['sensor_id']:e['status'] for e in entries},{'mic':'interrupted','other':'partial'})
+        self.assertTrue(p.closed)
+        self.assertIn(('source','other'),self.streams.streams)

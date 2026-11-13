@@ -303,7 +303,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 for lane in stream['lanes']:
                     finish = getattr(lane['provider'], 'finish', None)
                     captured = lane.get('last_capture')
-                    valid = (not control['cancelled'] and not self.closed and
+                    valid = (not control['cancelled'] and not stream.get('closing') and not self.closed and
                         generation == self.human._generation and not self.human.paused and
                         not self.human.closed and not lane['gap'] and captured is not None and
                         captured[1] == generation)
@@ -316,7 +316,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         # without injecting or inventing another captured audio frame.
                         sensor = replace(frame.sensor, sequence=stream['sequence']+1)
                         result = await _call(finish)
-                        if (control['cancelled'] or self.closed or self.human.closed or
+                        if (control['cancelled'] or stream.get('closing') or self.closed or self.human.closed or
                             self.human.paused or generation != self.human._generation):
                             skipped.append(lane['spec'].id)
                             continue
@@ -345,6 +345,11 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             return {'closed': True, 'published': published, 'skipped': skipped}
 
     async def clear(self, source_id=None, sensor_id=None):
+        # Abort intent must be visible before waiting behind a finalizer's lock.
+        # Provider disposal stays serialized; no worker is reset while running.
+        for key, stream in self.streams.items():
+            if (source_id is None or key[0] == source_id) and (sensor_id is None or key[1] == sensor_id):
+                stream['closing'] = True
         cleanup = asyncio.create_task(self._clear(source_id, sensor_id))
         try:
             await asyncio.shield(cleanup)
