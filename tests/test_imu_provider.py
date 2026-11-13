@@ -9,8 +9,8 @@ from humansense.schema import timestamp
 
 
 def provider(**kwargs):
-    return BNO055IMU(**dict(dict(unit_sel=0, operation_mode=5, acceleration_range_g=4,
-        gyroscope_range_dps=500, calibration_id='fixture'), **kwargs))
+    return BNO055IMU(**dict(dict(unit_sel=0, operation_mode=8, acceleration_range_g=4,
+        gyroscope_range_dps=2000, calibration_id='fixture'), **kwargs))
 
 
 def frame(words=(100, -200, 981, 30000, -30000, 1234, 160, -320, 0)):
@@ -30,21 +30,30 @@ class IMU(unittest.TestCase):
         self.assertFalse(motion['gravity_removed'])
         self.assertFalse(motion['physical_calibration_verified'])
 
+    def test_supported_fusion_modes_and_effective_range_thresholds(self):
+        for mode in (8, 11, 12):
+            for units, acc, gyr in ((0, 3923, 32000), (3, 4000, 31416)):
+                motion = provider(operation_mode=mode, unit_sel=units).process(
+                    frame((acc, 0, 0, 0, 0, 0, gyr, 0, 0)))['motion']
+                self.assertEqual(motion['input_axes_near_acceleration_range'], [True, False, False])
+                self.assertEqual(motion['input_axes_near_gyroscope_range'], [True, False, False])
+                self.assertFalse(motion['wire_endpoint_detected'])
+
     def test_bias_before_rotation_and_range_flags_before_correction(self):
         p = provider(output_frame='body', acceleration_bias=(1, 0, 0),
             rotation_to_output=((0, -1, 0), (1, 0, 0), (0, 0, 1)))
         motion = p.process(frame())['motion']
         self.assertEqual(motion['acceleration_m_s2'], [2, 0, 9.81])
         self.assertEqual(motion['coordinate_frame'], 'body')
-        motion = provider(acceleration_range_g=2, acceleration_bias=(100, 0, 0)).process(
-            frame((2000, 0, 0, 0, 0, 0, 32767, 0, 0)))['motion']
+        motion = provider(acceleration_bias=(100, 0, 0)).process(
+            frame((4000, 0, 0, 0, 0, 0, 32767, 0, 0)))['motion']
         self.assertTrue(motion['possible_saturation'])
         self.assertTrue(motion['wire_endpoint_detected'])
         self.assertEqual(motion['input_axes_near_acceleration_range'], [True, False, False])
 
     def test_reject_bad_config_frame_and_lifecycle(self):
-        for kwargs in ({'unit_sel': True}, {'operation_mode': 0}, {'acceleration_range_g': 3},
-            {'gyroscope_range_dps': 300}, {'acceleration_bias': (math.nan, 0, 0)},
+        for kwargs in ({'unit_sel': True}, {'operation_mode': 0}, {'operation_mode': 5}, {'operation_mode': 7}, {'acceleration_range_g': 3}, {'acceleration_range_g': 2}, {'acceleration_range_g': 8}, {'acceleration_range_g': 16},
+            {'gyroscope_range_dps': 300}, {'gyroscope_range_dps': 125}, {'gyroscope_range_dps': 250}, {'gyroscope_range_dps': 500}, {'gyroscope_range_dps': 1000}, {'acceleration_bias': (math.nan, 0, 0)},
             {'rotation_to_output': ((-1, 0, 0), (0, 1, 0), (0, 0, 1)), 'output_frame': 'body'},
             {'rotation_to_output': ((1, 0, 0), (1, 0, 0), (0, 0, 1))}):
             with self.assertRaises(ValueError):

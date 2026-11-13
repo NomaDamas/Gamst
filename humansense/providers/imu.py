@@ -20,12 +20,12 @@ class BNO055IMU:
                  acceleration_bias=(0, 0, 0), gyroscope_bias=(0, 0, 0), rotation_to_output=_IDENTITY):
         if type(unit_sel) is not int or not 0 <= unit_sel <= 255:
             raise ValueError('declare UNIT_SEL byte')
-        if type(operation_mode) is not int or operation_mode not in (5, 7, 8, 11, 12):
-            raise ValueError('declare an operating mode with both acceleration and gyroscope enabled')
-        if type(acceleration_range_g) is not int or acceleration_range_g not in (2, 4, 8, 16):
-            raise ValueError('declare acceleration range: 2, 4, 8 or 16 g')
-        if type(gyroscope_range_dps) is not int or gyroscope_range_dps not in (125, 250, 500, 1000, 2000):
-            raise ValueError('declare gyroscope range: 125..2000 dps supported setting')
+        if type(operation_mode) is not int or operation_mode not in (8, 11, 12):
+            raise ValueError('only fusion modes 8, 11 and 12 have supported gyro scaling')
+        if type(acceleration_range_g) is not int or acceleration_range_g != 4:
+            raise ValueError('fusion acceleration range must be 4 g')
+        if type(gyroscope_range_dps) is not int or gyroscope_range_dps != 2000:
+            raise ValueError('fusion gyroscope range must be 2000 dps')
         for value in (calibration_id, sensor_frame, output_frame):
             identifier(value)
         self.acc_bias = _vector(acceleration_bias, 'acceleration bias in m/s2', 200)
