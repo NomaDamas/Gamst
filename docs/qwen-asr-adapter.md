@@ -10,7 +10,7 @@ Input must be one-dimensional mono float32/float64 normalized PCM or int16 at 16
 
 Capture-end timestamps must advance by exactly one hop with consecutive input sequence and stable subject/source/sensor/epoch/channel ownership. A mismatch rejects the current hop, clears adapter state and requires the runtime to interrupt the prior partial before retrying the retained hop. SensorStreams already interrupts affected transcript lanes on provider errors/gaps. Direct callers must perform that scoped interruption themselves. Do not join audio across discontinuities or label discarded state final.
 
-At the segment limit, the adapter calls the official finish API, emits a final revision and releases accumulated state. The next hop starts a new utterance ID. This deterministic cap is a forced boundary, not a detected speech endpoint; its configuration must be retained with the run manifest. No overlap stitching or quality-preserving segmentation claim exists. Empty output before decode emits nothing. Unchanged partial text/language is suppressed. Finals are emitted even if empty so an earlier partial can be closed.
+At the segment limit, the adapter calls the official finish API, emits a final revision and releases accumulated state. The next hop starts a new utterance ID. This deterministic cap is a forced boundary, not a detected speech endpoint; its configuration must be retained with the run manifest. No overlap stitching or quality-preserving segmentation claim exists. Empty output before any published text emits nothing; a later empty partial retracts previously published text. Unchanged partial text/language is suppressed. Finals are emitted even if empty so an earlier partial can be closed.
 
 ## Publication and end-of-input
 

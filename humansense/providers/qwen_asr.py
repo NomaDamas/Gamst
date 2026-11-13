@@ -69,7 +69,7 @@ class QwenStreamingASR:
         if type(text) is not str or len(text) > 4096 or type(language) is not str or len(language) > 64:
             raise ValueError('ASR output exceeds transcript bounds or has invalid types')
         language = _LANGUAGES.get(language, 'und')
-        if not final and (not text or (text, language) == (self.last_text, self.last_language)):
+        if not final and ((not text and self.revision < 0) or (text, language) == (self.last_text, self.last_language)):
             return None
         self.revision += 1
         self.last_text, self.last_language = text, language

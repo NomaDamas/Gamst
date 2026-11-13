@@ -95,3 +95,31 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             snapshot=await human.get_transcripts()
             self.assertEqual(snapshot['utterances'][0]['status'],'final')
             self.assertEqual(snapshot['utterances'][0]['update']['text'],'안녕하세요!')
+
+    async def test_empty_partial_retracts_previously_published_text(self):
+        class RetractionEngine(EngineDouble):
+            def streaming_transcribe(self, pcm, state):
+                state.count += len(pcm)
+                if state.count >= 1600:
+                    state.text = 'wrong' if state.count < 3200 else ''
+                    state.language = 'English'
+        async with HumanSense(consent=True) as human:
+            p=provider(RetractionEngine()); human.register_capability(p.spec)
+            start=timestamp()-1000; emitted=[]
+            for i in range(11):
+                f=frame(i,start); update=p.process(f)
+                if update is not None:
+                    emitted.append(update)
+                    await human.push_observation(p.spec.id,update,
+                        sensor=replace(f.sensor,sequence=len(emitted)-1,stream_epoch='run'),timestamp_ms=f.timestamp_ms)
+            self.assertEqual([u['text'] for u in emitted], ['wrong',''])
+            self.assertEqual([u['revision'] for u in emitted], [0,1])
+            snapshot=await human.get_transcripts()
+            self.assertEqual(snapshot['utterances'][0]['update']['text'],'')
+            self.assertEqual(snapshot['utterances'][0]['status'],'partial')
+            final=p.finish()
+            await human.push_observation(p.spec.id,final,
+                sensor=replace(f.sensor,sequence=2,stream_epoch='run'),timestamp_ms=f.timestamp_ms)
+            snapshot=await human.get_transcripts()
+            self.assertEqual(snapshot['utterances'][0]['update']['text'],'!')
+            self.assertEqual(snapshot['utterances'][0]['status'],'final')
