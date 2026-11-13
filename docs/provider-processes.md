@@ -1,5 +1,10 @@
 # Separate inference environments
 
+Additional concrete profiles: `nemotron3.diarization`, `talknet.local`,
+`esp32.csi` and `ti.radar`. See their provider documents for runtime requirements
+and mandatory real-model/device acceptance; CSI and radar decoding use only the
+standard library and do not start capture hardware.
+
 ```mermaid
 flowchart LR
     Capture[Camera / microphone / sensor capture] --> Streams[SensorStreams bounded lanes]

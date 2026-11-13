@@ -13,7 +13,7 @@ The host owns firmware, radio operation, serial framing and capture-clock mappin
 radio starts on discovery. It reports a changing radio channel, not a verified
 person, object, position, gesture or through-wall observation. Real hardware and
 controlled-motion acceptance is required in [#121](https://github.com/NomaDamas/Gamst/issues/121)
-under#31. TI radar remains a separate required implementation; through-wall
+under#31. [TI radar](ti-radar.md) has a separate decoder and required hardware acceptance; through-wall
 research remains#32.
 
 ## Selected firmware and wire profile
