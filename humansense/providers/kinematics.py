@@ -124,7 +124,7 @@ class MetricKinematics:
                 dt = (ts-self._last[0])/1000
                 velocity = tuple((x-y)/dt for x, y in zip(position, old['position']))
                 interval = [self._last[0], ts]
-                # Relative time avoids losing sub-ms midpoint precision for large timestamps.
+                # Display midpoint can round at huge epochs; derivatives use integer differences.
                 midpoint = self._last[0] + (ts-self._last[0])/2
                 approach = (old['range']-distance)/dt
                 if old['velocity'] is not None:

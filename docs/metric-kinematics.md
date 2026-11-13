@@ -54,6 +54,9 @@ configured instance; mismatches reject and clear history.
 
 The first sample warms up. The second gives velocity `(p2-p1)/(t2-t1)` and speed.
 Velocity represents the interval average, with interval and midpoint reported.
+Interval endpoints are exact integers; the displayed floating midpoint may round
+half-milliseconds at extremely large timestamps. Derivatives use integer time
+differences and do not depend on that displayed midpoint.
 The third gives acceleration from velocity differences divided by the difference
 between their interval midpoints, correctly accounting for unequal sample gaps.
 Acceleration is an interval estimate, not an instantaneous force measurement.
