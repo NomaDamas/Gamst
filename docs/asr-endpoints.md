@@ -27,6 +27,11 @@ SensorStreams event loop. A hung native call cannot be forcibly timed out here.
 
 ## Capture-time policy
 
+Normalized float32/float64 and signed int16 mono arrays are accepted under the
+Qwen fixed-hop contract. PCM16 is converted on a bounded copy using /32768 before
+either branch, so VAD and ASR receive the same amplitude scale. Caller-owned
+arrays are not mutated.
+
 All accepted PCM goes to Qwen, including leading/trailing silence. There is no
 speech-only gating, preroll buffer, extra audio queue or audio cleanup. Ambient
 consumers can use their own unchanged lane. This avoids dropping boundary audio

@@ -53,6 +53,13 @@ class SileroEndpointASR:
         try:
             if type(manual_endpoint) is not bool:
                 raise ValueError('manual_endpoint must be boolean')
+            # Silero's array path expects normalized floats; Qwen also accepts
+            # PCM16. Normalize a bounded copy once so both see the same scale.
+            np, data = self.asr.np, frame.data
+            if isinstance(data, np.ndarray) and data.dtype == np.int16:
+                if data.shape != (16*self.asr.hop_ms,):
+                    raise ValueError('supply exactly one mono PCM16 hop')
+                frame = replace(frame, data=data.astype(np.float32)/32768.)
             activity = self.vad.process(frame)
             endpoint = 'manual_endpoint' if manual_endpoint else None
             for decision in activity['decisions'] if activity else ():

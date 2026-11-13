@@ -11,8 +11,11 @@ class ActivityModel:
     def __init__(self, scores):
         self.scores=list(scores)
         self.resets=0
+        self.inputs=[]
     def reset_states(self): self.resets+=1
-    def score(self, values): return self.scores.pop(0) if self.scores else .1
+    def score(self, values):
+        self.inputs.extend(values)
+        return self.scores.pop(0) if self.scores else .1
 
 
 def pipeline(scores, **kwargs):
@@ -33,6 +36,31 @@ class EndpointPolicy(unittest.TestCase):
         self.assertNotEqual(finals[0]['utterance_id'],finals[1]['utterance_id'])
         self.assertEqual(sum(v for v in p.asr.engine.calls if type(v) is int),14*320)
         self.assertIsNone(p.finish())
+
+    def test_pcm16_and_float_have_identical_scale_and_preserve_owned_input(self):
+        a,b=pipeline([.9,.9,.1,.1]),pipeline([.9,.9,.1,.1])
+        captured=[[],[]]
+        for p,samples in zip((a,b),captured):
+            original=p.asr.engine.streaming_transcribe
+            def observe(pcm,state,original=original,samples=samples):
+                samples.extend(pcm.tolist())
+                original(pcm,state)
+                pcm[:]=1  # Native ASR mutation cannot affect caller or VAD input.
+            p.asr.engine.streaming_transcribe=observe
+        for i in range(7):
+            raw=np.resize(np.array([-32768,-1000,0,1,1000,32767],dtype=np.int16),320)
+            owned=raw.copy()
+            x=a.process(replace(frame(i),data=raw))
+            y=b.process(replace(frame(i),data=raw.astype(np.float32)/32768.))
+            np.testing.assert_array_equal(raw,owned)
+            if x is not None:
+                self.assertEqual({k:v for k,v in x.items() if k!='utterance_id'},
+                                 {k:v for k,v in y.items() if k!='utterance_id'})
+            else: self.assertIsNone(y)
+        self.assertEqual(captured[0],captured[1])
+        self.assertEqual(a.vad.model.inputs,b.vad.model.inputs)
+        self.assertEqual(a.vad.model.inputs,captured[0][:len(a.vad.model.inputs)])
+        self.assertEqual(len(captured[0]),7*320)
 
     def test_short_pause_noise_and_silence_do_not_endpoint(self):
         for scores in ([.1]*9, [.9,.1]*4, [.9,.9,.1,.9,.1,.9,.1,.9]):
