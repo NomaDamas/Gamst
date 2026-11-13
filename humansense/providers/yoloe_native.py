@@ -131,6 +131,9 @@ class NativeYOLOE:
         result = results[0]
         if tuple(result.orig_shape) != image.shape[:2] or result.boxes is None:
             raise ValueError('YOLOE original image geometry mismatch')
+        shape = tuple(result.boxes.data.shape)
+        if len(shape) != 2 or shape[1:] != (6,) or shape[0] > self.max_objects:
+            raise ValueError('native YOLOE detection bound exceeded before host transfer')
         boxes = result.boxes.data.detach().cpu().float().numpy().copy()
         if boxes.ndim != 2 or boxes.shape[1:] != (6,) or len(boxes) > self.max_objects:
             raise ValueError('native YOLOE detection bound exceeded')

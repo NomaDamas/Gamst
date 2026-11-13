@@ -110,6 +110,11 @@ class Context(unittest.TestCase):
         self.assertIn('refer_image',model.calls[0]); self.assertNotIn('refer_image',model.calls[1])
         self.assertTrue(model.calls[0]['retina_masks']); self.assertFalse(model.calls[0]['save'])
         self.assertEqual(model.calls[0]['max_det'],16)
+        # Shape must be bounded before a GPU/host transfer or copy is attempted.
+        model.predict = lambda **kw:[SimpleNamespace(orig_shape=(32,32),
+            boxes=SimpleNamespace(data=SimpleNamespace(shape=(17,6))),masks=None)]
+        with patch.dict(sys.modules,{'torch':SimpleNamespace(inference_mode=contextlib.nullcontext)}):
+            with self.assertRaises(ValueError): native.predict(ref)
         native.close(); self.assertIsNone(native.model)
 
     def test_reference_class_mapping_owned_bytes_and_hash(self):
