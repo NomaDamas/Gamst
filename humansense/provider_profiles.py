@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'yoloe.local':
+        from .providers.yoloe_native import configuration
+        from .providers.yoloe import YOLOEContext
+        args,_,_ = configuration(config)
+        return YOLOEContext.capability(**args)
     if profile == 'ti.radar':
         from .providers.radar import TIRadar
         return TIRadar.capability(**config)

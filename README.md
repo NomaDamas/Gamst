@@ -457,3 +457,8 @@ not establish human presence, range or through-wall objects.
 metric tracks, range/Doppler summaries and firmware presence through SDK/MCP.
 The wire profile is explicit; real board, clock and accuracy acceptance remains
 required in#123. Track IDs are not verified identities or through-wall detections.
+
+[YOLOE text/exemplar context](docs/yoloe-context.md) provides an explicit local
+worker for prompted boxes and compact mask coverage. It avoids default text-model
+downloads; native checkpoint and held-out quality acceptance remains required
+in#125. Synthetic pipeline tests do not establish model inference or FPS.

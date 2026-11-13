@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'ti.radar':
+    if profile == 'yoloe.local':
+        from .providers.yoloe_native import load_worker
+        provider = load_worker(config)
+    elif profile == 'ti.radar':
         from .providers.radar import TIRadar
         provider = TIRadar(**config)
     elif profile == 'esp32.csi':
@@ -94,6 +97,7 @@ def _read_exact(source, size):
 
 
 def main():
+    os.environ['GAMST_PROVIDER_WORKER'] = '1'
     # Preserve a private protocol descriptor before redirecting Python AND native
     # stdout to stderr. Library print/logging cannot corrupt protocol frames.
     output = os.fdopen(os.dup(sys.stdout.fileno()), 'wb', buffering=0)
