@@ -22,6 +22,7 @@ mediapipe = ["mediapipe>=0.10,<0.11"]
 huggingface = ["transformers>=4.45,<5", "torch>=2.2,<3", "Pillow>=10", "numpy>=1.24"]
 providers = ["httpx>=0.27,<1"]
 detection = ["rfdetr==1.12.1"]
+environment-audio = ["mediapipe==0.10.35", "numpy>=1.24"]
 websocket = ["websockets>=13,<16"]
 
 [project.scripts]

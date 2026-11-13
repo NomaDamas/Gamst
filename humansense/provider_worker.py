@@ -14,6 +14,9 @@ def _construct(profile, config):
     elif profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         provider = AudioProsody(**config)
+    elif profile == 'yamnet.events':
+        from .providers.environment_audio import YAMNetEvents
+        provider = YAMNetEvents.from_local(**config)
     else:
         from .providers.motion import OpenCVFlow
         provider = OpenCVFlow(**config)

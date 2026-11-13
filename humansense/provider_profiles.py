@@ -18,4 +18,7 @@ def capability(profile, config):
     if profile == 'opencv.flow':
         from .providers.motion import OpenCVFlow
         return OpenCVFlow.capability(config.get('method', 'lucas_kanade'))
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody or opencv.flow')
+    if profile == 'yamnet.events':
+        from .providers.environment_audio import YAMNetEvents
+        return YAMNetEvents.capability()
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow or yamnet.events')
