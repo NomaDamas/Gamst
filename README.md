@@ -442,3 +442,8 @@ graph/head pair; actual trained-model acceptance remains open.
 local Nemotron-3 worker with bounded speaker cache and capture-timed overlapping
 activity intervals. Speaker slots are not identities; actual model acceptance
 and audiovisual active-speaker association remain open.
+
+[Same-clock face/audio window preparation](docs/audiovisual-windows.md) provides
+bounded local worker inputs for the required TalkNet bridge. This prerequisite
+does not yet classify active speakers; native inference and real acceptance
+remain tracked in#118.
