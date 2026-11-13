@@ -6,6 +6,12 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video'):
+        from .providers.landmarker_video import MediaPipeVideoContext
+        if set(config)-{'path','sha256','max_entities','max_gap_ms'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms')
+        return MediaPipeVideoContext.capability(profile.split('.')[1], config['sha256'],
+            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000))
     if profile == 'mediapipe.face':
         from .providers.face_context import MediaPipeFaceContext
         if set(config)-{'path','sha256','max_faces'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
@@ -56,4 +62,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand or mediapipe.face')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand, mediapipe.face or their .video profiles')
