@@ -26,7 +26,7 @@ async def run(args):
         detector=detector,regions=regions,timestamp_origin='replay_wall_time_not_original_capture',
         image_orientation='encoded_pixels_no_exif_rotation',observations=[])
     async with HumanSense(consent=True) as human:
-        streams=SensorStreams(human);streams.register(spec,factory)
+        streams=SensorStreams(human,max_packet_bytes=8*1024*1024);streams.register(spec,factory)
         start=time.perf_counter();await streams.open('object-replay','images',[spec.id])
         report['startup_ms']=(time.perf_counter()-start)*1000;last=-1
         for seq,name in enumerate(args.image):

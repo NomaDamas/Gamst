@@ -202,3 +202,32 @@ w.main()
         finally:
             for child in children:
                 if child.returncode is None:child.kill();await child.wait()
+
+
+    async def test_smoke_runner_accepts_declared_1080p_limit(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('optional Pillow absent')
+        import importlib.util,json,tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock
+        spec=importlib.util.spec_from_file_location('object_smoke',Path(__file__).resolve().parents[1]/'examples/validate_object_appearance.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        config=dict(path='/fixture',sha256='0'*64,device='cpu')
+        p,d,r=self.build()
+        # Match the explicit configs used by the runner's registration handshake.
+        d.spec=capability('rfdetr.nano',config)
+        p.spec=module.ObjectAppearancePipeline.combined_capability(d.spec,r.spec)
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();source=root/'1080p.png';output=root/'report.json'
+            Image.new('RGB',(1920,1080),(255,0,0)).save(source)
+            args=SimpleNamespace(image=[str(source)],detector='/fixture',detector_sha256='0'*64,
+                embedding='/fixture',embedding_sha256='0'*64,detector_python='/det/python',
+                embedding_python='/embed/python',output=str(output))
+            with patch.object(module.ObjectAppearancePipeline,'open',AsyncMock(return_value=p)):
+                await module.run(args)
+            report=json.loads(output.read_text())
+            self.assertEqual(len(report['observations']),1)
+            self.assertEqual(len(report['observations'][0]['record']['observation']['value']['objects']),2)
+            self.assertTrue(d.closed);self.assertTrue(r.closed)

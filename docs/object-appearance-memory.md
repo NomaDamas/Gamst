@@ -32,7 +32,9 @@ explicit local model files. No dependencies/weights were installed for this chan
 `ObjectAppearancePipeline.capability(detector_config, region_config)` declares
 `vision.object_appearance`; `await ObjectAppearancePipeline.open(detector_python,
 detector_config, embedding_python, region_config)` constructs it. Register that
-capability and async factory in SensorStreams. Detector config follows
+capability and async factory in `SensorStreams(human, max_packet_bytes=8*1024*1024)`
+when accepting the full2MP input limit. The default4MiB packet limit is too small
+for a1920×1080 BGR frame (6,220,800 bytes); the smoke runner selects8MiB. Detector config follows
 `rfdetr.nano`; region config follows `dinov3.regions`: absolute local `path` and
 `sha256`, optional `capacity`1..1024 (default128), `retention_ms`1..86400000
 (default600000), `max_regions`1..8 (default8), `top_k`1..2 (default2).
