@@ -144,3 +144,37 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             value=next(iter((await human.get_context())['observations'].values()))['value']
             self.assertEqual(value['flow']['vectors'][0]['velocity_m_s'],[.03,.02])
             self.assertEqual(streams.status()['streams'][0]['providers'][0]['errors'],0)
+
+    async def test_worker_profile_dispatch_and_real_pipe(self):
+        import asyncio
+        from humansense import ProcessProvider
+        children=[];spawn_real=asyncio.create_subprocess_exec
+        script='''
+import numpy as np
+from humansense.providers.piv import OpenPIVFlow
+from humansense.provider_worker import main
+
+def backend(a,b,**kw):
+    shape=((a.shape[0]-64)//32+1,(a.shape[1]-64)//32+1)
+    return np.full(shape,3/kw['dt']),np.full(shape,2/kw['dt']),np.full(shape,2.)
+OpenPIVFlow.from_installed=classmethod(lambda cls,**config:cls(backend,**config))
+main()
+'''
+        async def spawn(*args,**kwargs):
+            child=await spawn_real(sys.executable,'-u','-c',script,**kwargs)
+            children.append(child);return child
+        try:
+            with patch('asyncio.create_subprocess_exec',spawn):
+                worker=await ProcessProvider.open(sys.executable,'openpiv.flow',CONFIG)
+                try:
+                    self.assertEqual((await worker.process(frame()))['flow']['status'],'warmup')
+                    result=await worker.process(frame(1,100))
+                    self.assertEqual(result['flow']['vectors'][0]['velocity_m_s'],[.03,.02])
+                    await worker.reset()
+                    self.assertEqual((await worker.process(frame(2,200)))['flow']['status'],'warmup')
+                finally:await worker.close()
+            self.assertTrue(all(child.returncode is not None for child in children))
+        finally:
+            for child in children:
+                if child.returncode is None:
+                    child.kill();await child.wait()
