@@ -57,6 +57,9 @@ images, landmarks and logits never enter the emitted context.
 
 ## Selected runtime and explicit execution
 
+When model installation is enabled, install the optional runtime from this checkout
+with `/path/to/selected-runtime/bin/python -m pip install ".[gaze]"`. This installs
+packages, not checkpoint files; installation is deferred in the current task.
 Use an isolated environment with `torch==2.8.0`, `torchvision==0.23.0` and
 `mediapipe==0.10.35`, plus compatible NumPy, OpenCV and Pillow. Torch/TorchVision
 and MediaPipe versions are checked at load. Remaining dependency versions must

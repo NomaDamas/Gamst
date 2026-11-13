@@ -153,7 +153,11 @@ class Gaze(unittest.TestCase):
             if not release.wait(5): raise RuntimeError('test gate timed out')
             return logits(len(crops),45),logits(len(crops),45)
         p=provider(predictor=predict)
-        worker=threading.Thread(target=p.process,args=(frame(),))
+        errors=[]
+        def work():
+            try: p.process(frame())
+            except BaseException as exc: errors.append(exc)
+        worker=threading.Thread(target=work)
         closer=threading.Thread(target=lambda:(p.close(),closed.set()))
         worker.start()
         try:
@@ -162,6 +166,7 @@ class Gaze(unittest.TestCase):
         finally:
             release.set(); worker.join(5)
             if closer.ident is not None: closer.join(5)
+        self.assertEqual(errors,[])
         self.assertTrue(closed.is_set()); self.assertIsNone(p.predictor)
 
 
