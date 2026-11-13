@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'nemotron3.diarization':
+        from .providers.diarization import NemotronDiarization
+        if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:
+            raise ValueError('diarization requires local bundle path and optional mode/threshold/device')
+        return NemotronDiarization.capability(**{k:v for k,v in config.items() if k != 'path'})
     if profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         if not {'model_path','head_path','model_sha256','head_sha256'} <= set(config) or set(config)-{'model_path','head_path','model_sha256','head_sha256','window_ms','hop_ms'} or any(type(config[k]) is not str for k in ('model_path','head_path')):
