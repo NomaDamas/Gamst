@@ -14,7 +14,7 @@ At the segment limit, the adapter calls the official finish API, emits a final r
 
 ## Publication and end-of-input
 
-`process(frame)` returns one transcript dictionary or None. It can run as a SensorStreams provider for automatic capped segments. `finish()` flushes a pending tail once without new audio and returns a final dictionary; repeated finish returns None. `close()` discards pending state, so finish explicitly when a successful end-of-input is intended. Final publication support through SensorStreams control operations is still pending in #67; do not assume clearing/closing a lane finalizes it.
+`process(frame)` returns one transcript dictionary or None. It can run as a SensorStreams provider for automatic capped segments. `finish()` flushes a pending tail once without new audio and returns a final dictionary; repeated finish returns None. `close()` discards pending state, so finish explicitly when a successful end-of-input is intended. Use `await streams.finish(source_id, sensor_id)` for managed end-of-input: it drains accepted input, publishes the final with a fresh output sequence and closes that stream. Clearing/closing still aborts rather than finalizes. See [stream finalization](stream-finalization.md).
 
 For an explicit driver, keep publication sequence separate from capture-input sequence, including all partials. Call process/finish/reset/close serially in the selected worker, not on an event loop while inference can block. A simplified publication fragment after a successful serialized worker operation is:
 
