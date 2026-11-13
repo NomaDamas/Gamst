@@ -38,6 +38,8 @@ piv = ["openpiv==0.26.1"]
 
 vocal-expression = ["onnxruntime==1.23.2", "numpy>=1.24"]
 
+vocal-expression-export = ["torch==2.8.0", "funasr==1.4.26", "onnx==1.18.0", "onnxruntime==1.23.2", "omegaconf==2.3.0", "PyYAML==6.0.3", "numpy>=1.24"]
+
 [project.scripts]
 gamst = "humansense.cli:main"
 gamst-serve = "humansense.server:main"
