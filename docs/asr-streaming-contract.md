@@ -36,8 +36,9 @@ This contract preserves #23's full implementation and actual-inference gate. Hal
 
 `transcript_capability` declares optional `finalization_reason`. When present it
 is accepted only on a `final` update and must be `input_end` (the caller explicitly
-ended the submitted input) or `segment_limit` (the provider forced a bounded
-segment rollover). It is retained unchanged in observations, transcript memory,
+ended the submitted input), `segment_limit` (the provider forced a bounded
+segment rollover), `manual_endpoint` (an explicit application-selected hop boundary),
+or `vad_endpoint` (the configured speech-activity policy selected a hop boundary). It is retained unchanged in observations, transcript memory,
 context and MCP queries, and becomes immutable with the final text. Absence means
 the provider did not declare why the segment ended; do not infer silence or a
 natural sentence boundary. Existing seven-field transcript producers remain valid.
@@ -51,5 +52,7 @@ These describe software control boundaries, not detected human turn completion,
 semantic sentence completeness, VAD accuracy or recognition correctness. No audio
 sample or capture timestamp is invented for either operation. A final exactly at
 the cap keeps `segment_limit`; a subsequent empty finish produces no second final.
-VAD/manual utterance endpoint integration remains required in #67; this field
-alone does not implement it.
+The [Silero/Qwen endpoint composition](asr-endpoints.md) implements a local
+nonterminal VAD/manual hop-boundary path. Remote manual controls, isolated composite
+loading and real speech-boundary evidence remain required in #76; this field alone
+does not establish those gates.
