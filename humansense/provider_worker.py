@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'mediapipe.hand':
+    if profile == 'mediapipe.face':
+        from .providers.face_context import MediaPipeFaceContext
+        provider = MediaPipeFaceContext.from_local(**config)
+    elif profile == 'mediapipe.hand':
         from .providers.hand_context import MediaPipeHandContext
         provider = MediaPipeHandContext.from_local(**config)
     elif profile == 'mediapipe.body':
