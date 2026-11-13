@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'ti.radar':
+        from .providers.radar import TIRadar
+        return TIRadar.capability(**config)
     if profile == 'esp32.csi':
         from .providers.csi import ESP32CSI
         return ESP32CSI.capability(**config)

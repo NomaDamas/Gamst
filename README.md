@@ -452,3 +452,8 @@ actual trained-model, synchronization and quality acceptance remain in#118.
 20MHz receiver profile and exposes bounded amplitude/phase/temporal features
 through SDK/MCP. Real hardware validation remains open; channel variation does
 not establish human presence, range or through-wall objects.
+
+[TI xWR6843 radar context](docs/ti-radar.md) frames UART bytes and exposes bounded
+metric tracks, range/Doppler summaries and firmware presence through SDK/MCP.
+The wire profile is explicit; real board, clock and accuracy acceptance remains
+required in#123. Track IDs are not verified identities or through-wall detections.
