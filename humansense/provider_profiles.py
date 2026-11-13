@@ -6,6 +6,14 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'ppocr.mobile':
+        from .providers.ocr import PPOCRContext
+        required={'det_path','det_sha256','rec_path','rec_sha256'}
+        if (not required<=set(config) or set(config)-required-{'language','max_regions'} or
+                type(config['det_path']) is not str or type(config['rec_path']) is not str):
+            raise ValueError('OCR requires local detector/recognizer paths and hashes, optional language/max_regions')
+        return PPOCRContext.capability(config['det_sha256'],config['rec_sha256'],
+            language=config.get('language','en'),max_regions=config.get('max_regions',16))
     if profile == 'depth_anything_v2.small':
         from .providers.depth import DepthAnythingContext
         if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','grid_size'} or
@@ -76,4 +84,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand, mediapipe.face or their .video profiles, l2cs.gaze, depth_anything_v2.small')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand, mediapipe.face or their .video profiles, l2cs.gaze, depth_anything_v2.small, ppocr.mobile')
