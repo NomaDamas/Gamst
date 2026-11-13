@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'qwen3.asr.endpoint':
+    if profile == 'mediapipe.body':
+        from .providers.body_context import MediaPipeBodyContext
+        provider = MediaPipeBodyContext.from_local(**config)
+    elif profile == 'qwen3.asr.endpoint':
         from .providers.endpoint_asr import SileroEndpointASR
         provider = SileroEndpointASR.from_local(**config)
     elif profile == 'qwen3.asr':
