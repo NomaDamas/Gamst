@@ -25,10 +25,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install '.[vision]'
+      - run: python -m pip install '.[vision,websocket]'
       - run: python -c "import cv2, numpy; print(cv2.__version__, numpy.__version__)"
       - run: python -m unittest discover -s tests -p test_motion_provider.py -v
       - run: python -m unittest discover -s tests -p test_prosody_provider.py -v
       - run: python -m unittest discover -s tests -p test_detection_provider.py -v
       - run: python -m unittest discover -s tests -p test_process_provider.py -v
       - run: python -m unittest discover -s tests -p test_environment_audio.py -v
+      - run: python -m unittest discover -s tests -p test_perception_api.py -v

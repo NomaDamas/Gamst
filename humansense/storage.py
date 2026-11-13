@@ -65,7 +65,8 @@ class Store:
         self.connection.commit()
         return True
 
-    def query(self, subject=None, start=None, end=None, kind=None, limit=1000, name=None):
+    def query(self, subject=None, start=None, end=None, kind=None, limit=1000, name=None,
+              registered_only=False, capability_id=None, source_id=None, sensor_id=None):
         clauses, args = [], []
         for column, value, operator in (("subject", subject, "="), ("ts", start, ">="), ("ts", end, "<="), ("kind", kind, "=")):
             if value is not None:
@@ -74,6 +75,13 @@ class Store:
         if name is not None:
             clauses.append("json_extract(payload, '$.observation.name') = ?")
             args.append(name)
+        if registered_only:
+            clauses.append("json_type(payload, '$.observation.capability') = 'object'")
+        for field, value in (("capability.id", capability_id), ("sensor.source_id", source_id),
+                             ("sensor.sensor_id", sensor_id)):
+            if value is not None:
+                clauses.append("json_extract(payload, '$.observation."+field+"') = ?")
+                args.append(value)
         sql = "SELECT payload FROM records"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)

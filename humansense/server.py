@@ -30,22 +30,23 @@ async def handle_connection(server, socket):
         async with lock:
             await socket.send(json.dumps(message, ensure_ascii=False, allow_nan=False))
 
-    async def publish(kind):
+    async def publish(kind, context_options):
         if kind == 'context':
-            async for context in server.human.contexts():
+            async for context in server.human.contexts(**context_options):
                 await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
                             'params': context})
             return
         async for record in getattr(server.human, allowed[kind])():
             await send({"jsonrpc": "2.0", "method": f"notifications/humansense/{kind}", "params": record})
 
-    async def subscribe(kinds):
+    async def subscribe(kinds, context_options=None):
+        context_options = context_options or {}
         for task in publishers:
             task.cancel()
         if publishers:
             await asyncio.gather(*publishers, return_exceptions=True)
         publishers.clear()
-        publishers.extend(asyncio.create_task(publish(kind)) for kind in kinds)
+        publishers.extend(asyncio.create_task(publish(kind, context_options)) for kind in kinds)
         await asyncio.sleep(0)  # Register runtime iterators before acknowledging.
 
     await subscribe(["event"])
@@ -66,8 +67,29 @@ async def handle_connection(server, socket):
                         if not isinstance(kinds, list) or len(kinds) > 4 or any(type(kind) is not str or kind not in (*allowed, 'context') for kind in kinds) or len(set(kinds)) != len(kinds):
                             response = server.error(ident, -32602, "types must select unique event, signal, inference, context values")
                         else:
-                            await subscribe(kinds)
-                            response = {"jsonrpc": "2.0", "id": ident, "result": {"types": kinds}}
+                            try:
+                                from .engine import _window_ms
+                                allowed_params = {'types', 'interval_ms', 'subject_id', 'window'}
+                                if set(params)-allowed_params:
+                                    raise ValueError('unknown subscription parameter')
+                                interval_ms = params.get('interval_ms', 250)
+                                subject_id = params.get('subject_id', 'local-user')
+                                window = params.get('window', '5m')
+                                if type(interval_ms) is not int or not 50 <= interval_ms <= 60000:
+                                    raise ValueError('interval_ms must be 50..60000')
+                                if not isinstance(subject_id, str) or not 1 <= len(subject_id) <= 128 or not subject_id.strip():
+                                    raise ValueError('subject_id must be 1..128 nonblank characters')
+                                if not isinstance(window, str) or len(window) > 32 or _window_ms(window) > 86400000:
+                                    raise ValueError('window must be a positive duration at most one day')
+                                if 'context' not in kinds and set(params)-{'types'}:
+                                    raise ValueError('cadence/subject/window options require a context subscription')
+                                await subscribe(kinds, dict(interval=interval_ms/1000, subject_id=subject_id, window=window))
+                                result = {"types": kinds}
+                                if 'context' in kinds:
+                                    result['context'] = dict(interval_ms=interval_ms, subject_id=subject_id, window=window)
+                                response = {"jsonrpc": "2.0", "id": ident, "result": result}
+                            except (ValueError, TypeError, OverflowError) as exc:
+                                response = server.error(ident, -32602, str(exc))
                 elif isinstance(request, dict) and request.get('method') in (
                         'humansense/stream/start', 'humansense/stream/stop', 'humansense/stream/status', 'humansense/media'):
                     ident = request.get('id')

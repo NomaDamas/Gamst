@@ -12,7 +12,7 @@ from copy import deepcopy
 from .schema import envelope, hypothesis, timestamp, validate_output
 from .storage import Store
 from .plugins import PerceptionPlugin
-from .capabilities import CapabilityRegistry, SensorMetadata
+from .capabilities import CapabilityRegistry, SensorMetadata, identifier
 from .memory import ObjectMemory
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from dataclasses import asdict
@@ -520,6 +520,75 @@ class HumanSense:
     async def get_history(self, subject_id="local-user", hours=24, limit=100, start_ms=None, end_ms=None, type=None):
         self._prune()
         return self.store.query(subject_id, start_ms if start_ms is not None else timestamp()-int(hours*3_600_000), end_ms, type, limit)
+
+    async def list_capabilities(self):
+        """Registered contracts, not claims of installed or validated models."""
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        return {'capabilities': self.perception_capabilities.describe(),
+                'meaning': 'registered_contracts_only', 'activation': 'explicit_application_setup'}
+
+    async def get_sensor_status(self):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        return {'managers': [manager.status() for manager in getattr(self, '_sensor_streams', ())],
+                'paused': self.paused, 'consent': self.consent}
+
+    @staticmethod
+    def _bounded_query(items, limit, max_bytes):
+        import json
+        if type(limit) is not int or not 1 <= limit <= 100 or type(max_bytes) is not int or not 1024 <= max_bytes <= 262144:
+            raise ValueError('limit must be 1..100 and max_bytes 1024..262144')
+        result, size = [], 0
+        # Input is newest first. Keep whole records, never truncate evidence text.
+        for item in items:
+            cost = len(json.dumps(item, ensure_ascii=True).encode())
+            if len(result) >= limit or size+cost > max_bytes:
+                break
+            result.append(item)
+            size += cost
+        return {'items': result, 'returned_count': len(result), 'truncated': len(result) < len(items),
+                'entry_byte_budget': max_bytes}
+
+    async def get_observations(self, subject_id='local-user', window='1h', limit=20,
+                               max_bytes=65536, capability_id=None, source_id=None, sensor_id=None):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self._bounded_query([], limit, max_bytes)
+        for value in (capability_id, source_id, sensor_id):
+            if value is not None:
+                identifier(value)
+        duration = _window_ms(window)
+        self._prune()
+        now = timestamp()
+        rows = self.store.query(subject_id, max(0, now-duration), now, 'observation.signal',
+            limit=limit+1, registered_only=True, capability_id=capability_id,
+            source_id=source_id, sensor_id=sensor_id)
+        result = self._bounded_query(list(reversed(rows)), limit, max_bytes)
+        result['order'] = 'newest_first'
+        result['scope'] = 'retained_registered_observations'
+        return result
+
+    async def get_transcripts(self, subject_id='local-user', window='1h', limit=16, max_bytes=32768):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self._bounded_query([], limit, max_bytes)
+        now = timestamp()
+        return self.transcript_memory.snapshot(subject_id, now_ms=now,
+            start_ms=max(0, now-_window_ms(window)), limit=limit, max_bytes=max_bytes)
+
+    async def get_object_memory(self, subject_id='local-user', text=None, entity_id=None,
+                                limit=20, max_bytes=65536):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self._bounded_query([], limit, max_bytes)
+        # ObjectMemory has a 100-result query bound. The extra candidate makes
+        # count truncation explicit except at the API's maximum, handled below.
+        items = self.object_memory.find(subject_id=subject_id, text=text, entity_id=entity_id, limit=100)
+        result = self._bounded_query(items, limit, max_bytes)
+        result['possibly_more'] = len(items) == 100
+        result['scope'] = 'retained_object_evidence'
+        return result
 
     async def get_state(self, subject_id="local-user"):
         self._prune()
