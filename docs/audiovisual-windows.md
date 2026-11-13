@@ -5,16 +5,16 @@ flowchart LR
   A[Host mono PCM16 capture] --> C[Bounded same-clock window assembler]
   B[Host face crops with track and capture time] --> C
   C --> D[Immutable local worker input packet]
-  D --> E[Required TalkNet inference integration still open]
+  D --> E[Explicit local TalkNet inference provider]
 ```
 
 `TalkNetWindows` aligns one face track and one microphone lane into bounded raw
 worker inputs. It does not recognize speech, classify active speakers, detect or
 track faces, calibrate clocks or publish an LLM observation. This is an executable
 prerequisite of [required TalkNet child#118](https://github.com/NomaDamas/Gamst/issues/118),
-not completion of the audiovisual capability. Native trained inference, face-crop
-extraction from detections, MFCC computation and SDK/MCP classification delivery
-remain required in that issue. Family#26 and the full SDK Goal remain open.
+not completion of the audiovisual capability. [Concrete local inference, MFCC, crop geometry and SDK/MCP delivery](talknet-context.md)
+are now implemented separately. Actual trained-model, crop-policy and synchronization
+acceptance remain required in that issue. Family#26 and the full SDK Goal remain open.
 
 ## Source and timing contract
 
@@ -71,7 +71,7 @@ packets += windows.push_face(face_frame, track_id='track-1',
                             clock_id='device-monotonic')
 for packet in packets:
     metadata, pcm16, faces = decode_talknet_window(packet.data)
-    # Future concrete TalkNet worker consumes these media, not an LLM context API.
+    # Concrete TalkNet worker consumes these media, not an LLM context API.
 status = windows.status()
 windows.close()
 ```
@@ -124,8 +124,8 @@ identity_verified=False; consumers must not turn those into calibrated identity.
 The decoder validates exact field sets, interval arithmetic, source contracts,
 sequence ranges, duplicate JSON keys and exact payload length before creating
 owned arrays. It rejects truncated or appended payloads. This is local protocol
-validation, not cryptographic media authentication. A future worker must also
-check outer InputFrame provenance against this inner metadata. Raw packets never
+validation, not cryptographic media authentication. The concrete worker checks outer capture/subject provenance; the stream-binding
+helper preserves the inner capture session while allowing a distinct runtime epoch. Raw packets never
 belong in context/MCP observation values; that existing boundary remains intact.
 
 ## Verification
@@ -142,3 +142,7 @@ packet tampering. Import stays standard-library-only; NumPy loads on use. No
 model weights, packages or sensors were installed/started. These tests do not
 establish active-speaker accuracy, real camera/microphone synchronization or
 published TalkNet benchmark equivalence. Those requirements remain in#118.
+
+Use talknet_stream_frame(packet) before SensorStreams.submit. Output sequence is
+monotonic across resets for the assembler lifetime; replacing the assembler
+requires reopening its runtime stream. See the concrete provider guide above.

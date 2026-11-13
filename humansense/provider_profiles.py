@@ -6,6 +6,13 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'talknet.local':
+        from .providers.talknet import TalkNetContext
+        if (not {'source_dir', 'checkpoint_path', 'checkpoint_sha256'} <= set(config) or
+                set(config)-{'source_dir', 'checkpoint_path', 'checkpoint_sha256', 'window_frames', 'device'} or
+                any(type(config[k]) is not str for k in ('source_dir', 'checkpoint_path'))):
+            raise ValueError('TalkNet requires explicit local sources/checkpoint/hash and optional window/device')
+        return TalkNetContext.capability(**{k:v for k,v in config.items() if k not in ('source_dir', 'checkpoint_path')})
     if profile == 'nemotron3.diarization':
         from .providers.diarization import NemotronDiarization
         if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:

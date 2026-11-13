@@ -2,7 +2,7 @@
 
 This module aligns media; it does not infer speaking, identity or clock sync.
 """
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import struct
 import threading
@@ -272,7 +272,7 @@ class TalkNetWindows:
                 audio_sequence=[audio[0][1], audio[-1][1]], video_sequence=[video[0][1], video[-1][1]],
                 synchronization_verified=False, identity_verified=False)
             packet = _encode(meta, pcm.tobytes(), faces.tobytes())
-            sensor = SensorMetadata(self.source_id, self.sensor_id, self._sequence,
+            sensor = SensorMetadata(self.source_id, self.sensor_id, self._emitted,
                                     channels=('mono',), stream_epoch=self._session)
             output.append(InputFrame(packet, 'video', meta['audio_end_ms'], self.subject_id, 16000, sensor))
             self._sequence += 1
@@ -281,3 +281,20 @@ class TalkNetWindows:
             self._audio = {k: v for k, v in self._audio.items() if k >= self._next}
             self._video = {k: v for k, v in self._video.items() if k >= self._next}
         return output
+
+
+def talknet_stream_frame(frame):
+    """Bind an assembler packet to SensorStreams' separate runtime epoch.
+
+    The capture session remains inside the immutable packet. Reopen the stream
+    when replacing the assembler instance, whose lifetime sequence starts at0.
+    """
+    if not isinstance(frame, InputFrame) or not isinstance(frame.sensor, SensorMetadata):
+        raise ValueError('assembler InputFrame required')
+    meta, _, _ = decode_talknet_window(frame.data)
+    if (frame.modality != 'video' or type(frame.timestamp_ms) is not int or
+            frame.timestamp_ms != meta['audio_end_ms'] or frame.subject_id != meta['subject_id'] or
+            type(frame.sample_rate) is not int or frame.sample_rate != 16000 or
+            frame.sensor.stream_epoch != meta['session_id'] or frame.sensor.channels != ('mono',)):
+        raise ValueError('assembler packet provenance mismatch')
+    return replace(frame, sensor=replace(frame.sensor, stream_epoch=None))

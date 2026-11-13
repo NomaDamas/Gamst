@@ -14,6 +14,7 @@ dependencies = []
 classifiers = ["Programming Language :: Python :: 3", "Development Status :: 3 - Alpha"]
 
 [project.optional-dependencies]
+talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
 audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]

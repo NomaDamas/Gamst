@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'nemotron3.diarization':
+    if profile == 'talknet.local':
+        from .providers.talknet import TalkNetContext
+        provider = TalkNetContext.from_local(**config)
+    elif profile == 'nemotron3.diarization':
         from .providers.diarization import NemotronDiarization
         provider = NemotronDiarization.from_local(**config)
     elif profile == 'emotion2vec.seed.onnx':

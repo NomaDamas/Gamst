@@ -444,6 +444,6 @@ activity intervals. Speaker slots are not identities; actual model acceptance
 and audiovisual active-speaker association remain open.
 
 [Same-clock face/audio window preparation](docs/audiovisual-windows.md) provides
-bounded local worker inputs for the required TalkNet bridge. This prerequisite
-does not yet classify active speakers; native inference and real acceptance
-remain tracked in#118.
+bounded local worker inputs for the [windowed TalkNet provider](docs/talknet-context.md).
+The local worker emits capture-timed audiovisual activity scores through SDK/MCP;
+actual trained-model, synchronization and quality acceptance remain in#118.
