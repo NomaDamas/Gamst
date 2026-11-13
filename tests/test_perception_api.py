@@ -205,6 +205,11 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                         result = json.loads(await asyncio.wait_for(socket.recv(), 2))['result']
                         self.assertFalse(result['isError'])
                         self.assertEqual(json.loads(result['content'][0]['text'])['utterances'][0]['update']['text'], 'hello')
+                        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 3,
+                            'method': 'humansense/context_profile'}))
+                        initial = json.loads(await asyncio.wait_for(socket.recv(), 2))['result']
+                        self.assertFalse(initial['configured'])
+                        self.assertEqual(initial['completed'], 0)
                         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'humansense/subscribe',
                             'params': {'types': ['context'], 'interval_ms': 50, 'subject_id': 'alice'}}))
                         received = [json.loads(await asyncio.wait_for(socket.recv(), 2)) for _ in range(2)]
@@ -212,4 +217,13 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(context['subject_id'], 'alice')
                         self.assertEqual(len(context['transcripts']['utterances']), 1)
                         self.assertEqual(context['transcripts']['utterances'][0]['update']['text'], 'hello')
+                        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 4,
+                            'method': 'humansense/context_profile'}))
+                        while True:
+                            status = json.loads(await asyncio.wait_for(socket.recv(), 2))
+                            if status.get('id') == 4:
+                                break
+                        self.assertEqual(status['result']['applied_interval_ms'], 50)
+                        self.assertGreaterEqual(status['result']['completed'], 1)
+                        self.assertEqual(status['result']['consumer_comprehension'], 'unknown')
             self.assertEqual(human._subscribers, set())
