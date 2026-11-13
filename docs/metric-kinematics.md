@@ -4,7 +4,7 @@
 flowchart LR
   A[Metric depth and tracked 3D centroids] --> B[Caller supplies calibrated complete snapshots]
   B --> C[MetricKinematics: rigid transform and finite differences]
-  C --> D[HumanSense observation store]
+  C --> D[gamst observation store]
   D --> E[MCP or LLM context]
 ```
 

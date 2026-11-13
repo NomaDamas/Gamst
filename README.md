@@ -437,3 +437,8 @@ cases explicit; acoustic speech-rate validation remains open.
 An explicit [local emotion2vec preparation command](docs/vocal-expression.md#local-preparation-command)
 verifies source files and requires synthetic export parity before emitting a ready
 graph/head pair; actual trained-model acceptance remains open.
+
+[Native streaming speaker-activity context](docs/diarization.md) adds an explicit
+local Nemotron-3 worker with bounded speaker cache and capture-timed overlapping
+activity intervals. Speaker slots are not identities; actual model acceptance
+and audiovisual active-speaker association remain open.

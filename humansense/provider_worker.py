@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'emotion2vec.seed.onnx':
+    if profile == 'nemotron3.diarization':
+        from .providers.diarization import NemotronDiarization
+        provider = NemotronDiarization.from_local(**config)
+    elif profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         provider = Emotion2VecContext.from_local(**config)
     elif profile == 'opencv.fill':
