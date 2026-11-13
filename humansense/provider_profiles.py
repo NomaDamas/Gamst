@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'bosch.bsec2':
+        from .providers.bsec2 import BoschBSEC2
+        return BoschBSEC2.capability(**config)
     if profile == 'efficienttam.tiny512':
         from .providers.efficienttam_native import configuration
         from .providers.efficienttam_context import EfficientTAMContext
