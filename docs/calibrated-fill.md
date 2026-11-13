@@ -102,11 +102,15 @@ spec = ProcessProvider.capability('opencv.fill', config)
 async def create():
     return await ProcessProvider.open('/explicit/vision-env/bin/python',
                                       'opencv.fill', config, inference_timeout=5)
-streams = SensorStreams(human)
+streams = SensorStreams(human, max_packet_bytes=8*1024*1024)
 streams.register(spec, create)
 await streams.open('camera', 'fill-device', [spec.id])
 # Submit matching InputFrame/SensorMetadata to the managed lane.
 ```
+
+The explicit8MiB packet budget accommodates the full2Mi-pixel BGR limit
+(6MiB of pixels plus framing); the default4MiB budget only fits smaller frames.
+Choose budgets and queue capacity for the actual camera size.
 
 For direct calls, import `CalibratedColorFill` from `humansense.providers.fill`,
 construct it with the same config, register its `spec` and publish `process(frame)`
