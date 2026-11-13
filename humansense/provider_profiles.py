@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'mediapipe.body':
+        from .providers.body_context import MediaPipeBodyContext
+        if set(config)-{'path','sha256','max_poses'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('body profile requires local path, sha256 and optional max_poses')
+        return MediaPipeBodyContext.capability(config['sha256'],max_poses=config.get('max_poses',4))
     if profile == 'qwen3.asr.endpoint':
         from .providers.endpoint_asr import endpoint_capability
         from .providers.vad import SileroActivity
@@ -41,4 +46,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr or qwen3.asr.endpoint')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint or mediapipe.body')
