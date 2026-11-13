@@ -87,13 +87,22 @@ class Processes(unittest.IsolatedAsyncioTestCase):
     async def test_cooperative_exit_is_reaped_without_signalling(self):
         # Real children, not mocked wait results: close acknowledgement, EOF
         # and worker-side validation failure all have cooperative exit paths.
+        real_wait_for = asyncio.wait_for
+        budgets = []
+        async def scheduling_tolerant_wait(awaitable, timeout):
+            budgets.append(timeout)
+            # Assert the production budget separately; do not make correct
+            # behavior fail solely because a CI child is descheduled for100ms.
+            return await real_wait_for(awaitable, 5 if timeout == .1 else timeout)
         for path in ('close', 'eof', 'error'):
+            budgets.clear()
             code = FAKE_WORKER.replace('    def reset(self): pass',
                 "    def endpoint(self): return {'invalid': True}\n    def reset(self): pass")
             with self.fixture(code):
                 provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
                 child = self.children[-1]
-                with patch.object(child, 'terminate', wraps=child.terminate) as terminate, \
+                with patch('asyncio.wait_for', scheduling_tolerant_wait), \
+                     patch.object(child, 'terminate', wraps=child.terminate) as terminate, \
                      patch.object(child, 'kill', wraps=child.kill) as kill:
                     if path == 'close':
                         await provider.close()
@@ -104,6 +113,7 @@ class Processes(unittest.IsolatedAsyncioTestCase):
                             await provider.endpoint()
                     terminate.assert_not_called()
                     kill.assert_not_called()
+                self.assertIn(.1, budgets)
                 self.assertEqual(child.returncode, 0)
                 self.assertTrue(child._transport.is_closing())
                 self.assertTrue(child.stdin.is_closing())
