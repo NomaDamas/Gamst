@@ -39,6 +39,18 @@ class Motion(unittest.TestCase):
             provider.process(InputFrame(blank, 'video', 1000))
             self.assertIsNone(provider.process(InputFrame(blank, 'video', 1100)))
 
+    def test_texture_loss_and_recovery_do_not_fabricate_motion(self):
+        image = self.image()
+        blank = np.zeros_like(image)
+        for method in ('lucas_kanade', 'farneback'):
+            provider = OpenCVFlow(method=method)
+            provider.process(InputFrame(image, 'video', 1000))
+            self.assertIsNone(provider.process(InputFrame(blank, 'video', 1100)))
+            self.assertIsNone(provider.process(InputFrame(image, 'video', 1200)))
+            result = provider.process(InputFrame(image, 'video', 1300))
+            self.assertIsNotNone(result)
+            self.assertAlmostEqual(result['motion']['median_speed_pixels_per_second'], 0, delta=.1)
+
     def test_gap_shape_change_reset_and_invalid_time(self):
         provider = OpenCVFlow()
         image = self.image()

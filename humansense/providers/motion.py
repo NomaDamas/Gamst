@@ -95,10 +95,13 @@ class OpenCVFlow:
             valid_back = backward_status.reshape(-1).astype(bool) & (np.linalg.norm(back.reshape(-1, 2)-starts, axis=1) < 1.5)
             vectors = (ends-starts)[valid_back]*scale
         else:
+            texture = cv.cornerMinEigenVal(previous, blockSize=3)
+            current_texture = cv.cornerMinEigenVal(gray, blockSize=3)
+            if min(float(texture.max()), float(current_texture.max())) <= .0001:
+                return None
             flow = cv.calcOpticalFlowFarneback(previous, gray, None, .5, 3, 15, 3, 5, 1.2, 0)
             # Sample textured pixels; a blank image cannot establish zero motion.
-            texture = cv.cornerMinEigenVal(previous, blockSize=3)
-            mask = texture > max(.0001, float(texture.max())*.01)
+            mask = (texture > max(.0001, float(texture.max())*.01)) & (current_texture > max(.0001, float(current_texture.max())*.01))
             vectors = flow[mask]*scale
             if len(vectors) > self.max_points:
                 vectors = vectors[np.linspace(0, len(vectors)-1, self.max_points).astype(int)]
