@@ -95,8 +95,6 @@ class YAMNetEvents:
         if sensor is None:
             raise ValueError('explicit source/sensor metadata is required')
         owner = (frame.subject_id, sensor.source_id, sensor.sensor_id, sensor.stream_epoch, sensor.channels)
-        if self.owner is not None and owner != self.owner:
-            raise ValueError('reset before switching audio streams or channel layouts')
         data, np = frame.data, self.np
         if isinstance(data, (bytes, bytearray, memoryview)):
             size = data.nbytes if isinstance(data, memoryview) else len(data)
@@ -122,6 +120,10 @@ class YAMNetEvents:
             if self.channel not in (None, 0) or len(sensor.channels) > 1:
                 raise ValueError('mono list cannot satisfy array channel configuration')
             values = _pcm_floats(data)
+        channel_count = data.shape[1] if isinstance(data, np.ndarray) and data.ndim == 2 else 1
+        owner += (channel_count,)
+        if self.owner is not None and owner != self.owner:
+            raise ValueError('reset before switching audio streams or channel layouts')
         if not values:
             return None
         expected = ts if self.expected_end is None else self.expected_end+len(values)/16

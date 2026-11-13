@@ -79,6 +79,18 @@ class EnvironmentAudio(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.provider(channel=1).process(frame(stereo, channels=('one',)))
 
+    def test_unnamed_channel_layout_change_requires_reset(self):
+        for first, second, channel in ((2, 3, 1), (1, 2, 0), (2, 1, 0)):
+            provider = self.provider(channel=channel)
+            a = np.zeros((8000, first)) if first > 1 else np.zeros(8000)
+            b = np.zeros((7600, second)) if second > 1 else np.zeros(7600)
+            self.assertIsNone(provider.process(frame(a, ts=1000)))
+            with self.assertRaisesRegex(ValueError, 'channel layouts'):
+                provider.process(frame(b, ts=1475))
+            self.assertEqual(provider.classifier.inputs, [])
+            provider.reset()
+            self.assertIsNone(provider.process(frame(b, ts=1475)))
+
     def test_bounded_topk_and_empty_filtered_result(self):
         result = self.provider(top_k=1).process(frame(np.zeros(15600)))
         self.assertEqual(len(result['events']), 1)
