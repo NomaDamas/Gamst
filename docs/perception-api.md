@@ -4,7 +4,7 @@ Applications register capability contracts and provider factories explicitly. Di
 
 The same methods are available on `HumanSense` and as MCP tools:
 
-- `list_capabilities()` returns the exact registered contracts, including modality, streaming mode, windows, lookahead, units, model version and license. Registration alone does not activate anything.
+- `list_capabilities(offset=0, limit=100, max_bytes=65536, revision=None)` returns a bounded page of exact registered contracts, including modality, streaming mode, windows, lookahead, units, model version and license. Registration alone does not activate anything.
 - `get_sensor_status()` reports typed SensorStreams managers with stable per-instance IDs, registered factories, active sensor lanes, queue size, drops, reset/error counts and last processing latency. `get_stream_status` remains the separate legacy MediaRouter view.
 - `get_observations(subject_id, window, capability_id, source_id, sensor_id, limit, max_bytes)` queries retained registered evidence, newest first. Filters run in SQL before the limit. Legacy unregistered payloads are excluded. Whole records are retained or omitted; `truncated` identifies count/byte omissions. This is history, not a freshness claim.
 - `get_transcripts(subject_id, window, limit, max_bytes)` exposes the same revised/final/interrupted utterances used by context, with evidence and source epochs. It does not concatenate obsolete partial hypotheses.
@@ -39,3 +39,9 @@ This interval is user-selected, not automatic LLM comprehension calibration. Con
 ## Verification
 
 `python -m unittest discover -s tests -p test_perception_api.py -v` checks nonactivating discovery, Python/MCP equivalence, SQL filtering and truncation, revised transcripts, object evidence, cadence validation/reconfiguration, subject selection and slow-consumer bounds. A real loopback WebSocket test exercises tool calls, context notifications and reconnect with retained transcripts. It runs when the optional `websockets` dependency is installed; CI explicitly installs that extra and runs this test. Other tests use synthetic derived observations and a controlled slow transport. No new model weights are downloaded; no ASR or VLM quality claim follows from transport tests.
+
+## Capability discovery pagination
+
+Contracts are sorted by capability ID. Follow `next_offset` with the returned `revision` to read subsequent pages; a changed registry rejects continuation and requires restarting at zero. The revision hashes the complete registered contract metadata, not installed model state. `total_count`, `returned_count`, `truncated` and `entry_byte_budget` expose omissions explicitly. Limits and entry byte budgets use the same bounds as evidence queries. Whole contracts are never shortened; if the next contract cannot fit, the call fails with its required byte count so callers can increase the budget. Container metadata is additional to the entry budget. Empty registries return an empty terminal page.
+
+Discovery does not retain a server-side pagination session or import providers. Sensor status remains a separately bounded-by-runtime-capacity snapshot; byte-budgeted status pagination is still open in #11.

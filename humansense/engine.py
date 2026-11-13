@@ -521,11 +521,33 @@ class HumanSense:
         self._prune()
         return self.store.query(subject_id, start_ms if start_ms is not None else timestamp()-int(hours*3_600_000), end_ms, type, limit)
 
-    async def list_capabilities(self):
-        """Registered contracts, not claims of installed or validated models."""
+    async def list_capabilities(self, offset=0, limit=100, max_bytes=65536, revision=None):
+        """Page registered contracts without loading providers; revision pins pagination."""
+        import hashlib
+        import json
         if self.closed:
             raise RuntimeError('runtime is closed')
-        return {'capabilities': self.perception_capabilities.describe(),
+        self._bounded_query([], limit, max_bytes)
+        if type(offset) is not int or not 0 <= offset <= 256:
+            raise ValueError('offset must be 0..256')
+        if revision is not None and (not isinstance(revision, str) or len(revision) != 64):
+            raise ValueError('revision must be a SHA256 registry revision')
+        contracts = sorted(self.perception_capabilities.describe(), key=lambda item: item['id'])
+        digest = hashlib.sha256(json.dumps(contracts, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+        if revision is not None and revision != digest:
+            raise ValueError('registry changed; restart pagination at offset 0')
+        if offset and revision is None:
+            raise ValueError('revision is required for continuation pages')
+        if offset > len(contracts):
+            raise ValueError('offset exceeds registry size')
+        page = self._bounded_query(contracts[offset:], limit, max_bytes)
+        if not page['items'] and offset < len(contracts):
+            required = len(json.dumps(contracts[offset], ensure_ascii=True).encode())
+            raise ValueError(f'next contract requires max_bytes >= {required}')
+        next_offset = offset + page['returned_count'] if page['truncated'] else None
+        return {'capabilities': page['items'], 'revision': digest, 'next_offset': next_offset,
+                'total_count': len(contracts), 'returned_count': page['returned_count'],
+                'truncated': page['truncated'], 'entry_byte_budget': max_bytes,
                 'meaning': 'registered_contracts_only', 'activation': 'explicit_application_setup'}
 
     async def get_sensor_status(self):

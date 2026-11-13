@@ -35,7 +35,7 @@ def tool_definitions() -> list[dict]:
     query_bounds = {"subject_id": SUBJECT, "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144}}
     specs = [
-        ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors.", {}, ()),
+        ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors. Continue with next_offset and revision.", {"offset": {"type": "integer", "minimum": 0, "maximum": 256}, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"], "revision": {"type": "string", "minLength": 64, "maxLength": 64}}, ()),
         ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
         ("get_observations", "Bounded retained registered sensory evidence, newest first, with explicit truncation. No raw media.",
          dict(query_bounds, window=WINDOW, capability_id=identifier_field, source_id=identifier_field, sensor_id=identifier_field), ()),
