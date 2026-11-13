@@ -46,7 +46,8 @@ def compare(plan, rows, *, expected_plan_sha256):
         return _compare(plan, rows, expected_plan_sha256=expected_plan_sha256)
 
 
-def _compare(plan, rows, *, expected_plan_sha256):
+def validate_plan(plan, *, expected_plan_sha256):
+    """Validate the frozen declaration before collecting or comparing traces."""
     digest = plan_digest(plan)
     if digest != _digest(expected_plan_sha256):
         raise ValueError('plan differs from frozen digest')
@@ -106,6 +107,15 @@ def _compare(plan, rows, *, expected_plan_sha256):
         _text(cost.get('definition'), 'measured total resource-cost definition')
     elif mode != 'unknown':
         raise ValueError('cost mode must be priced, resource or unknown')
+    return digest, task_map, charges, mode
+
+
+def _compare(plan, rows, *, expected_plan_sha256):
+    digest, task_map, charges, mode = validate_plan(plan, expected_plan_sha256=expected_plan_sha256)
+    tasks, systems, cost = plan['tasks'], plan['systems'], plan['cost']
+    rates = cost.get('per_million', {})
+    evidence, minimum = plan['evidence'], plan['min_pairs']
+    repetitions, seed = plan['bootstrap_repetitions'], plan['bootstrap_seed']
     if type(rows) is not list or len(rows) != 2*len(tasks):
         raise ValueError('exactly one baseline and candidate row per task required')
     paired = {}
