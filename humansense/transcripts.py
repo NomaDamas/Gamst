@@ -5,6 +5,7 @@ import json
 
 from .capabilities import CapabilitySpec, OutputField, bounded_json, identifier
 from .schema import timestamp
+from .speaking_rate import estimate_rate
 
 TRANSCRIPT_OUTPUT = 'speech.transcript_update'
 
@@ -149,6 +150,7 @@ class TranscriptMemory:
         for entry in selected:
             item = deepcopy(entry)
             item['fresh'] = entry['status'] != 'interrupted' and now-entry['updated_ms'] <= entry['freshness_ms']
+            item['speaking_rate'] = estimate_rate(item['update'], item['status'])
             cost = len(json.dumps(item, ensure_ascii=True).encode())
             if len(output) >= limit or size+cost > max_bytes:
                 break

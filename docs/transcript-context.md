@@ -40,6 +40,15 @@ Defaults: at most 256 utterances, 128 retained stream namespaces and 1 MiB encod
 
 The reducer is in-memory and session-local even if the audit store uses a SQLite file. Restart does not reconstruct a live transcript from old partials. Closing clears transcript memory; deleting a subject clears its entries and watermarks. Reconnects require new epochs. Freshness refers to the latest accepted update, not whether the recognized words were correct or whether an LLM understood them.
 
+Each returned entry also contains [an orthographic speaking-rate estimate](speaking-rate.md)
+derived from that exact latest revision and its capture interval. English word
+runs/minute and Korean Hangul blocks/second use distinct units. This adds no model
+call or acoustic inference. Partial values are provisional; interrupted, empty,
+short, numeric or unsupported-script text produces an explicit unavailable value.
+The projection is included in the existing encoded-entry query budget, without
+new retained state. Historical finals retain historical estimates: always honor
+the entry's `fresh`, timestamp and source fields before using a value as current.
+
 ## Verification and remaining model work
 
 `python -m unittest discover -s tests -p test_transcripts.py -v` exercises replacement, Korean text, finality, retraction, retry semantics, malformed/out-of-order updates, epoch separation, gap/clear/pause interruption, byte/count/retention bounds and storage failure atomicity. These are contract and integrated-runtime tests with synthetic ASR updates, not recognition-quality evidence.

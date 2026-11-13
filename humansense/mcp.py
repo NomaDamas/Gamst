@@ -47,7 +47,7 @@ def tool_definitions() -> list[dict]:
          ("manager_id", "source_id", "sensor_id", "capability_id", "stream_epoch")),
         ("get_observations", "Bounded retained registered sensory evidence, newest first, with explicit truncation. No raw media.",
          dict(query_bounds, window=WINDOW, capability_id=identifier_field, source_id=identifier_field, sensor_id=identifier_field), ()),
-        ("get_transcripts", "Latest partial/final/interrupted text per retained utterance, with revisions and source evidence; not recognition ground truth.",
+        ("get_transcripts", "Latest partial/final/interrupted text per retained utterance, with revisions, source evidence and English/Korean orthographic rate estimates; not recognition or acoustic-rate ground truth.",
          dict(query_bounds, window=WINDOW), ()),
         ("get_object_memory", "Last-seen object evidence and visibility. Does not assert current location or real-world identity.",
          dict(query_bounds, text={"type": "string", "maxLength": 256}, entity_id=identifier_field), ()),
