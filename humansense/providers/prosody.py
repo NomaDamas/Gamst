@@ -43,7 +43,7 @@ class AudioProsody:
 
     def reset(self):
         self.buffer = []
-        self.rate = self.last_ts = None
+        self.rate = self.last_ts = self.expected_end = None
         self.since_output = 0
 
     def close(self):
@@ -88,8 +88,11 @@ class AudioProsody:
         # End timestamps describe sample capture, not callback arrival time.
         # Allow millisecond rounding, but never merge overlapping short blocks.
         tolerance_ms = max(1., 2000/rate)
-        if self.rate is not None and (rate != self.rate or abs(ts-self.last_ts-duration) > tolerance_ms):
+        expected_end = ts if self.expected_end is None else self.expected_end+duration
+        if self.rate is not None and (rate != self.rate or abs(ts-expected_end) > tolerance_ms):
             self.reset()
+            expected_end = ts
+        self.expected_end = expected_end
         self.rate, self.last_ts = rate, ts
         count = round(rate*self.window_ms/1000)
         self.buffer = (self.buffer+values)[-count:]

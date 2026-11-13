@@ -84,6 +84,16 @@ class Prosody(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertAlmostEqual(result['features']['pitch_hz'], 220, delta=1.)
 
+    def test_small_timing_errors_cannot_accumulate(self):
+        for duration, step in ((1, 2), (2, 1)):
+            provider = AudioProsody()
+            for index in range(160):
+                samples = self.tone(duration_ms=duration, rate=8000,
+                                    start=index*duration*8)
+                result = provider.process(self.frame(samples, ts=1000+step*index, rate=8000))
+                self.assertIsNone(result)
+            self.assertLess(len(provider.buffer), 640)
+
     def test_rejects_invalid_pcm_and_lifecycle(self):
         provider = AudioProsody()
         for data in ([float('nan')], [1.1], [float('inf')]):
