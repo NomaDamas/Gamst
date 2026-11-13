@@ -3,6 +3,8 @@
 This is a window DSP provider, not a 3D locator, speaker classifier or beamformer.
 """
 import math
+from collections import deque
+from dataclasses import replace
 from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, identifier
 
 
@@ -45,26 +47,31 @@ class GCCPHATDirection:
     def close(self):
         self.closed = True
 
-    def process(self, frame):
+    def _input(self, frame, duration_ms):
         if self.closed:
             raise RuntimeError('direction provider is closed')
         np, rate, data = self.np, frame.sample_rate, frame.data
         if frame.modality != 'audio' or type(rate) is not int or not 16000 <= rate <= 96000:
             raise ValueError('synchronized audio sample rate must be 16000..96000')
-        if type(frame.timestamp_ms) not in (int, float) or not math.isfinite(frame.timestamp_ms) or frame.timestamp_ms < self.window_ms:
+        if type(frame.timestamp_ms) not in (int, float) or not math.isfinite(frame.timestamp_ms) or frame.timestamp_ms < duration_ms:
             raise ValueError('capture timestamp is window end and must cover the entire window')
         sensor = frame.sensor
         if not isinstance(sensor, SensorMetadata) or (sensor.calibration_id, sensor.channels, sensor.coordinate_frame) != (self.calibration_id, self.channels, self.coordinate_frame):
             raise ValueError('sensor calibration, channel order and coordinate frame must match array profile')
         if not isinstance(data, np.ndarray) or data.ndim != 2 or data.shape[1] != 2 or data.dtype not in (np.dtype('float32'), np.dtype('float64'), np.dtype('int16')):
             raise ValueError('input must be samples-by-two float PCM or int16 array')
-        if data.shape[0]*1000 != rate*self.window_ms:
-            raise ValueError('supply exactly one configured window; assemble blocks upstream')
+        if data.shape[0]*1000 != rate*duration_ms:
+            raise ValueError('supply exactly one configured window or stream hop')
         values = data.astype(np.float64)
         if data.dtype == np.int16:
             values /= 32768.
         if not np.isfinite(values).all() or np.abs(values).max() > 1:
             raise ValueError('PCM must be finite and normalized to [-1, 1]')
+        return values
+
+    def process(self, frame):
+        values = self._input(frame, self.window_ms)
+        np, rate = self.np, frame.sample_rate
         values -= values.mean(axis=0)
         direction = dict(available=False, reason=None, delay_seconds=None,
             source_projection_on_baseline=None, cone_angle_degrees=None,
@@ -115,3 +122,68 @@ class GCCPHATDirection:
             source_projection_on_baseline=projection,
             cone_angle_degrees=math.degrees(math.acos(max(-1., min(1., projection)))))
         return {'direction': direction}
+
+
+class GCCPHATStream:
+    """Stateful fixed-hop assembly around the concrete GCC-PHAT window provider."""
+    def __init__(self, *, hop_ms=20, **configuration):
+        window_ms = configuration.get('window_ms', 80)
+        self.spec = self.capability(window_ms=window_ms, hop_ms=hop_ms)
+        self.backend = GCCPHATDirection(**configuration)
+        self.hop_ms = hop_ms
+        self.chunks = deque(maxlen=window_ms//hop_ms)
+        self.closed = False
+        self.continuity_resets = 0
+        self.reset()
+
+    @staticmethod
+    def capability(*, window_ms=80, hop_ms=20):
+        base = GCCPHATDirection.capability(window_ms=window_ms)
+        if type(hop_ms) is not int or not 5 <= hop_ms <= window_ms or window_ms % hop_ms:
+            raise ValueError('hop_ms must be 5..window_ms and divide window_ms exactly')
+        return replace(base, id='audio.gcc_phat.streaming_direction',
+                       provider='gamst.gcc_phat_stream', stateful=True, reset_on_gap=True)
+
+    def reset(self):
+        self.chunks.clear()
+        self.owner = self.last_sequence = self.last_end = self.expected_end = None
+
+    def close(self):
+        self.reset()
+        self.backend.close()
+        self.closed = True
+
+    def process(self, frame):
+        if self.closed:
+            raise RuntimeError('streaming direction provider is closed')
+        try:
+            values = self.backend._input(frame, self.hop_ms)
+        except Exception:
+            self.reset()
+            raise
+        sensor = frame.sensor
+        owner = (frame.subject_id, sensor.source_id, sensor.sensor_id,
+                 sensor.stream_epoch, frame.sample_rate)
+        sequence, end = sensor.sequence, frame.timestamp_ms
+        if self.owner == owner and (sequence <= self.last_sequence or end <= self.last_end):
+            self.reset()
+            raise ValueError('streaming audio sequence and capture end must increase')
+        discontinuity = self.owner is not None and (self.owner != owner or
+            sequence != self.last_sequence+1 or abs(end-(self.expected_end+self.hop_ms)) > 1.)
+        if discontinuity:
+            self.continuity_resets += 1
+            self.reset()
+        self.expected_end = end if self.expected_end is None else self.expected_end+self.hop_ms
+        self.owner, self.last_sequence, self.last_end = owner, sequence, end
+        self.chunks.append((values, sequence))
+        if len(self.chunks) < self.chunks.maxlen:
+            return None
+        assembled = self.backend.np.concatenate([values for values, _ in self.chunks], axis=0)
+        try:
+            result = self.backend.process(replace(frame, data=assembled))
+        except Exception:
+            self.reset()
+            raise
+        result['direction'].update(hop_ms=self.hop_ms, first_sequence=self.chunks[0][1],
+            last_sequence=sequence, continuity_resets=self.continuity_resets)
+        return result
