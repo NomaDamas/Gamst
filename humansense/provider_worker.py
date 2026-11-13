@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'opencv.fill':
+    if profile == 'emotion2vec.seed.onnx':
+        from .providers.vocal_expression import Emotion2VecContext
+        provider = Emotion2VecContext.from_local(**config)
+    elif profile == 'opencv.fill':
         from .providers.fill import CalibratedColorFill
         provider = CalibratedColorFill(**config)
     elif profile == 'openpiv.flow':

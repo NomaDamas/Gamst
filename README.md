@@ -429,3 +429,5 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 [Calibrated planar particle-flow context (OpenPIV)](docs/piv-flow.md).
 
 [Calibrated container level and volume context](docs/calibrated-fill.md).
+
+[Windowed vocal-expression model context](docs/vocal-expression.md).
