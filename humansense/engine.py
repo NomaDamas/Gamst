@@ -592,6 +592,15 @@ class HumanSense:
         return {"paused": False}
 
     async def delete_data(self, subject_id=None):
+        from .streams import _finish
+        cleanup = asyncio.create_task(self._delete_data(subject_id))
+        try:
+            return await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await _finish(cleanup)
+            raise
+
+    async def _delete_data(self, subject_id=None):
         self._generation += 1
         deleted = self.store.delete(subject_id)
         reset_error = None
@@ -629,6 +638,15 @@ class HumanSense:
         return {"deleted_records": deleted, "subject_id": subject_id}
 
     async def _reset_plugins(self):
+        from .streams import _finish
+        cleanup = asyncio.create_task(self._reset_all_plugins())
+        try:
+            return await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await _finish(cleanup)
+            raise
+
+    async def _reset_all_plugins(self):
         errors = []
         for streams in getattr(self, '_sensor_streams', ()):
             try:
@@ -659,6 +677,17 @@ class HumanSense:
         return {"processing_reset": True}
 
     async def close(self):
+        from .streams import _finish
+        task = getattr(self, '_close_task', None)
+        if task is None:
+            task = self._close_task = asyncio.create_task(self._close())
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await _finish(task)
+            raise
+
+    async def _close(self):
         if self.closed:
             return
         self.closed = True

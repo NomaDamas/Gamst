@@ -278,3 +278,30 @@ class Streams(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.human.get_context())['observations'], {})
         with self.assertRaises(ValueError):
             await other.submit(self.frame('s2', 1))
+
+    async def test_cancelled_human_close_finishes_every_manager(self):
+        entered, release = threading.Event(), threading.Event()
+        class Slow(Counter):
+            def process(self, frame):
+                entered.set()
+                release.wait(3)
+                return super().process(frame)
+        first, second = Slow(), Counter()
+        self.runtime.register(spec('imu.first'), lambda: first)
+        await self.runtime.open('s1', 'imu', ['imu.first'])
+        other = SensorStreams(self.human)
+        other.register(spec('imu.second'), lambda: second)
+        await other.open('s2', 'imu', ['imu.second'])
+        await self.runtime.submit(self.frame())
+        self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+        closing = asyncio.create_task(self.human.close())
+        await asyncio.sleep(.01)
+        closing.cancel()
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await closing
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+        self.assertEqual(other.status()['streams'], [])
+        self.assertEqual(self.human._sensor_provider_owners, {})
+        await self.human.close()
