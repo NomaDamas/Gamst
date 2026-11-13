@@ -40,6 +40,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_depth.py -v
       - run: python -m unittest discover -s tests -p test_ocr.py -v
       - run: python -m unittest discover -s tests -p test_visual_retrieval.py -v
+      - run: python -m unittest discover -s tests -p test_region_appearance.py -v
       - run: python -m unittest discover -s tests -p test_landmarker_video.py -v
       - run: python -m unittest discover -s tests -p test_detection_provider.py -v
       - run: python -m unittest discover -s tests -p test_process_provider.py -v

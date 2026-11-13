@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'dinov3.retrieval':
+    if profile == 'dinov3.regions':
+        from .providers.region_appearance import RegionAppearance
+        provider = RegionAppearance.from_local(**config)
+    elif profile == 'dinov3.retrieval':
         from .providers.visual_retrieval import DINOv3Retrieval
         provider = DINOv3Retrieval.from_local(**config)
     elif profile == 'ppocr.mobile':
@@ -90,6 +93,8 @@ def main():
                     result = provider.process(decode_frame(request['frame'], payload))
                     if result is not None:
                         result = spec.validate(result)
+                elif operation == 'process_regions' and provider is not None:
+                    result = spec.validate(provider.process_regions(decode_frame(request['frame'], payload), request['evidence']))
                 elif operation in ('finish', 'endpoint') and provider is not None and not payload:
                     finish = getattr(provider, operation, None)
                     if operation == 'endpoint' and not callable(finish):
