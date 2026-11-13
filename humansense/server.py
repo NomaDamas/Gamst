@@ -11,6 +11,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
+
+from .cadence import ContextCadenceProfile
 
 from .mcp import MAX_MESSAGE_BYTES, MCPServer
 
@@ -24,29 +27,47 @@ async def handle_connection(server, socket):
     streaming = False
     lock = asyncio.Lock()
     publishers = []
+    cadence_profile = ContextCadenceProfile()
     allowed = {"event": "events", "signal": "signals", "inference": "observe"}
 
     async def send(message):
         async with lock:
             await socket.send(json.dumps(message, ensure_ascii=False, allow_nan=False))
 
-    async def publish(kind, context_options):
+    async def publish(kind, context_options, profile):
         if kind == 'context':
-            async for context in server.human.contexts(**context_options):
-                await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
-                            'params': context})
+            profile.running = True
+            try:
+                while not server.human.closed:
+                    started = time.monotonic()
+                    context = await server.human.get_context(subject_id=context_options['subject_id'],
+                                                            window=context_options['window'])
+                    await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
+                                'params': context})
+                    completed = time.monotonic()
+                    profile.record((completed-started)*1000, completed*1000)
+                    await asyncio.sleep(context_options['interval'])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                profile.failures += 1
+                raise
+            finally:
+                profile.running = False
             return
         async for record in getattr(server.human, allowed[kind])():
             await send({"jsonrpc": "2.0", "method": f"notifications/humansense/{kind}", "params": record})
 
     async def subscribe(kinds, context_options=None):
+        nonlocal cadence_profile
         context_options = context_options or {}
         for task in publishers:
             task.cancel()
         if publishers:
             await asyncio.gather(*publishers, return_exceptions=True)
         publishers.clear()
-        publishers.extend(asyncio.create_task(publish(kind, context_options)) for kind in kinds)
+        cadence_profile = ContextCadenceProfile(round(context_options['interval']*1000) if 'context' in kinds else None)
+        publishers.extend(asyncio.create_task(publish(kind, context_options, cadence_profile)) for kind in kinds)
         await asyncio.sleep(0)  # Register runtime iterators before acknowledging.
 
     await subscribe(["event"])
@@ -90,6 +111,14 @@ async def handle_connection(server, socket):
                                 response = {"jsonrpc": "2.0", "id": ident, "result": result}
                             except (ValueError, TypeError, OverflowError) as exc:
                                 response = server.error(ident, -32602, str(exc))
+                elif isinstance(request, dict) and request.get('method') == 'humansense/context_profile':
+                    ident = request.get('id')
+                    if request.get('jsonrpc') != '2.0' or type(ident) not in (str, int):
+                        response = server.error(None, -32600, 'Profile requires a JSON-RPC request ID')
+                    elif request.get('params', {}) != {}:
+                        response = server.error(ident, -32602, 'Profile takes no parameters')
+                    else:
+                        response = {'jsonrpc': '2.0', 'id': ident, 'result': cadence_profile.snapshot()}
                 elif isinstance(request, dict) and request.get('method') in (
                         'humansense/stream/start', 'humansense/stream/stop', 'humansense/stream/status', 'humansense/media'):
                     ident = request.get('id')
