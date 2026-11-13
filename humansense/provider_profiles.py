@@ -6,6 +6,12 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'depth_anything_v2.small':
+        from .providers.depth import DepthAnythingContext
+        if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','grid_size'} or
+                type(config['path']) is not str):
+            raise ValueError('depth profile requires path, sha256 and optional grid_size')
+        return DepthAnythingContext.capability(config['sha256'],grid_size=config.get('grid_size',3))
     if profile == 'l2cs.gaze':
         from .providers.gaze import L2CSGaze
         required = {'path','sha256','face_path','face_sha256'}
@@ -70,4 +76,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand, mediapipe.face or their .video profiles, l2cs.gaze')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body, mediapipe.hand, mediapipe.face or their .video profiles, l2cs.gaze, depth_anything_v2.small')

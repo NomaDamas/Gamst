@@ -37,6 +37,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_hand_context.py -v
       - run: python -m unittest discover -s tests -p test_face_context.py -v
       - run: python -m unittest discover -s tests -p test_gaze.py -v
+      - run: python -m unittest discover -s tests -p test_depth.py -v
       - run: python -m unittest discover -s tests -p test_landmarker_video.py -v
       - run: python -m unittest discover -s tests -p test_detection_provider.py -v
       - run: python -m unittest discover -s tests -p test_process_provider.py -v
