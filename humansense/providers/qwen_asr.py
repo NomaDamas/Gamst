@@ -103,9 +103,11 @@ class QwenStreamingASR:
             status='final' if final else 'partial', start_ms=self.start_ms,
             end_ms=self.start_ms+decoded_ms, language=language)
 
-    def process(self, frame):
+    def process(self, frame, *, endpoint=None):
         if self.closed: raise RuntimeError('ASR provider is closed')
         try:
+            if endpoint not in (None, 'manual_endpoint', 'vad_endpoint'):
+                raise ValueError('endpoint must be manual_endpoint, vad_endpoint or None')
             np, sensor, data = self.np, frame.sensor, frame.data
             if frame.modality != 'audio' or type(frame.sample_rate) is not int or frame.sample_rate != 16000:
                 raise ValueError('Qwen streaming requires 16 kHz mono PCM')
@@ -134,6 +136,8 @@ class QwenStreamingASR:
             self.engine.streaming_transcribe(values, self.state)
             if self.elapsed_ms == self.max_segment_ms:
                 return self._finish_segment('segment_limit')
+            if endpoint is not None:
+                return self._finish_segment(endpoint)
             return self._update(False)
         except Exception:
             self.reset()

@@ -60,8 +60,8 @@ class TranscriptMemory:
         if value['status'] not in ('partial', 'final'):
             raise ValueError('status must be partial or final')
         if 'finalization_reason' in value:
-            if value['status'] != 'final' or value['finalization_reason'] not in ('input_end', 'segment_limit'):
-                raise ValueError('finalization_reason requires a final with input_end or segment_limit')
+            if value['status'] != 'final' or value['finalization_reason'] not in ('input_end', 'segment_limit', 'manual_endpoint', 'vad_endpoint'):
+                raise ValueError('finalization_reason requires a final with a supported endpoint reason')
         identifier(value['language'], 'language')
         if len(value['language']) > 32:
             raise ValueError('language identifier too long')

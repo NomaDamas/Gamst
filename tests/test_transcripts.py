@@ -38,7 +38,7 @@ class TranscriptReducer(unittest.TestCase):
             self.put(memory, record(update('invented', 3, 'final'), 4))
 
     def test_finalization_reason_validation_retention_and_immutability(self):
-        for reason in ('input_end','segment_limit'):
+        for reason in ('input_end','segment_limit','manual_endpoint','vad_endpoint'):
             memory=TranscriptMemory()
             self.put(memory,record())
             before=memory.snapshot('user',now_ms=2000)
