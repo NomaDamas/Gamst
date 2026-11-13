@@ -183,7 +183,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         key = (frame.sensor.source_id, frame.sensor.sensor_id)
         # No awaits while validating/enqueuing: lifecycle mutations cannot interleave.
         stream = self.streams.get(key)
-        if stream is None or stream.get('closing'):
+        if stream is None or stream.get('closing') or stream.get('finishing'):
             raise ValueError('sensor stream is not open')
         if frame.subject_id != stream['subject'] or frame.modality != stream['modality']:
             raise ValueError('frame does not match stream owner/modality')
@@ -244,6 +244,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 if result is not None:
                     await self.human.push_observation(lane['spec'].id, result, sensor=frame.sensor,
                         subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+                lane['last_capture'] = (replace(frame, data=None), generation)
                 lane['processed'] += 1
                 lane['last_latency_ms'] = round((time.monotonic()-started)*1000, 3)
             except asyncio.CancelledError:
@@ -264,7 +265,91 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
     async def drain(self):
         await asyncio.gather(*(l['queue'].join() for s in self.streams.values() for l in s['lanes']))
 
+    async def finish(self, source_id, sensor_id):
+        """Drain, finalize eligible providers once, then terminally close this stream.
+
+        Cancellation waits for owned workers, suppresses late finals and closes the
+        stream. Other existing streams can continue processing while this waits.
+        """
+        identifier(source_id); identifier(sensor_id)
+        control = {'cancelled': False}
+        task = asyncio.create_task(self._finish_stream(source_id, sensor_id, control))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            control['cancelled'] = True
+            if 'stream' in control:
+                control['stream']['closing'] = True
+            try:
+                await _finish(task)
+            finally:
+                raise
+
+    async def _finish_stream(self, source_id, sensor_id, control):
+        key = (source_id, sensor_id)
+        async with self._lock:
+            if control['cancelled']:
+                return None
+            self.human._check()
+            stream = self.streams.get(key)
+            if self.closed or stream is None or stream.get('closing'):
+                raise ValueError('sensor stream is not open')
+            stream['finishing'] = True
+            control['stream'] = stream
+            generation = self.human._generation
+            published, skipped, errors = [], [], []
+            try:
+                await asyncio.gather(*(lane['queue'].join() for lane in stream['lanes']))
+                for lane in stream['lanes']:
+                    finish = getattr(lane['provider'], 'finish', None)
+                    captured = lane.get('last_capture')
+                    valid = (not control['cancelled'] and not stream.get('closing') and not self.closed and
+                        generation == self.human._generation and not self.human.paused and
+                        not self.human.closed and not lane['gap'] and captured is not None and
+                        captured[1] == generation)
+                    if not callable(finish) or not valid:
+                        skipped.append(lane['spec'].id)
+                        continue
+                    frame = captured[0]
+                    try:
+                        # This stream terminates; reserve a distinct output sequence
+                        # without injecting or inventing another captured audio frame.
+                        sensor = replace(frame.sensor, sequence=stream['sequence']+1)
+                        result = await _call(finish)
+                        if (control['cancelled'] or stream.get('closing') or self.closed or self.human.closed or
+                            self.human.paused or generation != self.human._generation):
+                            skipped.append(lane['spec'].id)
+                            continue
+                        if result is not None:
+                            await self.human.push_observation(lane['spec'].id, result,
+                                sensor=sensor, subject_id=frame.subject_id,
+                                timestamp_ms=frame.timestamp_ms)
+                            published.append(lane['spec'].id)
+                    except Exception as exc:
+                        lane['errors'] += 1
+                        lane['last_error'] = type(exc).__name__
+                        errors.append(exc)
+            finally:
+                stream['closing'] = True
+                for lane in stream['lanes']:
+                    self.human.object_memory.invalidate_visibility(*key, lane['spec'].id)
+                    self.human.transcript_memory.interrupt(*key, lane['spec'].id,
+                        subject_id=stream['subject'], epoch=lane['epoch'])
+                    try:
+                        await self._dispose(lane['provider'])
+                    except Exception as exc:
+                        errors.append(exc)
+                del self.streams[key]
+            if errors:
+                raise RuntimeError('sensor stream finalization failed') from errors[0]
+            return {'closed': True, 'published': published, 'skipped': skipped}
+
     async def clear(self, source_id=None, sensor_id=None):
+        # Abort intent must be visible before waiting behind a finalizer's lock.
+        # Provider disposal stays serialized; no worker is reset while running.
+        for key, stream in self.streams.items():
+            if (source_id is None or key[0] == source_id) and (sensor_id is None or key[1] == sensor_id):
+                stream['closing'] = True
         cleanup = asyncio.create_task(self._clear(source_id, sensor_id))
         try:
             await asyncio.shield(cleanup)

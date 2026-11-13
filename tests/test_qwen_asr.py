@@ -6,7 +6,7 @@ try:
 except ImportError:
     np = None
 from humansense.providers.qwen_asr import QwenStreamingASR
-from humansense import HumanSense, SensorMetadata
+from humansense import HumanSense, SensorMetadata, SensorStreams
 from humansense.plugins import InputFrame
 from humansense.schema import timestamp
 
@@ -123,3 +123,22 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             snapshot=await human.get_transcripts()
             self.assertEqual(snapshot['utterances'][0]['update']['text'],'!')
             self.assertEqual(snapshot['utterances'][0]['status'],'final')
+
+    async def test_managed_stream_finish_flushes_qwen_tail(self):
+        async with HumanSense(consent=True) as human:
+            engine=EngineDouble(); p=provider(engine)
+            streams=SensorStreams(human)
+            streams.register(p.spec,lambda:p)
+            await streams.open('fixture','mic',[p.spec.id])
+            start=timestamp()-1000
+            for i in range(11):
+                await streams.submit(frame(i,start)); await streams.drain()
+            result=await streams.finish('fixture','mic')
+            self.assertEqual(result['published'],[p.spec.id])
+            entry=(await human.get_transcripts())['utterances'][0]
+            self.assertEqual(entry['status'],'final')
+            self.assertEqual(entry['update']['text'],'안녕하세요!')
+            self.assertEqual(entry['sequence'],11)
+            self.assertEqual(entry['update']['end_ms'],start+220)
+            self.assertEqual(engine.flushes,1)
+            self.assertTrue(p.closed)
