@@ -38,7 +38,7 @@ Resource mode additionally requires `resource_cost` in the declared unit. Scores
 python3 -m benchmarks.perception_comparison --plan plan.json --rows traces.json --plan-sha256 FROZEN_HASH
 ```
 
-Each input file is capped at 16 MiB. Missing/duplicate task pairs and mismatched inputs/plans are errors, so failed/slow tasks cannot be silently removed. A failed task must still be represented and scored under the predeclared failure protocol; do not replace failure latency with a fast successful-subset result. This evaluator consumes trace files. The [paired command collector](paired-replay.md) now records frozen inputs and complete execution pairs as unscored source traces. Concrete provider instrumentation, audited scoring/accounting joins and real paired inference acceptance remain open in #57/#10.
+Each input file is capped at 16 MiB. Missing/duplicate task pairs and mismatched inputs/plans are errors, so failed/slow tasks cannot be silently removed. A failed task must still be represented and scored under the predeclared failure protocol; do not replace failure latency with a fast successful-subset result. This evaluator consumes trace files. The [paired command collector](paired-replay.md) now records frozen inputs and complete execution pairs as unscored source traces. The [evidence join](replay-evidence.md) verifies trace-bound external assessments without certifying their truth. Concrete provider instrumentation, independently audited scoring/accounting evidence and real paired inference acceptance remain open in #57/#10.
 
 ## Gates and uncertainty
 
