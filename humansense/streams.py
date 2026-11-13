@@ -9,7 +9,7 @@ import math
 import time
 import uuid
 
-from .capabilities import SensorMetadata, bounded_json, identifier
+from .capabilities import CapabilitySpec, SensorMetadata, bounded_json, identifier
 from .plugins import InputFrame
 from .schema import timestamp
 
@@ -154,6 +154,9 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                                 task=None, gap=False, accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
                     lanes.append(lane)
+                    declared = getattr(provider, 'spec', None)
+                    if isinstance(declared, CapabilitySpec) and declared != spec:
+                        raise ValueError('provider contract differs from registered capability')
                     if not callable(getattr(provider, 'process', None)):
                         raise ValueError('provider must implement process')
                     if spec.stateful and not callable(getattr(provider, 'reset', None)):
