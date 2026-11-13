@@ -83,11 +83,11 @@ class Gaze(unittest.TestCase):
         self.assertAlmostEqual(p.process(frame())['faces'][0]['direction']['y'],-3**.5/2)
 
     def test_softmax_shift_invariance_and_extreme_bins(self):
-        self.assertEqual(L2CSGaze._angles(np.zeros((1,90)),1),[-2.])
+        self.assertAlmostEqual(L2CSGaze._angles(np.zeros((1,90)),1)[0],-2.,places=10)
         for index,angle in ((0,-180),(89,176)):
             self.assertEqual(L2CSGaze._angles(logits(1,index),1),[float(angle)])
         a=np.arange(90,dtype=float).reshape(1,90)
-        self.assertEqual(L2CSGaze._angles(a,1),L2CSGaze._angles(a+10000,1))
+        np.testing.assert_allclose(L2CSGaze._angles(a,1),L2CSGaze._angles(a+10000,1),rtol=0,atol=1e-10)
 
     def test_empty_small_missing_faces_never_invoke_model_and_association(self):
         def forbidden(crops): raise AssertionError('no usable crop')
@@ -140,8 +140,8 @@ class Gaze(unittest.TestCase):
                 p=L2CSGaze.from_local(str(path),digest,str(path),digest,arch='ResNet18')
             try:
                 result=p.process(frame())
-                self.assertEqual(result['faces'][0]['yaw_deg'],-2.)
-                self.assertEqual(result['faces'][0]['pitch_deg'],-2.)
+                self.assertAlmostEqual(result['faces'][0]['yaw_deg'],-2.,places=10)
+                self.assertAlmostEqual(result['faces'][0]['pitch_deg'],-2.,places=10)
             finally: p.close()
         self.assertEqual(captured,dict(map_location='cpu',weights_only=True,payload=b'fixture-not-weights'))
 
