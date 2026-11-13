@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'depth_anything_v2.small':
+    if profile == 'ppocr.mobile':
+        from .providers.ocr import PPOCRContext
+        provider = PPOCRContext.from_local(**config)
+    elif profile == 'depth_anything_v2.small':
         from .providers.depth import DepthAnythingContext
         provider = DepthAnythingContext.from_local(**config)
     elif profile == 'l2cs.gaze':
