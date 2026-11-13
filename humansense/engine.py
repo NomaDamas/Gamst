@@ -623,6 +623,8 @@ class HumanSense:
         return {"deleted_records": deleted, "subject_id": subject_id}
 
     async def _reset_plugins(self):
+        for streams in getattr(self, '_sensor_streams', ()):
+            await streams.clear()
         if hasattr(self, "_media_router"):
             await self._media_router.clear()
         for plugin in self.plugins:
@@ -651,6 +653,11 @@ class HumanSense:
             queue.put_nowait(None)
         errors = []
         try:
+            for streams in getattr(self, '_sensor_streams', ()):
+                try:
+                    await streams.close()
+                except Exception as exc:
+                    errors.append(exc)
             for plugin in self.plugins:
                 close = getattr(plugin, "close", None)
                 if close:

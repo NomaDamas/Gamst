@@ -3,8 +3,10 @@ from .engine import HumanSense, PerceptionPlugin
 from .schema import SCHEMA_VERSION, validate_output
 from .feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
 from .capabilities import CapabilitySpec, CapabilityRegistry, OutputField, SensorMetadata
+from .streams import SensorStreams
 
 Observer = HumanSense
 __version__ = "0.3.1"
 __all__ = ["HumanSense", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]
 __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetadata']
+__all__ += ['SensorStreams']
