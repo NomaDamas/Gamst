@@ -158,13 +158,14 @@ class SensorMetadata:
     coordinate_frame: str | None = None
     channels: tuple[str, ...] = ()
     calibration_id: str | None = None
+    stream_epoch: str | None = None
 
     def __post_init__(self):
         identifier(self.source_id, 'source_id')
         identifier(self.sensor_id, 'sensor_id')
         if type(self.sequence) is not int or not 0 <= self.sequence <= 2**63-1:
             raise ValueError('sequence must be a nonnegative 64-bit integer')
-        for key in ('coordinate_frame', 'calibration_id'):
+        for key in ('coordinate_frame', 'calibration_id', 'stream_epoch'):
             if getattr(self, key) is not None:
                 identifier(getattr(self, key), key)
         if type(self.channels) is not tuple or len(self.channels) > 64:

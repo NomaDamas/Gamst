@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import math
 import re
+import uuid
 from collections import Counter
 from copy import deepcopy
 
@@ -12,6 +13,7 @@ from .schema import envelope, hypothesis, timestamp, validate_output
 from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata
+from .memory import ObjectMemory
 from dataclasses import asdict
 
 
@@ -57,9 +59,11 @@ class HumanSense:
         self._analysis_results = {}
         self.plugins = []
         self.perception_capabilities = CapabilityRegistry()
+        self.object_memory = ObjectMemory()
         self._subscribers = set()
         self._last_ts = {}
         self._generation = 0
+        self._session_id = uuid.uuid4().hex
         self._metric_directions = {}
         self.dropped_records = 0
         self.plugin_errors = []
@@ -208,7 +212,8 @@ class HumanSense:
         if contract is not None:
             sensor_data = asdict(sensor)
             sensor_data['channels'] = list(sensor.channels)
-            observation.update(capability=contract, sensor=sensor_data)
+            observation.update(capability=contract, sensor=sensor_data,
+                               processing_epoch=f'{self._session_id}:{self._generation}')
         record = self._record("observation.signal", subject_id, ts,
             observation=observation,
             models=[{"id": model_id, "version": model_version, "backend": "plugin"}], quality=quality)
@@ -570,6 +575,30 @@ class HumanSense:
     async def summarize(self, **kwargs):
         return await self.get_context(**kwargs)
 
+    async def remember_objects(self, record_id, *, objects_field='objects', complete_snapshot=True):
+        """Remember only a stored registered observation, retaining its evidence."""
+        self._check()
+        if not isinstance(record_id, str) or len(record_id) > 128:
+            raise ValueError('invalid evidence ID')
+        records = self.store.get_many([record_id])
+        if not records:
+            raise ValueError('observation evidence is not retained in this runtime')
+        observation = records[0]['observation']
+        live = observation.get('processing_epoch') == f'{self._session_id}:{self._generation}'
+        epoch = observation.get('sensor', {}).get('stream_epoch')
+        if epoch is not None:
+            live = live and any(lane.get('epoch') == epoch and not s.get('closing')
+                for manager in getattr(self, '_sensor_streams', ()) for s in manager.streams.values()
+                for lane in s['lanes'])
+        return self.object_memory.observe(records[0],
+            objects_field=objects_field, complete_snapshot=complete_snapshot,
+            live=live)
+
+    async def find_objects(self, *, subject_id='local-user', text=None, entity_id=None, limit=20):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        return self.object_memory.find(subject_id=subject_id, text=text, entity_id=entity_id, limit=limit)
+
     async def inspect_interval(self, start_ms, end_ms, subject_id="local-user"):
         if start_ms > end_ms:
             raise ValueError("start_ms must not exceed end_ms")
@@ -603,6 +632,7 @@ class HumanSense:
     async def _delete_data(self, subject_id=None):
         self._generation += 1
         deleted = self.store.delete(subject_id)
+        self.object_memory.clear(subject_id)
         reset_error = None
         try:
             await self._reset_plugins()
@@ -647,6 +677,7 @@ class HumanSense:
             raise
 
     async def _reset_all_plugins(self):
+        self.object_memory.invalidate_visibility()
         errors = []
         for streams in getattr(self, '_sensor_streams', ()):
             try:
@@ -691,6 +722,7 @@ class HumanSense:
         if self.closed:
             return
         self.closed = True
+        self.object_memory.clear()
         self._generation += 1
         if hasattr(self, "_media_router"):
             await self._media_router.clear()

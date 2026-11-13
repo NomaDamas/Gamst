@@ -7,6 +7,7 @@ import inspect
 import json
 import math
 import time
+import uuid
 
 from .capabilities import SensorMetadata, bounded_json, identifier
 from .plugins import InputFrame
@@ -149,6 +150,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     # Reserve before awaiting the next factory, including across managers.
                     owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
+                                epoch=uuid.uuid4().hex,
                                 task=None, gap=False, accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
                     lanes.append(lane)
@@ -158,7 +160,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         raise ValueError('stateful provider must implement reset')
                 self.human._check()
                 self.streams[key] = dict(subject=subject_id, modality=specs[0].modality,
-                                        sequence=-1, timestamp=-1, lanes=lanes, generation=0)
+                                        sequence=-1, timestamp=-1, lanes=lanes, epoch=uuid.uuid4().hex)
             except BaseException:
                 errors = []
                 for lane in lanes:
@@ -181,6 +183,9 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             raise ValueError('sensor stream is not open')
         if frame.subject_id != stream['subject'] or frame.modality != stream['modality']:
             raise ValueError('frame does not match stream owner/modality')
+        if frame.sensor.stream_epoch not in (None, stream['epoch']):
+            raise ValueError('frame belongs to another stream epoch')
+        frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=stream['epoch']))
         ts = timestamp(frame.timestamp_ms)
         if ts < stream['timestamp'] or ts > timestamp()+5000 or frame.sensor.sequence <= stream['sequence']:
             raise ValueError('capture time and sequence must advance within the stream')
@@ -221,7 +226,11 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     lane['gap'] = False
                     if lane['spec'].stateful:
                         await _call(lane['provider'].reset)
+                        lane['epoch'] = uuid.uuid4().hex
+                        self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
+                            frame.sensor.sensor_id, lane['spec'].id)
                         lane['resets'] += 1
+                frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
                 result = await _call(lane['provider'].process, frame)
                 if generation != self.human._generation or stream.get('closing') or self.human.paused or self.human.closed:
                     continue
@@ -236,6 +245,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 lane['errors'] += 1
                 lane['last_error'] = type(exc).__name__
                 lane['gap'] = True
+                self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
+                    frame.sensor.sensor_id, lane['spec'].id)
             finally:
                 self.buffer_bytes -= size
                 queue.task_done()
@@ -259,6 +270,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             for key in keys:
                 stream = self.streams[key]
                 stream['closing'] = True
+                self.human.object_memory.invalidate_visibility(*key)
                 for lane in stream['lanes']:
                     if lane['task']:
                         lane['task'].cancel()
