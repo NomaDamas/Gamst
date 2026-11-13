@@ -36,9 +36,14 @@ class ProcessProvider:
         self._process = None
         self._close_task = None
         self._sequence, self.closed = 0, False
+        worker_environment = os.environ.copy()
+        if profile == 'qwen3.asr':
+            worker_environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
+                                      HF_HUB_DISABLE_TELEMETRY='1', VLLM_NO_USAGE_STATS='1',
+                                      VLLM_ENABLE_V1_MULTIPROCESSING='0')
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
             'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL))
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment))
         try:
             self._process = await asyncio.shield(spawn)
             response = await self._request('start', profile=profile, config=self.config,

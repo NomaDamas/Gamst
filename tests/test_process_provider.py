@@ -84,6 +84,21 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             return process
         return patch('asyncio.create_subprocess_exec', spawn)
 
+    async def test_qwen_profile_offline_environment_is_child_local(self):
+        import os
+        from humansense.qwen_artifact import REQUIRED
+        before = dict(os.environ)
+        code = FAKE_WORKER.replace('w.main()',
+            "assert os.environ['HF_HUB_OFFLINE'] == '1'\n"
+            "assert os.environ['TRANSFORMERS_OFFLINE'] == '1'\n"
+            "assert os.environ['VLLM_ENABLE_V1_MULTIPROCESSING'] == '0'\n"
+            "w.main()")
+        config = dict(path='/fixture-not-installed', files={name:'0'*64 for name in REQUIRED})
+        with self.fixture(code):
+            provider = await ProcessProvider.open(sys.executable, 'qwen3.asr', config)
+            await provider.close()
+        self.assertEqual(dict(os.environ), before)
+
     async def test_finish_roundtrip_and_absent_finalizer(self):
         code = FAKE_WORKER.replace('    def reset(self): pass',
             "    def finish(self): return {'features': {'final': True}}\n    def reset(self): pass")

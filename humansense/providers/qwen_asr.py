@@ -39,6 +39,31 @@ class QwenStreamingASR:
         self.closed = False
         self.reset()
 
+    @classmethod
+    def from_local(cls, path, files):
+        """Load a verified fixed-profile bundle in an already offline runtime."""
+        import os
+        import importlib.metadata
+        from ..qwen_artifact import verify_bundle
+        root, version = verify_bundle(path, files)
+        if any(os.environ.get(key) != '1' for key in ('HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE')):
+            raise RuntimeError('start the selected ASR runtime with HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1 before imports')
+        if os.environ.get('VLLM_ENABLE_V1_MULTIPROCESSING') != '0':
+            raise RuntimeError('set VLLM_ENABLE_V1_MULTIPROCESSING=0 before imports for this owned-worker profile')
+        for package, expected in (('qwen-asr', '0.0.6'), ('vllm', '0.14.0'), ('transformers', '4.57.6')):
+            try:
+                installed = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError as exc:
+                raise RuntimeError(f'install {package}=={expected} in the explicitly selected ASR runtime') from exc
+            if installed != expected:
+                raise RuntimeError(f'this source-audited profile requires {package}=={expected}')
+        from qwen_asr import Qwen3ASRModel
+        engine = Qwen3ASRModel.LLM(model=root, tokenizer=root, trust_remote_code=False,
+            load_format='safetensors', max_inference_batch_size=1, max_new_tokens=128,
+            gpu_memory_utilization=0.5, max_num_seqs=1, enforce_eager=True,
+            tensor_parallel_size=1, pipeline_parallel_size=1, distributed_executor_backend='uni')
+        return cls(engine, model_version=version)
+
     @staticmethod
     def capability(model_version, *, chunk_ms=2000):
         if type(chunk_ms) is not int or not 100 <= chunk_ms <= 2000:
