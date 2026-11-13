@@ -97,6 +97,29 @@ class Comparison(unittest.TestCase):
         self.assertLess(result['paired_bootstrap_95']['quality_delta'][0], 0)
         self.assertFalse(result['gates']['quality'])
 
+    def test_strict_cost_boundary_does_not_round_into_a_pass(self):
+        from decimal import Decimal, localcontext
+        for tiny_price in (1e-15, 1e-300):
+            plan, rows = fixture('measured')
+            plan['cost']['per_million'] = dict(input_tokens=1, output_tokens=tiny_price,
+                cache_read_tokens=0, cache_write_tokens=0)
+            for row in rows:
+                candidate = row['system'] == 'candidate'
+                row['plan_sha256'] = plan_digest(plan)
+                row['usage'] = dict(input_tokens=80 if candidate else 100,
+                    output_tokens=1 if candidate else 0, cache_read_tokens=0,
+                    cache_write_tokens=0, calls=1)
+            with localcontext() as context:
+                context.prec = 6
+                result = self.run_case(plan, rows)
+            self.assertEqual(result['point']['cost_ratio'], .8)  # display rounding only
+            self.assertGreater(Decimal(result['exact_point']['cost_ratio']), Decimal('.8'))
+            self.assertFalse(result['gates']['cost'])
+            self.assertFalse(result['meets_numeric_gates'])
+            for row in rows:
+                row['usage']['output_tokens'] = 0
+            self.assertTrue(self.run_case(plan, rows)['gates']['cost'])
+
     def test_all_prices_required_and_small_sample_not_accepted(self):
         plan, rows = fixture()
         del plan['cost']['per_million']['cache_write_tokens']

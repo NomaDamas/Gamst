@@ -3,7 +3,7 @@
 This computes evidence; it never runs a model or certifies trace authenticity.
 """
 import argparse
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 import hashlib
 import json
 import math
@@ -40,6 +40,13 @@ def _percentile(values, fraction):
 
 def compare(plan, rows, *, expected_plan_sha256):
     """All rows must match the same predeclared plan and complete paired tasks."""
+    # Covers the full accepted float exponent range plus sums of 1000 pairs;
+    # caller decimal-context changes must not weaken strict threshold checks.
+    with localcontext(Context(prec=400)):
+        return _compare(plan, rows, expected_plan_sha256=expected_plan_sha256)
+
+
+def _compare(plan, rows, *, expected_plan_sha256):
     digest = plan_digest(plan)
     if digest != _digest(expected_plan_sha256):
         raise ValueError('plan differs from frozen digest')
@@ -129,20 +136,28 @@ def compare(plan, rows, *, expected_plan_sha256):
         paired[task_id, system] = row
     pairs = [(paired[t['id'], 'baseline'], paired[t['id'], 'candidate']) for t in tasks]
 
-    def row_cost(row):
+    # Charge and convert each row once, not once per bootstrap draw.
+    numeric = {}
+    for key, row in paired.items():
         if mode == 'priced':
-            return sum(Decimal(row['usage'][key])*Decimal(str(rates[key]))/Decimal(1000000)
-                       for key in charges)
-        return row.get('resource_cost') if mode == 'resource' else None
+            charge = sum(Decimal(row['usage'][k])*Decimal(str(rates[k]))/Decimal(1000000)
+                         for k in charges)
+        else:
+            charge = Decimal(str(row['resource_cost'])) if mode == 'resource' else None
+        numeric[key] = (charge, Decimal(str(row['latency_ms'])), Decimal(str(row['quality_score'])))
+
+    def row_cost(row):
+        return numeric[row['task_id'], row['system']][0]
 
     def metrics(sample):
-        baseline, candidate = zip(*sample)
-        bcost = sum(row_cost(r) for r in baseline) if mode != 'unknown' else None
-        ccost = sum(row_cost(r) for r in candidate) if mode != 'unknown' else None
-        return dict(cost_ratio=float(ccost/bcost) if bcost else None,
-            latency_ratio=_percentile([r['latency_ms'] for r in candidate], .95)/
-                          _percentile([r['latency_ms'] for r in baseline], .95),
-            quality_delta=sum(c['quality_score']-b['quality_score'] for b, c in sample)/len(sample))
+        baseline = [numeric[b['task_id'], 'baseline'] for b, _ in sample]
+        candidate = [numeric[c['task_id'], 'candidate'] for _, c in sample]
+        bcost = sum(r[0] for r in baseline) if mode != 'unknown' else None
+        ccost = sum(r[0] for r in candidate) if mode != 'unknown' else None
+        return dict(cost_ratio=ccost/bcost if bcost else None,
+            latency_ratio=_percentile([r[1] for r in candidate], .95)/
+                          _percentile([r[1] for r in baseline], .95),
+            quality_delta=sum(c[2]-b[2] for b, c in zip(baseline, candidate))/len(sample))
 
     point = metrics(pairs)
     rng = random.Random(seed)
@@ -157,9 +172,9 @@ def compare(plan, rows, *, expected_plan_sha256):
                if f not in paired[t['id'], 'candidate']['correct_critical_facts']]
     gates = dict(measured_held_out=evidence == 'measured' and plan['held_out'],
         sample_count=len(pairs) >= minimum, critical_facts=critical_count > 0 and not missing,
-        cost=point['cost_ratio'] is not None and point['cost_ratio'] <= .8 and
-             intervals['cost_ratio'] is not None and intervals['cost_ratio'][1] <= .8,
-        latency=point['latency_ratio'] <= .9 and intervals['latency_ratio'][1] <= .9,
+        cost=point['cost_ratio'] is not None and point['cost_ratio'] <= Decimal('.8') and
+             intervals['cost_ratio'] is not None and intervals['cost_ratio'][1] <= Decimal('.8'),
+        latency=point['latency_ratio'] <= Decimal('.9') and intervals['latency_ratio'][1] <= Decimal('.9'),
         quality=point['quality_delta'] >= 0 and intervals['quality_delta'][0] >= 0)
     summaries = {}
     for system in systems:
@@ -168,12 +183,16 @@ def compare(plan, rows, *, expected_plan_sha256):
             latency_p95_ms=_percentile([r['latency_ms'] for r in selected], .95),
             quality_mean=sum(r['quality_score'] for r in selected)/len(selected),
             cost=(str(sum(row_cost(r) for r in selected)) if mode == 'priced' else
-                  sum(row_cost(r) for r in selected) if mode == 'resource' else None),
+                  float(sum(row_cost(r) for r in selected)) if mode == 'resource' else None),
             usage={k: sum(r['usage'][k] for r in selected) for k in (*charges, 'calls')},
             peak_memory_bytes=max(r['peak_memory_bytes'] for r in selected),
             dropped_frames=sum(r['dropped_frames'] for r in selected))
     return dict(plan_sha256=digest, pairs=len(pairs), evidence=evidence, summaries=summaries,
-        point=point, paired_bootstrap_95=intervals, gates=gates,
+        point={k: float(v) if v is not None else None for k, v in point.items()},
+        paired_bootstrap_95={k: [float(v) for v in bounds] if bounds else None for k, bounds in intervals.items()},
+        exact_point={k: str(v) if v is not None else None for k, v in point.items()},
+        exact_paired_bootstrap_95={k: [str(v) for v in bounds] if bounds else None for k, bounds in intervals.items()},
+        gates=gates,
         meets_numeric_gates=all(gates.values()), missing_critical_facts=missing,
         certification='Trace authenticity, held-out provenance and scoring require independent audit; this is not an inference runner.')
 
