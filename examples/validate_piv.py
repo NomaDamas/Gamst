@@ -27,7 +27,7 @@ def run(args):
         # Execute only verified bytes, avoiding a second mutable-path read.
         module=types.ModuleType('verified_openpiv_reference')
         exec(compile(payload,'verified_openpiv_pyprocess.py','exec'),module.__dict__)
-        provider=OpenPIVFlow(module.extended_search_area_piv,**config)
+        provider=OpenPIVFlow(OpenPIVFlow._scipy_backend(module),**config)
         mode='pinned_core_source_not_installed_package'
     else:
         provider=OpenPIVFlow.from_installed(**config)

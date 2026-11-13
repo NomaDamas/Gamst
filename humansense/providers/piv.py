@@ -52,8 +52,16 @@ class OpenPIVFlow:
             raise RuntimeError('Install optional humansense-sdk[piv] in the selected runtime; OpenPIV is absent') from exc
         if installed != '0.26.1':
             raise RuntimeError('OpenPIV provider requires exactly openpiv==0.26.1')
-        from openpiv.pyprocess import extended_search_area_piv
-        return cls(extended_search_area_piv, **config)
+        from openpiv import pyprocess
+        return cls(cls._scipy_backend(pyprocess), **config)
+
+    @staticmethod
+    def _scipy_backend(module):
+        # 0.26.1 scalar subpixel calls omit backend forwarding and default to auto.
+        # Refuse that alternate numerical path; never mutate shared upstream globals.
+        if getattr(module, 'HAS_RUST', None) is not False:
+            raise RuntimeError('OpenPIV flow requires a dedicated runtime without optional openpiv_rust; upstream scalar subpixel dispatch can otherwise select Rust implicitly')
+        return module.extended_search_area_piv
 
     def _clear(self):
         self._previous = self._owner = self._last = None

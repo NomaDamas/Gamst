@@ -49,10 +49,14 @@ class PIVTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'absent'):OpenPIVFlow.from_installed(**CONFIG)
         with patch('importlib.metadata.version',return_value='0.25'):
             with self.assertRaisesRegex(RuntimeError,'0.26.1'):OpenPIVFlow.from_installed(**CONFIG)
-        package=types.ModuleType('openpiv');module=types.ModuleType('openpiv.pyprocess');module.extended_search_area_piv=backend
+        package=types.ModuleType('openpiv');module=types.ModuleType('openpiv.pyprocess');module.extended_search_area_piv=backend;module.HAS_RUST=False
         with patch('importlib.metadata.version',return_value='0.26.1'),patch.dict(sys.modules,{'openpiv':package,'openpiv.pyprocess':module}):
             p=OpenPIVFlow.from_installed(**CONFIG)
             self.assertIs(p.backend,backend);p.close()
+            module.HAS_RUST=True
+            with self.assertRaisesRegex(RuntimeError,'without optional openpiv_rust'):
+                OpenPIVFlow.from_installed(**CONFIG)
+            self.assertTrue(module.HAS_RUST)
 
     def test_units_directions_pair_and_owned_inputs(self):
         calls=[]

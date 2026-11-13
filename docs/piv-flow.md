@@ -34,6 +34,11 @@ The fixed algorithm uses 32px interrogation windows, 64px search windows, 32px
 overlap, linear normalized correlation, Gaussian subpixel peaks, peak-to-peak SNR
 with exclusion width2, and `backend='scipy'`. It never selects optional Rust
 implicitly, fills invalid vectors, smooths flow, or runs multigrid deformation.
+The pinned scalar subpixel routine omits backend forwarding internally. Therefore
+the installed loader and source smoke explicitly reject `pyprocess.HAS_RUST=True`:
+use a dedicated runtime without optional `openpiv_rust`. Setting `backend=scipy`
+alone is insufficient in this release. The adapter does not uninstall anything
+or mutate shared upstream globals. Test backends bypass installed-runtime loading.
 
 ## Input and context
 
