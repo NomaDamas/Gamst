@@ -12,7 +12,17 @@ result = await streams.finish('microphone-source', 'microphone-sensor')
 # result: {'closed': True, 'published': [...], 'skipped': [...]}
 ```
 
-This is a Python runtime control. Remote MCP/live-API exposure and the isolated Qwen runtime profile remain separate integration work in #67. ProcessProvider forwards finish over its owned pipe protocol; the selected concrete profile must still implement a finalizer to produce output. See [provider processes](provider-processes.md). No model is loaded or installed by this operation.
+The shared Python runtime exposes `await human.finish_sensor_stream(manager_id, source_id, sensor_id)`. Discover the exact manager and stream IDs using `get_sensor_status`. The MCP tool `finish_sensor_stream` accepts those same three required string arguments; the live WebSocket API exposes it through `tools/call`:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"finish_sensor_stream","arguments":{"manager_id":"ID_FROM_STATUS","source_id":"microphone-source","sensor_id":"microphone-sensor"}}}
+```
+
+The caller must stop its application-owned producer first; this command does not stop a physical microphone or legacy MediaRouter capture. It never opens a stream, installs a model or loads a provider. Unknown manager/stream IDs and repeated completion fail explicitly. Manager IDs distinguish identical source/sensor names in different managers and are not authentication credentials. Access uses the existing shared-runtime transport trust boundary.
+
+Finalization does not hold the MCP server's global tool lock: another connection can inspect status or delete data while inference drains. Requests on one WebSocket are processed in order, so use a separate connection for concurrent control. Deletion invalidates pending output before waiting for provider cleanup. Existing worker timeouts still apply; an in-process provider can block cleanup indefinitely.
+
+ProcessProvider forwards finish over its owned pipe protocol; the selected concrete profile must still implement a finalizer to produce output. See [provider processes](provider-processes.md) and [Qwen local runtime](qwen-local-runtime.md).
 
 ## Ordering, cancellation and isolation
 
@@ -24,4 +34,4 @@ Once finalization has acquired ownership, cancellation marks that stream closing
 
 ## Evidence and remaining gates
 
-`python3 -m unittest discover -s tests -p test_stream_finalization.py -v` verifies drain-before-final, timestamp/sequence semantics, terminal close/reopen, cancellation during a blocked worker, another sensor's progress, generation invalidation, finalizer failure and empty-stream cleanup. The Qwen adapter tests also run its concrete lifecycle methods through this runtime using a labeled engine double. These establish control flow and publication, not speech-recognition accuracy. Actual Qwen inference remains #68; #67 retains loader, isolated runtime and remote control requirements.
+`python3 -m unittest discover -s tests -p test_stream_finalization.py -v` verifies drain-before-final, timestamp/sequence semantics, terminal close/reopen, cancellation during a blocked worker, another sensor's progress, generation invalidation, finalizer failure and empty-stream cleanup. The Qwen adapter tests also run its concrete lifecycle methods through this runtime using a labeled engine double. These establish control flow and publication, not speech-recognition accuracy. Actual Qwen inference remains #68; #67 tracks remaining integration requirements. Tests also verify exact manager selection, MCP deletion during a blocked finalizer, and final transcript retrieval through a real loopback WebSocket. These use provider fixtures, not microphone or model inference.

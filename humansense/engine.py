@@ -556,6 +556,16 @@ class HumanSense:
         return {'managers': [manager.status() for manager in getattr(self, '_sensor_streams', ())],
                 'paused': self.paused, 'consent': self.consent}
 
+    async def finish_sensor_stream(self, manager_id, source_id, sensor_id):
+        """Finalize an explicitly selected existing typed stream; never opens devices."""
+        self._check()
+        identifier(manager_id); identifier(source_id); identifier(sensor_id)
+        manager = next((m for m in getattr(self, '_sensor_streams', ())
+                        if m.manager_id == manager_id), None)
+        if manager is None:
+            raise ValueError('unknown sensor manager')
+        return await manager.finish(source_id, sensor_id)
+
     @staticmethod
     def _bounded_query(items, limit, max_bytes):
         import json

@@ -6,6 +6,7 @@ from humansense import HumanSense, SensorStreams, SensorMetadata
 from humansense.plugins import InputFrame
 from humansense.transcripts import transcript_capability
 from humansense.schema import timestamp
+from humansense.mcp import MCPServer
 
 
 def spec():
@@ -48,6 +49,48 @@ class Finalization(unittest.IsolatedAsyncioTestCase):
     def frame(self,i=0,sensor='mic'):
         return InputFrame(b'input','audio',timestamp()-100, sample_rate=16000,
             sensor=SensorMetadata('source',sensor,i,channels=('mono',)))
+    async def test_mcp_finish_targets_manager_and_preserves_final(self):
+        server=MCPServer(self.human)
+        other=SensorStreams(self.human)
+        other.register(spec(), ASR)
+        await other.open('source','mic',[spec().id])
+        await self.streams.submit(self.frame())
+        args=dict(manager_id=self.streams.manager_id,source_id='source',sensor_id='mic')
+        for invalid in ({}, dict(args,manager_id='missing'), dict(args,sensor_id='missing'),
+                        dict(args,manager_id=True), dict(args,unexpected=1)):
+            with self.assertRaises(ValueError): await server.call_tool('finish_sensor_stream',invalid)
+        self.assertEqual(self.instances[0].flushes,0)
+        response=await server.handle(dict(jsonrpc='2.0',id=1,method='tools/call',
+            params=dict(name='finish_sensor_stream',arguments=args)))
+        self.assertFalse(response['result']['isError'])
+        self.assertEqual((await self.human.get_transcripts())['utterances'][0]['status'],'final')
+        self.assertEqual(self.instances[0].flushes,1)
+        self.assertIn(('source','mic'),other.streams)
+        with self.assertRaises(ValueError): await server.call_tool('finish_sensor_stream',args)
+
+    async def test_mcp_delete_invalidates_pending_finish_without_global_lock(self):
+        server=MCPServer(self.human)
+        await self.streams.submit(self.frame()); await self.streams.drain()
+        p=self.instances[0]; p.release=threading.Event()
+        task=asyncio.create_task(server.call_tool('finish_sensor_stream',dict(
+            manager_id=self.streams.manager_id,source_id='source',sensor_id='mic')))
+        try:
+            self.assertTrue(await asyncio.to_thread(p.started.wait,2))
+            status=await asyncio.wait_for(server.call_tool('get_sensor_status'),1)
+            self.assertEqual(len(status['managers'][0]['streams']),1)
+            generation=self.human._generation
+            deletion=asyncio.create_task(server.call_tool('delete_data'))
+            for _ in range(100):
+                if self.human._generation != generation: break
+                await asyncio.sleep(.01)
+            self.assertNotEqual(self.human._generation,generation)
+        finally:
+            p.release.set()
+        self.assertEqual((await task)['published'],[])
+        await deletion
+        self.assertEqual((await self.human.get_transcripts())['utterances'],[])
+        self.assertTrue(p.closed)
+
     async def test_drains_final_without_new_capture_and_closes(self):
         f=self.frame(); await self.streams.submit(f)
         result=await self.streams.finish('source','mic')

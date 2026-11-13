@@ -186,6 +186,37 @@ class ContextSubscriptions(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(serve is None, 'optional websockets not installed')
 class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
+    async def test_finish_existing_stream_over_actual_websocket(self):
+        from humansense.plugins import InputFrame
+        class Provider:
+            def process(self, frame):
+                self.time=frame.timestamp_ms
+            def reset(self): pass
+            def finish(self):
+                return dict(utterance_id='tail',revision=0,text='final tail',status='final',
+                    start_ms=self.time,end_ms=self.time,language='en')
+        async with HumanSense(consent=True) as human:
+            streams=SensorStreams(human)
+            spec=transcript_capability('tail.asr','fixture','1',streaming_mode='native')
+            streams.register(spec,Provider)
+            await streams.open('source','mic',[spec.id])
+            await streams.submit(InputFrame(b'fixture','audio',timestamp()-100,
+                sample_rate=16000,sensor=SensorMetadata('source','mic',0)))
+            server=MCPServer(human)
+            async with serve(lambda socket: handle_connection(server,socket),'127.0.0.1',0,
+                             origins=[None],max_size=1048576,max_queue=16) as listener:
+                async with connect('ws://127.0.0.1:'+str(listener.sockets[0].getsockname()[1])) as socket:
+                    for ident,name,args in (
+                        (1,'finish_sensor_stream',dict(manager_id=streams.manager_id,source_id='source',sensor_id='mic')),
+                        (2,'get_transcripts',{})):
+                        await socket.send(json.dumps(dict(jsonrpc='2.0',id=ident,method='tools/call',
+                            params=dict(name=name,arguments=args))))
+                        response=json.loads(await asyncio.wait_for(socket.recv(),2))
+                        self.assertFalse(response['result']['isError'])
+                        data=json.loads(response['result']['content'][0]['text'])
+                        if ident==1: self.assertEqual(data['published'],[spec.id])
+                        else: self.assertEqual(data['utterances'][0]['update']['text'],'final tail')
+
     async def test_actual_websocket_tool_context_and_reconnect(self):
         async with HumanSense(consent=True) as human:
             adapter = MCPServer(human)
