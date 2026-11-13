@@ -49,6 +49,8 @@ class QwenLifecycle(unittest.TestCase):
         self.assertEqual([u['end_ms'] for u in updates], [1100,1200])
         final = p.finish()
         self.assertEqual((final['status'],final['end_ms'],final['revision']), ('final',1220,2))
+        self.assertEqual(final['finalization_reason'],'input_end')
+        self.assertTrue(all('finalization_reason' not in u for u in updates))
         self.assertIsNone(p.finish()); self.assertEqual(engine.flushes,1)
         self.assertEqual(engine.calls[0]['chunk_size_sec'], .1)
 
@@ -56,6 +58,7 @@ class QwenLifecycle(unittest.TestCase):
         engine = EngineDouble(); p = provider(engine)
         for i in range(15): result = p.process(frame(i))
         self.assertEqual(result['status'], 'final'); self.assertEqual(result['end_ms'],1300)
+        self.assertEqual(result['finalization_reason'],'segment_limit')
         old = result['utterance_id']
         for i in range(15,20): result = p.process(frame(i))
         self.assertNotEqual(result['utterance_id'],old); self.assertEqual(result['revision'],0)
@@ -124,6 +127,26 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot['utterances'][0]['update']['text'],'!')
             self.assertEqual(snapshot['utterances'][0]['status'],'final')
 
+    async def test_forced_boundary_and_tail_remain_distinct_in_mcp_context(self):
+        from humansense.mcp import MCPServer
+        async with HumanSense(consent=True) as human:
+            p=provider(); streams=SensorStreams(human)
+            streams.register(p.spec,lambda:p)
+            await streams.open('fixture','mic',[p.spec.id])
+            start=timestamp()-1000
+            for i in range(20):
+                await streams.submit(frame(i,start)); await streams.drain()
+            await streams.finish('fixture','mic')
+            snapshot=await MCPServer(human).call_tool('get_transcripts')
+            entries=sorted(snapshot['utterances'],key=lambda e:e['update']['start_ms'])
+            self.assertEqual(len(entries),2)
+            self.assertEqual([e['update']['finalization_reason'] for e in entries],['segment_limit','input_end'])
+            self.assertEqual(entries[0]['update']['end_ms'],entries[1]['update']['start_ms'])
+            self.assertNotEqual(entries[0]['update']['utterance_id'],entries[1]['update']['utterance_id'])
+            context=await human.get_context()
+            self.assertEqual({e['update']['finalization_reason'] for e in context['transcripts']['utterances']},
+                             {'segment_limit','input_end'})
+
     async def test_managed_stream_finish_flushes_qwen_tail(self):
         async with HumanSense(consent=True) as human:
             engine=EngineDouble(); p=provider(engine)
@@ -138,6 +161,7 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             entry=(await human.get_transcripts())['utterances'][0]
             self.assertEqual(entry['status'],'final')
             self.assertEqual(entry['update']['text'],'안녕하세요!')
+            self.assertEqual(entry['update']['finalization_reason'],'input_end')
             self.assertEqual(entry['sequence'],11)
             self.assertEqual(entry['update']['end_ms'],start+220)
             self.assertEqual(engine.flushes,1)

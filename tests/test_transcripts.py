@@ -37,6 +37,26 @@ class TranscriptReducer(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.put(memory, record(update('invented', 3, 'final'), 4))
 
+    def test_finalization_reason_validation_retention_and_immutability(self):
+        for reason in ('input_end','segment_limit'):
+            memory=TranscriptMemory()
+            self.put(memory,record())
+            before=memory.snapshot('user',now_ms=2000)
+            for bad in (dict(update(revision=1),finalization_reason=reason),
+                        dict(update(revision=1,status='final'),finalization_reason='silence'),
+                        dict(update(revision=1,status='final'),finalization_reason=None),
+                        dict(update(revision=1,status='final'),finalization_reason={}),
+                        dict(update(revision=1,status='final'),unexpected=reason)):
+                with self.assertRaises(ValueError): self.put(memory,record(bad,1))
+                self.assertEqual(memory.snapshot('user',now_ms=2000),before)
+            final=dict(update(revision=1,status='final'),finalization_reason=reason)
+            self.put(memory,record(final,1))
+            self.put(memory,record(final,2))
+            self.assertEqual(memory.snapshot('user',now_ms=2000)['utterances'][0]['update'],final)
+            for changed in (update(revision=2,status='final'),dict(final,finalization_reason=(
+                    'input_end' if reason=='segment_limit' else 'segment_limit'))):
+                with self.assertRaises(ValueError): self.put(memory,record(changed,3))
+
     def test_rejected_updates_do_not_mutate(self):
         memory = TranscriptMemory()
         self.put(memory, record())

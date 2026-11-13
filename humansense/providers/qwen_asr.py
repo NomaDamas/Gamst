@@ -1,6 +1,6 @@
 """Bounded adapter for explicitly loaded Qwen3ASRModel vLLM streaming engines.
 
-No model loader or installation runs here. Actual inference validation is separate.
+Local loading is explicit and verified. Actual inference validation is separate.
 """
 import uuid
 from ..capabilities import SensorMetadata, identifier
@@ -133,7 +133,7 @@ class QwenStreamingASR:
             self.elapsed_ms += self.hop_ms
             self.engine.streaming_transcribe(values, self.state)
             if self.elapsed_ms == self.max_segment_ms:
-                return self.finish()
+                return self._finish_segment('segment_limit')
             return self._update(False)
         except Exception:
             self.reset()
@@ -141,11 +141,15 @@ class QwenStreamingASR:
 
     def finish(self):
         """Flush once without new audio; caller must publish with a new output sequence."""
+        return self._finish_segment('input_end')
+
+    def _finish_segment(self, reason):
         if self.closed: raise RuntimeError('ASR provider is closed')
         if self.state is None: return None
         try:
             self.engine.finish_streaming_transcribe(self.state)
             result = self._update(True)
+            result['finalization_reason'] = reason
             self._clear_segment()
             return result
         except Exception:
