@@ -11,6 +11,8 @@ from copy import deepcopy
 from .schema import envelope, hypothesis, timestamp, validate_output
 from .storage import Store
 from .plugins import PerceptionPlugin
+from .capabilities import CapabilityRegistry, SensorMetadata
+from dataclasses import asdict
 
 
 def _window_ms(value):
@@ -54,6 +56,7 @@ class HumanSense:
         self.analysis_backend = None
         self._analysis_results = {}
         self.plugins = []
+        self.perception_capabilities = CapabilityRegistry()
         self._subscribers = set()
         self._last_ts = {}
         self._generation = 0
@@ -156,10 +159,39 @@ class HumanSense:
         result["name"] = name
         return self._emit(result)
 
+    def register_capability(self, spec):
+        """Register metadata without loading a provider or activating a sensor."""
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self.perception_capabilities.register(spec)
+
+    async def push_observation(self, capability_id, value, *, sensor,
+                               subject_id='local-user', timestamp_ms=None, quality=None):
+        spec = self.perception_capabilities.get(capability_id)
+        return await self.push_signal(spec.output_name, value, spec.modality,
+            subject_id=subject_id, timestamp_ms=timestamp_ms, quality=quality,
+            model_id=spec.provider, model_version=spec.version,
+            capability_id=capability_id, sensor=sensor)
+
     async def push_signal(self, name, value, modality, subject_id="local-user", timestamp_ms=None,
-                          model_id="external", model_version="unspecified", quality=None):
+                          model_id="external", model_version="unspecified", quality=None,
+                          capability_id=None, sensor=None):
         self._check()
-        if modality not in ("video", "audio", "text"):
+        contract = None
+        if capability_id is not None:
+            spec = self.perception_capabilities.get(capability_id)
+            if (name, modality, model_id, model_version) != (spec.output_name, spec.modality, spec.provider, spec.version):
+                raise ValueError('signal provenance must match registered capability')
+            if not isinstance(sensor, SensorMetadata):
+                raise ValueError('registered observations require SensorMetadata')
+            value = spec.validate(value)
+            contract = dict(id=spec.id, streaming_mode=spec.streaming_mode,
+                window_ms=spec.window_ms, lookahead_ms=spec.lookahead_ms,
+                freshness_ms=spec.freshness_ms, interpretation=spec.interpretation,
+                units={f.name: f.unit for f in spec.fields if f.unit is not None})
+        elif sensor is not None:
+            raise ValueError('sensor metadata requires a registered capability')
+        elif modality not in ("video", "audio", "text"):
             raise ValueError("modality must be video, audio, or text")
         if not name or not model_id or not model_version:
             raise ValueError("signal name and model provenance are required")
@@ -172,8 +204,13 @@ class HumanSense:
             if not isinstance(quality, dict) or quality.get("status") not in ("sufficient", "insufficient", "unavailable"):
                 raise ValueError("quality status must be sufficient, insufficient, or unavailable")
             quality = {"status": quality["status"], "flags": list(quality.get("flags", []))}
+        observation = {"name": name, "value": value, "modality": modality}
+        if contract is not None:
+            sensor_data = asdict(sensor)
+            sensor_data['channels'] = list(sensor.channels)
+            observation.update(capability=contract, sensor=sensor_data)
         record = self._record("observation.signal", subject_id, ts,
-            observation={"name": name, "value": value, "modality": modality},
+            observation=observation,
             models=[{"id": model_id, "version": model_version, "backend": "plugin"}], quality=quality)
         self._emit(record)
         if name == "speech.activity" and isinstance(value, bool) and record["quality"]["status"] == "sufficient":
