@@ -90,11 +90,14 @@ class Store:
         return [json.loads(row[0]) for row in rows]
 
     def latest_signals(self, subject, start, end):
-        """One current value per name; high-rate video cannot evict text/audio."""
+        """Latest legacy name or registered capability/source/sensor identity."""
         rows = self.connection.execute("""
             SELECT payload FROM (
               SELECT payload, ROW_NUMBER() OVER (
-                PARTITION BY json_extract(payload, '$.observation.name')
+                PARTITION BY json_extract(payload, '$.observation.name'),
+                  json_extract(payload, '$.observation.capability.id'),
+                  json_extract(payload, '$.observation.sensor.source_id'),
+                  json_extract(payload, '$.observation.sensor.sensor_id')
                 ORDER BY ts DESC, rowid DESC) AS rank
               FROM records WHERE subject=? AND kind='observation.signal' AND ts>=? AND ts<=?
             ) WHERE rank=1

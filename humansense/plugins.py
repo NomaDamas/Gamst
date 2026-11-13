@@ -10,6 +10,7 @@ from pathlib import Path
 import struct
 import threading
 from typing import Any
+from .capabilities import SensorMetadata
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class InputFrame:
     timestamp_ms: int
     subject_id: str = "local-user"
     sample_rate: int | None = None
+    sensor: SensorMetadata | None = None
 
 
 class PerceptionPlugin:
