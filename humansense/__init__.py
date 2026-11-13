@@ -15,3 +15,6 @@ __all__ += ['ProcessProvider']
 
 from .transcripts import transcript_capability
 __all__ += ['transcript_capability']
+
+from .object_appearance import ObjectAppearancePipeline
+__all__ += ['ObjectAppearancePipeline']

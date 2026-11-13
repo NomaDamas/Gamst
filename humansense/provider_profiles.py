@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'dinov3.regions':
+        from .providers.region_appearance import RegionAppearance
+        if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','capacity','retention_ms','max_regions','top_k'} or type(config['path']) is not str):
+            raise ValueError('region profile requires local path/hash and bounded gallery options')
+        return RegionAppearance.capability(config['sha256'],**{k:v for k,v in config.items() if k not in ('path','sha256')})
     if profile == 'dinov3.retrieval':
         from .providers.visual_retrieval import DINOv3Retrieval
         if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','capacity','retention_ms','top_k'} or

@@ -13,7 +13,7 @@ flowchart LR
 
 The SDK owns capture timestamps, queues, stream epochs and context storage. Each `ProcessProvider` owns exactly one explicitly started child interpreter and provider instance. The worker owns native model state and dependency imports. This isolates incompatible Python libraries without asking an LLM to receive raw media or understand the transport protocol. It is local process isolation, not an untrusted-code sandbox or network service.
 
-Current executable worker profiles are `rfdetr.nano`, `audio.prosody`, `opencv.flow`, `yamnet.events` and `silero.activity`. These dispatch to their existing concrete providers. This does not add model support to other inventory entries. Core import and profile discovery use only the standard library; no child, model, capture device or download starts during discovery. The selected environment must already contain the SDK and the relevant optional dependencies. For example, use a separate virtualenv with `humansense-sdk[detection]` for RF-DETR's Transformers 5 requirements, keeping Transformers 4 in another environment. Install the SDK source/editable checkout into each environment during development; a production application need not depend on its working directory.
+Executable worker profiles include `rfdetr.nano`, `audio.prosody`, `opencv.flow`, `yamnet.events`, `silero.activity`, `qwen3.asr`, `qwen3.asr.endpoint`, MediaPipe `body`/`hand`/`face` (both frame and `.video` variants), `l2cs.gaze`, `depth_anything_v2.small`, `ppocr.mobile`, `dinov3.retrieval` and `dinov3.regions`. MediaPipe profile names have the `mediapipe.` prefix. These dispatch to concrete providers; executable code does not establish trained-model/device acceptance. Refer to each provider document and its open validation issue. Other inventory entries retain their individual implementation status. Core import and profile discovery use only the standard library; no child, model, capture device or download starts during discovery. The selected environment must already contain the SDK and the relevant optional dependencies. For example, use a separate virtualenv with `humansense-sdk[detection]` for RF-DETR's Transformers 5 requirements, keeping Transformers 4 in another environment. Install the SDK source/editable checkout into each environment during development; a production application need not depend on its working directory.
 
 ```python
 from humansense import ProcessProvider, SensorStreams
@@ -73,7 +73,7 @@ Actual macOS arm64 MPS execution on 2026-11-14 used the same checkpoint and phot
 
 `await streams.finish(source_id, sensor_id)` uses this method to drain and finalize an isolated provider before closing it. Closing alone remains abort/dispose and does not flush. Direct callers must serialize meaningful end-of-input with their publication lifecycle; the protocol does not invent captured samples or timestamps. A direct finish request does not itself close the worker; the concrete provider determines whether it has any remaining final output. Managed stream finish is terminal and disposes the worker.
 
-Parent and worker SDK versions must agree on this operation. An older worker that rejects finish fails closed with an actionable worker error; no silent close-as-final fallback is used. Current profiles without a concrete finish method emit no extra observation. The Qwen local loader/runtime profile remains pending; adding this protocol operation does not establish Qwen installation or inference support.
+Parent and worker SDK versions must agree on this operation. An older worker that rejects finish fails closed with an actionable worker error; no silent close-as-final fallback is used. Current profiles without a concrete finish method emit no extra observation. Qwen local loader and endpoint worker profiles are implemented separately; actual checkpoint/runtime acceptance remains open in #68/#76. The finish operation itself does not establish model installation or inference quality.
 
 `python3 -m unittest discover -s tests -p test_process_provider.py -v` runs actual owned Python child processes with labeled fixture providers. It verifies finish roundtrip, absent finalizers, malformed success replies rejected in the parent, worker-side output checks, timeout teardown and managed final publication/child disposal. Fixtures establish IPC/lifecycle behavior, not model inference. No model weights or environments are installed by these tests.
 
@@ -105,3 +105,15 @@ A runtime upgrade is not claimed as a verified cure. Issue #90 remains open for
 cross-runtime evidence and the residual forced-termination race. Tests use real
 Python children for normal close, EOF, error exit, timeout/cancellation and a
 SIGTERM-ignoring fixture that requires kill; no model weights are involved.
+
+## Exact-capture region processing
+
+`await provider.process_regions(frame, evidence)` sends a serialized image packet
+plus bounded detector evidence to `dinov3.regions`. The worker verifies the complete
+capture binding before crop inference and validates the result on both sides. The
+operation shares normal inference deadlines, request IDs and owned-child teardown.
+Unsupported profiles fail closed. It is a local pipe operation, not a raw-image MCP
+tool. [ObjectAppearancePipeline](object-appearance-memory.md) owns separate detector
+and embedding workers and joins the exact same copied capture, allowing incompatible
+model dependency environments. Normal stream publication still contains only bounded
+context. Parent and worker checkouts must both support this operation.
