@@ -37,6 +37,9 @@ def tool_definitions() -> list[dict]:
     specs = [
         ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors. Continue with next_offset and revision.", {"offset": {"type": "integer", "minimum": 0, "maximum": 256}, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"], "revision": {"type": "string", "minLength": 64, "maxLength": 64}}, ()),
         ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
+        ("finish_sensor_stream", "Drain and finalize one existing typed sensor stream, then close it. Does not stop its application-owned producer or open devices. Use IDs from get_sensor_status. No raw media returned.",
+         {"manager_id": identifier_field, "source_id": identifier_field, "sensor_id": identifier_field},
+         ("manager_id", "source_id", "sensor_id")),
         ("get_observations", "Bounded retained registered sensory evidence, newest first, with explicit truncation. No raw media.",
          dict(query_bounds, window=WINDOW, capability_id=identifier_field, source_id=identifier_field, sensor_id=identifier_field), ()),
         ("get_transcripts", "Latest partial/final/interrupted text per retained utterance, with revisions and source evidence; not recognition ground truth.",
@@ -119,7 +122,9 @@ class MCPServer:
     async def call_tool(self, name: str, arguments: dict | None = None) -> Any:
         # WebSocket clients share the runtime; serialize capture lifecycle and
         # deletion so two concurrent clients cannot open duplicate devices.
-        if name in ("chat", "analyze"):
+        # Finalization owns its manager's lifecycle lock. Do not hold the global
+        # tool lock while draining: deletion must invalidate a pending final.
+        if name in ("chat", "analyze", "finish_sensor_stream"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)
