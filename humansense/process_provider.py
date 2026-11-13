@@ -105,7 +105,7 @@ class ProcessProvider:
             raise RuntimeError(f'{self.profile} worker failed ({kind}); verify profile configuration, '
                                'local checkpoints and optional dependencies in the selected Python environment')
         result = response.get('result')
-        return self.spec.validate(result) if operation == 'process' and result is not None else result
+        return self.spec.validate(result) if operation in ('process', 'finish') and result is not None else result
 
     async def _request(self, operation, *, payload=b'', timeout=None, input_frame=None, **fields):
         async with self._lock:
@@ -122,6 +122,9 @@ class ProcessProvider:
 
     async def process(self, frame):
         return await self._request('process', input_frame=frame)
+
+    async def finish(self):
+        return await self._request('finish')
 
     async def reset(self):
         await self._request('reset')

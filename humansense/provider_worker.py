@@ -60,6 +60,11 @@ def main():
                     result = provider.process(decode_frame(request['frame'], payload))
                     if result is not None:
                         result = spec.validate(result)
+                elif operation == 'finish' and provider is not None and not payload:
+                    finish = getattr(provider, 'finish', None)
+                    result = finish() if callable(finish) else None
+                    if result is not None:
+                        result = spec.validate(result)
                 elif operation == 'reset' and provider is not None and not payload:
                     provider.reset()
                     result = None

@@ -12,7 +12,7 @@ result = await streams.finish('microphone-source', 'microphone-sensor')
 # result: {'closed': True, 'published': [...], 'skipped': [...]}
 ```
 
-This is a Python runtime control. Remote MCP/live-API exposure and the isolated Qwen worker's finalization protocol remain separate integration work in #67. Generic ProcessProvider profiles do not gain a remote finish method automatically. No model is loaded or installed by this operation.
+This is a Python runtime control. Remote MCP/live-API exposure and the isolated Qwen runtime profile remain separate integration work in #67. ProcessProvider forwards finish over its owned pipe protocol; the selected concrete profile must still implement a finalizer to produce output. See [provider processes](provider-processes.md). No model is loaded or installed by this operation.
 
 ## Ordering, cancellation and isolation
 
