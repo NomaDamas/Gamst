@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'openpiv.flow':
+    if profile == 'opencv.fill':
+        from .providers.fill import CalibratedColorFill
+        provider = CalibratedColorFill(**config)
+    elif profile == 'openpiv.flow':
         from .providers.piv import OpenPIVFlow
         provider = OpenPIVFlow.from_installed(**config)
     elif profile == 'webrtc.aec3':
