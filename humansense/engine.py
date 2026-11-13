@@ -103,7 +103,9 @@ class HumanSense:
         transcript = None
         if record.get("observation", {}).get("name") == TRANSCRIPT_OUTPUT:
             transcript = self.transcript_memory.prepare(record)
-        self.store.add(record)
+        stored = self.store.add(record)
+        if transcript is not None and not stored:
+            raise ValueError('transcript record exceeds storage capacity')
         if transcript is not None:
             self.transcript_memory.commit(transcript)
         self._last_ts[record["subject_id"]] = max(record["timestamp_ms"], self._last_ts.get(record["subject_id"], 0))

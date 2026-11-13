@@ -87,6 +87,23 @@ class TranscriptReducer(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.put(TranscriptMemory(max_bytes=10), record())
 
+    def test_eviction_cannot_reopen_final_or_partial_and_protection_is_bounded(self):
+        memory = TranscriptMemory(max_entries=1)
+        self.put(memory, record(update('sealed', status='final')))
+        self.put(memory, record(update(utterance='u2'), 1))
+        with self.assertRaisesRegex(ValueError, 'cannot be reused'):
+            self.put(memory, record(update('changed'), 2))
+        self.put(memory, record(update(utterance='u3'), 2))
+        with self.assertRaisesRegex(ValueError, 'cannot be reused'):
+            self.put(memory, record(update(utterance='u2'), 3))
+        self.put(memory, record(update(utterance='u4'), 3))
+        with self.assertRaisesRegex(ValueError, 'protection limit'):
+            self.put(memory, record(update(utterance='u5'), 4))
+        self.assertEqual(len(memory.seen), 4)
+        memory.clear()
+        self.assertEqual(memory.seen, {})
+        self.put(memory, record())
+
 
 class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
     def spec(self):
@@ -152,3 +169,61 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
                     sensor=SensorMetadata('mic', 'a', 0), timestamp_ms=now)
             self.assertEqual(human.transcript_memory.entries, {})
             human.store.add = original
+
+    async def test_capacity_rejection_does_not_commit_or_publish(self):
+        async with HumanSense(consent=True, max_payload_bytes=100) as human:
+            import asyncio
+            queue = asyncio.Queue()
+            human._subscribers.add((queue, ('observation.signal',)))
+            spec = self.spec()
+            human.register_capability(spec)
+            now = timestamp()-100
+            with self.assertRaisesRegex(ValueError, 'storage capacity'):
+                await human.push_observation(spec.id, update(start=now-100, end=now),
+                    sensor=SensorMetadata('mic', 'a', 0), timestamp_ms=now)
+            self.assertEqual(human.transcript_memory.entries, {})
+            self.assertEqual(human.transcript_memory.streams, {})
+            self.assertEqual(human.transcript_memory.seen, {})
+            self.assertTrue(queue.empty())
+            self.assertEqual(human.store.count('local-user', 0, timestamp()), 0)
+
+    async def test_gap_error_and_clear_do_not_interrupt_other_manager_or_subject(self):
+        class Backend:
+            def __init__(self):
+                self.fail = False
+            def process(self, frame):
+                if self.fail:
+                    raise ValueError('fixture failure')
+                return update(start=frame.timestamp_ms-10, end=frame.timestamp_ms)
+            def reset(self):
+                pass
+        async with HumanSense(consent=True) as human:
+            spec = self.spec()
+            managers, backends = [], []
+            now = timestamp()-1000
+            for subject in ('alice', 'bob', 'alice'):
+                streams, backend = SensorStreams(human), Backend()
+                streams.register(spec, lambda backend=backend: backend)
+                await streams.open('mic', 'a', [spec.id], subject_id=subject)
+                await streams.submit(InputFrame(bytes(320), 'audio', now, subject_id=subject,
+                    sample_rate=16000, sensor=SensorMetadata('mic', 'a', 0)))
+                await streams.drain()
+                managers.append(streams)
+                backends.append(backend)
+            async def unaffected():
+                bob = (await human.get_context('bob'))['transcripts']['utterances']
+                self.assertEqual([e['status'] for e in bob], ['partial'])
+                epoch = managers[2].streams[('mic', 'a')]['lanes'][0]['epoch']
+                alice = (await human.get_context('alice'))['transcripts']['utterances']
+                self.assertEqual([e['status'] for e in alice if e['epoch'] == epoch], ['partial'])
+            await managers[0].submit(InputFrame(bytes(320), 'audio', now+20, subject_id='alice',
+                sample_rate=16000, sensor=SensorMetadata('mic', 'a', 2)))
+            await managers[0].drain()
+            await unaffected()
+            backends[0].fail = True
+            await managers[0].submit(InputFrame(bytes(320), 'audio', now+40, subject_id='alice',
+                sample_rate=16000, sensor=SensorMetadata('mic', 'a', 3)))
+            await managers[0].drain()
+            await unaffected()
+            await managers[0].clear()
+            await unaffected()

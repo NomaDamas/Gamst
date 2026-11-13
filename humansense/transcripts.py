@@ -29,12 +29,13 @@ class TranscriptMemory:
                 raise ValueError('invalid transcript bounds')
         self.max_entries, self.max_streams = max_entries, max_streams
         self.max_bytes, self.retention_ms = max_bytes, retention_ms
-        self.entries, self.streams = OrderedDict(), {}
+        self.entries, self.streams, self.seen = OrderedDict(), {}, {}
 
     def prune(self, now):
         self.entries = OrderedDict((k, v) for k, v in self.entries.items()
             if now-v['updated_ms'] <= self.retention_ms)
         self.streams = {k: v for k, v in self.streams.items() if now-v[0] <= self.retention_ms}
+        self.seen = {k: v for k, v in self.seen.items() if now-v <= self.retention_ms}
 
     def prepare(self, record, *, now_ms=None):
         """Validate without mutation, before the runtime persists/emits the record."""
@@ -68,6 +69,7 @@ class TranscriptMemory:
             raise ValueError('utterance boundaries must be capture milliseconds, at most five minutes')
         epoch = sensor.get('stream_epoch') or obs.get('processing_epoch')
         identifier(epoch, 'stream epoch')
+        identifier(record['subject_id'], 'transcript subject_id')
         namespace = (record['subject_id'], sensor['source_id'], sensor['sensor_id'], capability['id'], epoch)
         key = namespace+(value['utterance_id'],)
         previous = self.entries.get(key)
@@ -94,6 +96,10 @@ class TranscriptMemory:
                     raise ValueError('utterance start is fixed and capture end cannot move backwards')
                 entry = None
         else:
+            if key in self.seen and now-self.seen[key] <= self.retention_ms:
+                raise ValueError('evicted utterance ID cannot be reused within retention')
+            if sum(now-ts <= self.retention_ms for ts in self.seen.values()) >= self.max_entries*4:
+                raise ValueError('utterance ID protection limit reached; clear or expire retained transcripts')
             if value['revision'] != 0:
                 raise ValueError('first retained update must have revision zero')
             entry = None
@@ -111,17 +117,20 @@ class TranscriptMemory:
         key, entry, watermark, now = prepared
         self.prune(now)
         self.streams[key[:-1]] = watermark
+        self.seen[key] = watermark[0]
         self.entries[key] = entry
         self.entries.move_to_end(key)
         while len(self.entries) > self.max_entries or len(json.dumps(list(self.entries.values()), ensure_ascii=True).encode()) > self.max_bytes:
             self.entries.popitem(last=False)
 
-    def interrupt(self, source_id=None, sensor_id=None, capability_id=None):
+    def interrupt(self, source_id=None, sensor_id=None, capability_id=None, *, subject_id=None, epoch=None):
         for entry in self.entries.values():
             if (entry['status'] == 'partial' and
                 (source_id is None or entry['source_id'] == source_id) and
                 (sensor_id is None or entry['sensor_id'] == sensor_id) and
-                (capability_id is None or entry['capability_id'] == capability_id)):
+                (capability_id is None or entry['capability_id'] == capability_id) and
+                (subject_id is None or entry['subject_id'] == subject_id) and
+                (epoch is None or entry['epoch'] == epoch)):
                 entry['status'] = 'interrupted'
 
     def snapshot(self, subject_id='local-user', *, now_ms=None, start_ms=0, limit=16, max_bytes=32768):
@@ -147,3 +156,4 @@ class TranscriptMemory:
     def clear(self, subject_id=None):
         self.entries = OrderedDict((k, v) for k, v in self.entries.items() if subject_id is not None and k[0] != subject_id)
         self.streams = {k: v for k, v in self.streams.items() if subject_id is not None and k[0] != subject_id}
+        self.seen = {k: v for k, v in self.seen.items() if subject_id is not None and k[0] != subject_id}
