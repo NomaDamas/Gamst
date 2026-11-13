@@ -71,6 +71,20 @@ class Memory(unittest.TestCase):
         del bad['observation']['sensor']['coordinate_frame']
         with self.assertRaises(ValueError):
             memory.observe(bad, now_ms=1000)
+
+    def test_sequence_regression_with_newer_timestamp_is_rejected(self):
+        memory = ObjectMemory()
+        memory.observe(evidence(ts=1000, seq=10), now_ms=1000)
+        with self.assertRaises(ValueError):
+            memory.observe(evidence(ts=1050, seq=1), now_ms=1050)
+
+    def test_active_entity_expires_old_evidence_snapshots(self):
+        memory = ObjectMemory(retention_ms=100)
+        for seq, ts in enumerate((1000, 1050, 1101)):
+            memory.observe(evidence(ts=ts, seq=seq), now_ms=ts)
+        found = memory.find(now_ms=1101)[0]
+        self.assertEqual([h['timestamp_ms'] for h in found['history']], [1050, 1101])
+        self.assertEqual(found['first_seen_ms'], 1050)
         bad = evidence()
         bad['quality']['status'] = 'insufficient'
         with self.assertRaises(ValueError):
@@ -78,6 +92,28 @@ class Memory(unittest.TestCase):
 
 
 class MemoryRuntime(unittest.IsolatedAsyncioTestCase):
+    async def test_gap_reset_rotates_provider_track_epoch(self):
+        class Detector:
+            label = 'cup'
+            def process(self, frame):
+                return {'objects': [{'track_id': '1', 'label': self.label}]}
+            def reset(self):
+                self.label = 'plate'
+        async with HumanSense(consent=True) as human:
+            streams = SensorStreams(human)
+            streams.register(CapabilitySpec('objects', 'scene.objects', 'video', 'detector', '1',
+                (OutputField('objects', 'array'),), 'native', stateful=True, reset_on_gap=True), Detector)
+            await streams.open('cam', 'sensor', ['objects'])
+            for sequence in (0, 2):
+                await streams.submit(InputFrame({}, 'video', timestamp(), sensor=SensorMetadata('cam', 'sensor', sequence)))
+                await streams.drain()
+                record = human.store.latest_signals('local-user', 0, timestamp())[0]
+                await human.remember_objects(record['id'])
+            found = await human.find_objects()
+            self.assertEqual(len(found), 2)
+            self.assertEqual({entry['label'] for entry in found}, {'cup', 'plate'})
+            self.assertFalse(next(e for e in found if e['label'] == 'cup')['currently_visible'])
+
     async def test_reconnect_changes_track_epoch_and_ends_visibility(self):
         class Detector:
             def process(self, frame):

@@ -587,8 +587,9 @@ class HumanSense:
         live = observation.get('processing_epoch') == f'{self._session_id}:{self._generation}'
         epoch = observation.get('sensor', {}).get('stream_epoch')
         if epoch is not None:
-            live = live and any(s.get('epoch') == epoch and not s.get('closing')
-                for manager in getattr(self, '_sensor_streams', ()) for s in manager.streams.values())
+            live = live and any(lane.get('epoch') == epoch and not s.get('closing')
+                for manager in getattr(self, '_sensor_streams', ()) for s in manager.streams.values()
+                for lane in s['lanes'])
         return self.object_memory.observe(records[0],
             objects_field=objects_field, complete_snapshot=complete_snapshot,
             live=live)

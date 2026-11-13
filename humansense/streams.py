@@ -150,6 +150,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     # Reserve before awaiting the next factory, including across managers.
                     owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
+                                epoch=uuid.uuid4().hex,
                                 task=None, gap=False, accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
                     lanes.append(lane)
@@ -225,7 +226,11 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     lane['gap'] = False
                     if lane['spec'].stateful:
                         await _call(lane['provider'].reset)
+                        lane['epoch'] = uuid.uuid4().hex
+                        self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
+                            frame.sensor.sensor_id, lane['spec'].id)
                         lane['resets'] += 1
+                frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
                 result = await _call(lane['provider'].process, frame)
                 if generation != self.human._generation or stream.get('closing') or self.human.paused or self.human.closed:
                     continue
@@ -240,6 +245,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 lane['errors'] += 1
                 lane['last_error'] = type(exc).__name__
                 lane['gap'] = True
+                self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
+                    frame.sensor.sensor_id, lane['spec'].id)
             finally:
                 self.buffer_bytes -= size
                 queue.task_done()

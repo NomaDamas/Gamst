@@ -25,6 +25,11 @@ class ObjectMemory:
         for key in list(self._entities):
             if now-self._entities[key]['last_seen_ms'] > self.retention_ms:
                 del self._entities[key]
+            else:
+                entry = self._entities[key]
+                entry['history'] = [h for h in entry['history'] if now-h['timestamp_ms'] <= self.retention_ms]
+                if entry['history']:
+                    entry['first_seen_ms'] = entry['history'][0]['timestamp_ms']
         self._latest = {key: value for key, value in self._latest.items()
                         if now-value[0] <= self.retention_ms}
         while len(self._latest) > self.max_entities*2:
@@ -50,8 +55,10 @@ class ObjectMemory:
         if ts > now or now-ts > self.retention_ms:
             raise ValueError('evidence timestamp outside memory retention')
         namespace = (record['subject_id'], sensor['source_id'], sensor['sensor_id'], capability['id'], epoch)
-        order = (ts, sensor['sequence'])
-        if order < self._latest.get(namespace, (-1, -1)):
+        order = (ts, sensor['sequence'], record['id'])
+        previous = self._latest.get(namespace)
+        if previous and (ts < previous[0] or sensor['sequence'] < previous[1] or
+                         sensor['sequence'] == previous[1] and record['id'] != previous[2]):
             raise ValueError('out-of-order snapshot')
         objects = observation.get('value', {}).get(objects_field)
         if not isinstance(objects, list) or len(objects) > 256:
@@ -136,7 +143,9 @@ class ObjectMemory:
         self._latest = {k: v for k, v in self._latest.items() if subject_id is not None and k[0] != subject_id}
         return before-len(self._entities)
 
-    def invalidate_visibility(self, source_id=None, sensor_id=None):
+    def invalidate_visibility(self, source_id=None, sensor_id=None, capability_id=None):
         for entry in self._entities.values():
-            if (source_id is None or entry['source_id'] == source_id) and (sensor_id is None or entry['sensor_id'] == sensor_id):
+            if ((source_id is None or entry['source_id'] == source_id)
+                    and (sensor_id is None or entry['sensor_id'] == sensor_id)
+                    and (capability_id is None or entry['capability_id'] == capability_id)):
                 entry['in_latest_snapshot'] = False
