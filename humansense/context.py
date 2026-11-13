@@ -41,13 +41,13 @@ def observation_packet(records, now):
     for record in sorted(records, key=lambda r: r['timestamp_ms']):
         name = record.get('observation', {}).get('name')
         value = record.get('observation', {}).get('value')
-        is_classification = isinstance(name,str) and name.startswith('classification.')
+        registered = record.get('observation', {}).get('capability')
+        is_classification = not registered and isinstance(name,str) and name.startswith('classification.')
         if is_classification:
             try:
                 compact_observation(name,value)
             except (ValueError,TypeError,KeyError):
                 continue
-        registered = record.get('observation', {}).get('capability')
         safe = registered or is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
         if name and safe and record.get('type') == 'observation.signal':
             sensor = record['observation'].get('sensor', {})

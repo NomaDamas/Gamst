@@ -106,6 +106,28 @@ class RuntimeContracts(unittest.IsolatedAsyncioTestCase):
                 sensor=SensorMetadata(source, 'lepton', 1), timestamp_ms=1000))
         self.assertEqual(len(observation_packet(records, 1000)), 2)
 
+    async def test_public_context_preserves_sources_and_providers(self):
+        self.human.register_capability(thermal(id='thermal.other', provider='other.sensor'))
+        for capability in ('thermal.roi', 'thermal.other'):
+            for source in ('camera1', 'camera2'):
+                await self.human.push_observation(capability, {'mean': 32, 'roi': {}},
+                    sensor=SensorMetadata(source, 'lepton', 1))
+        # Same identity is replaced, without dropping other providers or sources.
+        await self.human.push_observation('thermal.roi', {'mean': 35, 'roi': {}},
+            sensor=SensorMetadata('camera1', 'lepton', 2))
+        observations = (await self.human.get_context())['observations']
+        self.assertEqual(len(observations), 4)
+        self.assertEqual(sorted(v['value']['mean'] for v in observations.values()), [32, 32, 32, 35])
+
+    async def test_registered_classification_uses_declared_contract(self):
+        self.human.register_capability(CapabilitySpec('food.label', 'classification.food',
+            'video', 'food-model', '1', (OutputField('label', 'string'),),
+            'frame', interpretation='classification'))
+        await self.human.push_observation('food.label', {'label': 'apple'}, sensor=self.sensor)
+        observations = (await self.human.get_context())['observations']
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(next(iter(observations.values()))['value'], {'label': 'apple'})
+
     async def test_provenance_cannot_bypass_registry(self):
         with self.assertRaises(ValueError):
             await self.human.push_signal('thermal.surface', {}, 'thermal', capability_id='thermal.roi', sensor=self.sensor)
