@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'ppocr.mobile':
+    if profile == 'dinov3.retrieval':
+        from .providers.visual_retrieval import DINOv3Retrieval
+        provider = DINOv3Retrieval.from_local(**config)
+    elif profile == 'ppocr.mobile':
         from .providers.ocr import PPOCRContext
         provider = PPOCRContext.from_local(**config)
     elif profile == 'depth_anything_v2.small':

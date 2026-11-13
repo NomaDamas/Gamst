@@ -6,6 +6,12 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'dinov3.retrieval':
+        from .providers.visual_retrieval import DINOv3Retrieval
+        if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','capacity','retention_ms','top_k'} or
+                type(config['path']) is not str):
+            raise ValueError('retrieval requires local path/hash and optional capacity/retention_ms/top_k')
+        return DINOv3Retrieval.capability(config['sha256'],**{k:v for k,v in config.items() if k not in ('path','sha256')})
     if profile == 'ppocr.mobile':
         from .providers.ocr import PPOCRContext
         required={'det_path','det_sha256','rec_path','rec_sha256'}
