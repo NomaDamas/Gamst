@@ -31,6 +31,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_prosody_provider.py -v
       - run: python -m unittest discover -s tests -p 'test_direction*.py' -v
       - run: python -m unittest discover -s tests -p test_beamforming.py -v
+      - run: python -m unittest discover -s tests -p test_srp_direction.py -v
       - run: python -m unittest discover -s tests -p test_detection_provider.py -v
       - run: python -m unittest discover -s tests -p test_process_provider.py -v
       - run: python -m unittest discover -s tests -p test_environment_audio.py -v
