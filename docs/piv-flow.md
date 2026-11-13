@@ -44,6 +44,8 @@ config = dict(meters_per_pixel=0.001, calibration_id='lab-plane-v1',
 ```
 
 Use `InputFrame(uint8_bgr, 'video', capture_timestamp_ms, sensor=metadata)`.
+Inputs and backend grids must be plain NumPy arrays; masked arrays/subclasses
+are rejected so missing pixel/vector masks cannot be silently discarded.
 Both axes must be64..256px; no implicit crop/resize changes calibration. Pixel
 values become owned int32 grayscale using rounded BGR luminance weights
 0.114/0.587/0.299. Metadata frame/calibration must match the configuration.

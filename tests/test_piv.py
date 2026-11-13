@@ -104,7 +104,8 @@ class PIVTests(unittest.TestCase):
             p.reset();p.process(frame());self.assertEqual(p.process(nextframe)['flow']['status'],'warmup')
         for bad in (frame(0,100),frame(1,0),frame(1,100,32),
                     dataclasses.replace(frame(1,100),sensor=None),
-                    dataclasses.replace(frame(1,100),timestamp_ms=True)):
+                    dataclasses.replace(frame(1,100),timestamp_ms=True),
+                    dataclasses.replace(frame(1,100),data=np.ma.array(frame().data,mask=True))):
             p.reset();p.process(frame())
             with self.assertRaises(ValueError):p.process(bad)
             self.assertEqual(p.process(frame(2,200))['flow']['status'],'warmup')

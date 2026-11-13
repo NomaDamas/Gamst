@@ -88,7 +88,7 @@ class OpenPIVFlow:
             raise ValueError('PIV metric calibration and coordinate frame must match')
         if type(ts) is not int or not 0 <= ts <= 2**53-1:
             raise ValueError('capture timestamp must be nonnegative integer milliseconds')
-        if not isinstance(data, np.ndarray) or data.dtype != np.uint8 or data.ndim != 3 or data.shape[2] != 3:
+        if type(data) is not np.ndarray or data.dtype != np.uint8 or data.ndim != 3 or data.shape[2] != 3:
             raise ValueError('PIV requires uint8 BGR images')
         h, w = data.shape[:2]
         if not 64 <= h <= 256 or not 64 <= w <= 256:
@@ -121,7 +121,7 @@ class OpenPIVFlow:
                     use_vectorized=False, backend='scipy')
                 shape = ((h-64)//32+1, (w-64)//32+1)
                 if not isinstance(output, (tuple,list)) or len(output) != 3 or any(
-                    not isinstance(a,np.ndarray) or a.shape != shape or a.dtype.kind not in 'fi' for a in output):
+                    type(a) is not np.ndarray or a.shape != shape or a.dtype.kind not in 'fi' for a in output):
                     raise ValueError('OpenPIV returned invalid vector grid')
                 u,v,snr = output
                 for row in range(shape[0]):
