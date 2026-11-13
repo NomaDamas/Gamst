@@ -92,6 +92,10 @@ class Duplex(unittest.TestCase):
         p,created=self.provider();f=frame();data=np.zeros((160,2),dtype=np.int16);data[:,0]=-32768
         out=p.transform(replace(f,data=data));self.assertTrue(np.all(out.ambient.data==-1))
         self.assertTrue(out.context['processing']['input_clipping_present'])
+        data[:,0]=32767
+        out=p.transform(replace(frame(1,1010),data=data))
+        self.assertTrue(out.context['processing']['input_clipping_present'])
+        self.assertTrue(np.all(out.ambient.data==32767/32768))
         class Backend:
             def process(self,near,far):return np.full(160,1.25,dtype=np.float32)
         p=WebRTCDuplex(Backend);out=p.transform(frame());self.assertTrue(np.all(out.speech.data==1))

@@ -134,7 +134,8 @@ class WebRTCDuplex:
                     input_rms=float(np.sqrt(np.mean(values[:,0].astype(np.float64)**2))),
                     render_rms=float(np.sqrt(np.mean(values[:,1].astype(np.float64)**2))) if present else None,
                     speech_rms=out_rms,speech_peak_before_clip=out_peak,output_samples_clipped=clipped,
-                    input_clipping_present=bool(np.any(np.abs(values[:,0])>=1)),ambient_preserved=True,
+                    input_clipping_present=bool(np.any((data[:,0]==-32768)|(data[:,0]==32767))) if data.dtype==np.int16
+                        else bool(np.any(np.abs(values[:,0])>=1)),ambient_preserved=True,
                     high_pass_filter_applied=present,noise_suppression=False,automatic_gain_control=False,
                     continuity_resets=self.resets,echo_reduction_verified=False,recognition_improvement_verified=False)
                 return DuplexBlock(ambient,speech,self.spec.validate(dict(processing=processing)))
