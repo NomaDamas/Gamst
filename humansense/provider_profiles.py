@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'emotion2vec.seed.onnx':
+        from .providers.vocal_expression import Emotion2VecContext
+        if not {'model_path','head_path','model_sha256','head_sha256'} <= set(config) or set(config)-{'model_path','head_path','model_sha256','head_sha256','window_ms','hop_ms'} or any(type(config[k]) is not str for k in ('model_path','head_path')):
+            raise ValueError('emotion2vec requires local model/head paths and hashes with optional window/hop')
+        return Emotion2VecContext.capability(**{k:v for k,v in config.items() if k not in ('model_path','head_path')})
     if profile == 'opencv.fill':
         from .providers.fill import CalibratedColorFill
         return CalibratedColorFill.capability(**config)
