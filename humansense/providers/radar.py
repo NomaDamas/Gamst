@@ -136,7 +136,7 @@ def parse_ti_radar(packet, *, sdk_version):
     if 7 in payloads:
         if points is None or len(payloads[7]) != detected*4 or 1020 in payloads:
             raise ValueError('side information requires matching Cartesian points')
-        for point, (snr, noise) in zip(points, struct.iter_unpack('<hh', payloads[7])):
+        for point, (snr, noise) in zip(points, struct.iter_unpack('<HH', payloads[7])):
             point.update(snr_db=snr*.1, noise_db=noise*.1)
     tracks = None
     if 1010 in payloads:

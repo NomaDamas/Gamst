@@ -29,7 +29,9 @@ Record the binary hash, SDK/toolbox versions and CLI configuration separately.
 Supported payloads:
 
 - Type1: Cartesian x/y/z in meters and radial Doppler in m/s, four float32 values.
-- Type7: Cartesian-point SNR and noise, signed int16 in0.1dB units.
+- Type7: Cartesian-point SNR and noise, uint16 in0.1dB units, following this
+  selected format specification. Firmware with signed side-info requires a
+  separately validated profile; no signedness guessing is performed.
 - Type1020: five float32 scales then elevation/azimuth int8, Doppler int16,
   range/SNR uint16. Outputs radians, meters, m/s and scaled SNR in dB.
 - Type1010: uint32 track ID and27float32 values,112bytes per track. Retains

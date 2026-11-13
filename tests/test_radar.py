@@ -36,7 +36,7 @@ def frame(i=0, *, data=None, number=None, ts=None):
 
 class Radar(unittest.TestCase):
     def test_cartesian_target_height_presence_and_missing_are_distinct(self):
-        raw = packet([(1,struct.pack('<4f',3,4,0,-2)),(7,struct.pack('<hh',125,43)),
+        raw = packet([(1,struct.pack('<4f',3,4,0,-2)),(7,struct.pack('<HH',125,40000)),
             (1010,target()),(1012,struct.pack('<I2f',3,1.8,.1)),(1021,struct.pack('<I',1)),
             (1011,bytes([3,253,254,255])),(999,b'extension')],detected=1)
         result = parse_ti_radar(raw,sdk_version=VERSION)
@@ -44,6 +44,7 @@ class Radar(unittest.TestCase):
         self.assertEqual(point['range_m'],5)
         self.assertAlmostEqual(point['azimuth_rad'],math.atan2(3,4))
         self.assertEqual(point['snr_db'],12.5)
+        self.assertEqual(point['noise_db'],4000)
         track = result['tracks'][0]
         self.assertEqual(track['position_m'],[3,4,0]); self.assertEqual(track['speed_m_s'],2)
         self.assertEqual(track['range_to_frame_origin_m'],5)
