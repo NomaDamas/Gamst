@@ -90,6 +90,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                                (max_packet_bytes, 16*1024*1024), (max_buffer_bytes, 256*1024*1024)):
             if type(value) is not int or not 1 <= value <= maximum:
                 raise ValueError('invalid stream resource bound')
+        self.manager_id = uuid.uuid4().hex
         self.human, self.capacity, self.max_streams = human, capacity, max_streams
         self.max_packet_bytes, self.max_buffer_bytes = max_packet_bytes, max_buffer_bytes
         self.factories, self.streams = {}, {}
@@ -303,7 +304,9 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         await self.clear()
 
     def status(self):
-        return dict(buffer_bytes=self.buffer_bytes, max_buffer_bytes=self.max_buffer_bytes,
+        return dict(manager_id=self.manager_id, closed=self.closed,
+            registered_capabilities=list(self.factories),
+            buffer_bytes=self.buffer_bytes, max_buffer_bytes=self.max_buffer_bytes,
             streams=[dict(source_id=key[0], sensor_id=key[1], subject_id=s['subject'],
                 modality=s['modality'], last_sequence=s['sequence'],
                 providers=[dict(capability_id=l['spec'].id, queued=l['queue'].qsize(),

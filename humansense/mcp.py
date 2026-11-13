@@ -31,7 +31,18 @@ MODEL_PATH = {"type": "string", "minLength": 1,
 
 
 def tool_definitions() -> list[dict]:
+    identifier_field = {"type": "string", "minLength": 1, "maxLength": 128}
+    query_bounds = {"subject_id": SUBJECT, "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144}}
     specs = [
+        ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors.", {}, ()),
+        ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
+        ("get_observations", "Bounded retained registered sensory evidence, newest first, with explicit truncation. No raw media.",
+         dict(query_bounds, window=WINDOW, capability_id=identifier_field, source_id=identifier_field, sensor_id=identifier_field), ()),
+        ("get_transcripts", "Latest partial/final/interrupted text per retained utterance, with revisions and source evidence; not recognition ground truth.",
+         dict(query_bounds, window=WINDOW), ()),
+        ("get_object_memory", "Last-seen object evidence and visibility. Does not assert current location or real-world identity.",
+         dict(query_bounds, text={"type": "string", "maxLength": 256}, entity_id=identifier_field), ()),
         ("get_stream_status", "Live media lane queue, drop and latency metrics.", {}, ()),
         ("configure_feature", "Enable or disable an installed model while capture is paused.", {"name": {"type": "string"}, "enabled": {"type": "boolean"}}, ("name", "enabled")),
         ("get_features", "Runtime model switches shared with dashboard settings.", {}, ()),
@@ -72,8 +83,8 @@ def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
         raise ValueError(f"{path}: must be {schema['const']!r}")
     if "enum" in schema and value not in schema["enum"]:
         raise ValueError(f"{path}: unsupported value")
-    if isinstance(value, str) and len(value) < schema.get("minLength", 0):
-        raise ValueError(f"{path}: must not be empty")
+    if isinstance(value, str) and not schema.get("minLength", 0) <= len(value) <= schema.get("maxLength", float("inf")):
+        raise ValueError(f"{path}: string length out of range")
     if type(value) in (int, float):
         if value != value or value in (float("inf"), -float("inf")):
             raise ValueError(f"{path}: must be finite")
