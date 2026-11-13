@@ -124,7 +124,7 @@ class WindowTests(unittest.TestCase):
 
 @unittest.skipIf(np is None,'optional numpy absent')
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_managed_window_context_and_clear(self):
+    async def test_managed_window_context(self):
         async with HumanSense(consent=True) as human:
             streams=SensorStreams(human);spec=Emotion2VecContext.capability(**CONFIG)
             streams.register(spec,lambda:Emotion2VecContext(predictor,**CONFIG))
@@ -135,3 +135,33 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             result=await MCPServer(human).call_tool('get_observations',{'capability_id':spec.id})
             self.assertIn('inner_emotion_verified',json.dumps(result))
             self.assertEqual(streams.status()['streams'][0]['providers'][0]['errors'],0)
+
+    async def test_worker_profile_partial_window_reset_and_close(self):
+        import asyncio
+        from humansense import ProcessProvider
+        children=[];spawn_real=asyncio.create_subprocess_exec
+        script='''
+import numpy as np
+from humansense.providers.vocal_expression import Emotion2VecContext
+from humansense.provider_worker import main
+Emotion2VecContext.from_local=classmethod(lambda cls,model_path,head_path,**config:cls(lambda x:np.ones(9)/9,**config))
+main()
+'''
+        async def spawn(*args,**kwargs):
+            child=await spawn_real(sys.executable,'-u','-c',script,**kwargs)
+            children.append(child);return child
+        try:
+            with patch('asyncio.create_subprocess_exec',spawn):
+                worker=await ProcessProvider.open(sys.executable,'emotion2vec.seed.onnx',dict(CONFIG,model_path='/fixture',head_path='/fixture'))
+                try:
+                    self.assertIsNone(await worker.process(frame(0,500,8000)))
+                    result=await worker.process(frame(1,1000,8000))
+                    self.assertEqual(len(result['classification']['scores']),9)
+                    self.assertFalse(result['classification']['export_parity_verified'])
+                    await worker.reset()
+                    self.assertIsNone(await worker.process(frame(2,1500,8000)))
+                finally:await worker.close()
+            self.assertTrue(all(child.returncode is not None for child in children))
+        finally:
+            for child in children:
+                if child.returncode is None:child.kill();await child.wait()
