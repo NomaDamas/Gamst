@@ -21,7 +21,7 @@ The primary format reference is TI's
 [Radar Toolbox3.30.00.06 UART specification](https://dev.ti.com/tirex/explore/content/radar_toolbox_3_30_00_06/software_docs/Understanding_UART_Data_Output_Format.html).
 This adapter selects little-endian40-byte headers, platform0xA6843, subframe0,
 32-byte packet alignment and TLV lengths excluding the8-byte TLV header.
-The caller must supply the exact `sdk_version` uint32 encoded by their firmware;
+The caller must supply the exact SDK3 `sdk_version` uint32 encoded by their firmware;
 the value is checked on every packet. Other platform/header/length profiles are
 not auto-detected. Header compatibility does not authenticate a firmware build.
 Record the binary hash, SDK/toolbox versions and CLI configuration separately.
@@ -29,9 +29,12 @@ Record the binary hash, SDK/toolbox versions and CLI configuration separately.
 Supported payloads:
 
 - Type1: Cartesian x/y/z in meters and radial Doppler in m/s, four float32 values.
-- Type7: Cartesian-point SNR and noise, uint16 in0.1dB units, following this
-  selected format specification. Firmware with signed side-info requires a
-  separately validated profile; no signedness guessing is performed.
+- Type7: Cartesian-point SNR and noise, signed int16 in0.1dB units. The Toolbox
+  summary labels these unsigned, but TI's
+  [pinned SDK3 ROS header](https://git.ti.com/cgit/mmwave_radar/mmwave_ti_ros/tree/ros2_driver/src/ti_mmwave_rospkg/include/mmWave.h?id=a244861eec7638792c0e070cd846b23d43e4fbaf)
+  defines both as int16. This profile follows that firmware structure. Unsigned
+  side-info firmware needs a separate validated profile; bytes cannot reveal
+  which interpretation is correct and no signedness guessing is performed.
 - Type1020: five float32 scales then elevation/azimuth int8, Doppler int16,
   range/SNR uint16. Outputs radians, meters, m/s and scaled SNR in dB.
 - Type1010: uint32 track ID and27float32 values,112bytes per track. Retains

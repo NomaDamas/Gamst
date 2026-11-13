@@ -1,6 +1,7 @@
 """Bounded TI xWR6843 UART decoding; no serial access or device configuration.
 
-Wire profile: Radar Toolbox 3.30.00.06 Understanding UART Data Output Format.
+Wire profile: Radar Toolbox 3.30.00.06 UART layout with SDK3 signed side-info
+from TI mmwave_ti_ros revision a244861eec7638792c0e070cd846b23d43e4fbaf.
 The explicit SDK version identifies a declaration, not verified firmware.
 """
 import hashlib
@@ -67,8 +68,8 @@ class TIRadarPackets:
 
 
 def _version(value):
-    if type(value) is not int or not 1 <= value <= 0xffffffff:
-        raise ValueError('explicit uint32 SDK version required')
+    if type(value) is not int or not 0x03000000 <= value <= 0x03ffffff:
+        raise ValueError('explicit uint32 SDK3 version required')
     return value
 
 
@@ -136,7 +137,7 @@ def parse_ti_radar(packet, *, sdk_version):
     if 7 in payloads:
         if points is None or len(payloads[7]) != detected*4 or 1020 in payloads:
             raise ValueError('side information requires matching Cartesian points')
-        for point, (snr, noise) in zip(points, struct.iter_unpack('<HH', payloads[7])):
+        for point, (snr, noise) in zip(points, struct.iter_unpack('<hh', payloads[7])):
             point.update(snr_db=snr*.1, noise_db=noise*.1)
     tracks = None
     if 1010 in payloads:
