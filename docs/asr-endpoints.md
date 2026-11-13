@@ -84,8 +84,7 @@ manual/cap precedence, contiguous revisions, source/gap resets, backend errors,
 policy identity and two successive finals through SensorStreams and MCP while the
 stream stays open. It proves control flow, not VAD/ASR accuracy or native execution.
 
-#76 retains serialized remote manual endpoint
-control, concurrency/overload/clear evidence and actual speech-boundary validation.
+#76 retains sustained concurrency/overload evidence and actual speech-boundary validation.
 #68 retains real Korean/English recognition, false splits/merges, endpoint and
 capture-to-context latency, runtime compatibility and resource/process-tree evidence.
 No required family or overall goal is complete from these fixture tests.
@@ -154,13 +153,13 @@ or old worker rejects the operation and the parent closes its owned child; it do
 not silently report success. Error, timeout and cancellation also invalidate that
 worker, requiring explicit reopen. Parent/worker SDK versions must match.
 
-These are provider primitives, not a SensorStreams/MCP manual-control API yet.
+These provider primitives are also exposed through the [managed endpoint control](managed-endpoints.md).
 Do not call a managed lane's provider directly while its queue is processing.
 A direct application must serialize calls and publish non-null results at the last
 capture timestamp using a distinct monotonically increasing **output** sequence.
 Input sequences still describe actual captured hops; do not inject a fake input to
-make sequence numbers advance. That separate output sequencing and serialized
-managed/remote control integration remains required in #76. The normal terminal
+make sequence numbers advance. The managed API implements separate output/capture sequences and serialized
+control; direct applications must still provide this ordering themselves. The normal terminal
 `finish_sensor_stream` MCP tool still closes the selected stream.
 
 Tests exercise endpoint/next-input continuity, actual child-pipe dispatch with the

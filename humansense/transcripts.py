@@ -112,6 +112,7 @@ class TranscriptMemory:
                 sensor_id=sensor['sensor_id'], capability_id=capability['id'], epoch=epoch,
                 update=deepcopy(value), status=value['status'], updated_ms=ts,
                 evidence_id=record['id'], models=record['models'], sequence=sequence,
+                capture_sequence=sensor.get('capture_sequence'),
                 freshness_ms=capability['freshness_ms'])
         if len(json.dumps(entry, ensure_ascii=True).encode()) > self.max_bytes:
             raise ValueError('single transcript exceeds memory byte budget')

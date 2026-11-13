@@ -566,6 +566,18 @@ class HumanSense:
             raise ValueError('unknown sensor manager')
         return await manager.finish(source_id, sensor_id)
 
+    async def endpoint_sensor_stream(self, manager_id, source_id, sensor_id, capability_id,
+                                     stream_epoch, after_sequence=None):
+        """Finalize an utterance at an accepted-input barrier without closing capture."""
+        self._check()
+        identifier(manager_id)
+        manager = next((m for m in getattr(self, '_sensor_streams', ())
+                        if m.manager_id == manager_id), None)
+        if manager is None:
+            raise ValueError('unknown sensor manager')
+        return await manager.endpoint(source_id, sensor_id, capability_id,
+            stream_epoch=stream_epoch, after_sequence=after_sequence)
+
     @staticmethod
     def _bounded_query(items, limit, max_bytes):
         import json
