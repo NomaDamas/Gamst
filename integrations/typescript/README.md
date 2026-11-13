@@ -15,6 +15,6 @@ const state = await client.callTool('get_state');
 client.close();
 ```
 
-Start `python -m humansense.server --origin http://localhost:3000` for that exact browser app origin. Default subscriptions deliver events only; `humansense/subscribe` is a HumanSense WebSocket extension, not an MCP protocol method. Signal/inference subscriptions are opt-in and use bounded runtime queues. The promise client matches response IDs, separates notifications, rejects tool/RPC failures and closes/times out pending requests.
+Start `python -m humansense.server --origin http://localhost:3000` for that exact browser app origin. Default subscriptions deliver events only; `humansense/subscribe` is a gamst WebSocket extension, not an MCP protocol method. Signal/inference subscriptions are opt-in and use bounded runtime queues. The promise client matches response IDs, separates notifications, rejects tool/RPC failures and closes/times out pending requests.
 
 Run `node integrations/typescript/client.test.mjs`. Tests use an in-process fake WebSocket to verify response ordering, event delivery, errors, close and timeouts. Actual network transport and TypeScript compiler checks remain unverified in the restricted development environment.

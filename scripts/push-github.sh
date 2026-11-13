@@ -3,7 +3,7 @@
 set -euo pipefail
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bundle_path="$project_dir/dist/humansense-v0.1.bundle"
-remote_url='https://github.com/NomaDamas/catch-your-mind.git'
+remote_url='https://github.com/NomaDamas/Gamst.git'
 branch_name="feat/humansense-$(date +%Y%m%d-%H%M%S)"
 if ! test -f "$bundle_path"; then
   printf '%s\n' "Missing bundle: $bundle_path" >&2
@@ -23,8 +23,8 @@ if ! git -C "$work_dir/remote" apply --index --3way "$work_dir/implementation.pa
 fi
 author_name=$(git -C "$work_dir/remote" config user.name || true)
 author_email=$(git -C "$work_dir/remote" config user.email || true)
-git -C "$work_dir/remote" -c "user.name=${author_name:-HumanSense Development}" \
+git -C "$work_dir/remote" -c "user.name=${author_name:-gamst Development}" \
   -c "user.email=${author_email:-humansense@localhost}" \
-  commit -m 'Implement HumanSense local SDK, MCP and real-time demo'
+  commit -m 'Implement gamst local SDK, MCP and real-time demo'
 git -C "$work_dir/remote" push -u origin "$branch_name"
-printf '\nPushed branch: %s\nReview: https://github.com/NomaDamas/catch-your-mind/pull/new/%s\n' "$branch_name" "$branch_name"
+printf '\nPushed branch: %s\nReview: https://github.com/NomaDamas/Gamst/pull/new/%s\n' "$branch_name" "$branch_name"

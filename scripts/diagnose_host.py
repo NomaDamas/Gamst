@@ -42,7 +42,7 @@ def main():
     if shutil.which('git'):
         result['git_worktree'] = command(['git','rev-parse','--is-inside-work-tree'], root)
         result['github_access'] = command(['git','-c','credential.interactive=never','ls-remote',
-            'https://github.com/NomaDamas/catch-your-mind.git','HEAD'], root)
+            'https://github.com/NomaDamas/Gamst.git','HEAD'], root)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

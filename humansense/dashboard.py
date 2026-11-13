@@ -301,7 +301,7 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_for(app))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        print(f"HumanSense: http://127.0.0.1:{server.server_port} — consent required in browser", flush=True)
+        print(f"gamst: http://127.0.0.1:{server.server_port} — consent required in browser", flush=True)
         try:
             await asyncio.Event().wait()
         finally:
@@ -314,7 +314,7 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HumanSense local browser dashboard")
+    parser = argparse.ArgumentParser(description="gamst local browser dashboard")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--store", default=":memory:")
     parser.add_argument("--face-model", help="Local MediaPipe task file")

@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👁️ Catch Your Mind
+# 👁️ gamst
 
 <img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
 
@@ -16,7 +16,7 @@ Turn speech, voice activity, facial movement, and surroundings into bounded, tim
 
 ---
 
-Catch Your Mind gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The Python import remains `humansense` for compatibility. The product's core is context delivery; Companion replies are optional.
+gamst gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The Python import remains `humansense` for compatibility. The product's core is context delivery; Companion replies are optional.
 
 **Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
@@ -71,7 +71,7 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 .venv/bin/python scripts/local_models.py remove --yes
 ```
 
-[Setup, agent integration and removal](docs/local-setup.md) · [Realtime behavior](docs/realtime.md) · [Public browser preview](https://nomadamas.github.io/catch-your-mind/)
+[Setup, agent integration and removal](docs/local-setup.md) · [Realtime behavior](docs/realtime.md) · [Public browser preview](https://blog.nomadamas.org/Gamst/)
 
 ## ✨ What it provides
 
@@ -108,7 +108,9 @@ The core SDK and MCP have **no runtime dependencies**. The dashboard supports te
 python -m pip install -e '.[vision,audio]'
 ```
 
-The distribution name is `humansense-sdk`; the Python import is `humansense`. Install from this repository or a built wheel. A PyPI release is not currently claimed.
+The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). For compatibility, the distribution remains `humansense-sdk`, the Python import remains `humansense`, and the SDK class remains `HumanSense`. Existing `humansense*` commands, plugin entry points and wire protocol names remain supported.
+
+After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`; these are aliases of the existing commands. For example, `gamst demo` and `python -m humansense demo` run the same CLI. Install from this repository or a built wheel; a PyPI release under the new name is not claimed.
 
 ## 🐍 Python SDK
 
@@ -225,10 +227,10 @@ Add it to your MCP client's server configuration, replacing the absolute paths:
 ```json
 {
   "mcpServers": {
-    "humansense": {
-      "command": "/path/to/catch-your-mind/.venv/bin/python",
+    "gamst": {
+      "command": "/path/to/Gamst/.venv/bin/python",
       "args": ["-m", "humansense.mcp"],
-      "cwd": "/path/to/catch-your-mind"
+      "cwd": "/path/to/Gamst"
     }
   }
 }

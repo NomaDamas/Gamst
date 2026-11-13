@@ -1,6 +1,6 @@
 # Evidence-citing interaction analysis
 
-The optional `ChatCompletionsBackend` connects a local model server or an explicitly authorized remote provider implementing the JSON chat-completions interface. It analyzes supplied transcripts and scalar measurements. It does not send raw camera/audio buffers or identify people. No provider model is installed or downloaded by HumanSense.
+The optional `ChatCompletionsBackend` connects a local model server or an explicitly authorized remote provider implementing the JSON chat-completions interface. It analyzes supplied transcripts and scalar measurements. It does not send raw camera/audio buffers or identify people. No provider model is installed or downloaded by gamst.
 
 ```python
 from humansense.reasoning import ChatCompletionsBackend
