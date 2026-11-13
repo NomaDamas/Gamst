@@ -84,6 +84,49 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             return process
         return patch('asyncio.create_subprocess_exec', spawn)
 
+    async def test_cooperative_exit_is_reaped_without_signalling(self):
+        # Real children, not mocked wait results: close acknowledgement, EOF
+        # and worker-side validation failure all have cooperative exit paths.
+        for path in ('close', 'eof', 'error'):
+            code = FAKE_WORKER.replace('    def reset(self): pass',
+                "    def endpoint(self): return {'invalid': True}\n    def reset(self): pass")
+            with self.fixture(code):
+                provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+                child = self.children[-1]
+                with patch.object(child, 'terminate', wraps=child.terminate) as terminate, \
+                     patch.object(child, 'kill', wraps=child.kill) as kill:
+                    if path == 'close':
+                        await provider.close()
+                    elif path == 'eof':
+                        await provider._stop()
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            await provider.endpoint()
+                    terminate.assert_not_called()
+                    kill.assert_not_called()
+                self.assertEqual(child.returncode, 0)
+                self.assertTrue(child._transport.is_closing())
+                self.assertTrue(child.stdin.is_closing())
+                self.assertTrue(child._transport.get_pipe_transport(1).is_closing())
+
+    async def test_stalled_exit_escalates_to_owned_kill(self):
+        if sys.platform == 'win32':
+            self.skipTest('POSIX SIGTERM fixture')
+        code = FAKE_WORKER.replace('import os, time',
+            'import os, time, signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)')
+        code = code.replace('    def close(self): pass', '    def close(self): time.sleep(60)')
+        with self.fixture(code):
+            provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+            child = self.children[-1]
+            with patch.object(child, 'terminate', wraps=child.terminate) as terminate, \
+                 patch.object(child, 'kill', wraps=child.kill) as kill:
+                await asyncio.wait_for(provider._stop(), 5)
+                terminate.assert_called_once()
+                kill.assert_called_once()
+            self.assertEqual(child.returncode, -9)
+            self.assertTrue(child._transport.is_closing())
+            self.assertTrue(child._transport.get_pipe_transport(1).is_closing())
+
     async def test_qwen_profile_offline_environment_is_child_local(self):
         import os
         from humansense.qwen_artifact import REQUIRED

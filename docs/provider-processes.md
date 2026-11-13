@@ -76,3 +76,32 @@ Actual macOS arm64 MPS execution on 2026-11-14 used the same checkpoint and phot
 Parent and worker SDK versions must agree on this operation. An older worker that rejects finish fails closed with an actionable worker error; no silent close-as-final fallback is used. Current profiles without a concrete finish method emit no extra observation. The Qwen local loader/runtime profile remains pending; adding this protocol operation does not establish Qwen installation or inference support.
 
 `python3 -m unittest discover -s tests -p test_process_provider.py -v` runs actual owned Python child processes with labeled fixture providers. It verifies finish roundtrip, absent finalizers, malformed success replies rejected in the parent, worker-side output checks, timeout teardown and managed final publication/child disposal. Fixtures establish IPC/lifecycle behavior, not model inference. No model weights or environments are installed by these tests.
+
+## Cooperative teardown and Python child-watcher limitation
+
+After closing its owned input/output pipes, `ProcessProvider` gives the worker up
+to 100 ms to exit and lets `asyncio` reap it. An acknowledged close, input EOF,
+or worker-side contract failure can therefore preserve exit status without an
+unnecessary termination signal. A stalled child still receives terminate,
+followed by kill if it has not exited after another second. Cleanup is awaited
+before transport disposal. These bounds exclude OS scheduling delays and the
+final wait after kill; cancellation cleanup can outlast the inference deadline.
+The additional grace period is a teardown cost, not an inference latency claim.
+
+Python 3.10.11 on macOS 15.6.1 uses `ThreadedChildWatcher`. Its watcher calls
+`waitpid`, while `Popen.send_signal` first calls `poll`, which can also reap the
+same child. A controlled diagnostic that delayed the watcher until after an
+exited child's `terminate()` reproduced `Popen.returncode == 0` followed by
+`asyncio.returncode == 255` and the `Unknown child process` warning. This proves
+that runtime race exists; it does not prove every historical warning had that
+cause. See the upstream [CPython issue](https://github.com/python/cpython/issues/89137)
+and [Python 3.10.11 subprocess implementation](https://github.com/python/cpython/blob/v3.10.11/Lib/subprocess.py).
+
+The grace period avoids signalling on the tested cooperative paths, but cannot
+eliminate a runtime race when a child exits at the escalation boundary. The SDK
+does not suppress warnings, replace a host's global child watcher, manually reap
+asyncio-owned children, or bypass process-handle safeguards with raw PID signals.
+A runtime upgrade is not claimed as a verified cure. Issue #90 remains open for
+cross-runtime evidence and the residual forced-termination race. Tests use real
+Python children for normal close, EOF, error exit, timeout/cancellation and a
+SIGTERM-ignoring fixture that requires kill; no model weights are involved.

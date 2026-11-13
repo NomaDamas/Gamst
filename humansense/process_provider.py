@@ -75,19 +75,28 @@ class ProcessProvider:
             pipe = transport.get_pipe_transport(descriptor)
             if pipe is not None:
                 pipe.close()
-        if process.returncode is None:
-            try:
-                process.terminate()  # Only this explicitly spawned child handle.
-            except ProcessLookupError:
-                pass
         try:
-            await asyncio.wait_for(process.wait(), 1)
-        except asyncio.TimeoutError:
+            # A close acknowledgement, EOF or protocol failure often means the
+            # worker is already exiting. Let asyncio's child watcher reap it
+            # before asking Popen to signal (and poll) the same child.
             try:
-                process.kill()
-            except ProcessLookupError:
+                await asyncio.wait_for(process.wait(), .1)
+                return
+            except asyncio.TimeoutError:
                 pass
-            await process.wait()
+            if process.returncode is None:
+                try:
+                    process.terminate()  # Only this explicitly spawned child handle.
+                except ProcessLookupError:
+                    pass
+            try:
+                await asyncio.wait_for(process.wait(), 1)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
         finally:
             transport.close()
 
