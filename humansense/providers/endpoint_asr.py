@@ -119,6 +119,15 @@ class SileroEndpointASR:
             self.reset()
             raise
 
+    def endpoint(self):
+        if self.closed:
+            raise RuntimeError('endpoint provider is closed')
+        try:
+            return self.asr.endpoint()
+        finally:
+            self.vad.reset()
+            self._clear_policy()
+
     def finish(self):
         if self.closed:
             raise RuntimeError('endpoint provider is closed')

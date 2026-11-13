@@ -66,8 +66,10 @@ def main():
                     result = provider.process(decode_frame(request['frame'], payload))
                     if result is not None:
                         result = spec.validate(result)
-                elif operation == 'finish' and provider is not None and not payload:
-                    finish = getattr(provider, 'finish', None)
+                elif operation in ('finish', 'endpoint') and provider is not None and not payload:
+                    finish = getattr(provider, operation, None)
+                    if operation == 'endpoint' and not callable(finish):
+                        raise ValueError('provider does not support nonterminal endpoints')
                     result = finish() if callable(finish) else None
                     if result is not None:
                         result = spec.validate(result)

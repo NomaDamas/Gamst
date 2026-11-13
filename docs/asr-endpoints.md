@@ -136,3 +136,34 @@ config validation, pre-load hash rejection and partial ownership cleanup with
 explicit loader doubles. A real Python child also executes the concrete endpoint
 composition over framed PCM16 IPC using labeled engine/scoring doubles; this verifies
 pipe integration and finalization, not real Torch/vLLM/model execution.
+
+## Provider-level endpoint without another audio hop
+
+`QwenStreamingASR.endpoint()`, `SileroEndpointASR.endpoint()` and
+`await ProcessProvider.endpoint()` flush only the current utterance with
+`finalization_reason='manual_endpoint'`. They do not close the provider or insert
+silent/synthetic PCM. Empty or repeated endpoints return None. The next sequential
+capture hop starts a new utterance; capture ownership/order checks remain active.
+The composite resets its VAD analysis window and endpoint policy after the flush,
+without discarding ASR audio. A simultaneous completed hard-cap final remains final;
+a later endpoint has nothing to finalize.
+
+The worker operation is serialized with other pipe requests and uses the existing
+inference timeout and bounded context-response validation. An unsupported provider
+or old worker rejects the operation and the parent closes its owned child; it does
+not silently report success. Error, timeout and cancellation also invalidate that
+worker, requiring explicit reopen. Parent/worker SDK versions must match.
+
+These are provider primitives, not a SensorStreams/MCP manual-control API yet.
+Do not call a managed lane's provider directly while its queue is processing.
+A direct application must serialize calls and publish non-null results at the last
+capture timestamp using a distinct monotonically increasing **output** sequence.
+Input sequences still describe actual captured hops; do not inject a fake input to
+make sequence numbers advance. That separate output sequencing and serialized
+managed/remote control integration remains required in #76. The normal terminal
+`finish_sensor_stream` MCP tool still closes the selected stream.
+
+Tests exercise endpoint/next-input continuity, actual child-pipe dispatch with the
+concrete composite plus engine doubles, unsupported operation, invalid output,
+timeout/cancellation teardown, and manual final publication through transcript
+memory/MCP with separate output sequences. These remain control-flow evidence.

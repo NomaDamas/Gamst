@@ -136,10 +136,51 @@ w.main()
                     result=await provider.process(f)
                 self.assertEqual(result['finalization_reason'],'vad_endpoint')
                 self.assertEqual(result['end_ms'],1140)
+                self.assertIsNone(await provider.endpoint())
+                f=replace(f,timestamp_ms=1160,sensor=replace(f.sensor,sequence=7))
+                await provider.process(f)
+                manual=await provider.endpoint()
+                self.assertEqual(manual['finalization_reason'],'manual_endpoint')
+                self.assertEqual(manual['end_ms'],1160)
+                self.assertNotEqual(manual['utterance_id'],result['utterance_id'])
                 self.assertIsNone(await provider.finish())
                 await provider.reset()
             finally:
                 await provider.close()
+
+    async def test_endpoint_roundtrip_then_more_input_and_unsupported_fails_closed(self):
+        code=FAKE_WORKER.replace('    def reset(self): pass',
+            "    def endpoint(self): return {'features': {'boundary': True}}\n    def reset(self): pass")
+        with self.fixture(code):
+            provider=await ProcessProvider.open(sys.executable,'audio.prosody',{})
+            self.assertEqual(await provider.endpoint(),{'features':{'boundary':True}})
+            self.assertEqual(await provider.process(frame({'marker':7})),{'features':{'marker':7}})
+            await provider.close()
+        with self.fixture():
+            provider=await ProcessProvider.open(sys.executable,'audio.prosody',{})
+            with self.assertRaises(RuntimeError): await provider.endpoint()
+            self.assertTrue(provider.closed)
+            self.assertIsNotNone(self.children[-1].returncode)
+
+    async def test_endpoint_invalid_output_timeout_and_cancel_stop_owned_child(self):
+        cases=("return {'raw': 'invalid'}", "time.sleep(.5); return None")
+        for body in cases:
+            code=FAKE_WORKER.replace('    def reset(self): pass',
+                '    def endpoint(self): '+body+'\n    def reset(self): pass')
+            with self.fixture(code):
+                provider=await ProcessProvider.open(sys.executable,'audio.prosody',{},inference_timeout=.05)
+                with self.assertRaises((RuntimeError,ValueError,asyncio.TimeoutError)): await provider.endpoint()
+                self.assertTrue(provider.closed)
+                self.assertIsNotNone(self.children[-1].returncode)
+        code=FAKE_WORKER.replace('    def reset(self): pass',
+            '    def endpoint(self): time.sleep(.5); return None\n    def reset(self): pass')
+        with self.fixture(code):
+            provider=await ProcessProvider.open(sys.executable,'audio.prosody',{})
+            task=asyncio.create_task(provider.endpoint())
+            await asyncio.sleep(.02); task.cancel()
+            with self.assertRaises(asyncio.CancelledError): await task
+            self.assertTrue(provider.closed)
+            self.assertIsNotNone(self.children[-1].returncode)
 
     async def test_finish_roundtrip_and_absent_finalizer(self):
         code = FAKE_WORKER.replace('    def reset(self): pass',
