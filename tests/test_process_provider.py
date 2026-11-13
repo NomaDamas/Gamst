@@ -140,6 +140,17 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await opening
 
+    async def test_excessive_malformed_output_closes_paused_pipe_without_gc(self):
+        code = "import os; os.write(1, b'x'*10000000)"
+        for _ in range(3):
+            with self.fixture(code):
+                with self.assertRaises(ValueError):
+                    await ProcessProvider.open(sys.executable, 'audio.prosody', {})
+            child = self.children[-1]
+            self.assertIsNotNone(child.returncode)
+            self.assertTrue(child._transport.is_closing())
+            self.assertTrue(child.stdout._transport.is_closing())
+
     async def test_wrong_contract_and_raw_response_are_rejected(self):
         for suffix in (
             "w.capability=lambda p,c: __import__('humansense').CapabilitySpec('wrong','wrong','audio','wrong','1',(__import__('humansense').OutputField('features','object'),),'frame')\n",

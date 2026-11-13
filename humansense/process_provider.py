@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .capabilities import bounded_json
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
-from .provider_worker import capability
+from .provider_profiles import capability
 from .streams import _finish
 
 
@@ -62,6 +62,14 @@ class ProcessProvider:
             return
         if process.stdin:
             process.stdin.close()
+        # Process has no public close-reader method. Its owned asyncio transport
+        # exposes pipe closure; close stdout even when StreamReader has paused
+        # after malformed excessive output, rather than relying on GC to do it.
+        transport = process._transport
+        for descriptor in (1, 2):
+            pipe = transport.get_pipe_transport(descriptor)
+            if pipe is not None:
+                pipe.close()
         if process.returncode is None:
             try:
                 process.terminate()  # Only this explicitly spawned child handle.
@@ -75,6 +83,8 @@ class ProcessProvider:
             except ProcessLookupError:
                 pass
             await process.wait()
+        finally:
+            transport.close()
 
     async def _exchange(self, operation, payload, fields):
         process = self._process
