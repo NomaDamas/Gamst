@@ -167,11 +167,21 @@ class Publication(unittest.IsolatedAsyncioTestCase):
             await streams.open('cam','sensor',[p.spec.id],subject_id='person')
             now=timestamp()-100
             await streams.submit(frame(ts=now,epoch=None));await streams.drain()
-            await streams.submit(frame(1,now+1,epoch=None));await streams.drain()
+            await streams.submit(frame(10,now+10,epoch=None));await streams.drain()
             result=await MCPServer(human).call_tool('get_observations',{'capability_id':p.spec.id,'subject_id':'person'})
             items=[item['observation'] for item in result['items']]
             matched=[item for item in items if item['value']['candidates']]
             self.assertEqual(len(matched),1)
-            self.assertEqual(matched[0]['sensor']['capture_sequence'],1)
+            self.assertEqual(matched[0]['sensor']['capture_sequence'],10)
             self.assertFalse(matched[0]['value']['candidates'][0]['identity_confirmed'])
+            # Ordinary sampled gaps preserve history; errors still force recovery reset.
+            previous_epoch=matched[0]['sensor']['stream_epoch']
+            p.predictor=lambda _:np.zeros(384)
+            await streams.submit(frame(11,now+11,epoch=None));await streams.drain()
+            p.predictor=lambda _:np.ones(384)
+            await streams.submit(frame(12,now+12,epoch=None));await streams.drain()
+            result=await MCPServer(human).call_tool('get_observations',{'capability_id':p.spec.id,'subject_id':'person'})
+            recovered=[i['observation'] for i in result['items'] if i['observation']['sensor']['capture_sequence']==12][0]
+            self.assertEqual(recovered['value']['candidates'],[])
+            self.assertNotEqual(recovered['sensor']['stream_epoch'],previous_epoch)
             await streams.clear();self.assertTrue(p.closed);self.assertEqual(len(p._entries),0)

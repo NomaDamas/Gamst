@@ -15,7 +15,7 @@ SensorStreams owns capture and publication; this provider owns a bounded gallery
 It is frame inference with stateful history, not a native temporal encoder. It does
 not detect individual objects, prove identity, infer the present location of a
 previously seen object, or perform text-to-image search. Object crop retrieval and
-its observation-memory association remain required work under #21/#39.
+its observation-memory association remain required work in [#101](https://github.com/NomaDamas/Gamst/issues/101) under #21/#39.
 
 The `dinov3.retrieval` profile exposes `vision.dinov3.retrieval` with output name
 `vision.appearance_candidates`. Configuration requires absolute local `path` and
@@ -58,8 +58,10 @@ retained observation, not an object, and do not retrieve raw images.
 History is separate per provider instance. Subject/source/sensor/stream epoch or
 coordinate/calibration changes clear the previous gallery. Timestamps and sequences
 must increase within the same owner; sequence gaps are allowed, preserving useful
-history when capture is sampled. Invalid input or failed inference does not mutate
-history. Retention uses both capture-time age and elapsed monotonic time, pruned on
+history when capture is sampled. SensorStreams honors `reset_on_gap=False` for
+ordinary sequence gaps or queue drops; process/publication/endpoint errors still
+force a reset and a new provider epoch before subsequent work. Direct invalid
+input or failed inference does not mutate history. Retention uses both capture-time age and elapsed monotonic time, pruned on
 the next successful process call. Idle entries may remain allocated until the next
 call, explicit reset or close, but capacity always bounds memory. Capacity eviction
 removes oldest entries after querying. At maximum capacity raw float64 descriptors
