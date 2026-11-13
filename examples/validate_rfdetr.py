@@ -6,9 +6,10 @@ from importlib.metadata import version
 import json
 from pathlib import Path
 import platform
+import sys
 import time
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
+from humansense import HumanSense, SensorMetadata, SensorStreams, ProcessProvider
 from humansense.plugins import InputFrame
 from humansense.providers.detection import RFDETRObjects
 from humansense.schema import timestamp
@@ -21,18 +22,25 @@ async def run(args):
     if data is None:
         raise ValueError('Cannot decode input image')
     start = time.perf_counter()
-    provider = RFDETRObjects.from_local(args.checkpoint, sha256=args.sha256, device=args.device)
+    if args.worker_python:
+        provider = await ProcessProvider.open(args.worker_python, 'rfdetr.nano',
+            dict(path=args.checkpoint, sha256=args.sha256, device=args.device))
+        spec = provider.spec
+    else:
+        provider = RFDETRObjects.from_local(args.checkpoint, sha256=args.sha256, device=args.device)
+        spec = provider.capability(provider.version)
     load_ms = (time.perf_counter()-start)*1000
     frames = [data, data, cv2.warpAffine(data, np.float32([[1, 0, 5], [0, 1, 0]]),
               (data.shape[1], data.shape[0])), np.zeros_like(data)]
-    report = dict(model_version=provider.version, device=args.device, platform=platform.platform(),
-        dependencies={name: version(name) for name in ('rfdetr', 'torch', 'torchvision', 'transformers', 'supervision', 'numpy')},
+    packages = ('numpy',) if args.worker_python else ('rfdetr', 'torch', 'torchvision', 'transformers', 'supervision', 'numpy')
+    report = dict(model_version=spec.version, device=args.device, platform=platform.platform(),
+        worker_python=args.worker_python, parent_python=sys.executable,
+        parent_dependencies={name: version(name) for name in packages},
         input_sha256=hashlib.sha256(Path(args.image).read_bytes()).hexdigest(),
         scenario='real image, repeated image, synthetic 5px translation, blank frame; not a natural video',
         load_ms=load_ms, frames=[])
     async with HumanSense(consent=True) as human:
         streams = SensorStreams(human)
-        spec = provider.capability(provider.version)
         streams.register(spec, lambda: provider)
         await streams.open('replay', 'image', [spec.id])
         capture_ms = 0
@@ -57,6 +65,8 @@ async def run(args):
         assert report['frames'][0]['value']['objects'], 'Fixture must produce detections'
         assert not report['frames'][-1]['value']['objects'], 'Blank frame unexpectedly produced detections'
         assert report['memory'] and all(not item['currently_visible'] for item in report['memory'])
+    report['parent_loaded_torch'] = 'torch' in sys.modules
+    report['parent_loaded_rfdetr'] = 'rfdetr' in sys.modules
     Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False)+'\n')
     print(json.dumps({key: report[key] for key in ('model_version', 'device', 'load_ms')}))
     print('latencies_ms:', [round(row['submit_to_observation_ms'], 2) for row in report['frames']])
@@ -70,4 +80,5 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=True)
     parser.add_argument('--device', choices=('cpu', 'cuda', 'mps'), default='cpu')
     parser.add_argument('--output', required=True)
+    parser.add_argument('--worker-python', help='Run the model in this separately installed Python environment')
     asyncio.run(run(parser.parse_args()))
