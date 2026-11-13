@@ -31,3 +31,25 @@ Loading must accept only an explicitly configured local model artifact with immu
 Contract tests may use an instrumented test double to verify lifecycle and exact API arguments, but cannot establish recognition support. Required real execution must include Korean and English labeled audio, silence, speech/noise, revisions, non-aligned tails, interrupted utterances, concurrent playback and a stalled worker. Report capture-to-partial and capture-to-final p50/p95 separately, model time, growing-prefix cost, segment-boundary errors, drops and process/GPU memory. Record exact model/runtime hashes, fixture provenance and reference scoring. Add the exact inference reproduction command with the implementation; the upstream demo's remote downloads are not an approved local-only validation command.
 
 This contract preserves #23's full implementation and actual-inference gate. Halo remains deferred; cheaper/faster VLM and preserved quality remain separate measured acceptance requirements.
+
+## Finalization provenance
+
+`transcript_capability` declares optional `finalization_reason`. When present it
+is accepted only on a `final` update and must be `input_end` (the caller explicitly
+ended the submitted input) or `segment_limit` (the provider forced a bounded
+segment rollover). It is retained unchanged in observations, transcript memory,
+context and MCP queries, and becomes immutable with the final text. Absence means
+the provider did not declare why the segment ended; do not infer silence or a
+natural sentence boundary. Existing seven-field transcript producers remain valid.
+Older SDK consumers that require exactly seven fields must upgrade to receive
+this extension; provider workers and parent SDK versions must match.
+
+Qwen emits `segment_limit` when its configured maximum accumulated duration is
+reached, then begins a new utterance ID on the next hop. Explicit `finish()` emits
+`input_end` for a remaining segment. Partial updates have no finalization reason.
+These describe software control boundaries, not detected human turn completion,
+semantic sentence completeness, VAD accuracy or recognition correctness. No audio
+sample or capture timestamp is invented for either operation. A final exactly at
+the cap keeps `segment_limit`; a subsequent empty finish produces no second final.
+VAD/manual utterance endpoint integration remains required in #67; this field
+alone does not implement it.

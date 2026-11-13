@@ -15,7 +15,8 @@ def transcript_capability(capability_id, provider, version, *, streaming_mode,
         (OutputField('utterance_id', 'string'), OutputField('revision', 'integer'),
          OutputField('text', 'string'), OutputField('status', 'string'),
          OutputField('start_ms', 'integer'), OutputField('end_ms', 'integer'),
-         OutputField('language', 'string')), streaming_mode, window_ms=window_ms,
+         OutputField('language', 'string'),
+         OutputField('finalization_reason', 'string', required=False)), streaming_mode, window_ms=window_ms,
         lookahead_ms=lookahead_ms, freshness_ms=freshness_ms, stateful=True,
         reset_on_gap=True, interpretation='semantic_description', license=license)
 
@@ -49,7 +50,7 @@ class TranscriptMemory:
             raise ValueError('transcripts require sufficient audio evidence')
         value = obs.get('value')
         required = {'utterance_id', 'revision', 'text', 'status', 'start_ms', 'end_ms', 'language'}
-        if type(value) is not dict or set(value) != required:
+        if type(value) is not dict or not required <= set(value) or set(value)-required-{'finalization_reason'}:
             raise ValueError('invalid transcript update fields')
         identifier(value['utterance_id'], 'utterance_id')
         if type(value['revision']) is not int or not 0 <= value['revision'] <= 2**31-1:
@@ -58,6 +59,9 @@ class TranscriptMemory:
             raise ValueError('transcript text must contain at most 4096 characters')
         if value['status'] not in ('partial', 'final'):
             raise ValueError('status must be partial or final')
+        if 'finalization_reason' in value:
+            if value['status'] != 'final' or value['finalization_reason'] not in ('input_end', 'segment_limit'):
+                raise ValueError('finalization_reason requires a final with input_end or segment_limit')
         identifier(value['language'], 'language')
         if len(value['language']) > 32:
             raise ValueError('language identifier too long')
