@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'webrtc.aec3':
+    if profile == 'openpiv.flow':
+        from .providers.piv import OpenPIVFlow
+        provider = OpenPIVFlow.from_installed(**config)
+    elif profile == 'webrtc.aec3':
         from .providers.duplex import WebRTCDuplex
         provider = WebRTCDuplex.from_installed(**config)
     elif profile == 'dinov3.regions':
