@@ -6,6 +6,11 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'mediapipe.hand':
+        from .providers.hand_context import MediaPipeHandContext
+        if set(config)-{'path','sha256','max_hands'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('hand profile requires local path, sha256 and optional max_hands')
+        return MediaPipeHandContext.capability(config['sha256'],max_hands=config.get('max_hands',4))
     if profile == 'mediapipe.body':
         from .providers.body_context import MediaPipeBodyContext
         if set(config)-{'path','sha256','max_poses'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
@@ -46,4 +51,4 @@ def capability(profile, config):
     if profile == 'yamnet.events':
         from .providers.environment_audio import YAMNetEvents
         return YAMNetEvents.capability()
-    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint or mediapipe.body')
+    raise ValueError('unsupported worker profile; use rfdetr.nano, audio.prosody, opencv.flow, yamnet.events silero.activity, qwen3.asr qwen3.asr.endpoint mediapipe.body or mediapipe.hand')
