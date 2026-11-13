@@ -31,8 +31,90 @@ classification scores. Its [native inference](https://github.com/modelscope/FunA
 means features over time, applies the classifier head and softmax. The SDK follows
 that decomposition with a bounded local graph and matching external head; it
 never imports FunASR, selects AutoModel, fetches weights or executes remote code.
-A reproducible export/preparation tool and upstream parity are still required#111;
-there is no claim that an unprepared official checkpoint can be loaded directly.
+The explicit [local preparation tool](#local-preparation-command) constructs this
+pair. Its actual trained export and upstream parity still require#111; an
+unprepared official checkpoint cannot be loaded directly by the ORT consumer.
+
+## Local preparation command
+
+Preparation is a separate, potentially multi-GiB-memory process, never part of
+the streaming callback. In an explicitly selected environment with the SDK and
+`vocal-expression-export` extra already installed, run:
+
+```sh
+/explicit/export-env/bin/python -m humansense.emotion2vec_export \
+  --checkpoint /local/emotion2vec_plus_seed/model.pt \
+  --config /local/emotion2vec_plus_seed/config.yaml \
+  --tokens /local/emotion2vec_plus_seed/tokens.txt \
+  --output-dir /prepared/seed-v1
+```
+
+The parent output directory must exist; `seed-v1` must not. Inputs must be the
+exact official revision above. The command never fetches models, uses AutoModel,
+installs packages, overwrites outputs or removes partial files. The explicit
+preparation environment imports FunASR, whose package initializer recursively
+imports optional modules and changes process-local `HYDRA_FULL_ERROR`. Dependency
+imports are not sandboxed by this tool; use an OS/network-isolated preparation
+process if network denial is required. No FunASR import reaches the live SDK/ORT
+worker. The exporter has no native-operation deadline; supervise this explicit
+process externally. It does not modify the host SDK environment.
+
+Selected candidate runtime: Torch2.8.0, FunASR1.4.26, ONNX1.18.0,
+ONNXRuntime1.23.2, OmegaConf2.3.0 and PyYAML6.0.3. Exact installed versions,
+including NumPy, Python and platform are recorded. A local Torch build suffix
+such as `+cpu` is accepted and recorded. This is a specified candidate environment,
+**not an already validated dependency installation or trained export**. No new
+package or weight installation was performed for this implementation.
+
+1. Read and hash each local file once before parsing or deserializing it. The
+   official config SHA256 is
+   `50674ec187406b4f1208925594ceaf1f28f16a22333b5f2ac5b3d0cbffdd670e`;
+   token SHA256 is
+   `654625c18ef0f0583441a3b811c20904f2cf30febb716f32e14810b8e6bb715c`.
+   These pins matter because upstream architecture construction evaluates the
+   config's convolution expression. Checkpoint loading is CPU `weights_only=True`;
+   unsupported serialized objects cause failure, without pickle fallback or
+   allowlisting. The large checkpoint is snapshotted in memory, not reopened
+   after hash verification.
+2. Construct the exact9-class model and require one compatible finite source
+   tensor for **every** destination parameter and persistent buffer. Recognize
+   `state_dict`, `model_state_dict` and `model` wrappers, plus raw,
+   `d2v_model.`, `module.` and `module.d2v_model.` keys. Ambiguity, missing keys,
+   shape/dtype differences and nonfinite values fail before loading. Record the
+   complete mapping and unused selected-state keys (for example training/EMA
+   entries); do not silently retain initialized weights. Actual checkpoint layout
+   compatibility remains to be established#111.
+3. Extract the matching head and export normalized features with batch1,
+   dynamic samples/frames, opset17 and `dynamo=False`. Embed the source/contract
+   metadata and reject external tensor references, including nested tensors.
+   ONNX checking and actual CPU ORT execution are mandatory at preparation time.
+   [PyTorch2.8 documents tracing limitations](https://docs.pytorch.org/docs/2.8/onnx.html);
+   dynamic axis declarations alone do not prove varying lengths work.
+4. Compare native `layer_norm` inference, the export normalization wrapper and
+   CPU ORT features. Compare the consumer's float64 head probabilities against
+   native float32 projection/softmax. Use deterministic noise at16000,31984,
+   32000 and64000samples, plus silence, constant input and a440Hz tone. Features
+   require `atol=2e-4, rtol=2e-4`; probabilities require `atol=2e-5, rtol=0`.
+   No threshold-relaxation switch exists. Report each input hash, frame count
+   and maximum observed errors. These seven synthetic cases catch selected
+   normalization/shape/export regressions; they do not prove all audio or all
+   possible window lengths, real speech quality or live performance.
+
+Success creates `seed.onnx`, `head.json` and **last** `report.json`, with graph/head
+SHA256s to pass to the consumer. Only a completed `status="passed"` report marks
+a ready pair. Failure leaves `failure.json` when possible and retains any partial
+outputs; use a different new output directory for a retry. The command exits
+nonzero on failure. Abrupt process termination may leave no failure report; the
+absence of a complete success report always means incomplete preparation.
+Nothing is accepted merely because an ONNX file exists. The report is local
+evidence, not a signature or third-party attestation. The consumer still reports
+`export_parity_verified=False` because it does not authenticate preparation reports.
+
+Tests exercise real Torch tensor matching/normalization/head arithmetic when
+Torch is already available, plus hash/no-overwrite/failure behavior and the
+orchestration with explicit model/ONNX doubles. They do not invoke the trained
+FunASR model or native ONNX export. Actual export, bilingual real speech,
+license, paced runtime/memory and SDK/MCP acceptance remain required#111.
 
 ## Local artifacts and loader
 
@@ -123,5 +205,5 @@ test_vocal_expression.py -v`) validate window state, hash/IO/head contracts,
 actual NumPy linear-head arithmetic and managed SDK/MCP with predictor/session
 doubles. They do **not** execute trained ONNX features or validate Korean/English
 classification. No actual model quality, live latency or low-cost claim is made.
-Required#111 covers export tooling, real model/runtime and paced real speech;
+Required#111 retains actual export, real model/runtime and paced real speech;
 family#25 also retains its speaking-rate/prosody requirements.

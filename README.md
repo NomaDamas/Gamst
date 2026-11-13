@@ -431,3 +431,6 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 [Calibrated container level and volume context](docs/calibrated-fill.md).
 
 [Windowed vocal-expression model context](docs/vocal-expression.md).
+An explicit [local emotion2vec preparation command](docs/vocal-expression.md#local-preparation-command)
+verifies source files and requires synthetic export parity before emitting a ready
+graph/head pair; actual trained-model acceptance remains open.
