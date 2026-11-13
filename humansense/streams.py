@@ -152,7 +152,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
                                 epoch=uuid.uuid4().hex,
-                                task=None, gap=False, output_sequence=-1, endpoint_control=None,
+                                task=None, gap=False, reset_required=False, output_sequence=-1, endpoint_control=None,
                                 accepted=0, processed=0, dropped=0,
                                 errors=0, resets=0, last_latency_ms=None, last_error=None)
                     lanes.append(lane)
@@ -234,7 +234,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     continue
                 if gap or lane['gap']:
                     lane['gap'] = False
-                    if lane['spec'].stateful:
+                    if lane['spec'].stateful and (lane['spec'].reset_on_gap or lane['reset_required']):
                         await _call(lane['provider'].reset)
                         self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                             frame.sensor.sensor_id, lane['spec'].id)
@@ -243,6 +243,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                             subject_id=frame.subject_id, epoch=lane['epoch'])
                         lane['epoch'] = uuid.uuid4().hex
                         lane['resets'] += 1
+                    lane['reset_required'] = False
                 frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
                 result = await _call(lane['provider'].process, frame)
                 if generation != self.human._generation or stream.get('closing') or self.human.paused or self.human.closed:
@@ -257,6 +258,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             except Exception as exc:
                 lane['errors'] += 1
                 lane['last_error'] = type(exc).__name__
+                lane['reset_required'] = True
                 lane['gap'] = True
                 self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                     frame.sensor.sensor_id, lane['spec'].id)
@@ -345,6 +347,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             outcome = {'error': 'sensor endpoint failed'}
         finally:
             if invoked and 'error' in outcome:
+                lane['reset_required'] = True
                 lane['gap'] = True
                 self.human.transcript_memory.interrupt(captured[0].sensor.source_id,
                     captured[0].sensor.sensor_id, lane['spec'].id,
