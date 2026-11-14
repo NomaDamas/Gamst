@@ -24,7 +24,7 @@ print(json.dumps(dict(schema_version=1,status='error' if mode=='error' else 'suc
 '''
 
 
-def setup(root, modes=('ok',)*6):
+def setup(root, modes=('ok',)*6, *, script_text=SCRIPT):
     plan,_ = fixture('synthetic')
     plan['comparison']['tasks'] = plan['comparison']['tasks'][:len(modes)]
     inputs = []
@@ -32,7 +32,7 @@ def setup(root, modes=('ok',)*6):
         payload = {'prompt': 'same visible input', 'mode': mode}
         task['input_sha256'] = plan_digest(payload)
         inputs.append({'task_id': task['id'], 'input': payload})
-    script = root/'pipeline.py'; script.write_text(SCRIPT)
+    script = root/'pipeline.py'; script.write_text(script_text)
     python = str(Path(sys.executable).resolve())
     command = dict(argv=[python,str(script)],cwd=str(root),environment={},artifacts={
         python:hashlib.sha256(Path(python).read_bytes()).hexdigest(),
@@ -96,14 +96,31 @@ class ThreeArmReplay(unittest.IsolatedAsyncioTestCase):
                     spawn.assert_not_called()
                 self.assertFalse((root/'run').exists())
 
-    async def test_failure_timeout_and_malformed_reports_retained(self):
+    async def test_failure_and_malformed_reports_retained_with_slow_fixture(self):
         with tempfile.TemporaryDirectory(dir='.') as directory:
-            root=Path(directory).resolve();plan,spec,inputs=setup(root,('error','malformed','overflow','timeout'))
+            root=Path(directory).resolve()
+            # Report classification must not assume a real process finishes in
+            # 200ms. Deliberately exceed that old budget in the actual child.
+            script = SCRIPT.replace("if mode=='timeout':time.sleep(60)",
+                                    "time.sleep(.25)\nif mode=='timeout':time.sleep(60)")
+            plan,spec,inputs=setup(root,('error','malformed','overflow'),script_text=script)
+            spec['runner']['timeout_ms']=5000
+            result=await collect(plan,spec,inputs,root/'run')
+            rows=[json.loads(line) for line in (root/'run/source-traces.jsonl').read_text().splitlines()]
+            self.assertEqual([r['status'] for r in rows],['error']*9)
+            self.assertEqual(result['records'],9);self.assertEqual(result['remaining_tasks'],3)
+            self.assertEqual(result['state'],'collected_unscored')
+            self.assertTrue(all(r['quality_status']=='unscored' for r in rows))
+            self.assertTrue(all('cost' not in r for r in rows))
+
+    async def test_actual_short_deadline_timeout_reports_retained(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();plan,spec,inputs=setup(root,('timeout',))
             spec['runner']['timeout_ms']=200
             result=await collect(plan,spec,inputs,root/'run')
             rows=[json.loads(line) for line in (root/'run/source-traces.jsonl').read_text().splitlines()]
-            self.assertEqual([r['status'] for r in rows],['error']*9+['timeout']*3)
-            self.assertEqual(result['records'],12);self.assertEqual(result['remaining_tasks'],4)
+            self.assertEqual([r['status'] for r in rows],['timeout']*3)
+            self.assertEqual(result['records'],3);self.assertEqual(result['remaining_tasks'],1)
             self.assertEqual(result['state'],'collected_unscored')
             self.assertTrue(all(r['quality_status']=='unscored' for r in rows))
             self.assertTrue(all('cost' not in r for r in rows))
