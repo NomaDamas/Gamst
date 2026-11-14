@@ -89,6 +89,47 @@ class Native(unittest.TestCase):
                 four=prepare(processor,images*2,[0,1,2,3]);self.assertEqual(tuple(four['pixel_values'].shape),(1,4,3,512,512))
             finally:native.close()
             with self.assertRaises(RuntimeError):native.predict(images,[0,1])
+            # Real owned worker, production loader and Context/MCP, substituting
+            # ONLY the architecture with this explicitly generated tiny fixture.
+            import asyncio
+            from unittest.mock import patch
+            from humansense import HumanSense,ProcessProvider,SensorStreams,SensorMetadata
+            from humansense.plugins import InputFrame
+            from humansense.schema import timestamp
+            from humansense.mcp import MCPServer
+            tokenizer_path=Path(directory)/'tokenizer.json';tok.backend_tokenizer.save(str(tokenizer_path))
+            worker_config=dict(CONFIG,checkpoint_path=str(path),checkpoint_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                tokenizer_path=str(tokenizer_path),tokenizer_sha256=hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),window_frames=2)
+            code=('import torch;torch.set_num_threads(1)\n'
+                'from humansense.providers import smolvlm_native as n\n'
+                'n.model_config=lambda cls:cls.from_dict('+repr(config.to_dict())+')\n'
+                'from humansense.provider_worker import main\nmain()')
+            async def managed():
+                real_spawn=asyncio.create_subprocess_exec
+                children=[]
+                async def spawn(*args,**kwargs):
+                    child=await real_spawn(sys.executable,'-u','-c',code,**kwargs);children.append(child);return child
+                with patch('asyncio.create_subprocess_exec',spawn):
+                    worker=await ProcessProvider.open(sys.executable,'smolvlm2.500m.local',worker_config,inference_timeout=60)
+                try:
+                    async with HumanSense(consent=True) as human:
+                        streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
+                        await streams.open('camera','video',[worker.spec.id]);start=timestamp()-500
+                        try:
+                            for i in range(2):
+                                f=InputFrame(images[0].copy(),'video',start+i*200,sensor=SensorMetadata('camera','video',i,coordinate_frame='pixels'))
+                                await streams.submit(f);await streams.drain()
+                            records=human.store.latest_signals('local-user',0,timestamp())
+                            self.assertEqual(len(records),1);self.assertEqual(records[0]['timestamp_ms'],start+200)
+                            value=records[0]['observation']['value'];self.assertTrue(value['window']['complete'])
+                            self.assertEqual(value['model']['checkpoint_sha256'],worker_config['checkpoint_sha256'])
+                            self.assertEqual(value['window']['observed_frames'],2)
+                            self.assertIn('untrusted_semantic_hypothesis',str(await MCPServer(human).call_tool('get_observations',{'capability_id':worker.spec.id})))
+                            self.assertEqual(streams.status()['streams'][0]['providers'][0]['errors'],0)
+                        finally:await streams.clear()
+                finally:await worker.close()
+                self.assertIsNotNone(children[0].returncode)
+            asyncio.run(managed())
             # The same strict loader used for production rejects missing/nonfinite tensors.
             bad=model.state_dict();bad.pop(next(iter(bad)));save_file(bad,str(path))
             with self.assertRaises(ValueError):load_state(path,model,torch,safe_open,'float32')

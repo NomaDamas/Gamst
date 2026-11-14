@@ -7,10 +7,9 @@ BGR images and capture timestamps, and returns bounded **untrusted semantic
 text**, token counts and truncation status. It does not call the user's LLM.
 
 This engine is a component of required small-VLM context support (#40/#133).
-It is not yet a SensorStreams provider or MCP integration. Capture-bound
-window accumulation, lifecycle/reset and observation publication remain a
-separate required integration step. Do not list engine-only support as full
-streaming integration. Actual trained-model/device acceptance is #150.
+The [capture-window provider](smolvlm-context.md) adds SensorStreams/MCP,
+capture-time provenance and owned-worker lifecycle around this engine.
+Actual trained-model/device acceptance is #150.
 
 ## Explicit runtime and assets
 
@@ -53,7 +52,7 @@ finally:
 
 Calls are synchronous and serialized; this native class cannot preempt a GPU
 kernel or blocked native generation. Use an owned worker for hard cancellation
-of the application task; that provider integration is not included here.
+of the application task; use the [window provider](smolvlm-context.md) for that integration.
 Calling close waits for the current call. No implicit background work exists.
 
 ## Bounds and semantics

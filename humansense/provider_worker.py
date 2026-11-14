@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'food.segformer_b0':
+    if profile == 'smolvlm2.500m.local':
+        from .providers.smolvlm_context import SmolVLMContext
+        provider = SmolVLMContext.from_local(**config)
+    elif profile == 'food.segformer_b0':
         from .providers.food import FoodContext
         provider = FoodContext.from_local(**config)
     elif profile == 'visual_microphone.phase':

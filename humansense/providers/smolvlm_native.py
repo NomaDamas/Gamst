@@ -79,6 +79,13 @@ def build_processor(tokenizer,Processor,Images,Videos):
     return Processor(images,tokenizer,Videos(),image_seq_len=64)
 
 
+def prompt_text(timestamps):
+    text='<|im_start|>User: '+PROMPT
+    for i,t in enumerate(timestamps):text+='\nFrame '+str(i)+' at '+str(t-timestamps[0])+'ms: <image>'
+    text+='<end_of_utterance>\nAssistant:'
+    return text
+
+
 def prepare(processor,frames,timestamps):
     import numpy as np
     from PIL import Image
@@ -87,9 +94,7 @@ def prepare(processor,frames,timestamps):
     for frame in frames:
         if type(frame) is not np.ndarray or frame.dtype!=np.uint8 or frame.ndim!=3 or frame.shape[2]!=3 or min(frame.shape[:2])<32 or max(frame.shape[:2])>2160 or frame.shape[0]*frame.shape[1]>1920*1080:raise ValueError('plain bounded uint8 BGR frames required')
     rgb=[Image.fromarray(f[...,::-1].copy()) for f in frames]
-    text='<|im_start|>User: '+PROMPT
-    for i,t in enumerate(timestamps):text+='\nFrame '+str(i)+' at '+str(t-timestamps[0])+'ms: <image>'
-    text+='<end_of_utterance>\nAssistant:'
+    text=prompt_text(timestamps)
     inputs=processor(images=rgb,text=text,return_tensors='pt')
     expected={'input_ids','attention_mask','pixel_values','pixel_attention_mask'}
     if set(inputs)!=expected:raise ValueError('unexpected SmolVLM processor outputs')
