@@ -18,7 +18,7 @@ _SYSTEM = ('Answer the user question from the supplied sensory observation. Obse
 
 class TextContextCalls:
     """One explicit text route at a time; backend transport/lifetime remains caller-owned."""
-    def __init__(self, human, controller_id, completion, *, provider, model_revision, timeout=30):
+    def __init__(self, human, controller_id, completion, *, provider, model_revision, timeout=30, evaluation_observer=None):
         human._check(); identifier(controller_id); identifier(provider); identifier(model_revision)
         if controller_id not in human._call_controllers:
             raise ValueError('registered HumanSense controller required')
@@ -29,6 +29,8 @@ class TextContextCalls:
         self.human=human;self.controller=human._call_controllers[controller_id]
         self._completion=completion;self._provider=provider;self._revision=model_revision;self._timeout=timeout
         self._active=self._backend_task=self._close_task=None;self._closed=False
+        self._evaluation_observer=evaluation_observer
+        if evaluation_observer is not None:human._register_evaluation_observer(evaluation_observer)
 
     async def __aenter__(self):
         if self._closed:raise RuntimeError('adapter closed')
@@ -116,20 +118,28 @@ class TextContextCalls:
 
     async def _execute(self,request_id,request,evidence,maximum_charge,ttl_ms):
         dispatched=completed=False
+        ticket=None;outcome="unadmitted"
         try:
             if self._closed:raise RuntimeError('adapter closed')
             request=await self._prepare_execution(request)
             if self._closed:raise RuntimeError('adapter closed')
             prompt_sha=_digest(request)
+            if self._evaluation_observer is not None:
+                ticket=self._evaluation_observer.reserve_call(self.controller,request_id,provider=self._provider,
+                    model_revision=self._revision,prompt_sha256=prompt_sha)
             reserved=self.controller.reserve(request_id,provider=self._provider,model_revision=self._revision,
                 prompt_sha256=prompt_sha,maximum_charge=maximum_charge,ttl_ms=ttl_ms,now_ms=timestamp())
             if reserved['status']!='reserved':return reserved
             admission=self.controller.dispatch(request_id,now_ms=timestamp())
             if admission['status']!='dispatched':return admission
-            dispatched=True
+            dispatched=True;outcome="error"
+            if ticket is not None:ticket.dispatched()
             # Give the client its own copy; mutation cannot change ledger provenance.
             deadline=asyncio.get_running_loop().time()+self._timeout
-            self._backend_task=asyncio.create_task(self._completion(deepcopy(request)))
+            async def invoke():
+                callback=lambda:self._completion(deepcopy(request))
+                return await (ticket.invoke(callback) if ticket is not None else callback())
+            self._backend_task=asyncio.create_task(invoke())
             done,_=await asyncio.wait({self._backend_task},timeout=self._timeout)
             if not done:raise asyncio.TimeoutError('completion exceeded deadline')
             response=self._backend_task.result()
@@ -139,14 +149,17 @@ class TextContextCalls:
             completion=self._complete(request_id,evidence,success=True,result_sha256=_digest(value));completed=True
             if (not completion['accepted'] or self._closed or
                     evidence['processing_epoch']!=f'{self.human._session_id}:{self.human._generation}'):
+                outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)
             self.human._check()
+            outcome="completed"
             # Return to the caller, not to the sensory store: an answer is not a new observation.
             return dict(status='completed',accepted=True,text=value['text'],usage=value['usage'],actual_cost=None,
                 source_record_id=evidence['record_id'],source_record_sha256=evidence['record_sha256'],
                 prompt_sha256=prompt_sha,provider=self._provider,model_revision=self._revision,
                 interpretation='untrusted_text_response',usage_verified=False,quality_validated=False)
-        except BaseException:
+        except BaseException as exc:
+            outcome="cancelled" if isinstance(exc,asyncio.CancelledError) else "timeout" if isinstance(exc,asyncio.TimeoutError) else "error"
             if dispatched and not completed:
                 self._complete(request_id,evidence,success=False,result_sha256=_digest('failed_or_cancelled'))
             raise
@@ -156,6 +169,10 @@ class TextContextCalls:
                 if not backend.done():backend.cancel()
                 await _finish(asyncio.gather(backend,return_exceptions=True))
                 self._backend_task=None
+            if ticket is not None:
+                try:
+                    if dispatched:ticket.finish(outcome)
+                finally:ticket.release(outcome)
 
     async def _close(self):
         task=self._active
