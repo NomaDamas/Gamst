@@ -48,7 +48,7 @@ class PreparedWindow:
         return np.frombuffer(self.pcm, dtype='<f4').copy()
 
 
-def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None):
+def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None, allow_empty_prompt=False):
     """Validate batch1 mono input; never resample, mix, pad or truncate it.
 
     Anchors are +/- intervals in source-window seconds. Feature indices follow
@@ -70,7 +70,10 @@ def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None):
         raise ValueError('input layout changed while copying')
     if not np.isfinite(pcm).all() or (np.abs(pcm) > 1).any():
         raise ValueError('input PCM must be finite and normalized within[-1,1]')
-    if type(prompt) is not str or not prompt.strip() or len(prompt) > MAX_PROMPT_BYTES:
+    if type(allow_empty_prompt) is not bool:
+        raise ValueError('explicit empty-prompt policy required')
+    if (type(prompt) is not str or (not prompt.strip() and not (allow_empty_prompt and prompt==''))
+            or len(prompt) > MAX_PROMPT_BYTES):
         raise ValueError('nonempty bounded prompt required')
     try:
         encoded_prompt = prompt.encode('utf-8')

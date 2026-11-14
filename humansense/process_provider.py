@@ -4,6 +4,7 @@ import os
 import uuid
 from .call_controller import _digest
 from pathlib import Path
+import tempfile
 
 from .capabilities import bounded_json
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
@@ -53,6 +54,7 @@ class ProcessProvider:
         self._lifecycle_ticket=None
         self._separation_owner = separation_owner
         if separation_owner is not None:
+            separation_owner._authorize_configuration(self.config)
             separation_owner._claim()
         worker_environment = os.environ.copy()
         if separation_owner is not None:
@@ -66,14 +68,20 @@ class ProcessProvider:
             try:
                 self._lifecycle_ticket=evaluation_observer.reserve_work("worker_lifecycle",dict(worker_id=self._worker_id,
                     profile=profile,configuration_sha256=_digest(self.config)))
-                self._lifecycle_ticket.event("spawn_begin")
             except BaseException:
                 if separation_owner is not None:separation_owner.close()
                 raise
-        spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
-            'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
+        spawn = staging = None
         try:
+            if separation_owner is not None:
+                # The parent owns cleanup even if startup cancellation kills the
+                # worker before its tokenizer constructor can return.
+                staging = tempfile.TemporaryDirectory(prefix='.gamst-sam-tokenizer-', dir='.')
+                worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
+            if self._lifecycle_ticket is not None:self._lifecycle_ticket.event('spawn_begin')
+            spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
+                'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
             if self._lifecycle_ticket is not None:self._lifecycle_ticket.event("handle_acquired")
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
@@ -85,18 +93,21 @@ class ProcessProvider:
             return self
         except BaseException:
             self._observe_lifecycle("handshake_failed")
-            if self._process is None:
+            if self._process is None and spawn is not None:
                 try:
                     self._process = await _finish(spawn)
                     self._observe_lifecycle("handle_acquired")
                 except Exception:
                     pass
             await _finish(asyncio.create_task(self._stop()))
-            if self._process is None and spawn.done() and (spawn.cancelled() or spawn.exception() is not None):
+            if self._process is None and (spawn is None or (spawn.done() and (spawn.cancelled() or spawn.exception() is not None))):
                 if self._lifecycle_ticket is not None:
                     try:self._lifecycle_ticket.finish("error")
                     except BaseException:pass
             raise
+        finally:
+            if staging is not None:
+                staging.cleanup()
 
     def _observe_lifecycle(self, event):
         ticket=getattr(self,"_lifecycle_ticket",None)
@@ -211,13 +222,14 @@ class ProcessProvider:
             if input_frame is not None:
                 fields['frame'], payload = encode_frame(input_frame)
                 if self._separation_owner is not None:
-                    from .separation_media import frame_binding
+                    from .separation_media import request_binding
                     owner = self._separation_owner
-                    fields['separation_binding'] = frame_binding(fields['frame'], payload,
+                    fields['separation_binding'] = request_binding(fields['frame'], payload, config=self.config,
                         generation=owner.generation, config_id=self.spec.version,
                         owner_revision=owner.revision)
                     owner._bind(fields['separation_binding'])
-                    owner._reserve(fields['separation_binding']['sample_count'])
+                    owner._reserve(fields['separation_binding']['sample_count'],
+                        request_bytes=len(payload) if 'visual_policy' in self.config else 0)
             ticket=None
             observer=getattr(self,"_evaluation_observer",None)
             if observer is not None:
@@ -233,6 +245,7 @@ class ProcessProvider:
                 return await self._exchange(operation,payload,fields)
             exchange = asyncio.create_task(invoke())
             outcome="error"
+
             try:
                 # Explicit ownership preserves caller cancellation even when the
                 # response completes in the same loop turn (including Python 3.10).

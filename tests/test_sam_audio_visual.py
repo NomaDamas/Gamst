@@ -62,7 +62,7 @@ class VisualAlignmentTests(unittest.TestCase):
         sizes=visual_allocation_bounds(frame_count=10,height=64,width=64,
                                       feature_count=25,image_size=224)
         self.assertEqual(sizes['preprocessing_tensor_bytes'],
-                         10*4*64*64+2*25*3*64*64+25*3*224*224+4*25*3*(64*64+3*224*224))
+                         3*10*4*64*64+2*25*3*64*64+25*3*224*224+4*25*3*(64*64+3*224*224))
         with self.assertRaises(ValueError):
             visual_allocation_bounds(frame_count=1,height=16,width=16,
                                      feature_count=96,image_size=336)

@@ -93,7 +93,8 @@ class HumanSense:
             except BaseException:pass
 
     def enable_separation_media(self, *, subject_id='local-user', source_id, sensor_id,
-                                ttl_ms=30000, capacity=8, max_bytes=16*1024*1024):
+                                ttl_ms=30000, capacity=8, max_bytes=16*1024*1024,
+                                visual_source=None):
         """Grant an explicit local media owner. No public API/MCP audio exposure.
 
         Call within this runtime's event loop. Retention settings are shared by
@@ -109,7 +110,7 @@ class HumanSense:
         store = self._separation_media
         if (ttl_ms, capacity, max_bytes) != (store.ttl_ms, store.capacity, store.max_bytes):
             raise ValueError('separation retention settings differ from existing runtime owner')
-        return store.grant(subject_id, source_id, sensor_id)
+        return store.grant(subject_id, source_id, sensor_id, visual_source=visual_source)
 
     def _clear_separation_media(self):
         if self._separation_media is not None:
