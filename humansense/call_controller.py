@@ -133,6 +133,7 @@ class CallController:
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
             self._requests[token] = dict(id=token, source=handle, fingerprint=fingerprint,
                 state='pending', decision=d, record=record, rules=rules,
+                freshness_ms=record['observation']['capability']['freshness_ms'],
                 submitted_ms=now, expires_ms=min(2**53-1, now+self._retention), priority=priority,
                 reservation=None, execution=None, finished=False, charged=False,
                 discard=False, outcome=None)
@@ -148,7 +149,7 @@ class CallController:
         blockers = []
         if now >= r['expires_ms']:
             blockers.append('retention_expired')
-        if now-capture > min(self._policy.max_age_ms, r['record']['observation']['capability']['freshness_ms']):
+        if now-capture > min(self._policy.max_age_ms, r['freshness_ms']):
             blockers.append('stale_capture')
         if s['last_dispatch'] is not None and now-s['last_dispatch'] < self._policy.cooldown_ms:
             blockers.append('cooldown')
@@ -189,8 +190,9 @@ class CallController:
                 return dict(status='blocked', blockers=blockers)
             self._budget.dispatch(r['reservation']['token'], now_ms=now)
             r['state'] = 'dispatched'
+            observation = r.pop('record')
             self._sources[r['source']]['last_dispatch'] = now
-            return dict(status='dispatched', execution=deepcopy(r['execution']),
+            return dict(status='dispatched', execution=deepcopy(r['execution']), observation=deepcopy(observation),
                 evidence=deepcopy(r['decision']['evidence']), visual_reference=deepcopy(r['decision']['visual_reference']))
 
     def finish(self, token, *, success, evidence_sha256, result_sha256, now_ms):

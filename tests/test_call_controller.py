@@ -117,6 +117,19 @@ class ControllerTests(unittest.TestCase):
         t=d['request_id'];reserve(c,t);c.dispatch(t,now_ms=1000)
         with self.assertRaises(ValueError):c.finish(t,success=True,evidence_sha256='f'*64,result_sha256='d'*64,now_ms=1001)
 
+    def test_dispatched_observation_copy_is_not_retained_for_billing(self):
+        c=controller();r=record();r['observation']['value']={'text':'private-lived-context'}
+        h=c.open_source(r,now_ms=1000)
+        d=c.submit(h,r,sequence=1,now_ms=1000,visual_reference=visual())
+        t=d['request_id'];reserve(c,t)
+        admitted=c.dispatch(t,now_ms=1000)
+        self.assertEqual(admitted['observation'],r)
+        self.assertNotIn('private-lived-context',repr(c._requests))
+        admitted['observation']['observation']['value']['text']='mutated'
+        c.cancel(t,now_ms=1001);c.close_source(h,now_ms=1002)
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],20)
+        self.assertNotIn('private-lived-context',repr(c._requests))
+
     def test_concurrent_duplicate_dispatch_and_completion(self):
         c=controller();h=c.open_source(record(),now_ms=1000);d=submit(c,h,1);t=d['request_id'];reserve(c,t)
         def dispatch(_):
