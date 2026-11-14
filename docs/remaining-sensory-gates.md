@@ -30,6 +30,7 @@ exhaustive replacement of the acceptance map or a reduced MVP.
   prompt mode. Whole-window processing does not establish native causal streaming.
   Preserve ambient input and validate source separation against clean references.
 - **Tactile contact/slip, family17:**
+  Software acquisition scope: [bounded tactile capture/replay](tactile-capture.md) (#224). It reports input provenance/window readiness only; Sparsh/task-head inference (#225) and actual tactile validation (#226) remain separate requirements.
   [#188](https://github.com/NomaDamas/Gamst/issues/188), child of
   [#33](https://github.com/NomaDamas/Gamst/issues/33). IMU support does not complete
   the required DIGIT/GelSight capture plus Sparsh/task-head path. The
