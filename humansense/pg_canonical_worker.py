@@ -17,7 +17,12 @@ def main():
     if path.name!='request.json' or not stage.name.startswith('.gamst-pg-') or {p.name for p in stage.iterdir()}!={'request.json'}:
         raise ValueError('exclusive supervisor staging required')
     request=_json(_file(path,args.sha256,REQUEST_LIMIT,retain=True),REQUEST_LIMIT)
-    _keys(request,('graph','graph_sha','lock','lock_sha','canonical','canonical_sha'),'PG worker request')
+    keys=('graph','graph_sha','lock','lock_sha','canonical','canonical_sha')
+    _keys(request,keys+(('generation',) if 'generation' in request else ()),'PG worker request')
+    generation=None
+    if 'generation' in request:
+        from .pg_generation import policy
+        generation=policy(request['generation'],request['graph']['execution'])
     source=_absolute(request['graph']['bundle_root'])
     if stage==source or stage.is_relative_to(source) or source.is_relative_to(stage):
         raise ValueError('source/stage overlap')
@@ -27,6 +32,15 @@ def main():
         print(json.dumps(result,allow_nan=False),flush=True);return
     model,receipt=result
     try:
+        if generation is not None:
+            from .pg_generation import original_generate
+            from .pg_physical_worker import serve
+            from .pg_artifact import manifest_digest
+            generate=original_generate(request['graph'])
+            receipt['generation_sha256']=manifest_digest(generation)
+            print(json.dumps(receipt,allow_nan=False),flush=True)
+            serve(model,generate,request['graph'],generation,receipt)
+            return
         print(json.dumps(receipt,allow_nan=False),flush=True)
         # No inference command is accepted in this materialization-only delivery.
         command=sys.stdin.buffer.readline(64)
