@@ -49,6 +49,7 @@ over max_gap_ms, explicit reset and recovery after rejected input reset native
 state before another frame is tracked. Same-owner reordered/duplicate captures
 are rejected. Lifetime frame limits are never replenished by resets. Reopen an
 explicit new worker when exhausted; no automatic unlimited session renewal occurs.
+For planned bounded rotation, opt into [ORBSLAMProcess](orbslam-rotation.md).
 A native failure can require reopening rather than successful reset. Deadlines
 and cancellation belong to ProcessProvider, which reaps only its owned child.
 
