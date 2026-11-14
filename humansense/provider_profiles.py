@@ -24,6 +24,9 @@ def capability(profile, config):
     if profile == 'openeb.eventcd':
         from .providers.openeb import OpenEBContext
         return OpenEBContext.capability(**config)
+    if profile == 'sparsh.slip.local':
+        from .providers.sparsh_context import SparshSlipContext, configuration
+        return SparshSlipContext.capability(**configuration(config))
     if profile == 'efficientphys.local':
         from .providers.efficientphys_context import EfficientPhysContext, configuration
         return EfficientPhysContext.capability(**configuration(config))

@@ -27,6 +27,9 @@ def _construct(profile, config):
     elif profile == 'openeb.eventcd':
         from .providers.openeb import OpenEBContext
         provider = OpenEBContext(**config)
+    elif profile == 'sparsh.slip.local':
+        from .providers.sparsh_context import SparshSlipContext
+        provider = SparshSlipContext.from_local(**config)
     elif profile == 'efficientphys.local':
         from .providers.efficientphys_context import EfficientPhysContext
         provider = EfficientPhysContext.from_local(**config)
