@@ -83,6 +83,8 @@ class Owned(unittest.IsolatedAsyncioTestCase):
         worker=await ProcessProvider.open(sys.executable,'orbslam3.monocular',config)
         child=worker._process
         try:
+            with self.assertRaises(ValueError):
+                await worker.process(replace(frame(0),data=np.ma.array(frame(0).data,mask=True)))
             async with HumanSense(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('cam','video',[worker.spec.id]);start=timestamp()-1000

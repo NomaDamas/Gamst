@@ -50,6 +50,9 @@ def encode_frame(frame):
             raise ValueError('sensor payload too large')
         layout, payload = {'kind': 'bytes'}, bytes(data)
     elif hasattr(data, 'dtype') and hasattr(data, 'shape') and hasattr(data, 'tobytes'):
+        import numpy as np
+        if type(data) is not np.ndarray:
+            raise ValueError('plain ndarray required; masks/subclass semantics are not serialized')
         dtype, shape = data.dtype.str, list(data.shape)
         count = array_size(dtype, shape)
         if data.nbytes != count:

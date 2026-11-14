@@ -2,8 +2,10 @@
 
 `orbslam3.monocular` is an explicit ProcessProvider profile. It loads the
 [local native bridge](orbslam-native.md) only in its owned child process, converts
-calibrated uint8 BGR frames using OpenCV BGR2GRAY without resizing, and publishes
-`vision.camera_pose`. Discovery does not open assets or import numpy/OpenCV.
+calibrated plain numpy uint8 BGR frames using OpenCV BGR2GRAY without resizing, and publishes
+`vision.camera_pose`. Discovery does not open assets or import numpy/OpenCV. The shared worker wire
+rejects masked arrays and ndarray subclasses before serialization, so mask or
+subclass semantics cannot silently turn into ordinary pixel observations.
 The selected runtime needs numpy/OpenCV and a prebuilt native library with all
 its dependencies; no model or dependency downloads happen during provider startup.
 
