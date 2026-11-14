@@ -42,9 +42,13 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         self.server=await asyncio.start_server(serve,'127.0.0.1',0)
         self.client=OpenAIResponsesClient._loopback_fixture(port=self.server.sockets[0].getsockname()[1],api_key='fixture-key',model_revision='fixture-model',account_scope='fixture-account',project_id='fixture-project',evidence_session=self.sink)
     async def asyncTearDown(self):
-        await self.client.close();await self.sink.close();self.server.close();await self.server.wait_closed()
-        for task in tuple(self.connections):task.cancel()
-        if self.connections:await asyncio.gather(*tuple(self.connections),return_exceptions=True)
+        await self.client.close();await self.sink.close();self.server.close()
+        # Python3.12+ Server.wait_closed also joins active connections. Close our
+        # owned handlers first: a held fixture response cannot finish by itself.
+        handlers=tuple(self.connections)
+        for task in handlers:task.cancel()
+        if handlers:await asyncio.gather(*handlers,return_exceptions=True)
+        await self.server.wait_closed()
         self.tmp.cleanup()
     def prepare(self):
         prepared=self.client.prepare(request());return prepared,_issue_entry_binding(binding(prepared.sdk_hash))
@@ -92,6 +96,27 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(p._task.done());self.assertIsNone(p.writer);self.assertEqual(len(self.calls),1)
         m=self.manifest();self.assertEqual(m['terminal'],'cancelled');self.assertIsNone(m['server_request_id'])
         self.assertIn('possible_send',[x['event'] for x in m['milestones']])
+
+    async def test_fixture_teardown_joins_held_handler_before_server_barrier(self):
+        self.hold=asyncio.Event();p,b=self.prepare()
+        active=asyncio.create_task(p.invoke(b));await self.entered.wait()
+        handlers=tuple(self.connections);self.assertEqual(len(handlers),1)
+        cleanup=asyncio.create_task(self.asyncTearDown())
+        try:
+            # Fixture-only watchdog, not a production response deadline.
+            done,_=await asyncio.wait((cleanup,),timeout=5)
+            self.assertIn(cleanup,done,'owned fixture handlers must precede Server.wait_closed')
+            await cleanup
+            with self.assertRaises(asyncio.CancelledError):await active
+            self.assertTrue(all(task.done() for task in handlers))
+            self.assertFalse(self.connections);self.assertIsNone(p.writer)
+            self.assertTrue(p._task.done());self.assertFalse(self.server.is_serving())
+        finally:
+            # Also leave the old/broken ordering repro free of owned test tasks.
+            for task in handlers:
+                if not task.done():task.cancel()
+            await asyncio.gather(*handlers,return_exceptions=True)
+            await cleanup
 
     async def test_session_closes_unused_lease_and_prevents_late_send(self):
         p,b=self.prepare();inventory=await self.sink.close()
