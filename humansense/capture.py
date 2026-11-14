@@ -81,6 +81,11 @@ class CaptureSession:
         try:
             return await self._start(), None
         except BaseException as exc:
+            if not isinstance(exc, asyncio.CancelledError):
+                # Cancellation of the caller must not hide a native failure
+                # that arrives later while cleanup is draining startup.
+                self._errors.append(f"startup: {exc}")
+                self._errors[:] = self._errors[-20:]
             return None, exc
 
     async def _start(self):

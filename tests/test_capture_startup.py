@@ -160,3 +160,23 @@ class CaptureStartupTests(unittest.IsolatedAsyncioTestCase):
                 gate.allow.set()
                 await asyncio.gather(*(t for t in (start, stop) if t is not None), return_exceptions=True)
                 await session.stop()
+
+    async def test_cancel_preserves_late_native_failure_in_public_diagnostics(self):
+        camera = Device()
+        gate = Gate(error=ValueError('late microphone constructor failure'))
+        session = CaptureSession(object(), video=0, audio=True, consent=True)
+        with patch.dict('sys.modules', {'cv2': SimpleNamespace(VideoCapture=lambda _: camera),
+                                       'sounddevice': SimpleNamespace(InputStream=gate)}):
+            start = asyncio.create_task(session.start())
+            try:
+                await asyncio.wait_for(gate.entered.wait(), 2)
+                start.cancel(); await asyncio.sleep(0)
+                gate.allow.set()
+                with self.assertRaises(asyncio.CancelledError): await start
+                self.assertEqual(camera.calls, ['release'])
+                self.assertEqual(session.status()['errors'], ['startup: late microphone constructor failure'])
+                with self.assertRaisesRegex(RuntimeError, 'late microphone constructor failure'):
+                    await session.wait()
+                self.assertFalse(session.status()['cleanup_pending'])
+            finally:
+                gate.allow.set(); await asyncio.gather(start, return_exceptions=True); await session.stop()
