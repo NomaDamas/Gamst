@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import time
 
-from .paired_replay import _execute, _encoded, _keys, _write_new, validate_command
+from .paired_replay import _execute, _encoded, _keys, _write_new, validate_command, validate_command_declaration
 from .perception_comparison import plan_digest, _digest
 from .three_arm_comparison import _snapshot, _read, validate_three_arm_plan
 
@@ -15,7 +15,7 @@ PERMUTATIONS = ('ABC', 'ACB', 'BAC', 'BCA', 'CAB', 'CBA')
 MAX_TRACE_BYTES = 512*1024
 
 
-def validate_collection_spec(comparison_plan, collection_spec, inputs, *, expected_plan_sha256,
+def validate_collection_declaration(comparison_plan, collection_spec, inputs, *, expected_plan_sha256,
                              expected_collection_sha256):
     """Return detached validated declarations; preflight never starts a command."""
     plan = validate_three_arm_plan(comparison_plan, expected_plan_sha256=expected_plan_sha256)
@@ -33,7 +33,7 @@ def validate_collection_spec(comparison_plan, collection_spec, inputs, *, expect
         raise ValueError('bounded timeout and fixed six-permutation order required')
     _keys(runner['commands'], ('A', 'B', 'C'), 'commands')
     for command in runner['commands'].values():
-        validate_command(command)
+        validate_command_declaration(command)
     policy = spec['evidence_join']
     _keys(policy, ('schema_version', 'rubric_sha256', 'measurement_protocol_sha256', 'failure_policy'), 'evidence join')
     if (type(policy['schema_version']) is not int or policy['schema_version'] != 1 or
@@ -53,6 +53,15 @@ def validate_collection_spec(comparison_plan, collection_spec, inputs, *, expect
             raise ValueError('recorded input differs from frozen task')
         by_id[task] = item['input']
     return plan, spec, by_id
+
+
+def validate_collection_spec(comparison_plan, collection_spec, inputs, *, expected_plan_sha256,
+                             expected_collection_sha256):
+    result = validate_collection_declaration(comparison_plan, collection_spec, inputs,
+        expected_plan_sha256=expected_plan_sha256, expected_collection_sha256=expected_collection_sha256)
+    for command in result[1]['runner']['commands'].values():
+        validate_command(command)
+    return result
 
 
 async def run(comparison_plan, collection_spec, inputs, output_directory, *, expected_plan_sha256,
