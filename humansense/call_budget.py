@@ -182,6 +182,14 @@ class CallBudget:
                     self._release(r, 'closed_undispatched', now)
             return self.snapshot()
 
+    def redact_evidence(self):
+        """Drop correlation provenance without deleting charges or liabilities."""
+        with self._lock:
+            for record in list(self._active.values()) + list(self._recent):
+                for key in ('decision_sha256', 'evidence_sha256', 'provider', 'model_revision'):
+                    record.pop(key, None)
+                record['evidence_redacted'] = True
+
     def snapshot(self):
         with self._lock:
             return deepcopy(dict(scope=self._scope, unit=self.unit,
