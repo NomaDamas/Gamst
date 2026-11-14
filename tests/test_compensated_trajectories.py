@@ -81,14 +81,44 @@ class Paths(unittest.TestCase):
 
     def test_maximum_labels_histories_and_reference_provenance_fit_context(self):
         import json
-        source=images.Similarity();source.setUp();image=source.texture(1023,511)
-        self.backend.rows=tuple((10+i*100,100,20+i*100,110,.987654321,i,chr(0x10000+i)*256) for i in range(8))
-        for i in range(8):
-            frame=InputFrame(image,'video',2**53-801+i*100,'s'*128,sensor=SensorMetadata(
-                'c'*128,'i'*128,i,'f'*128,stream_epoch='e'*128,calibration_id='k'*128))
+        np,cv=images.np,images.cv
+        source=images.Similarity();source.setUp();image=source.texture(1001,663)
+        self.provider.detector.version='1.12.1.eager.sha256.'+'a'*64
+        anchor=None
+        for i in range(12):
+            matrix=np.eye(3);matrix[:2]=cv.getRotationMatrix2D((500.5,331.5),i*.75,1.003**i)
+            matrix[:2,2]+=np.array([i*1.23456789,i*.87654321])
+            rows=[]
+            for j in range(8):
+                x,y=110+j*100,210
+                corners=np.array([[x,y,1],[x+7,y,1],[x+7,y+7,1],[x,y+7,1]])@matrix.T
+                low,high=corners[:,:2].min(axis=0),corners[:,:2].max(axis=0)
+                rows.append((*low,*high,.987654321,j,chr(0x10000+j)*256))
+            self.backend.rows=tuple(rows)
+            seq=2**63-20+i
+            frame=InputFrame(cv.warpAffine(image,matrix[:2],(1001,663)),
+                'video',2**53-801+i*30,'s'*128,sensor=SensorMetadata(
+                'c'*128,'i'*128,seq,'f'*128,stream_epoch='e'*128,
+                calibration_id='k'*128,capture_sequence=seq))
             result=self.provider.process(frame)
             self.assertLessEqual(len(json.dumps(result,ensure_ascii=True).encode()),65536)
-        self.assertEqual(result['geometry']['status'],'estimated',result['geometry'])
+            if anchor is None:anchor=result['geometry']['anchor']
+            self.assertEqual(result['geometry']['anchor'],anchor)
+            if i:
+                self.assertEqual(result['geometry']['status'],'estimated',result['geometry'])
+                self.assertEqual(len(result['objects']),8)
+                mappings=result['geometry']['projection_records']
+                self.assertLessEqual(len(mappings),8)
+                for obj in result['objects']:
+                    self.assertEqual(obj['anchor_id'],anchor['id'])
+                    for sample in obj['observations']:
+                        records=[r for r in mappings if all(r[k]==sample[k] for k in
+                            ('capture_sequence','timestamp_ms','evidence_sha256'))]
+                        self.assertEqual(len(records),1)
+                        self.assertNotIn('current_to_anchor_pixels',sample)
+                        raw=sample['raw_centroid']
+                        point=np.asarray(records[0]['current_to_anchor_pixels'])@np.array([raw[0]*1001,raw[1]*663,1])
+                        np.testing.assert_allclose(point[:2]/[1001,663],sample['anchor_projection'])
         self.assertEqual([len(obj['observations']) for obj in result['objects']],[8]*8)
         self.assertEqual(len(result['detections'][0]['label']),256)
         self.assertNotIn('label',result['objects'][0])

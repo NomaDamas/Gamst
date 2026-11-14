@@ -71,7 +71,12 @@ frame, and ambiguous associations start new track/trajectory segments.
 
 `C_t = C_(t-1) @ inverse(G_t)` maps current pixels to a named anchor image. Each
 history sample retains its raw centroid, capture time/sequence, evidence hash,
-separate estimated anchor projection and that sample's actual mapping matrix.
+separate estimated anchor projection. Up to8 `geometry.projection_records` store
+each frame's actual mapping once. Resolve a sample within the same output and
+anchor by exact capture sequence, timestamp and evidence SHA256; the match must
+be unique. Keep the complete snapshot when forwarding/persisting histories.
+Original anchor capture provenance remains even after its sample leaves the
+8-frame history.
 Anchor coordinates are normalized by the anchor image width/height and may lie
 outside[0,1]. Values outside[-4,5] invalidate the reference rather than being
 clipped. These units are not meters. Velocity uses actual capture intervals and

@@ -57,7 +57,7 @@ class CompensatedTrajectories:
     def _clear(self):
         self.detector.reset()
         self.owner=self.last=self.previous=self.anchor=self.to_anchor=None
-        self.boxes=[];self.paths={};self.links=0
+        self.boxes=[];self.paths={};self.mappings=[];self.links=0
 
     def reset(self):
         with self.lock:self._clear()
@@ -133,11 +133,14 @@ class CompensatedTrajectories:
         valid=complete and transform is not None and reason is None
         projected_boxes=self._project_boxes(transform,size) if valid else {}
         if not valid:
-            self.detector.reset();self.paths={};self.links=0
+            self.detector.reset();self.paths={};self.mappings=[];self.links=0
             self.to_anchor=np.eye(3)
             self.anchor=dict(id=uuid.uuid4().hex,timestamp_ms=ts,capture_sequence=seq,evidence_sha256=digest)
         else:self.to_anchor=candidate;self.links+=1
         detected=self.detector._associate_rows(*batch,association_boxes=projected_boxes,visible_only=True)
+        mapping=dict(capture_sequence=seq,timestamp_ms=ts,evidence_sha256=digest,
+                     current_to_anchor_pixels=self.to_anchor.tolist())
+        mappings=(self.mappings+[mapping])[-8:]
         pending={};objects=[]
         for item in detected['objects'] if complete else []:
             key=item['track_id'];box=item['location']['bbox']
@@ -145,7 +148,7 @@ class CompensatedTrajectories:
             point=self.to_anchor@np.array([raw[0]*size[0],raw[1]*size[1],1.])
             projection=[float(point[0]/size[0]),float(point[1]/size[1])]
             sample=dict(timestamp_ms=ts,capture_sequence=seq,raw_centroid=raw,anchor_projection=projection,
-                evidence_sha256=digest,current_to_anchor_pixels=self.to_anchor.tolist(),
+                evidence_sha256=digest,
                 kind='observed_with_estimated_projection')
             prior=self.paths.get(key) if valid else None
             segment=prior['segment_id'] if prior else uuid.uuid4().hex
@@ -168,6 +171,8 @@ class CompensatedTrajectories:
             camera_motion_compensated=valid,camera_motion_verified=False,metric_geometry=False,
             reference_units='anchor_image_width_height',anchor=self.anchor,composition_links=self.links,
             current_to_anchor_pixels=self.to_anchor.tolist() if valid else None,
+            projection_records=mappings if valid else [],
+            projection_record_join='same_anchor_capture_sequence_timestamp_evidence_sha256',
             previous_to_current_pixels=transform.tolist() if valid else None,
             previous_evidence_sha256=self.last[2] if valid else None,
             previous_capture_timestamp_ms=self.last[0] if valid else None,
@@ -178,7 +183,7 @@ class CompensatedTrajectories:
             opencv_version=self.motion.cv.__version__,config_version=self.spec.version)
         result=self.spec.validate(dict(detections=detected['objects'],objects=objects,geometry=geometry))
         if complete:
-            self.paths=pending;self.previous=gray;self.boxes=current_boxes
+            self.paths=pending;self.mappings=mappings;self.previous=gray;self.boxes=current_boxes
             self.owner=owner;self.last=(ts,seq,digest)
         else:self._clear()
         return result
