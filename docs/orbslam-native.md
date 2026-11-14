@@ -52,7 +52,8 @@ build declaration, not cryptographic attestation of the upstream library.
 
 ## Calibration and observations
 
-Only the flat version1 PinHole settings subset is accepted. The pinned upstream
+Only the flat version1 PinHole settings subset is accepted. A single `%YAML:1.0`
+header must precede all fields (blank/comment lines may precede it). The pinned upstream
 [Settings parser](https://github.com/UZ-SLAMLab/ORB_SLAM3/blob/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4/src/Settings.cc)
 requires camera, ORB extractor and viewer fields even when the viewer is disabled.
 Provide the fields in the upstream monocular example, with integer syntax for

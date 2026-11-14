@@ -54,10 +54,14 @@ class ORBSLAMNative:
                         'ORBextractor.iniThFAST':(1,255),'ORBextractor.minThFAST':(1,255)}
         distortion={'Camera1.'+key for key in ('k1','k2','p1','p2','k3')}
         required=(numeric-distortion)|{'File.version','Camera.type'}
-        seen=set();values={}
+        seen=set();values={};header=False
         for line in text.splitlines():
             line=line.split('#',1)[0].strip()
-            if not line or line=='%YAML:1.0':continue
+            if not line:continue
+            if not header:
+                if line!='%YAML:1.0':raise ValueError('OpenCV YAML1.0 header must be first')
+                header=True
+                continue
             key,sep,value=line.partition(':');value=value.strip()
             if not sep or key in seen:raise ValueError('flat unique camera settings required')
             seen.add(key)

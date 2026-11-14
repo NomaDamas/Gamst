@@ -90,13 +90,13 @@ class Native(unittest.TestCase):
         with patch.dict(os.environ,{'GAMST_PROVIDER_WORKER':'0'}):
             with self.assertRaises(RuntimeError):ORBSLAMNative(**self.args())
         for extra in ('System.SaveAtlasFromFile: "outside"','"System.SaveAtlasFromFile": "outside"',
-                      'Camera.width: 40','Camera1.k1: .nan','Camera1.k1: 1e999','garbage: 1'):
+                      '%YAML:1.0','Camera.width: 40','Camera1.k1: .nan','Camera1.k1: 1e999','garbage: 1'):
             self.settings.write_text(SETTINGS+extra+'\n')
             with self.assertRaises(ValueError):ORBSLAMNative(**self.args())
         self.settings.write_text(SETTINGS);self.open()
 
     def test_required_types_ranges_and_distortion_are_checked_before_native_open(self):
-        replacements=(('Camera.RGB: 0\n',''),('Camera.fps: 30','Camera.fps: 30.0'),
+        replacements=(('%YAML:1.0\n',''),('Camera.RGB: 0\n',''),('Camera.fps: 30','Camera.fps: 30.0'),
                       ('Camera1.fx: 100.0','Camera1.fx: 100'),
                       ('Camera1.fx: 100.0','Camera1.fx: 1.0e-300'),
                       ('Camera1.fy: 100.0','Camera1.fy: 1.0e-40'),
