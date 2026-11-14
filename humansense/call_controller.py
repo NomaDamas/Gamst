@@ -121,6 +121,15 @@ class CallController:
                 last_dispatch=None, last_semantic=None, last_capture=None)
             return handle
 
+    def submit_next(self, handle, record, *, now_ms, **rules):
+        """Allocate one ordered submission atomically for owned orchestrators.
+
+        Retains all source/capture/fingerprint/budget rules; callers using the
+        explicit sequence API must continue from the controller's actual order.
+        """
+        with self._lock:
+            return self.submit(handle,record,sequence=self._submission_seq+1,now_ms=now_ms,**rules)
+
     def submit(self, handle, record, *, sequence, now_ms, **rules):
         allowed = {'change_score', 'query', 'needs_visual', 'unknown_candidate',
                    'conflict_rule', 'visual_reference'}
