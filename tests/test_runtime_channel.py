@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import socket
 import struct
+import sys
 import tempfile
 import time
 import unittest
@@ -13,7 +14,7 @@ from benchmarks.paired_replay import _encoded
 from benchmarks.paired_replay import _execute
 from benchmarks.perception_comparison import plan_digest
 from benchmarks.runtime_channel import (ParentChannel,ChildChannel,CollectionBudget,frame,receive,
-    build_bootstrap,load_declarations,read_declaration_paths,validate_instrumentation_protocol,HASH_FIELDS,MAX_FRAME,MAX_BYTES,FD_ENVIRONMENT_KEY)
+    build_bootstrap,load_declarations,read_declaration_paths,validate_instrumentation_protocol,HASH_FIELDS,MAX_FRAME,MAX_BYTES,FD_ENVIRONMENT_KEY,RuntimeChannelError)
 
 
 def declarations(root):
@@ -62,7 +63,9 @@ class Channel(unittest.IsolatedAsyncioTestCase):
             previous_sha256='0'*64,payload=event());item['sha256']=plan_digest(item)
         await asyncio.get_running_loop().sock_sendall(peer,frame(item))
         bad=dict(item,sequence=2);bad.pop('sha256');bad['sha256']=plan_digest(bad)
-        await asyncio.get_running_loop().sock_sendall(peer,frame(bad));peer.close();await reader;parent.close()
+        await asyncio.get_running_loop().sock_sendall(peer,frame(bad));peer.close()
+        with self.assertRaises(RuntimeChannelError):await reader
+        parent.close()
         self.assertEqual(len(parent.events),1);self.assertEqual(parent.sequence,1)
         self.assertFalse(parent.snapshot()['instrumentation_complete']);self.assertEqual(parent.reason,'invalid_channel')
     async def test_global_budget_and_environment_collision_close_owned_fds(self):
@@ -70,7 +73,8 @@ class Channel(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):parent.prepare({FD_ENVIRONMENT_KEY:'2'},1)
         parent.close();self.assertEqual(parent.parent.fileno(),-1);self.assertEqual(parent.child.fileno(),-1)
         parent=ParentChannel(self.bootstrap,budget=CollectionBudget(16));peer,reader=await self.peer(parent)
-        await reader;peer.close();parent.close();self.assertTrue(parent.budget.exhausted)
+        with self.assertRaises(RuntimeChannelError):await reader
+        peer.close();parent.close();self.assertTrue(parent.budget.exhausted)
         self.assertFalse(parent.snapshot()['instrumentation_complete'])
     async def test_child_reservation_control_credit_and_blocked_writer_are_bounded(self):
         left,right=socket.socketpair();left.setblocking(False);right.setblocking(False)
@@ -107,7 +111,8 @@ class Channel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'error');self.assertEqual(parent.child.fileno(),-1);self.assertEqual(parent.parent.fileno(),-1)
         parent=ParentChannel(self.bootstrap);parent.prepare({},.02)
         peer=parent.child.dup();peer.setblocking(False);parent.spawned();started=time.monotonic()
-        await parent.collect();parent.close();peer.close()
+        with self.assertRaises(asyncio.TimeoutError):await parent.collect()
+        parent.close();peer.close()
         self.assertLess(time.monotonic()-started,.5);self.assertEqual(parent.reason,'deadline_exceeded')
     async def test_declarations_are_bounded_regular_immutable_identity(self):
         self.assertEqual(load_declarations(self.bootstrap)['inputs'],[])
@@ -125,6 +130,62 @@ class Channel(unittest.IsolatedAsyncioTestCase):
         with first.open('wb') as stream:stream.truncate(MAX_BYTES+1)
         with patch('benchmarks.runtime_channel._strict_decode',side_effect=AssertionError('oversize data was decoded')):
             with self.assertRaises(ValueError):read_declaration_paths(self.bootstrap['paths'])
+    async def test_invalid_channel_stops_owned_child_before_post_error_work(self):
+        marker=self.root/'forbidden-post-error-work';script=self.root/'bad-child.py'
+        script.write_text('''import json,os,socket,struct,time
+from pathlib import Path
+s=socket.socket(fileno=int(os.environ['GAMST_EVALUATION_FD']))
+def exact(n):
+    data=b''
+    while len(data)<n:data+=s.recv(n-len(data))
+    return data
+exact(struct.unpack('!I',exact(4))[0])
+data=json.dumps(dict(schema_version=1,type='wronghello')).encode()
+s.sendall(struct.pack('!I',len(data))+data)
+time.sleep(.15)
+Path('forbidden-post-error-work').write_text('must not execute')
+time.sleep(30)
+''')
+        parent=ParentChannel(self.bootstrap);children=[];real=asyncio.create_subprocess_exec
+        async def spawn(*args,**kwargs):
+            child=await real(*args,**kwargs);children.append(child);return child
+        with patch('asyncio.create_subprocess_exec',spawn):
+            started=time.monotonic()
+            result=await _execute(dict(argv=[sys.executable,str(script)],cwd=str(self.root),environment={}),{},3000,runtime_channel=parent)
+        self.assertLess(time.monotonic()-started,1)
+        self.assertEqual(result['status'],'error');self.assertEqual(result['diagnostic'],'RuntimeChannelError')
+        self.assertEqual(parent.reason,'invalid_channel');self.assertFalse(marker.exists())
+        self.assertTrue(children and all(child.returncode is not None for child in children))
+        self.assertEqual(parent.parent.fileno(),-1);self.assertEqual(parent.child.fileno(),-1)
+    async def test_abort_joins_blocked_writer_and_concurrent_close_despite_repeated_cancel(self):
+        for closing in (False,True):
+            with self.subTest(closing=closing):
+                left,right=socket.socketpair();left.setblocking(False);right.setblocking(False)
+                left.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,4096)
+                child=ChildChannel(left,dict(self.bootstrap,deadline_ns=time.monotonic_ns()+30000000000))
+                close=None
+                try:
+                    started=time.monotonic()
+                    child.reserve(63,63*4096)
+                    for index in range(63):child.emit(event(index,operation_id='b'*32))
+                    if closing:close=asyncio.create_task(child.close(reports=[{'sha256':'a'*64}]*2,summary={}))
+                    await asyncio.sleep(.01)
+                    task=asyncio.create_task(child.abort());await asyncio.sleep(0);task.cancel();await asyncio.sleep(0);task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):await task
+                    await child.abort();await child.close(reports=[],summary={})
+                    self.assertTrue(child.writer.done());self.assertTrue(child.abort_task.done());self.assertEqual(left.fileno(),-1)
+                    self.assertLess(time.monotonic()-started,1)
+                    if child.close_task is not None:self.assertTrue(child.close_task.done())
+                    with self.assertRaises(RuntimeError):child.reserve(1,1)
+                    received=bytearray()
+                    while True:
+                        block=await asyncio.wait_for(asyncio.get_running_loop().sock_recv(right,65536),.5)
+                        if not block:break
+                        received.extend(block)
+                    self.assertNotIn(b'"type":"terminal"',received)
+                finally:
+                    if close is not None:await asyncio.gather(close,return_exceptions=True)
+                    right.close()
 
 
 if __name__=='__main__':unittest.main()

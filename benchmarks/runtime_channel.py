@@ -22,6 +22,7 @@ CONTROL_EVENTS = 32
 CONTROL_BYTES = 64*1024
 FINAL_BYTES = 3*(MAX_FRAME+4)
 CLOSE_TIMEOUT_SECONDS = 5
+MAX_CALL_RESERVATIONS = 1024
 HASH_FIELDS = ('comparison_plan_sha256','collection_sha256','inputs_sha256','stream_protocol_sha256',
     'allocation_protocol_sha256','reconciliation_protocol_sha256','instrumentation_protocol_sha256')
 PATH_HASHES = dict(zip(('plan','collection','inputs','stream_protocol','allocation_protocol',
@@ -51,6 +52,10 @@ def _attempt_id(value):
     scope,separator,index=value.partition(':')
     return (len(scope)==32 and all(c in '0123456789abcdef' for c in scope) and separator==':' and
             index.isascii() and index.isdecimal() and len(index)<=3 and str(int(index))==index and int(index)<128)
+
+
+class RuntimeChannelError(RuntimeError):
+    """Invalid side-channel data requires prompt owned invocation cleanup."""
 for _milestone in ('spawn_begin','handle_acquired','handshake_ready','handshake_failed',
                    'reap_confirmed','operation_started','operation_finished','invalidated'):
     EVENT_FIELDS[_milestone]={'returncode','status','operation','parent_operation_id'}
@@ -393,7 +398,8 @@ class ParentChannel:
         reasons=summary['incomplete_reasons']
         allowed={'control_event_capacity_exhausted','invalidation_journal_failed','invocations_not_drained',
             'journal_capacity_exhausted','journal_reservation_failed','journal_sink_failed','reserved_event_capacity_exhausted',
-            'terminal_observation_failed','unfinished_owned_operation','worker_reap_unverified','native_admission_failed_before_callback'}
+            'terminal_observation_failed','unfinished_owned_operation','worker_reap_unverified','native_admission_failed_before_callback',
+            'native_attempt_capacity_exhausted','call_reservation_capacity_exhausted'}
         if type(reasons) is not list or any(type(r) is not str or r not in allowed for r in reasons) or reasons!=sorted(set(reasons)):
             raise ValueError('known incomplete reasons required')
         self._workers(summary['worker_measurements'],summary['incomplete_reasons'])
@@ -410,7 +416,7 @@ class ParentChannel:
             if name not in ('call_capacity_reserved','controller_dispatched','backend_entry_admission',
                             'backend_invocation_finished','call_publication_finished','call_capacity_released'):continue
             if name=='call_capacity_reserved':
-                if ident in operations or len(operations)>=128:raise ValueError('duplicate/excess observed call reservation')
+                if ident in operations or len(operations)>=MAX_CALL_RESERVATIONS:raise ValueError('duplicate/excess observed call reservation')
                 operations[ident]={}
             marks=operations.get(ident)
             if marks is None or name in marks or 'call_publication_finished' in marks or 'call_capacity_released' in marks:
@@ -561,6 +567,8 @@ class ParentChannel:
             self.reason='cancelled';raise
         except Exception as error:
             self.reason='deadline_exceeded' if isinstance(error,asyncio.TimeoutError) else 'invalid_channel'
+            if isinstance(error,asyncio.TimeoutError):raise
+            raise RuntimeChannelError('invalid runtime side channel') from None
         finally:self.parent.close()
     def close(self):
         self.closed=True;self.parent.close();self.child.close()
@@ -583,7 +591,7 @@ class ChildChannel:
         self.queued_bytes=0;self.used=0;self.events=0;self.reserved_events=0;self.reserved_bytes=0
         self.control_events=0;self.control_bytes=0;self.sequence=0;self.previous='0'*64
         self.failure=None;self.closed=False;self.writer=asyncio.create_task(self._write())
-        self.close_task=None
+        self.close_task=None;self.abort_task=None
     @classmethod
     async def from_environment(cls):
         raw=os.environ.get(FD_ENVIRONMENT_KEY)
@@ -649,10 +657,35 @@ class ChildChannel:
             self.socket.close()
     async def close(self,*,reports,summary):
         from .paired_replay import _finish_owned
+        if self.abort_task is not None:
+            try:return await asyncio.shield(self.abort_task)
+            except asyncio.CancelledError:
+                await _finish_owned(self.abort_task);raise
         if self.close_task is None:self.close_task=asyncio.create_task(self._close(reports,summary))
         try:return await asyncio.shield(self.close_task)
         except asyncio.CancelledError:
             await _finish_owned(self.close_task);raise
+    async def abort(self):
+        """Reap this journal's writer/socket without emitting a success terminal."""
+        from .paired_replay import _finish_owned
+        if self.abort_task is None:self.abort_task=asyncio.create_task(self._abort())
+        try:return await asyncio.shield(self.abort_task)
+        except asyncio.CancelledError:
+            await _finish_owned(self.abort_task);raise
+    async def _abort(self):
+        self.closed=True;self.failure='aborted'
+        # Revoke the FD before joining cancellation: Python 3.10 wait_for can
+        # consume cancellation racing a completed socket write. A later writer
+        # iteration must fail immediately instead of using the original deadline.
+        self.socket.close()
+        try:
+            if self.close_task is not None and not self.close_task.done():self.close_task.cancel()
+            if self.close_task is not None:await asyncio.gather(self.close_task,return_exceptions=True)
+        finally:
+            self.socket.close()
+            if not self.writer.done():self.writer.cancel()
+            await asyncio.gather(self.writer,return_exceptions=True)
+            self.socket.close()
     async def _close(self,reports,summary):
         if self.closed:return
         self.closed=True
@@ -670,6 +703,7 @@ class ChildChannel:
             await _until(asyncio.shield(self.writer),deadline)
             self.socket.shutdown(socket.SHUT_WR)
         finally:
+            self.socket.close()
             if not self.writer.done():self.writer.cancel()
             await asyncio.gather(self.writer,return_exceptions=True)
             self.socket.close()

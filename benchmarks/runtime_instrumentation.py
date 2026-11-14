@@ -13,6 +13,7 @@ from .three_arm_comparison import _snapshot
 MAX_EVENTS = 8192
 MAX_BYTES = 16*1024*1024
 MAX_OPERATIONS = 1024
+MAX_CALL_RESERVATIONS = 1024
 MAX_WORKERS = 32
 
 
@@ -52,7 +53,7 @@ class EvaluationSession:
         self._limit=max_attempts;self._events=[];self._bytes=0;self._reserved=0;self._reserved_bytes=0
         self._closed=False;self._terminal=False;self._revoked=False;self._incomplete=set()
         self._terminal_result=None;self._close_task=None
-        self._tickets={};self._workers={};self._links={};self._operations=0;self._calls=0;self._running=set()
+        self._tickets={};self._workers={};self._links={};self._operations=0;self._calls=0;self._call_reservations=0;self._running=set()
         self._started=time.monotonic_ns();self._ended=None
         self._identity=dict(comparison_plan_sha256=expected_plan_sha256,collection_sha256=expected_collection_sha256,
             stream_protocol_sha256=expected_stream_protocol_sha256,reconciliation_protocol_sha256=expected_reconciliation_protocol_sha256,
@@ -135,6 +136,9 @@ class EvaluationSession:
         return now
 
     def _release_capacity(self,ticket):
+        # Native credit belongs to actual callbacks, not refused or pre-entry work.
+        # Their bounded journal tickets remain immutable for liability accounting.
+        if isinstance(ticket,_Call) and ticket.attempt_id is None:self._calls-=1
         self._reserved-=ticket._events_left;self._reserved_bytes-=ticket._bytes_left
         if self._journal is not None and hasattr(self._journal,'release'):
             self._journal.release(ticket._events_left,ticket._bytes_left)
@@ -152,7 +156,12 @@ class EvaluationSession:
         self._links[request_id]=(previous.attempt_id,relationship)
 
     def reserve_call(self, controller, request_id, *, provider, model_revision, prompt_sha256):
-        if self._calls>=self._limit: raise RuntimeError('native task attempt admission bound reached')
+        if self._calls>=self._limit:
+            self._mark('native_attempt_capacity_exhausted')
+            raise RuntimeError('native task attempt admission bound reached')
+        if self._call_reservations>=MAX_CALL_RESERVATIONS:
+            self._mark('call_reservation_capacity_exhausted')
+            raise RuntimeError('call journal reservation inventory exhausted')
         state=controller.snapshot()
         pending=next((r for r in state['requests'] if r['id']==request_id),None)
         if state['closed'] or pending is None or pending['state']!='pending':
@@ -165,7 +174,7 @@ class EvaluationSession:
         from .call_attempts import _binding
         if not _binding(self._task._card,provider,model_revision):
             raise ValueError('provider is outside frozen evaluation rate card')
-        self._reserve(8,32768);self._calls+=1
+        self._reserve(8,32768);self._calls+=1;self._call_reservations+=1
         ticket=_Call(self,provider,model_revision,role,prompt_sha256,evidence['record_sha256'],evidence['subject_id'],controller,request_id)
         ticket._predecessor,ticket._relationship=self._links.pop(request_id,(None,'root'))
         self._tickets[ticket.id]=ticket
@@ -330,11 +339,45 @@ class EvaluationSession:
         self._task.close();self._stream.close();self._ended=time.monotonic_ns()
         if any('reap_confirmed' not in w._marks for w in self._workers.values()):self._mark('worker_reap_unverified')
         self._terminal=True
-        result=self.snapshot()
-        self._terminal_result=deepcopy(result)
+        try:
+            result=self.snapshot()
+            self._terminal_result=deepcopy(result)
+        except BaseException:
+            self._mark('terminal_bundle_failed')
+            # This bounded tombstone is not a native report or a successful wire
+            # terminal. The parent retains its independently received prefix.
+            self._terminal_result=dict(schema_version=1,session_id=self.id,closed=True,terminal=True,
+                state='incomplete_terminal_bundle',journal_records=len(self._events),
+                journal_prefix_sha256=self._events[-1]['sha256'] if self._events else '0'*64,
+                incomplete_reasons=sorted(self._incomplete),actual_acceptance='incomplete',
+                instrumentation_complete=False,receipt_authenticity_verified=False,
+                instrumentation_coverage_verified=False,measurement_truth_verified=False,
+                isolation_verified=False,whole_pipeline_cost_verified=False)
+            await self._abort_journal()
+            raise
         if self._journal is not None and hasattr(self._journal,'close'):
-            await self._journal.close(reports=result['reports'],summary={k:v for k,v in result.items() if k not in ('reports','journal')})
+            try:
+                await self._journal.close(reports=result['reports'],summary={k:v for k,v in result.items() if k not in ('reports','journal')})
+            except BaseException:
+                # Keep the already frozen bundle immutable, but never abandon
+                # its writer when final frame serialization/transmission fails.
+                await self._abort_journal()
+                raise
         return result
+
+    async def _abort_journal(self):
+        if self._journal is None:return
+        try:
+            if hasattr(self._journal,'abort'):
+                await self._journal.abort()
+            elif hasattr(self._journal,'close'):
+                # Legacy sinks still receive a cleanup call, never a plausible
+                # complete report. Owned ChildChannel uses the explicit abort.
+                await self._journal.close(reports=[],summary=dict(state='incomplete_terminal_bundle'))
+        except BaseException:
+            # Preserve the original serialization/publication failure. No
+            # successful terminal or cleanup attestation is manufactured.
+            self._mark('journal_cleanup_failed')
 
 
 class _Ticket:

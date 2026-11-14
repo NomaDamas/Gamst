@@ -12,7 +12,7 @@ from unittest.mock import patch
 from benchmarks.instrumented_replay import run
 from benchmarks.perception_comparison import plan_digest
 from benchmarks.runtime_channel import FD_ENVIRONMENT_KEY
-from benchmarks.runtime_channel import ParentChannel,frame,receive
+from benchmarks.runtime_channel import ParentChannel,frame,receive,RuntimeChannelError
 from test_stream_attempts import fixture
 
 PROJECT=Path(__file__).resolve().parents[1]
@@ -160,6 +160,28 @@ class Collector(unittest.IsolatedAsyncioTestCase):
             for side in sides:
                 runtime=side['runtime'];self.assertTrue(runtime['instrumentation_complete'],runtime)
                 self.assertEqual(len(runtime['native_reports'][0]['attempts']),count)
+    async def test_denial_preserves_native_attempt_credit_then_executes_same_request(self):
+        script=SCRIPT.replace("try:await adapter.execute(rid,record,'PRIVATE QUESTION',maximum_charge=None if mode=='denied' else 1)",
+            "try:\n            await adapter.execute(rid,record,'PRIVATE QUESTION',maximum_charge=None)\n            await adapter.execute(rid,record,'PRIVATE QUESTION',maximum_charge=1)")
+        values=setup(self.root,script=script);await collect(values,self.root/'run')
+        for line in (self.root/'run/runtime-sidecars.jsonl').read_text().splitlines():
+            runtime=json.loads(line)['runtime'];self.assertTrue(runtime['instrumentation_complete'],runtime)
+            self.assertEqual(sum(e['event']=='call_capacity_reserved' for e in runtime['journal']),2)
+            self.assertEqual(len(runtime['native_reports'][0]['attempts']),1)
+    async def test_parent_separates_cumulative_reservation_bound_from_native_attempt_bound(self):
+        values=setup(self.root,'denied');await collect(values,self.root/'run')
+        runtime=json.loads((self.root/'run/runtime-sidecars.jsonl').read_text().splitlines()[0])['runtime']
+        reserve=next(e for e in runtime['journal'] if e['event']=='call_capacity_reserved')
+        release=next(e for e in runtime['journal'] if e['event']=='call_capacity_released')
+        events=[]
+        for index in range(1024):
+            for original in (reserve,release):
+                item=copy.deepcopy(original);item.update(operation_id=f'{index:032x}',monotonic_ns=reserve['monotonic_ns']);events.append(item)
+        self.validate_runtime(runtime,events=events)
+        summary=copy.deepcopy(runtime['terminal']['summary']);summary['incomplete_reasons']=['call_reservation_capacity_exhausted','native_attempt_capacity_exhausted']
+        self.validate_runtime(runtime,events=events,summary=summary)
+        events.extend([dict(copy.deepcopy(item),operation_id='f'*32) for item in events[-2:]])
+        with self.assertRaises(ValueError):self.validate_runtime(runtime,events=events,summary=summary)
     async def test_actual_visual_and_owned_smol_sdk_paths_preserve_one_semantic_charge(self):
         try:import cv2,numpy
         except ImportError:self.skipTest('optional vision fixture dependencies unavailable; no install')
@@ -213,7 +235,9 @@ class Collector(unittest.IsolatedAsyncioTestCase):
             envelope=dict(schema_version=1,type=kind,nonce=bootstrap['nonce'],sequence=sequence,previous_sha256=previous,payload=payload)
             envelope['sha256']=plan_digest(envelope);previous=envelope['sha256'];sequence+=1
             await asyncio.get_running_loop().sock_sendall(peer,frame(envelope))
-        peer.close();await reader;channel.close()
+        peer.close()
+        with self.assertRaises(RuntimeChannelError):await reader
+        channel.close()
         self.assertIsNotNone(channel.terminal);self.assertFalse(channel.snapshot()['instrumentation_complete'])
     async def test_native_attempt_crossrefs_and_unique_ordered_call_milestones(self):
         values=setup(self.root);await collect(values,self.root/'run')
@@ -294,7 +318,8 @@ r=json.loads(sys.stdin.readline());print(json.dumps(dict(schema_version=1,status
 '''
         values=setup(self.root,script=code);await collect(values,self.root/'run')
         rows=[json.loads(line) for line in (self.root/'run/source-traces.jsonl').read_text().splitlines()]
-        self.assertTrue(all(row['status']=='success' for row in rows))
+        self.assertTrue(all(row['status']=='error' for row in rows))
+        self.assertTrue(all(row['diagnostic']=='RuntimeChannelError' for row in rows))
         runtime=json.loads((self.root/'run/runtime-complete.json').read_text())
         self.assertFalse(runtime['instrumentation_complete'])
     async def test_deadline_and_repeated_cancellation_reap_and_keep_prefix(self):

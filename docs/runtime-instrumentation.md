@@ -99,6 +99,11 @@ most five seconds, bounded further by the original task deadline, before cancell
 and joining its owned writer and closing its socket. It never waits indefinitely for
 future invoices. Billing after terminal cannot mutate the original report, journal
 or source; a future amendment requires a separate versioned exclusive artifact.
+If the terminal bundle itself exceeds its byte bound or fails serialization, close
+still aborts and joins the owned channel writer. The original error is re-raised;
+a bounded local failure tombstone retains the journal prefix digest and explicitly
+marks instrumentation incomplete, without manufacturing native reports or a
+successful wire terminal.
 
 `actual_acceptance` is always `incomplete`. Instrumentation coverage, receipt
 authenticity, measurement truth, isolation and whole-pipeline cost verification
@@ -129,9 +134,14 @@ final sidecar to the original source trace and response digest. No child termina
 self-certifies that parent binding or process death.
 
 Limits are 512 KiB per frame, 16 MiB aggregate collection journal/report bytes, 8192 events
-per child, 128 native attempts per task/stream scope, 32 workers, 1024 worker operations,
+per child, 128 native attempts per task/stream scope, 1024 cumulative call
+reservation tickets, 32 workers, 1024 worker operations,
 and 64 queued frames/1 MiB queued bytes. Admission reserves terminal observation
-capacity before work; overflow rejects future admission without evicting financial
+capacity before work. Refusal or cancellation before actual invocation returns
+native attempt credit; its bounded journal ticket remains for liability accounting.
+Actual callback attempts consume native credit even on error. Exhausted native or
+journal inventories mark instrumentation incomplete. Overflow rejects future
+admission without evicting financial
 history. Serialized bundles are also checked before publication. See #255 for the
 frozen design and failure semantics.
 

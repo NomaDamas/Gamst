@@ -192,6 +192,49 @@ class Text(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await observer.close(),frozen)
         self.assertTrue(frozen['terminal'])
 
+    async def test_oversized_terminal_aborts_real_owned_channel_and_retains_failure_prefix(self):
+        import socket,time
+        from benchmarks.runtime_channel import ChildChannel
+        left,right=socket.socketpair();left.setblocking(False);right.setblocking(False)
+        channel=ChildChannel(left,dict(nonce='a'*64,deadline_ns=time.monotonic_ns()+10**9))
+        observer=session(self.root,journal=channel,max_bytes=4096)
+        observer.invalidate('pause')
+        prefix=observer._events[-1]['sha256']
+        try:
+            with self.assertRaisesRegex(ValueError,'bundle exceeds byte bound'):await observer.close()
+            self.assertTrue(channel.writer.done());self.assertEqual(left.fileno(),-1)
+            frozen=observer.snapshot()
+            self.assertEqual(frozen['state'],'incomplete_terminal_bundle')
+            self.assertFalse(frozen['instrumentation_complete'])
+            self.assertEqual(frozen['journal_prefix_sha256'],prefix)
+            self.assertEqual(frozen['journal_records'],1)
+            self.assertIn('terminal_bundle_failed',frozen['incomplete_reasons'])
+            self.assertLess(len(str(frozen)),4096)
+            with self.assertRaisesRegex(ValueError,'bundle exceeds byte bound'):await observer.close()
+            self.assertEqual(observer.snapshot(),frozen)
+        finally:
+            if not channel.writer.done():channel.writer.cancel()
+            await asyncio.gather(channel.writer,return_exceptions=True)
+            left.close();right.close()
+
+    async def test_refused_reservation_returns_native_credit_for_valid_retry(self):
+        observer=session(self.root,max_attempts=1);called=[]
+        async def callback(request):called.append(True);return dict(text='ok',usage=None)
+        adapter=self.adapter(callback,evaluation_observer=observer)
+        request,record=await self.queued()
+        refused=await adapter.execute(request,record,'q',maximum_charge=None)
+        self.assertEqual(refused['status'],'blocked')
+        self.assertEqual(observer._calls,0);self.assertEqual(observer._reserved,0)
+        result=await adapter.execute(request,record,'q',maximum_charge=1)
+        self.assertEqual(result['status'],'completed');self.assertEqual(called,[True])
+        self.assertEqual(len(observer.snapshot()['reports'][0]['attempts']),1)
+        second,second_record=await self.queued()
+        with self.assertRaises(RuntimeError):await adapter.execute(second,second_record,'q',maximum_charge=1)
+        report=await observer.close()
+        self.assertIn('native_attempt_capacity_exhausted',report['incomplete_reasons'])
+        self.assertEqual(len(report['reports'][0]['attempts']),1)
+        self.assertEqual(sum(e['event']=='call_capacity_reserved' for e in report['journal']),2)
+
     async def test_worker_proxy_unions_overlapping_intervals_without_double_count(self):
         from unittest.mock import patch
         import time
