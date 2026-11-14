@@ -123,9 +123,8 @@ Exhaustion/error closes the source. Explicit close also stops constructor-starte
 RAW acquisition before the first read. Pinned RawReaderBase context-manager
 cleanup is used; tests validate calls but real driver cleanup is unverified.
 Reads/close are serialized. **Close cannot interrupt a blocked native read.**
-Use a separate supervised capture process when hard deadlines/full-duplex
-isolation are required; an owned supervisor is a required next software item in
-#140. Do not advertise the synchronous source as hard-cancellable or demonstrated
+Use [OpenEBProcess](openeb-process.md) for owned source-process supervision and
+asynchronous deadlines/full-duplex isolation. Do not advertise the synchronous source as hard-cancellable or demonstrated
 nonblocking live audio/video. The isolated context worker itself uses the existing
 bounded ProcessProvider lifecycle and does not call hardware.
 
@@ -154,6 +153,6 @@ slices, int64 time precision, gaps/overlap/clock/lifecycle, malformed CRC/fields
 masked/oversized/padded inputs, maximum payload, installed-API call shape/early closure
 and a real owned context worker→SensorStreams→MCP path with generated events.
 They do not prove actual RAW decoding, native memory bounds, camera accuracy or
-latency. Real SDK/recording/device evidence, supervision, overflow/disconnect,
+latency. Real SDK/recording/device evidence, native-supervision acceptance, overflow/disconnect,
 clock calibration, synchronized stimuli and measured p50/p95/resources remain
 mandatory in #140. No hardware/model acceptance is closed by fixtures.
