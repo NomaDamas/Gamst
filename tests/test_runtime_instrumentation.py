@@ -192,6 +192,28 @@ class Text(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await observer.close(),frozen)
         self.assertTrue(frozen['terminal'])
 
+    async def test_worker_proxy_unions_overlapping_intervals_without_double_count(self):
+        from unittest.mock import patch
+        import time
+        observer=session(self.root);base=time.monotonic_ns()
+        with patch('benchmarks.runtime_instrumentation.time.monotonic_ns',side_effect=[base+n for n in
+                (100,110,120,130,140,150,160,170,200,220,250,260)]):
+            worker=observer.reserve_work('worker_lifecycle',dict(worker_id='worker'))
+            worker.event('spawn_begin');worker.event('handle_acquired');worker.event('handshake_ready')
+            first=observer.reserve_work('worker_operation',dict(worker_id='worker',operation='process'))
+            first.event('operation_started')
+            second=observer.reserve_work('worker_operation',dict(worker_id='worker',operation='process'))
+            second.event('operation_started')
+            first.finish('completed');second.finish('completed')
+            worker.event('reap_confirmed');worker.finish('closed')
+        measured=observer.snapshot()['worker_measurements'][0]
+        self.assertEqual(measured['startup_elapsed_ns'],20)
+        self.assertEqual(measured['residency_elapsed_ns'],130)
+        self.assertEqual(measured['observed_exchange_union_ns'],70)
+        self.assertEqual(measured['observed_no_exchange_gap_ns'],60)
+        self.assertIsNone(observer.snapshot()['monetary_cost'])
+        await observer.close()
+
     async def test_native_admission_refusal_does_not_claim_callback_entry(self):
         from unittest.mock import patch
         observer=session(self.root);called=[]

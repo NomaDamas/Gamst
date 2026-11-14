@@ -280,6 +280,7 @@ class EvaluationSession:
                     started_ns=t._marks.get('operation_started'),ended_ns=t._marks.get('work_finished')) for t in operations],
                 interpretation='host elapsed interval proxy; overlapping intervals must not be summed as CPU or money'))
         unresolved=any(a['cost_quantities'] is None for r in reports for a in r['attempts'])
+        pending_dispatch=sum(isinstance(t,_Call) and t._dispatched and t.attempt_id is None for t in self._tickets.values())
         result=dict(schema_version=1,**self._identity,session_id=self.id,clock_domain=self.clock_domain,
             started_ns=self._started,ended_ns=self._ended,closed=self._closed,terminal=self._terminal,
             retention='explicit_external_owner_retains_task_and_evidence_hashes',
@@ -288,9 +289,9 @@ class EvaluationSession:
             journal=deepcopy(self._events),reports=reports,
             provider_counters=[dict(provider=p,revision=r,role=role,count=n) for (p,r,role),n in sorted(provider_counts.items())],
             worker_measurements=workers,
-            dispatched_without_invocation=sum(isinstance(t,_Call) and t._dispatched and t.attempt_id is None for t in self._tickets.values()),
+            dispatched_without_invocation=pending_dispatch,
             incomplete_reasons=sorted(self._incomplete),unresolved_attempt_billing=unresolved,
-            unresolved_billing=(unresolved or any(lane['kind']=='monetary' for lane in self._unmeasured_boundary())),
+            unresolved_billing=(unresolved or bool(pending_dispatch) or any(lane['kind']=='monetary' for lane in self._unmeasured_boundary())),
             monetary_cost=None,physical_capture_counters=None,
             required_boundary_lanes=self._unmeasured_boundary(),
             source_availability='unknown; SDK lifecycle is not physical capture availability',

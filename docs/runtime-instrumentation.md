@@ -79,8 +79,8 @@ accepted/processed counts. No idle/startup/resource lane silently becomes free.
 
 The session emits native3 task and stream reports automatically. Unknown quantities
 and line claims stay null. `unresolved_attempt_billing` describes the native
-attempts only; `unresolved_billing` also includes unmeasured required monetary
-resource lanes. Settling an attempt never settles startup/idle costs implicitly. Optional `attach_declared_lines(operation_id, quantities=
+attempts only; `unresolved_billing` also includes dispatched pre-invocation
+liabilities and unmeasured required monetary resource lanes. Settling an attempt never settles startup/idle costs implicitly. Optional `attach_declared_lines(operation_id, quantities=
 ..., line_claims=..., evidence_sha256=...)` attaches explicit external line evidence;
 it does not fetch invoices or authenticate them. Synthetic tests exercise this path
 without creating a production fixture fallback. Real automatic receipt extraction
