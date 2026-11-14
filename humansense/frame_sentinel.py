@@ -283,6 +283,7 @@ class FreshFrameSentinel:
         if self._invalidated:return
         self._refresh_dispatch();self._invalidated=True;self._reason=reason
         self._scrub(self._candidate);self._scrub(self._active_frame)
+        if self._active_meta is not None:self._active_meta.clear()
         self._candidate=None;self._active_frame=None;self._active_meta=None
         if self._source is not None:
             if self._source in self.controller.snapshot()['sources']:
