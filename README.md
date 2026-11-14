@@ -489,3 +489,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Controller lifecycle replay](docs/controller-replay.md): isolated synthetic policy/accounting traces and frozen paired-collector integration; not model-quality or cost evidence.
 
 [Itemized cost evaluation](docs/itemized-costs.md): frozen multi-provider rates, cache/media/local charges and trace-bound quantities for full-pipeline cost comparisons.
+
+[Evaluation attempt recorder](docs/call-attempts.md): explicit async call/error/cancellation records, late receipts and frozen itemized-cost reduction.
