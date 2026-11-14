@@ -106,9 +106,11 @@ def _file(path, expected, limit, *, retain=False):
     if not 0 < before.st_size <= limit:
         raise ValueError('asset file size outside declared SDK bound')
     digest, blocks, count = hashlib.sha256(), [], 0
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                         getattr(os, 'O_NONBLOCK', 0))
     with os.fdopen(descriptor, 'rb') as stream:
-        if _identity(os.fstat(stream.fileno())) != _identity(before):
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(before):
             raise ValueError('asset replaced before reading')
         while True:
             block = stream.read(min(1024*1024, limit-count+1))

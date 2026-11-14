@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+import sys
 from unittest.mock import patch
 
 from humansense.sam_audio_artifact import (
@@ -122,6 +124,30 @@ class ArtifactPreflight(unittest.TestCase):
         path = Path(self.manifest['sam']['checkpoint_path'])
         path.unlink(); os.mkfifo(path)
         with self.assertRaises(ValueError): self.verify()
+
+    def test_file_swapped_for_fifo_cannot_block_open(self):
+        # A separate owned fixture process bounds this regression even against
+        # the old blocking implementation. No unrelated process is signalled.
+        script = '''
+import os, sys
+from pathlib import Path
+from unittest.mock import patch
+from humansense.sam_audio_artifact import _file
+target = Path(sys.argv[1]); expected = sys.argv[2]
+original_open = os.open
+def replace(path, flags):
+    target.unlink(); os.mkfifo(target)
+    return original_open(path, flags)
+with patch('os.open', side_effect=replace):
+    try: _file(target, expected, 1024)
+    except ValueError: print('rejected replacement before read')
+    else: raise AssertionError('replaced file accepted')
+'''
+        result = subprocess.run([sys.executable,'-c',script,self.manifest['sam']['checkpoint_path'],
+                                 self.manifest['sam']['checkpoint_sha256']],
+                                text=True,capture_output=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('rejected replacement before read',result.stdout)
 
     def test_sparse_oversize_checkpoint_rejected_before_hash(self):
         path = Path(self.manifest['sam']['checkpoint_path'])
