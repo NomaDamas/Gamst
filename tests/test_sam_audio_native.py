@@ -83,6 +83,34 @@ class Sources(unittest.TestCase):
                 stage.chmod(0o700);(stage/'unexpected').write_bytes(b'x')
                 with self.assertRaises(ValueError): native._local_tokenizer(object(),declaration)
 
+    def test_tokenizer_config_cannot_redirect_assets_or_activate_slow_conversion(self):
+        base={'tokenizer_class':'T5TokenizerFast','model_max_length':512,'extra_ids':0,
+              'add_prefix_space':None,'pad_token':{'content':'<pad>','special':True}}
+        native._tokenizer_configuration(json.dumps(base).encode())
+        native._tokenizer_configuration(json.dumps(dict(base,model_max_length=1000000000000000019884624838656,extra_special_tokens={})).encode())
+        for change in ({'tokenizer_file':'/outside.json'},{'vocab_file':'/outside.model'},
+                       {'fast_tokenizer_files':['/outside.json']},{'tokenizer_config_file':'/outside.json'},
+                       {'name_or_path':'remote-id'},{'from_slow':True},{'add_prefix_space':True},
+                       {'tokenizer_class':'CustomTokenizer'},{'extra_ids':1000000},{'unknown':{}},
+                       {'added_tokens_decoder':{'1':{'content':{'content':'nested'}}}}):
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                native._tokenizer_configuration(json.dumps(dict(base,**change)).encode())
+
+    def test_immutable_staged_tokenizer_rejects_unhashed_asset_reference_before_factory(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).absolute();assets=root/'assets';assets.mkdir();stage=root/'stage';stage.mkdir(mode=0o700)
+            (assets/'tokenizer.json').write_text('{}')
+            outside=root/'outside.json';outside.write_text('{"not":"declared"}')
+            for field,value in (('tokenizer_file',str(outside)),('vocab_file',str(outside)),('fast_tokenizer_files',[str(outside)])):
+                data=json.dumps({'tokenizer_class':'T5TokenizerFast',field:value}).encode()
+                (assets/'tokenizer_config.json').write_bytes(data)
+                declaration={'t5':{'root':str(assets),'files':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in assets.iterdir()}}}
+                factory=Mock(side_effect=AssertionError('redirected asset must never reach builtin constructor'))
+                with patch.dict(os.environ,GAMST_SAM_TOKENIZER_DIR=str(stage)):
+                    with self.assertRaises(ValueError): native._local_tokenizer(types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(from_pretrained=factory)),declaration)
+                factory.assert_not_called();self.assertEqual(list(stage.iterdir()),[])
+
 
 @unittest.skipUnless(HAS_TORCH,'optional Torch unavailable')
 class TensorPolicies(unittest.TestCase):
@@ -122,6 +150,63 @@ class TensorPolicies(unittest.TestCase):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             with self.assertRaises(ValueError),patch.object(t,'load',side_effect=AssertionError('must reject before load')):
                 native._torch_checkpoint(str(path.absolute()),digest,{'weight':((2,),t.float32)},t)
+
+    def test_declared_storage_extent_and_zip_records_precede_cpu_materialization(self):
+        t=self.torch
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            path=Path(directory)/'checkpoint.pt';t.save({'weight':t.ones(2)},path)
+            with zipfile.ZipFile(path) as archive: records=[(info.filename,archive.read(info)) for info in archive.infolist()]
+            for source,replacement in ((b'K\x02t',b'M\xe8\x03t'), # storage count2 ->1000
+                                       (b'QK\x00K\x02',b'QM\xe8\x03K\x02'), # offset0 ->1000
+                                       (b'K\x01\x85',b'M\xe8\x03\x85')): # stride1 ->1000
+                with zipfile.ZipFile(path,'w',compression=zipfile.ZIP_STORED) as archive:
+                    for name,data in records:
+                        if name.endswith('/data.pkl'):
+                            self.assertIn(source,data);data=data.replace(source,replacement,1)
+                        archive.writestr(name,data)
+                digest=hashlib.sha256(path.read_bytes()).hexdigest()
+                for bound in (2048,8192):
+                    with patch.object(native,'MAX_STORAGE',bound),patch.object(t,'load',wraps=t.load) as load:
+                        with self.assertRaises(ValueError): native._torch_checkpoint(str(path.absolute()),digest,{'weight':((2,),t.float32)},t)
+                        self.assertEqual([call.kwargs['map_location'] for call in load.call_args_list],['meta'])
+            shared=t.ones(4);state={'weight':shared[:2],'other':shared[2:]}
+            t.save(state,path);digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            actual=native._torch_checkpoint(str(path.absolute()),digest,{key:((2,),t.float32) for key in state},t)
+            self.assertTrue(t.equal(actual['weight'],t.ones(2)))
+            state=__import__('collections').OrderedDict(weight=t.ones(2));state._metadata={'':{'version':1}}
+            t.save(state,path);digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            native._torch_checkpoint(str(path.absolute()),digest,{'weight':((2,),t.float32)},t)
+            state._metadata={'':{'hidden':t.ones(1000)}}
+            t.save(state,path);digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch.object(t,'load',wraps=t.load) as load:
+                with self.assertRaises(ValueError): native._torch_checkpoint(str(path.absolute()),digest,{'weight':((2,),t.float32)},t)
+                self.assertEqual([call.kwargs['map_location'] for call in load.call_args_list],['meta'])
+
+    def test_fake_planning_does_not_materialize_real_storage(self):
+        t=self.torch
+        real_open=t.serialization._open_zipfile_reader;real_load=t.load
+        phase={'value':None};reads=[]
+        class Proxy:
+            def __init__(self,reader): self.reader=reader
+            def __getattr__(self,name): return getattr(self.reader,name)
+            def get_storage_from_record(self,*args):
+                reads.append(phase['value'])
+                if phase['value']!='cpu': raise AssertionError('planning read CPU tensor storage')
+                return self.reader.get_storage_from_record(*args)
+        class Reader:
+            def __init__(self,path): self.reader=real_open(path)
+            def __enter__(self): return Proxy(self.reader.__enter__())
+            def __exit__(self,*args): return self.reader.__exit__(*args)
+        def load(*args,**kwargs):
+            phase['value']=kwargs['map_location']
+            try: return real_load(*args,**kwargs)
+            finally: phase['value']=None
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            path=Path(directory)/'checkpoint.pt';t.save({'weight':t.ones(2)},path)
+            digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch.object(t.serialization,'_open_zipfile_reader',Reader),patch.object(t,'load',side_effect=load):
+                native._torch_checkpoint(str(path.absolute()),digest,{'weight':((2,),t.float32)},t)
+            self.assertTrue(reads);self.assertEqual(set(reads),{'cpu'})
 
     @unittest.skipUnless(HAS_SAFETENSORS,'optional safetensors unavailable')
     def test_t5_explicit_tied_alias_and_no_full_decoder_ignore(self):
@@ -302,7 +387,7 @@ class ConstructorFixture(unittest.TestCase):
             def load_state_dict(self,*args,**kwargs):
                 raise AssertionError('must bypass permissive upstream override')
         upstream.SAMAudio=Graph
-        transformer=types.ModuleType('transformers');transformer.T5Config=lambda **config:config;transformer.T5EncoderModel=Encoder
+        transformer=types.ModuleType('transformers');transformer.T5Config=lambda **config:config;transformer.T5EncoderModel=Encoder;transformer.T5TokenizerFast=FixtureTokenizer
         calls=[]
         def tokenizer(root,**kwargs):
             calls.append((root,kwargs));self.assertEqual((Path(root)/'config.json').read_bytes(),b'{}');return FixtureTokenizer()
@@ -320,11 +405,13 @@ class ConstructorFixture(unittest.TestCase):
             def remove(self): self.installed=False
         with tempfile.TemporaryDirectory(dir='.') as directory:
             root=Path(directory).absolute();(root/'config.json').write_text('{}')
+            (root/'tokenizer_config.json').write_text('{"tokenizer_class":"T5TokenizerFast"}')
+            (root/'tokenizer.json').write_text('{}')
             t5path=root/'model.safetensors';save_file({'shared.weight':torch.full((2,2),3.)},str(t5path))
             checkpoint=root/'sam.pt';torch.save({'core':torch.full((2,),7.),'audio_codec.weight':torch.full((1,),9.)},checkpoint)
             digest=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
             declaration=dict(sources={},runtime=dict(packages={key:'fixture' for key in native.REQUIRED_PACKAGES}),
-                t5=dict(root=str(root),files={'config.json':digest(root/'config.json'),'model.safetensors':digest(t5path)}),
+                t5=dict(root=str(root),files={name:digest(root/name) for name in ('config.json','tokenizer_config.json','tokenizer.json','model.safetensors')}),
                 sam=dict(config_path=str(root/'config.json'),checkpoint_path=str(checkpoint),checkpoint_sha256=digest(checkpoint)))
             report=dict(effective_config={},hop_length=1920,**{key:'0'*64 for key in (
                 'runtime_manifest_sha256','manifest_sha256','t5_manifest_sha256','original_config_sha256','effective_config_sha256')})
@@ -345,9 +432,11 @@ class ConstructorFixture(unittest.TestCase):
                 self.assertEqual(len(calls),1)
                 self.assertNotEqual(calls[0][0],str(root))
                 self.assertEqual(calls[0][0],str(stage))
-                self.assertEqual(calls[0][1],dict(local_files_only=True,trust_remote_code=False,use_fast=True))
+                self.assertEqual(calls[0][1],dict(local_files_only=True,trust_remote_code=False,use_fast=True,tokenizer_type='t5',
+                    tokenizer_file=str(stage/'tokenizer.json'),vocab_file=None,from_slow=False))
                 self.assertEqual(verify.call_count,2);runtime.assert_called_once();closure.assert_called_once();read.assert_called_once()
-                (stage/'config.json').unlink();stage.rmdir()
+                for name in ('config.json','tokenizer_config.json','tokenizer.json'): (stage/name).unlink()
+                stage.rmdir()
                 backend.model.text_encoder.tokenizer(['fixture'],truncation=True,max_length=4,padding='longest',return_tensors='pt')
                 self.assertEqual(backend.model.text_encoder.tokenizer.stats['token_count_after'],4)
                 self.assertTrue(backend.finder.installed);backend.close();self.assertFalse(backend.finder.installed)
