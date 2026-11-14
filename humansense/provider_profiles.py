@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'smolvlm2.500m.local':
+        from .providers.smolvlm_context import SmolVLMContext
+        return SmolVLMContext.capability(**config)
     if profile == 'food.segformer_b0':
         from .providers.food import FoodContext
         return FoodContext.capability(**config)
