@@ -80,6 +80,7 @@ class Owned(unittest.IsolatedAsyncioTestCase):
     async def test_roundtrip_epoch_eof_and_explicit_reopen(self):
         with self.fixture():
             source=await OpenEBProcess.open(sys.executable,CONFIG)
+            self.assertIsNone(source._transport._separation_owner)
             epoch=source.epoch
             for i in range(3):
                 f=await source.next_frame()

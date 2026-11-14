@@ -74,6 +74,30 @@ class HumanSense:
         self.sensor_inference_interval_ms = sensor_inference_interval_ms
         self._sensor_refresh = {}
         self._call_controllers = {}
+        self._separation_media = None
+
+    def enable_separation_media(self, *, subject_id='local-user', source_id, sensor_id,
+                                ttl_ms=30000, capacity=8, max_bytes=16*1024*1024):
+        """Grant an explicit local media owner. No public API/MCP audio exposure.
+
+        Call within this runtime's event loop. Retention settings are shared by
+        all grants and cannot silently change when another stream is enabled.
+        """
+        self._check()
+        from .separation_media import SeparationMediaStore
+        if any(type(value) is not int for value in (ttl_ms, capacity, max_bytes)):
+            raise ValueError('separation retention settings require integer bounds')
+        if self._separation_media is None:
+            self._separation_media = SeparationMediaStore(self, ttl_ms=ttl_ms,
+                capacity=capacity, max_bytes=max_bytes)
+        store = self._separation_media
+        if (ttl_ms, capacity, max_bytes) != (store.ttl_ms, store.capacity, store.max_bytes):
+            raise ValueError('separation retention settings differ from existing runtime owner')
+        return store.grant(subject_id, source_id, sensor_id)
+
+    def _clear_separation_media(self):
+        if self._separation_media is not None:
+            self._separation_media.clear()
 
     @property
     def consent(self):
@@ -87,6 +111,7 @@ class HumanSense:
         self._consent = value
         if prior and not value:
             self._generation += 1
+            self._clear_separation_media()
             for controller in getattr(self, '_call_controllers', {}).values():
                 controller.reset_sources(now_ms=timestamp())
 
@@ -831,6 +856,7 @@ class HumanSense:
         self.paused = True
         self._analysis_results.clear()
         self._generation += 1
+        self._clear_separation_media()
         await self._reset_plugins()
         return {"paused": True}
 
@@ -853,6 +879,7 @@ class HumanSense:
 
     async def _delete_data(self, subject_id=None):
         self._generation += 1
+        self._clear_separation_media()
         for controller in self._call_controllers.values():
             controller.forget_subject(subject_id, now_ms=timestamp())
         deleted = self.store.delete(subject_id)
@@ -932,6 +959,7 @@ class HumanSense:
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
         self._generation += 1
+        self._clear_separation_media()
         await self._reset_plugins()
         return {"processing_reset": True}
 
@@ -956,6 +984,7 @@ class HumanSense:
         self.object_memory.clear()
         self.transcript_memory.clear()
         self._generation += 1
+        self._clear_separation_media()
         if hasattr(self, "_media_router"):
             await self._media_router.clear()
         for queue, _ in self._subscribers:

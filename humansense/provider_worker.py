@@ -8,7 +8,11 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'orbslam3.monocular':
+    if profile == 'sam_audio.text_temporal.local':
+        # Reserved transport contract. The separately reviewed native loader is
+        # #201; never substitute an unrelated provider or download a model here.
+        raise RuntimeError('SAM Audio native adapter is not implemented (#201)')
+    elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)
     elif profile == 'smolvlm2.500m.local':
@@ -131,6 +135,7 @@ def main():
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     source = sys.stdin.buffer
     provider = spec = None
+    separation_protocol = None
     try:
         while True:
             head_size, payload_size = sizes(_read_exact(source, 8))
@@ -142,9 +147,32 @@ def main():
             operation = request['operation']
             try:
                 if operation == 'start' and provider is None and not payload:
+                    from .separation_media import PROFILE, PROTOCOL
+                    requested = request.get('separation_protocol')
+                    if request['profile'] == PROFILE:
+                        if requested != PROTOCOL:
+                            raise ValueError('SAM separation media negotiation required')
+                        separation_protocol = PROTOCOL
+                    elif requested is not None:
+                        raise ValueError('JSON providers cannot negotiate separation media')
                     provider, spec = _construct(request['profile'], request['config'])
                     result = dict(spec=spec_value(spec))
+                    if separation_protocol is not None:
+                        result['separation_protocol'] = separation_protocol
                 elif operation == 'process' and provider is not None:
+                    if separation_protocol is not None:
+                        from .separation_media import frame_binding, pack_pair
+                        binding = request['separation_binding']
+                        expected = frame_binding(request['frame'], payload,
+                            generation=binding['generation'], config_id=spec.version,
+                            owner_revision=binding['owner_revision'])
+                        if binding != expected:
+                            raise ValueError('invalid separation request binding')
+                        pair = provider.process(decode_frame(request['frame'], payload))
+                        observation, media, binary = pack_pair(pair, binding, spec)
+                        output.write(envelope(dict(id=number, ok=True,
+                            result=observation, separation=media), binary))
+                        continue
                     result = provider.process(decode_frame(request['frame'], payload))
                     if result is not None:
                         result = spec.validate(result)

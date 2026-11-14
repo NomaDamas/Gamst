@@ -122,3 +122,7 @@ tool. [ObjectAppearancePipeline](object-appearance-memory.md) owns separate dete
 and embedding workers and joins the exact same copied capture, allowing incompatible
 model dependency environments. Normal stream publication still contains only bounded
 context. Parent and worker checkouts must both support this operation.
+
+## Private SAM separation media
+
+The opt-in [SAM separation media contract](sam-audio-media.md) reserves a closed two-waveform response for `sam_audio.text_temporal.local`, with parent-owned TTL/ownership and explicit local retrieval. Existing JSON profiles retain their no-binary-response rule. This is transport software only: production SAM native construction remains unavailable until #201 is implemented; API/MCP Context remains metadata-only.

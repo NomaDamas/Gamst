@@ -277,8 +277,14 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         if capture_sequence is None:
             capture_sequence = frame.sensor.sequence
         sensor = replace(frame.sensor, sequence=sequence, capture_sequence=capture_sequence)
-        await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
-            subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+        try:
+            await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
+                subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+        except BaseException:
+            discard = getattr(lane['provider'], 'discard_separation_result', None)
+            if discard is not None:
+                discard(result)
+            raise
         lane['output_sequence'] = sequence
 
     async def endpoint(self, source_id, sensor_id, capability_id, *, stream_epoch, after_sequence=None):
@@ -449,6 +455,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         for key, stream in self.streams.items():
             if (source_id is None or key[0] == source_id) and (sensor_id is None or key[1] == sensor_id):
                 stream['closing'] = True
+                for lane in stream['lanes']:
+                    revoke = getattr(lane['provider'], 'revoke_separation_media', None)
+                    if revoke is not None:
+                        revoke()
         cleanup = asyncio.create_task(self._clear(source_id, sensor_id))
         try:
             await asyncio.shield(cleanup)
