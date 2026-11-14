@@ -129,6 +129,14 @@ def _validate_manifest(m,raw):
         if type(value) is not str or len(value)>1024 or any(ord(c)<32 or ord(c)>126 for c in value):raise ValueError('bounded printable selected header required')
     if m['server_request_id'] is not None and headers.get('x-request-id')!=m['server_request_id']:raise ValueError('server identity differs from original selected header')
     if m['terminal'] not in ('not_entered','completed','cancelled','timeout','error') or m['failure_category'] not in (None,'cancelled','timeout','error'):raise ValueError('known transport outcome required')
+    expected_failure=None if m['terminal'] in ('not_entered','completed') else m['terminal']
+    if m['failure_category']!=expected_failure:raise ValueError('terminal failure category differs')
+    if m['created_at'] is not None and (type(m['created_at']) is not int or not 0<=m['created_at']<=2**53-1):raise ValueError('bounded response timestamp required')
+    usage=m['normalized_usage']
+    if usage is not None:
+        _keys(usage,'input_tokens output_tokens cached_input_tokens')
+        if any(type(v) is not int or not 0<=v<=10**12 for v in usage.values()) or usage['cached_input_tokens']>usage['input_tokens']:raise ValueError('bounded normalized usage required')
+    if (m['consumption_basis']=='response_reported')!=(usage is not None):raise ValueError('consumption evidence differs')
     if m['remote_acceptance'] not in ('unknown','response_observed') or m['consumption_basis'] not in ('unknown','response_reported'):raise ValueError('known evidence strength required')
     if m['billing_time_assignment']!='ambiguous_unverified_host_clock' or type(m['clock_jump_detected']) is not bool:raise ValueError('host time uncertainty required')
     marks=m['milestones']
@@ -141,19 +149,29 @@ def _validate_manifest(m,raw):
         if any(type(v) is not int or not 0<=v<=2**63-1 for v in clock.values()) or not last<=clock['monotonic_before_ns']<=clock['monotonic_after_ns']:raise ValueError('bounded monotonic bracket required')
         last=clock['monotonic_after_ns']
     if events[0]!='prepared' or events[-1]!='terminal':raise ValueError('prepared and terminal evidence required')
+    first=marks[0]['clock'];lo=first['utc_ns']-first['monotonic_after_ns'];hi=first['utc_ns']-first['monotonic_before_ns']
+    jumped=any(mark['clock']['utc_ns']-mark['clock']['monotonic_after_ns']>hi+1000000 or mark['clock']['utc_ns']-mark['clock']['monotonic_before_ns']<lo-1000000 for mark in marks[1:])
+    if m['clock_jump_detected']!=jumped:raise ValueError('derived clock jump differs')
     if (m['entry_binding'] is not None)!=('entered' in events) or ('headers' in events and 'possible_send' not in events):raise ValueError('entry/send/header milestones disagree')
+    for event,required in (('body_complete','headers'),('headers','possible_send'),('possible_send','entered')):
+        if event in events and required not in events:raise ValueError('missing predecessor milestone')
+    if (m['remote_acceptance']=='response_observed')!=('headers' in events):raise ValueError('response observation milestone differs')
+    if m['terminal']=='not_entered' and (events!=['prepared','terminal'] or raw or m['http_status'] is not None or headers or any(m[k] is not None for k in ('server_request_id','response_id','returned_model','response_status','created_at','usage_raw_locator','normalized_usage'))):raise ValueError('not-entered transport contains response evidence')
+    if (raw or m['http_status'] is not None or headers) and 'possible_send' not in events:raise ValueError('response without possible send')
     descriptor=m['raw_response']
     if type(descriptor.get('complete')) is not bool or type(descriptor.get('truncated')) is not bool or descriptor['complete'] and descriptor['truncated']:raise ValueError('raw response completeness required')
     if descriptor['complete']!=('body_complete' in events):raise ValueError('body-complete milestone differs')
     if m['usage_raw_locator'] not in (None,'/usage'):raise ValueError('original usage pointer required')
+    if not descriptor['complete'] and any(m[k] is not None for k in ('response_id','returned_model','response_status','created_at','usage_raw_locator','normalized_usage')):raise ValueError('projection without complete body')
     if descriptor['complete']:
         try:value,metadata=response_projection(raw,m['requested_model'])
         except ValueError:
-            if m['terminal']=='completed':raise
+            if m['terminal']=='completed' or any(m[k] is not None for k in ('response_id','returned_model','response_status','created_at','usage_raw_locator','normalized_usage')):raise
         else:
             for key in ('response_id','returned_model','response_status','created_at','usage_raw_locator'):
                 if m[key]!=metadata[key]:raise ValueError('projection differs from original response bytes')
-            if m['terminal']=='completed':
+            if m['terminal']=='completed' or usage is not None:
+                if m['http_status']!=200:raise ValueError('normalized usage without successful HTTP')
                 expected=normalize(value,m['requested_model'])
                 if m['normalized_usage']!=expected['usage']:raise ValueError('normalized usage differs from original bytes')
     if m['terminal']=='completed' and (m['http_status']!=200 or not descriptor['complete'] or 'entered' not in events):raise ValueError('completed transport lacks original response')

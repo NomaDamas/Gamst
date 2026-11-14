@@ -10,7 +10,41 @@ PROJECTION='gamst.openai.responses.text-image.v1'
 MAX_RESPONSE=1024*1024
 
 
+def _owned_request(request):
+    """Snapshot only the bounded concrete SDK shape, never arbitrary caller graphs."""
+    if type(request) is not dict or set(request) not in ({'provider','model_revision','messages'},{'provider','model_revision','messages','images'}):raise ValueError('exact SDK request required')
+    result={k:request[k] for k in ('provider','model_revision')}
+    for value in result.values():_id(value)
+    messages=request['messages']
+    if type(messages) is not list or len(messages)!=2:raise ValueError('exact system/user messages required')
+    result['messages']=[]
+    for index in range(2):
+        item=messages[index]
+        if type(item) is not dict or set(item)!={'role','content'}:raise ValueError('exact message required')
+        role,content=item['role'],item['content']
+        if type(role) is not str or role not in ('system','user') or type(content) is not str or len(content)>12*1024*1024:raise ValueError('bounded plain message required')
+        result['messages'].append(dict(role=role,content=content))
+    if 'images' in request:
+        images=request['images']
+        if type(images) is not list or len(images)!=1:raise ValueError('one prepared PNG required')
+        item=images[0]
+        keys={'mime_type','data_base64','sha256','source_frame_sha256','capture_ms','shape'}
+        if type(item) is not dict or set(item)!=keys:raise ValueError('prepared PNG metadata required')
+        owned={k:item[k] for k in keys if k!='shape'}
+        for key in ('mime_type','data_base64','sha256','source_frame_sha256'):
+            value=owned[key]
+            if type(value) is not str or len(value)>(12*1024*1024 if key=='data_base64' else 256):raise ValueError('bounded plain image field required')
+        if type(owned['capture_ms']) is not int or not 0<=owned['capture_ms']<=2**53-1:raise ValueError('plain capture timestamp required')
+        shape=item['shape']
+        if type(shape) is not list or len(shape)!=3:raise ValueError('fixed shape required')
+        owned['shape']=[shape[0],shape[1],shape[2]]
+        if any(type(x) is not int or not 1<=x<=8192 for x in owned['shape']):raise ValueError('plain shape integers required')
+        result['images']=[owned]
+    return result
+
+
 def prepare_body(request,provider,model,max_output_tokens):
+    request=_owned_request(request)
     if type(request) is not dict or set(request) not in ({'provider','model_revision','messages'},{'provider','model_revision','messages','images'}):raise ValueError('exact SDK request required')
     if (request['provider'],request['model_revision'])!=(provider,model):raise ValueError('selected provider/revision mismatch')
     messages=request['messages']
@@ -42,15 +76,17 @@ def prepare_body(request,provider,model,max_output_tokens):
 
 def strict_json(raw):
     if type(raw) is not bytes or len(raw)>MAX_RESPONSE:raise ValueError('bounded original response required')
-    text=raw.decode('utf8');depth=nodes=0;quoted=escaped=False
+    text=raw.decode('utf8');depth=nodes=0;quoted=escaped=primitive=False
     for c in text:
         if quoted:
             if escaped:escaped=False
             elif c=='\\':escaped=True
             elif c=='"':quoted=False
-        elif c=='"':quoted=True;nodes+=1
+        elif c=='"':quoted=True;nodes+=1;primitive=False
         elif c in '[{':depth+=1;nodes+=1
-        elif c in ']}':depth-=1
+        elif c in ']}':depth-=1;primitive=False
+        elif c in ',: \t\r\n':primitive=False
+        elif not primitive:nodes+=1;primitive=True
         if depth>32 or nodes>32768:raise ValueError('response JSON structure exceeds bounds')
     def pairs(items):
         result={}

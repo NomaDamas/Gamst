@@ -130,6 +130,32 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         (self.sink.directory/'raw-0000.bin').write_bytes(b'{}')
         with self.assertRaises(ValueError):read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
 
+    async def test_reader_rejects_impossible_states_and_allows_late_cancel(self):
+        from humansense.responses_evidence_reader import read_responses_evidence
+        p,b=self.prepare();await p.invoke(b);await p.release();await self.sink.close()
+        directory=self.sink.directory
+        original=json.loads((directory/'call-0000.json').read_bytes())
+        inventory=json.loads((directory/'inventory.json').read_bytes())
+        def read_changed(change):
+            m=json.loads(json.dumps(original));change(m)
+            raw=json.dumps(m).encode();(directory/'call-0000.json').write_bytes(raw)
+            inventory['entries'][0]['manifest_sha256']=hashlib.sha256(raw).hexdigest()
+            inventory['entries'][0]['manifest_bytes']=len(raw)
+            raw=json.dumps(inventory).encode();(directory/'inventory.json').write_bytes(raw)
+            return read_responses_evidence(directory,expected_inventory_sha256=hashlib.sha256(raw).hexdigest())
+        invalid=[
+            lambda m:m.update(milestones=[x for x in m['milestones'] if x['event'] not in ('possible_send','headers')]),
+            lambda m:m.update(terminal='not_entered'),
+            lambda m:m.update(failure_category='error'),
+            lambda m:m.update(terminal='error',failure_category='error',normalized_usage={'input_tokens':-1}),
+            lambda m:m.update(terminal='cancelled',failure_category='cancelled',consumption_basis='unknown'),
+            lambda m:m.update(created_at=True),
+        ]
+        for change in invalid:
+            with self.assertRaises(ValueError):read_changed(change)
+        evidence=read_changed(lambda m:m.update(terminal='cancelled',failure_category='cancelled'))
+        self.assertEqual(next(evidence.entries())['manifest']['normalized_usage']['input_tokens'],10)
+
     async def test_explicit_retention_and_symlink_boundaries(self):
         with self.assertRaises(PermissionError):ResponsesEvidenceSession(Path(self.tmp.name)/'no-consent',owner_kind='task_native3',expected_owner=owner())
         self.assertFalse((Path(self.tmp.name)/'no-consent').exists())
@@ -190,6 +216,28 @@ class Transport(unittest.IsolatedAsyncioTestCase):
 
 
 class Projection(unittest.TestCase):
+    def test_projection_owns_request_before_hash_and_wire(self):
+        from humansense import openai_responses_codec as codec
+        caller=request();original=json.loads(json.dumps(caller));encode=codec.encoded
+        def mutate(value):
+            result=encode(value)
+            caller['messages'][1]['content']='mutated after original hash'
+            return result
+        with patch.object(codec,'encoded',side_effect=mutate):
+            wire,sha=codec.prepare_body(caller,'openai','fixture-model',16)
+        self.assertEqual(sha,hashlib.sha256(encode(original)).hexdigest())
+        self.assertEqual(json.loads(wire)['input'][0]['content'][0]['text'],original['messages'][1]['content'])
+        caller=request();caller['messages'][0]['content']=['unexpected']
+        with patch.object(codec,'encoded',side_effect=AssertionError('must preflight before encoding')):
+            with self.assertRaises(ValueError):codec.prepare_body(caller,'openai','fixture-model',16)
+
+    def test_json_counts_primitive_nodes_before_decode(self):
+        for scalar in (b'0',b'true',b'null'):
+            raw=b'['+b','.join([scalar]*32768)+b']'
+            with patch('humansense.openai_responses_codec.json.loads',side_effect=AssertionError('must bound before allocation')):
+                with self.assertRaises(ValueError):strict_json(raw)
+        self.assertEqual(strict_json(b'[1,true,null,"a,0"]'),[1,True,None,'a,0'])
+
     def test_missing_details_are_unknown_not_cached_zero(self):
         value=response();value['usage'].pop('input_tokens_details');self.assertIsNone(normalize(value,'fixture-model')['usage'])
         value['usage']=None;self.assertIsNone(normalize(value,'fixture-model')['usage'])
