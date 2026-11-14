@@ -471,3 +471,5 @@ required in#123. Track IDs are not verified identities or through-wall detection
 worker for prompted boxes and compact mask coverage. It avoids default text-model
 downloads; native checkpoint and held-out quality acceptance remains required
 in#125. Synthetic pipeline tests do not establish model inference or FPS.
+
+[Food segmentation Context](docs/food-context.md) supports an explicit local task-trained SegFormer-B0 head, bounded semantic masks and provenance. Real target-cuisine accuracy and unknown-food acceptance remain pending; mass/calories are not inferred.
