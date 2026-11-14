@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'food.segformer_b0':
+        from .providers.food import FoodContext
+        return FoodContext.capability(**config)
     if profile == 'visual_microphone.phase':
         from .providers.visual_microphone_context import VisualMicrophoneContext
         return VisualMicrophoneContext.capability(**config)

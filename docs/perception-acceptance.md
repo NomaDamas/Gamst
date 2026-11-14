@@ -45,3 +45,5 @@ Minimum evidence records identify commit, model/checkpoint hash, dependency vers
 - [P12 #14](https://github.com/NomaDamas/Gamst/issues/14): all preceding gates, exact-head independent GPT-6.1 Sol High reviews, CI, approved-plan audit and merges. Documentation PRs are reviewed too. No overall completion with required open subissues.
 
 Before each implementation merge, link the affected entries, test commands/results and remaining validation issues in the PR. Before release, rerun real-model/device scenarios and matched efficiency evaluation; preserve all scope not yet proven. Each unavailable hardware/research path must have a separately linked subissue before its package can be considered for completion.
+
+Food software integration: [SegFormer-B0 context](food-context.md); trained checkpoint and held-out target-cuisine/unknown-food acceptance remain open in [#148](https://github.com/NomaDamas/Gamst/issues/148). Generated untrained graph tests do not satisfy family 20.
