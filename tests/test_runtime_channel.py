@@ -105,6 +105,26 @@ class Channel(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(child.writer.done());self.assertEqual(left.fileno(),-1)
             with self.assertRaises(RuntimeError):child.reserve(1,1)
         finally:right.close()
+    async def test_completed_write_cannot_enter_idle_queue_after_fd_revocation(self):
+        left,right=socket.socketpair();left.setblocking(False);right.setblocking(False)
+        child=ChildChannel(left,dict(self.bootstrap,deadline_ns=time.monotonic_ns()+10**9))
+        async def completed_then_revoked(awaitable,deadline):
+            result=await awaitable
+            # Model a successful write whose cancellation was consumed just as
+            # abort revoked the FD. The next queue wait would otherwise hang.
+            left.close()
+            return result
+        try:
+            with patch('benchmarks.runtime_channel._until',completed_then_revoked):
+                child.reserve(1,4096);child.emit(event(0,operation_id='b'*32))
+                done,_=await asyncio.wait({child.writer},timeout=.5)
+                self.assertTrue(done,'writer entered idle queue after FD revocation')
+            self.assertTrue(child.writer.done());self.assertEqual(left.fileno(),-1)
+        finally:
+            left.close();right.close()
+            if not child.writer.done():child.writer.cancel()
+            await asyncio.gather(child.writer,return_exceptions=True)
+
     async def test_spawn_failure_and_bounded_missing_hello_close_owned_descriptors(self):
         parent=ParentChannel(self.bootstrap)
         result=await _execute(dict(argv=['/no/such/runtime-owned-command'],cwd=str(self.root),environment={}),{},100,runtime_channel=parent)

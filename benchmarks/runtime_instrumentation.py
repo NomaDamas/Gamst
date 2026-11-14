@@ -222,7 +222,11 @@ class EvaluationSession:
         self._links.clear()
         for ticket in self._tickets.values():
             if isinstance(ticket,_Call) and (subject_id is None or ticket._subject==subject_id):
-                ticket._invalidated=True;ticket._scrub();affected+=1
+                # Finished/refused tickets retain financial history, not live
+                # private mappings. Count only references actually scrubbed.
+                affected+=int(ticket._subject is not None or ticket._controller is not None or ticket._request_id is not None)
+                if not ticket._finished:ticket._invalidated=True
+                ticket._scrub()
         if subject_id is None:self._revoked=True
         if not self._terminal:
             try:self._emit(None,'private_mappings_invalidated',dict(reason=reason,affected=affected))

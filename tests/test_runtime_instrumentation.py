@@ -217,6 +217,21 @@ class Text(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(channel.writer,return_exceptions=True)
             left.close();right.close()
 
+    async def test_global_invalidation_counts_live_mappings_not_finished_refusals(self):
+        observer=session(self.root,max_attempts=1)
+        async def callback(request):self.fail('refusal must not invoke callback')
+        adapter=self.adapter(callback,evaluation_observer=observer)
+        request,record=await self.queued()
+        for _ in range(129):
+            self.assertEqual((await adapter.execute(request,record,'q',maximum_charge=None))['status'],'blocked')
+        self.assertEqual(observer.snapshot()['private_subject_mappings'],0)
+        await self.h.pause()
+        report=await observer.close()
+        invalidations=[e for e in report['journal'] if e['event']=='private_mappings_invalidated']
+        self.assertEqual(invalidations[-1]['fields']['affected'],0)
+        self.assertEqual(report['reports'][0]['attempts'],[])
+        self.assertEqual(report['incomplete_reasons'],[])
+
     async def test_refused_reservation_returns_native_credit_for_valid_retry(self):
         observer=session(self.root,max_attempts=1);called=[]
         async def callback(request):called.append(True);return dict(text='ok',usage=None)

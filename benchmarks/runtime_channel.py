@@ -645,7 +645,11 @@ class ChildChannel:
         self._enqueue('event',item);self.events+=1
     async def _write(self):
         try:
-            while True:
+            # A completed wait_for socket write can consume cancellation on
+            # Python 3.10. Abort revokes the FD first: never enter an idle queue
+            # wait after that revocation, even if cancellation was consumed.
+            # self.closed is not suitable here: normal close must drain first.
+            while self.socket.fileno()>=0:
                 data=await self.queue.get()
                 try:
                     if data is None:return
