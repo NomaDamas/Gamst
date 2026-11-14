@@ -592,4 +592,3 @@ w.main()
             self.providers.append(provider)
             with self.assertRaisesRegex(ValueError, 'cannot contain raw'): await provider.process(frame())
             self.assertTrue(provider.closed)
-
