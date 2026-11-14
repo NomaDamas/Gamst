@@ -298,7 +298,7 @@ def _inventory(model,torch):
         peak_memory_bytes=None,transient_construction_bytes=None)
 
 
-def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_sha256=None):
+def _construct_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_sha256=None):
     """Explicit worker-only schema construction; never returns a usable model."""
     value=validate_manifest(manifest,expected_sha256=expected_sha256)
     mismatch=_runtime(value)
@@ -375,6 +375,14 @@ def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_
         if layer.output is None or layer.intermediate is None:raise ValueError('retained Qformer FFN absent')
     if len(model.tokenizer)!=30523:raise ValueError('unexpected BERT tokenizer vocabulary')
     schema=_inventory(model,torch)
+    return model,schema
+
+
+def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_sha256=None):
+    result=_construct_graph(manifest,expected_sha256=expected_sha256,
+                            runtime_lock=runtime_lock,runtime_lock_sha256=runtime_lock_sha256)
+    if type(result) is dict:return result
+    model,schema=result
     del model
     return _unavailable('schema_only_no_canonical_state',schema=schema,
         original_source_graph_constructed=True,construction_qformer_text_input=True,
