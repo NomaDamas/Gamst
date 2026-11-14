@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'bosch.bsec2':
+    if profile == 'efficientphys.local':
+        from .providers.efficientphys_context import EfficientPhysContext
+        provider = EfficientPhysContext.from_local(**config)
+    elif profile == 'bosch.bsec2':
         from .providers.bsec2 import BoschBSEC2
         provider = BoschBSEC2(**config)
     elif profile == 'efficienttam.tiny512':

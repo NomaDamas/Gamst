@@ -61,3 +61,4 @@ jobs:
       - run: python -m unittest discover -s tests -p test_efficienttam_stream.py -v
       - run: python -m unittest discover -s tests -p test_efficienttam_context.py -v
       - run: python -m unittest discover -s tests -p test_efficientphys_native.py -v
+      - run: python -m unittest discover -s tests -p test_efficientphys_context.py -v

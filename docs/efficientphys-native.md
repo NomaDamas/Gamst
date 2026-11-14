@@ -1,9 +1,9 @@
 # EfficientPhys local graph bridge
 
 This internal bridge executes a verified local EfficientPhys graph on an already
-preprocessed bounded RGB window. It is **not yet a registered context provider**:
-face capture, temporal assembly, online normalization, physiological interpretation,
-SensorStreams/MCP integration and reference acceptance remain required in [#137](https://github.com/NomaDamas/Gamst/issues/137), under [#35](https://github.com/NomaDamas/Gamst/issues/35).
+preprocessed bounded RGB window. The [face-window context adapter](efficientphys-context.md) now adds capture binding,
+temporal assembly, explicit online normalization and SensorStreams/MCP integration.
+Trained physiological quality and real reference acceptance remain required in [#137](https://github.com/NomaDamas/Gamst/issues/137), under [#35](https://github.com/NomaDamas/Gamst/issues/35).
 No existing family is marked supported or complete by this bridge.
 
 ## Source and runtime
@@ -83,7 +83,8 @@ bounds, no hidden normalization, tensor/layout ownership, terminal duplication,
 strict checkpoint formats, output validation, import isolation and closure.
 CI runs them with CPU Torch; the upstream source is not fetched by CI.
 
-Required next: capture/ROI assembly and profile integration, real checkpoint and
-reference pulse data, preprocessing parity/quality, missing-frame and motion
-rejection, measured capture-to-output latency and licensing evidence. OpenEB and
+Required next: real checkpoint and reference pulse data, preprocessing quality,
+validated motion/lighting rejection, measured capture-to-output latency and
+licensing evidence. Capture/ROI assembly and profile integration are now provided
+by the linked context adapter. OpenEB and
 visual vibration in #35 remain separate outstanding deliverables.

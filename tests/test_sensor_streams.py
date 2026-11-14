@@ -49,6 +49,19 @@ class Streams(unittest.IsolatedAsyncioTestCase):
         return InputFrame(data if data is not None else {'x': 1}, 'imu', timestamp(),
                           sensor=SensorMetadata(source, 'imu', sequence))
 
+    async def test_publish_preserves_explicit_original_capture_sequence(self):
+        for i,capture_sequence in enumerate((5000,0,None)):
+            source='original'+str(i)
+            await self.runtime.open(source,'imu',['imu.motion'])
+            frame=self.frame(source,99)
+            frame=replace(frame,sensor=replace(frame.sensor,capture_sequence=capture_sequence))
+            await self.runtime.submit(frame)
+            await self.runtime.drain()
+            rows=self.human.store.latest_signals('local-user',0,timestamp())
+            sensor=next(r['observation']['sensor'] for r in rows if r['observation']['sensor']['source_id']==source)
+            self.assertEqual(sensor['sequence'],99)
+            self.assertEqual(sensor['capture_sequence'],99 if capture_sequence is None else capture_sequence)
+
     async def test_explicit_loading_and_independent_state(self):
         self.assertEqual(self.instances, [])
         for source in ('s1', 's2'):
