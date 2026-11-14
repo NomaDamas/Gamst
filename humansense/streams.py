@@ -273,7 +273,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         # Capture order belongs to the provider input. Publication also includes
         # no-input control results, so its sequence must advance independently.
         sequence = max(minimum_sequence, lane['output_sequence']+1)
-        sensor = replace(frame.sensor, sequence=sequence, capture_sequence=frame.sensor.sequence)
+        capture_sequence = frame.sensor.capture_sequence
+        if capture_sequence is None:
+            capture_sequence = frame.sensor.sequence
+        sensor = replace(frame.sensor, sequence=sequence, capture_sequence=capture_sequence)
         await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
             subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         lane['output_sequence'] = sequence
