@@ -112,6 +112,8 @@ The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDam
 
 [EfficientTAM streaming mask context](docs/efficienttam-stream.md) adds an explicit local worker and RF-DETR seed pipeline with bounded temporal state, capture-bound prompts and MCP-compatible observations. Trained-model quality and live performance acceptance remain pending; startup never downloads weights.
 
+[EfficientPhys face-window context](docs/efficientphys-context.md) connects capture-bound face crops to an isolated local model and MCP observations. Spectral candidates are explicitly unvalidated; actual pulse measurements remain unavailable pending reference acceptance.
+
 [BME688/BSEC2 environment context](docs/bsec2-context.md) separates sensor measurements, algorithm estimates and available trained gas-pattern candidates through a bounded firmware callback bridge. Actual hardware and trained-pattern acceptance remain pending.
 
 After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`; these are aliases of the existing commands. For example, `gamst demo` and `python -m humansense demo` run the same CLI. Install from this repository or a built wheel; a PyPI release under the new name is not claimed.
