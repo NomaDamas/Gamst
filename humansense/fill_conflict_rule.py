@@ -26,7 +26,7 @@ def _number(token):
 
 
 def parse_claim(text):
-    if type(text) is not str or len(text.encode())>CLAIM_LIMIT:raise ValueError('bounded strict claim JSON required')
+    if type(text) is not str or len(text)>CLAIM_LIMIT or len(text.encode())>CLAIM_LIMIT:raise ValueError('bounded strict claim JSON required')
     # Bound structure and numeric lexemes before constructing a general JSON
     # tree or arbitrary-precision numbers. Strings are scanned, not interpreted.
     index=depth=0;quoted=escape=False

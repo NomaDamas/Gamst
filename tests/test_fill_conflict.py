@@ -133,3 +133,110 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(driver.closed);self.assertIsNone(driver.snapshot()['active']);self.assertEqual(driver.snapshot()['history'],[])
         observed=await self.h.get_observations(capability_id='vision.fill_comparison');self.assertEqual(observed['items'],[])
         self.assertEqual(c.snapshot()['budget']['reserved_liability'],5)
+
+    async def test_each_stage_host_lifecycle_and_independent_context_progress(self):
+        await self.h.close()
+        for stage,action in ((1,'consent'),(2,'reset_processing'),(3,'delete_data'),(2,'close')):
+            with self.subTest(stage=stage,action=action):
+                self.h=HumanSense(consent=True);entered=asyncio.Event();count=[]
+                async def callback(request):
+                    count.append(True)
+                    if len(count)==stage:entered.set();await asyncio.Event().wait()
+                    return answer([.1,.2])
+                driver,c,requests=self.create([],callback=callback,settle=False)
+                task=asyncio.create_task(driver.inspect(frame()))
+                await asyncio.wait_for(entered.wait(),5)
+                # Independent audio/context APIs progress while visual callback waits.
+                await self.h.push_signal('audio.rms',.1,'audio')
+                self.assertTrue((await self.h.get_context())['observations'])
+                if action=='consent':
+                    self.h.consent=False;self.assertTrue(driver.closed);await self.h._join_call_drivers()
+                else:await getattr(self.h,action)()
+                with self.assertRaises(asyncio.CancelledError):await task
+                self.assertTrue(driver._close_task.done());self.assertIsNone(driver.snapshot()['active'])
+                self.assertEqual(driver.snapshot()['history'],[])
+                self.assertEqual(c.snapshot()['budget']['reserved_liability'],5*stage)
+                await self.h.close()
+
+    async def test_newer_capture_supersedes_without_queue_and_reuses_same_source(self):
+        entered=asyncio.Event();count=[]
+        async def callback(request):
+            count.append(True)
+            if len(count)==1:entered.set();await asyncio.Event().wait()
+            return answer([.48,.52])
+        driver,c,requests=self.create([],callback=callback)
+        first=frame(ts=timestamp()-10);task=asyncio.create_task(driver.inspect(first))
+        await asyncio.wait_for(entered.wait(),5);source=driver._source
+        newer=frame(2)
+        with self.assertRaisesRegex(RuntimeError,'not queued'):await driver.inspect(newer)
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertEqual(driver._source,source);self.assertIsNone(driver.snapshot()['active'])
+        result=await driver.inspect(newer)
+        self.assertEqual(result['timestamp_ms'],newer.timestamp_ms)
+        self.assertEqual(driver._source,source);self.assertEqual(len(c.snapshot()['sources']),1)
+
+    async def test_unknown_claim_does_not_create_conflict(self):
+        driver,c,requests=self.create([None])
+        result=await driver.inspect(frame());self.assertEqual(result['observation']['value']['comparison']['outcome'],'indeterminate_claim')
+        self.assertEqual(len(requests),1)
+
+    async def test_actual_backend_observer_is_consumed_not_inferred_from_dispatch(self):
+        from test_evaluation_hooks import Observer
+        observer=Observer();driver,c,requests=self.create([[.48,.52]])
+        driver.small._evaluation_observer=observer
+        self.h._register_evaluation_observer(observer)
+        result=await driver.inspect(frame());self.assertEqual(len(observer.tickets),1)
+        self.assertTrue(observer.tickets[0].entered)
+        self.assertIn(('0','finish:completed'),observer.events)
+        self.assertFalse(result['observation']['value']['comparison']['whole_chain_cost_complete'])
+        self.assertIsNone(result['observation']['value']['comparison']['local_overhead_cost'])
+
+    async def test_strong_optout_retains_conflict(self):
+        driver,c,requests=self.create([[.1,.2],[.1,.2]],strong=False)
+        result=await driver.inspect(frame())
+        self.assertEqual(result['observation']['value']['comparison']['outcome'],'strong_opt_out')
+        self.assertEqual(len(requests),2)
+
+    async def test_unknown_quote_never_enters_backend(self):
+        driver,c,requests=self.create([],ceilings=dict(initial=None,reinspection=5,strong=5))
+        result=await driver.inspect(frame());value=result['observation']['value']['comparison']
+        self.assertEqual(requests,[]);self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+        self.assertIn('unknown_charge_ceiling',value['attempts'][0]['blockers'])
+
+    async def test_capture_configuration_and_order_fail_closed(self):
+        driver,c,requests=self.create([[.48,.52]])
+        original=frame()
+        for bad in (replace(original,sensor=replace(original.sensor,calibration_id='wrong')),
+            replace(original,sensor=replace(original.sensor,stream_epoch=None)),
+            replace(original,data=original.data.reshape(32,128,3))):
+            with self.assertRaises(ValueError):await driver.inspect(bad)
+        self.assertEqual(requests,[])
+        await driver.inspect(original)
+        changed=replace(original,data=original.data.copy());changed.data[:]=0
+        with self.assertRaises(ValueError):await driver.inspect(changed)
+        self.assertEqual(len(requests),1)
+
+    async def test_atomic_next_submission_preserves_existing_order(self):
+        driver,c,requests=self.create([[.1,.2],[.48,.52]])
+        c._submission_seq=40
+        result=await driver.inspect(frame())
+        self.assertEqual(c._submission_seq,42)
+        self.assertEqual(len(result['observation']['value']['comparison']['attempts']),2)
+
+    async def test_case_deadline_joins_actual_visual_backend_and_preserves_liability(self):
+        entered=asyncio.Event();cleaned=asyncio.Event()
+        async def callback(request):
+            entered.set()
+            try:await asyncio.Event().wait()
+            finally:cleaned.set()
+        driver,c,requests=self.create([],settle=False,callback=callback)
+        original=driver._execute_stage
+        async def bounded(adapter,args,kwargs,deadline):
+            return await original(adapter,args,kwargs,asyncio.get_running_loop().time()+.1)
+        with patch.object(driver,'_execute_stage',bounded):
+            result=await driver.inspect(frame())
+        self.assertTrue(entered.is_set());self.assertTrue(cleaned.is_set())
+        self.assertEqual(result['observation']['value']['comparison']['outcome'],'stage_failed')
+        self.assertIsNone(driver.small._active);self.assertIsNone(driver.small._backend_task)
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],5)
+        self.assertEqual(len(requests),1)

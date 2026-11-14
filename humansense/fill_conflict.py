@@ -2,7 +2,7 @@
 import asyncio
 from collections import deque
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict,replace
 import hashlib
 import math
 import uuid
@@ -18,15 +18,15 @@ from .streams import _finish
 from .visual_context_call import VisualContextCalls
 
 
-def _client(human,controller_id,value,timeout):
+def _client(human,controller_id,value,timeout,observer):
     if type(value) is not dict or set(value)!={'completion','provider','model_revision'}:raise ValueError('explicit application client/provider/revision required')
-    return VisualContextCalls(human,controller_id,value['completion'],provider=value['provider'],model_revision=value['model_revision'],timeout=timeout)
+    return VisualContextCalls(human,controller_id,value['completion'],provider=value['provider'],model_revision=value['model_revision'],timeout=timeout,evaluation_observer=observer)
 
 
 class FillConflictRuntime:
     """One real OpenCV measurement and at most three explicitly budgeted calls."""
     def __init__(self,human,driver_id,controller_id,*,fill_config,small_client,strong_client=None,
-                 strong_opt_in=False,charge_ceilings,chain_ceiling,pricing_revision,unit,timeout=10,retention_ms=60000):
+                 strong_opt_in=False,charge_ceilings,chain_ceiling,pricing_revision,unit,timeout=10,retention_ms=60000,evaluation_observer=None):
         human._check();identifier(driver_id);identifier(controller_id)
         if not hasattr(human,'_register_call_driver'):raise RuntimeError('owned call-driver lifecycle support required')
         if controller_id not in human._call_controllers:raise ValueError('registered call controller required')
@@ -44,9 +44,12 @@ class FillConflictRuntime:
         budget=controller.snapshot()['budget']
         if budget['unit']!=unit or budget['pricing_revision']!=pricing_revision:raise ValueError('chain pricing units/revision differ from authoritative ledger')
         self.human,self.driver_id,self.controller=human,driver_id,controller
-        self.fill=CalibratedColorFill(**fill_config);self.config=self.fill.config
-        self.small=_client(human,controller_id,small_client,timeout)
-        self.strong=None if strong_client is None else _client(human,controller_id,strong_client,timeout)
+        self.fill=CalibratedColorFill(**fill_config);self.config=self.fill.config;self._config_sha=_digest(self.config)
+        try:
+            self.small=_client(human,controller_id,small_client,timeout,evaluation_observer)
+            self.strong=None if strong_client is None else _client(human,controller_id,strong_client,timeout,evaluation_observer)
+        except BaseException:
+            self.fill.close();raise
         self.strong_opt_in=strong_opt_in;self.ceilings=ceilings;self.chain_ceiling=chain_ceiling
         self.timeout=timeout;self.retention=retention_ms;self.closed=False;self._generation=0
         self._operation=self._native=self._close_task=None;self._case=None;self._history=deque(maxlen=32)
@@ -99,6 +102,7 @@ class FillConflictRuntime:
 
     def _check(self,generation):
         self.human._check()
+        if _digest(self.fill.config)!=self._config_sha:raise RuntimeError('frozen fill configuration changed')
         if self.closed or self.human.paused or generation!=(self._generation,self.human._generation):raise RuntimeError('inspection invalidated')
 
     def _fresh(self,frame):
@@ -119,7 +123,8 @@ class FillConflictRuntime:
             if (isinstance(frame,InputFrame) and isinstance(frame.sensor,SensorMetadata) and
                 type(frame.timestamp_ms) is int and type(frame.sensor.capture_sequence) is int and self._last is not None):
                 newer=(frame.timestamp_ms,frame.sensor.capture_sequence)
-                if newer[0]>self._last[0] and newer[1]>self._last[1]:
+                previous=self._superseded_order or self._last
+                if newer[0]>previous[0] and newer[1]>previous[1]:
                     self._generation+=1;self._case=None;self._superseded_order=newer;self._operation.cancel()
             raise RuntimeError('one active case; newer capture invalidates it but is not queued')
         import numpy as np
@@ -150,10 +155,27 @@ class FillConflictRuntime:
             if self._operation is task:self._operation=None
             self._case=None
 
+    async def _execute_stage(self,adapter,args,kwargs,deadline):
+        # One absolute case deadline; cancellation joins the real adapter's
+        # owned cleanup, which can outlive the admission/response deadline.
+        remaining=deadline-asyncio.get_running_loop().time()
+        if remaining<=0:raise TimeoutError('case deadline exhausted')
+        task=asyncio.create_task(adapter.execute(*args,**kwargs))
+        try:
+            done,_=await asyncio.wait((task,),timeout=remaining)
+            if not done:raise TimeoutError('case deadline exhausted')
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel();await _finish(asyncio.gather(task,return_exceptions=True))
+
     async def _inspect(self,frame,generation):
         self._check(generation);case_id=uuid.uuid4().hex;started=asyncio.get_running_loop().time()
         image_sha=smolvlm_frame_sha256(frame.data)
-        case=dict(id=case_id,capture_ms=frame.timestamp_ms,source_sha256=image_sha,stage='measurement',attempts=[],rule_sha256=RULE_SHA)
+        case=dict(id=case_id,capture_ms=frame.timestamp_ms,source_sha256=image_sha,stage='measurement',attempts=[],rule_sha256=RULE_SHA,
+            capture=dict(subject_id=frame.subject_id,sensor=dict(asdict(frame.sensor),channels=list(frame.sensor.channels)),
+                shape=list(frame.data.shape),roi_px=list(self.config['roi']),container_id=self.config['container_id'],
+                configuration_sha256=self._config_sha,processing_epoch=f'{self.human._session_id}:{self.human._generation}'))
         self._case=case
         self._native=asyncio.create_task(asyncio.to_thread(self.fill.process,frame))
         try:
@@ -162,6 +184,7 @@ class FillConflictRuntime:
                 await _finish(asyncio.gather(self._native,return_exceptions=True));raise
         finally:self._native=None
         self._check(generation)
+        case['fill_processing_ms']=round((asyncio.get_running_loop().time()-started)*1000,3)
         measurement=await self.human.push_observation(self.fill.spec.id,numeric,sensor=frame.sensor,subject_id=frame.subject_id,timestamp_ms=frame.timestamp_ms)
         self._check(generation)
         c=self.config
@@ -188,17 +211,23 @@ class FillConflictRuntime:
                 rules={'query':True,'needs_visual':True} if stage=='initial' else ({'unknown_candidate':True} if stage=='reinspection' else {'conflict_rule':RULE_ID})
                 decision=self.controller.submit_next(self._source,descriptor,now_ms=timestamp(),visual_reference=visual,**rules)
                 entry=dict(stage=stage,parent_request_id=None if not case['attempts'] else case['attempts'][-1].get('request_id'),
-                    status=decision['status'],rule_sha256=RULE_SHA,evidence_sha256=_digest(dict(case=case_id,measurement=case['measurement_sha256'],descriptor=case['descriptor_sha256'],pixels=image_sha)))
+                    status=decision['status'],maximum_charge=self.ceilings[stage],desired_route=decision.get('decision',{}).get('desired_route'),
+                    allowed_route=decision.get('decision',{}).get('recommended_route'),dispatched_route=None,rule_sha256=RULE_SHA,evidence_sha256=_digest(dict(case=case_id,measurement=case['measurement_sha256'],descriptor=case['descriptor_sha256'],pixels=image_sha)))
                 case['attempts'].append(entry)
                 if decision['status']!='queued':outcome='blocked_admission';entry['blockers']=decision.get('decision',{}).get('blockers',[]);break
                 rid=decision['request_id'];entry['request_id']=rid
                 adapter=self.strong if stage=='strong' else self.small
                 question=prompt(stage,width=c['width'],height=c['height'],roi=c['roi'],container_id=c['container_id'],coordinate_frame=c['coordinate_frame'])
                 try:
-                    response=await adapter.execute(rid,descriptor,frame,question,maximum_charge=self.ceilings[stage],ttl_ms=1000)
+                    response=await self._execute_stage(adapter,(rid,descriptor,frame,question),
+                        dict(maximum_charge=self.ceilings[stage],ttl_ms=1000),started+30)
                     self._check(generation)
                 except (RuntimeError,ValueError,TimeoutError) as error:
                     self._check(generation);entry.update(status='failed',error=type(error).__name__);outcome='stage_failed';break
+                state=self.controller.snapshot()
+                actual=next((row for row in state['requests']+state['recent'] if row['id']==rid),None)
+                if actual is not None and (actual.get('last_admission') or {}).get('stage')=='dispatch' and actual['last_admission'].get('status')=='dispatched':
+                    entry['dispatched_route']=actual['execution']['route']
                 entry.update(status=response['status'],provider=adapter._provider,model_revision=adapter._revision,
                     prompt_sha256=response.get('prompt_sha256'),result_sha256=_digest(response))
                 if not response.get('accepted'):
@@ -206,7 +235,9 @@ class FillConflictRuntime:
                 if not self._fresh(frame):outcome='blocked_stale_evidence';entry['status']='historical_response';break
                 try:claim,interval=parse_claim(response['text']);result=compare(numeric['fill'],interval)
                 except ValueError:claim=None;result='indeterminate_invalid_claim'
-                entry.update(claim=claim,comparison=result,conditional=True)
+                entry.update(claim=claim,claim_id=case_id+':'+stage,claim_version=1,
+                    supersedes_claim_id=None if len(case['attempts'])==1 else case['attempts'][-2].get('claim_id'),
+                    comparison=result,conditional=True)
                 outcome=result
                 if stage=='initial':
                     initial_conflict=result=='conditional_image_model_conflict'
@@ -216,8 +247,9 @@ class FillConflictRuntime:
         if not self._fresh(frame):outcome='blocked_stale_evidence'
         case.update(stage='complete',outcome=outcome,conditional=True,current_evidence=self._fresh(frame),
             measurement_verification='not_verified',claim_verification='not_verified',budget_authorization_ceiling=self.chain_ceiling,
-            accounting='authoritative_controller_ledger',actual_cost=None)
-        value=bounded_json(dict(comparison=case),max_bytes=16384)
+            accounting='authoritative_controller_ledger',actual_cost=None,local_overhead_cost=None,
+            whole_chain_cost_complete=False,pipeline_elapsed_ms=round((asyncio.get_running_loop().time()-started)*1000,3))
+        value=bounded_json(dict(comparison=case),max_bytes=15*1024)
         self._delivery=max(self._delivery+1,frame.sensor.sequence)
         result=await self.human.push_observation(self.spec.id,value,sensor=replace(frame.sensor,sequence=self._delivery),
             subject_id=frame.subject_id,timestamp_ms=frame.timestamp_ms,quality='sufficient' if case['current_evidence'] else 'insufficient')
