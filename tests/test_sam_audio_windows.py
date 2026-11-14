@@ -79,6 +79,13 @@ class WindowContract(unittest.TestCase):
         result = self.prepare(anchors=[('+',0,.04),('-',.04,.08)])
         self.assertEqual(result.feature_spans,(('+',0,1),('-',1,2)))
 
+    def test_float_rounded_end_must_not_claim_an_extra_feature(self):
+        # Upstream's float ceil gives482 for this endpoint, but only481 codec
+        # features exist. Reject rather than silently recording a clipped span.
+        with self.assertRaises(ValueError):
+            self.prepare(np.zeros(48100,np.float32), hop_length=100,
+                         anchors=[('+',0,48100/48000)])
+
     def test_malformed_and_unbounded_anchors(self):
         cases = [[('?',0,.1)], [('+',True,.1)], [('+',0,float('nan'))],
                  [('+',0,float('inf'))], [('+',0,10**500)], [('+',-.1,.2)],

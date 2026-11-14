@@ -91,8 +91,8 @@ def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None):
             raise ValueError('anchor must lie strictly within the complete window')
         start, end = float(start), float(end)
         first, last = math.ceil(start*SAMPLE_RATE/hop), math.ceil(end*SAMPLE_RATE/hop)
-        if first >= last:
-            raise ValueError('anchor disappears at codec feature resolution')
+        if first >= last or last > (count+hop-1)//hop:
+            raise ValueError('anchor disappears or exceeds the actual codec feature window')
         for (_, old_start, old_end), (_, old_first, old_last) in zip(originals, spans):
             if max(start, old_start) < min(end, old_end) or max(first, old_first) < min(last, old_last):
                 raise ValueError('overlapping manual anchors are unsupported')
