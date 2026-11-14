@@ -67,87 +67,128 @@ def validate_manifest(value):
     if origin + duration > 2**63-1:
         raise ValueError('capture interval exceeds integer bound')
     sources = value['sources']
-    if type(sources) is not list or not 1 <= len(sources) <= 2:
-        raise ValueError('one or two explicitly selected capture sources required')
+    if type(sources) is not list or not 1 <= len(sources) <= 16:
+        raise ValueError('one to sixteen explicitly selected capture sources required')
     inventory = {}
     for source in sources:
-        _keys(source, ('source_id', 'sensor_id', 'stream_epoch', 'format'))
+        _keys(source, ('source_id', 'sensor_id', 'stream_epoch', 'format', 'modality', 'calibration_id'))
         for name in ('source_id', 'sensor_id', 'stream_epoch'):
             identifier(source[name])
         if source['source_id'] in inventory or source['format'] not in ('bgr8_hwc', 'pcm_s16le_mono'):
             raise ValueError('unique typed capture sources required')
+        expected = 'video' if source['format'] == 'bgr8_hwc' else 'audio'
+        if source['modality'] != expected:
+            raise ValueError('source modality must match frozen format')
+        if source['calibration_id'] is not None:
+            identifier(source['calibration_id'])
         inventory[source['source_id']] = source
     records = value['records']
     if type(records) is not list or not 1 <= len(records) <= MAX_RECORDS:
         raise ValueError('bounded nonempty capture inventory required')
-    previous = {}; last_offset = -1; total = 0
+    previous = {}; last_order = None; total = 0; payloads = {}
     for record in records:
         if type(record) is not dict:
             raise ValueError('capture record required')
         form = record.get('format')
         fields = ('shape',) if form == 'bgr8_hwc' else ('sample_rate', 'sample_count')
         _keys(record, ('source_id', 'sensor_id', 'sequence', 'capture_ns', 'offset_ns',
-                       'format', 'payload_path', 'payload_bytes', 'payload_sha256') + fields)
+                       'format', 'stream_epoch', 'payload_path', 'payload_bytes', 'payload_sha256') + fields)
         source = inventory.get(record['source_id'])
-        if source is None or any(source[k] != record[k] for k in ('sensor_id', 'format')):
+        if source is None or any(source[k] != record[k] for k in ('sensor_id', 'format', 'stream_epoch')):
             raise ValueError('capture differs from declared source')
         seq = _integer(record['sequence'], 0, 2**63-1)
         offset = _integer(record['offset_ns'], 0, duration-1)
-        if seq <= previous.get(record['source_id'], -1) or offset < last_offset:
+        order = (offset, record['source_id'], seq)
+        if seq <= previous.get(record['source_id'], -1) or (last_order is not None and order <= last_order):
             raise ValueError('ordered captures and strictly advancing source sequence required')
         _integer(record['capture_ns'], 0, 2**63-1)
         if record['capture_ns'] != origin + offset:
             raise ValueError('capture time must equal original origin plus playback offset')
-        previous[record['source_id']] = seq; last_offset = offset
+        previous[record['source_id']] = seq; last_order = order
         if form == 'bgr8_hwc':
             shape = record['shape']
             if type(shape) is not list or len(shape) != 3 or shape[2] != 3:
                 raise ValueError('BGR HWC3 shape required')
-            h = _integer(shape[0], 16, 1080); w = _integer(shape[1], 16, 1920)
+            h = _integer(shape[0], 1, 1080); w = _integer(shape[1], 1, 1920)
             _integer(shape[2], 3, 3)
             size = h*w*3
         else:
             rate = _integer(record['sample_rate'], 8000, 48000)
             count = _integer(record['sample_count'], 1, rate//10)
             size = count*2
+            if offset*rate + count*10**9 > duration*rate:
+                raise ValueError('audio extends past declared recording end')
         if _integer(record['payload_bytes'], 1, 1920*1080*3) != size:
             raise ValueError('payload byte count differs from exact typed layout')
         path = record['payload_path']; sha = record['payload_sha256']
-        if type(path) is not str or not 1 <= len(path) <= 4096 or '\0' in path or not Path(path).is_absolute():
-            raise ValueError('explicit absolute capture payload path required')
+        if type(path) is not str or not 1 <= len(path) <= 4096 or '\0' in path or Path(path).is_absolute() or any(x in ('', '.', '..') for x in path.split('/')):
+            raise ValueError('relative nonescaping capture payload path required')
         if type(sha) is not str or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha):
             raise ValueError('original capture SHA256 required')
-        total += size
+        identity = (size, sha)
+        if path in payloads and payloads[path] != identity:
+            raise ValueError('one payload path cannot declare different frozen bytes')
+        if path not in payloads: total += size
+        payloads[path] = identity
         if total > MAX_PAYLOAD_BYTES:
             raise ValueError('joint recording payload bound exceeded')
-    intervals = value['availability']
-    if type(intervals) is not list or not 1 <= len(intervals) <= 4096:
-        raise ValueError('bounded declared availability partition required')
-    end = 0
-    for interval in intervals:
-        _keys(interval, ('start_ns', 'end_ns', 'state'))
-        start = _integer(interval['start_ns'], 0, duration)
-        finish = _integer(interval['end_ns'], 1, duration)
-        if start != end or finish <= start or interval['state'] not in ('available', 'unavailable', 'unknown'):
-            raise ValueError('gap-free declared availability partition required')
-        end = finish
-    if end != duration:
-        raise ValueError('availability must span the declared recording')
+    partitions = value['availability']
+    if type(partitions) is not list or len(partitions) != len(inventory):
+        raise ValueError('availability partition required for every source')
+    seen = set(); interval_count = 0
+    for partition in partitions:
+        _keys(partition, ('source_id', 'intervals'))
+        sid = partition['source_id']
+        if type(sid) is not str or sid not in inventory or sid in seen:
+            raise ValueError('unique known availability source required')
+        seen.add(sid); intervals = partition['intervals']
+        if type(intervals) is not list or not intervals:
+            raise ValueError('bounded declared availability partition required')
+        interval_count += len(intervals)
+        if interval_count > 4096: raise ValueError('availability interval bound exceeded')
+        end = 0
+        for interval in intervals:
+            _keys(interval, ('start_ns', 'end_ns', 'state'))
+            start = _integer(interval['start_ns'], 0, duration)
+            finish = _integer(interval['end_ns'], 1, duration)
+            if start != end or finish <= start or interval['state'] not in ('available', 'unavailable', 'unknown'):
+                raise ValueError('gap-free declared availability partition required')
+            end = finish
+        if end != duration: raise ValueError('availability must span declared recording')
+        index = 0
+        for record in records:
+            if record['source_id'] != sid: continue
+            while record['offset_ns'] >= intervals[index]['end_ns']: index += 1
+            if intervals[index]['state'] == 'unavailable':
+                raise ValueError('capture inside declared unavailable interval')
     data = encoded(value)
     if len(data) > MAX_MANIFEST_BYTES:
         raise ValueError('joint recording manifest bound exceeded')
     return json.loads(data)
 
 
-def read_capture(record):
+def read_capture(record, asset_directory):
     """Hash actual owned bytes, not a pathname checked before an await.
 
     The caller supplies a validated detached record. This function runs off the
     event loop; a source scheduler must not block another source on disk I/O.
     """
     size = _integer(record['payload_bytes'], 1, 1920*1080*3)
-    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
-    fd = os.open(record['payload_path'], flags)
+    path = record['payload_path']
+    if type(path) is not str or Path(path).is_absolute() or any(x in ('', '.', '..') for x in path.split('/')):
+        raise ValueError('relative nonescaping capture path required')
+    root = Path(asset_directory)
+    if not root.is_absolute(): raise ValueError('explicit absolute asset directory required')
+    # Open every component relative to an owned directory; no symlink traversal.
+    directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in root.parts[1:] + tuple(path.split('/')[:-1]):
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory); directory = child
+        flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+        fd = os.open(path.split('/')[-1], flags, dir_fd=directory)
+    finally:
+        os.close(directory)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size != size:
