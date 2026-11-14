@@ -2,6 +2,7 @@
 import asyncio
 import os
 from pathlib import Path
+import tempfile
 
 from .capabilities import bounded_json
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
@@ -57,10 +58,16 @@ class ProcessProvider:
             worker_environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
                                       HF_HUB_DISABLE_TELEMETRY='1', VLLM_NO_USAGE_STATS='1',
                                       VLLM_ENABLE_V1_MULTIPROCESSING='0')
-        spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
-            'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment))
+        spawn = staging = None
         try:
+            if separation_owner is not None:
+                # The parent owns cleanup even if startup cancellation kills the
+                # worker before its tokenizer constructor can return.
+                staging = tempfile.TemporaryDirectory(prefix='.gamst-sam-tokenizer-', dir='.')
+                worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
+            spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
+                'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment))
             self._process = await asyncio.shield(spawn)
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
             response = await self._request('start', profile=profile, config=self.config,
@@ -69,13 +76,16 @@ class ProcessProvider:
                 raise RuntimeError('worker capability/provenance differs from selected contract')
             return self
         except BaseException:
-            if self._process is None:
+            if self._process is None and spawn is not None:
                 try:
                     self._process = await _finish(spawn)
                 except Exception:
                     pass
             await _finish(asyncio.create_task(self._stop()))
             raise
+        finally:
+            if staging is not None:
+                staging.cleanup()
 
     async def _stop(self):
         self.closed = True

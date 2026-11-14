@@ -99,6 +99,15 @@ class ArtifactPreflight(unittest.TestCase):
         source['files']['../model.py'] = source['files'].pop('model.py')
         with self.assertRaises(ValueError): self.verify()
 
+    def test_empty_python_source_supported_but_assets_remain_nonempty(self):
+        source=self.manifest['sources']['perception_models']
+        path=Path(source['root'])/'__init__.py'
+        source['files']['__init__.py']=self.put(path,b'')
+        self.assertTrue(self.verify()['declared_file_bytes_verified'])
+        checkpoint=Path(self.manifest['sam']['checkpoint_path'])
+        self.manifest['sam']['checkpoint_sha256']=self.put(checkpoint,b'')
+        with self.assertRaises(ValueError): self.verify()
+
     def test_missing_extra_and_modified_t5_files(self):
         root = Path(self.manifest['t5']['root'])
         (root/'extra.json').write_text('{}')
