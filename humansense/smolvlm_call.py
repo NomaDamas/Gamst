@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import asdict, replace
 import hashlib
+import struct
 
 from .capabilities import SensorMetadata, bounded_json, identifier
 from .call_controller import _digest
@@ -10,6 +11,18 @@ from .process_provider import ProcessProvider
 from .providers.smolvlm_native import configuration, prompt_text
 from .schema import timestamp
 from .streams import _finish
+
+
+def smolvlm_frame_sha256(image):
+    """Versioned shape-bound digest of plain uint8 HWC BGR pixels, C-order.
+
+    Use this when creating the controller visual_reference for SmolVLMCalls.
+    """
+    import numpy as np
+    if type(image) is not np.ndarray or image.dtype!=np.uint8 or image.ndim!=3 or image.shape[2]!=3 or min(image.shape[:2])<32 or max(image.shape[:2])>2160 or image.shape[0]*image.shape[1]>1920*1080:
+        raise ValueError('bounded plain uint8 BGR pixels required')
+    header=b'gamst.smolvlm.uint8.HWC.BGR.v1\0'+struct.pack('>III',*image.shape)
+    return hashlib.sha256(header+image.tobytes(order='C')).hexdigest()
 
 
 class SmolVLMCalls:
@@ -63,7 +76,7 @@ class SmolVLMCalls:
         copied=replace(frame,data=data.copy())
         digest=hashlib.sha256(copied.data.tobytes()).hexdigest()
         reference=decision['visual_reference']
-        if reference is None or reference['sha256']!=digest:
+        if reference is None or reference['sha256']!=smolvlm_frame_sha256(copied.data):
             raise ValueError('retained pixel bytes differ from visual reference')
         return copied,evidence,digest
 

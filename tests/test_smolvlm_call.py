@@ -11,7 +11,7 @@ from humansense.call_controller import CallController
 from humansense.call_policy import CallPolicy
 from humansense.mcp import MCPServer
 from humansense.schema import timestamp
-from humansense.smolvlm_call import SmolVLMCalls
+from humansense.smolvlm_call import SmolVLMCalls,smolvlm_frame_sha256
 import test_smolvlm_context as smol_tests
 from test_smolvlm_context import frame,np
 from test_smolvlm_native import CONFIG
@@ -34,10 +34,11 @@ class Calls(unittest.IsolatedAsyncioTestCase):
 
     async def request(self,human,controller,spec,*,index=0,**rules):
         f=frame(index,timestamp());f=replace(f,sensor=replace(f.sensor,stream_epoch="camera-1",source_id="camera-"+str(index)))
+        f=replace(f,data=np.arange(f.data.size,dtype=np.uint8).reshape(f.data.shape))
         r=await human.push_observation(spec.id,{'count':1},sensor=f.sensor,subject_id=f.subject_id,timestamp_ms=f.timestamp_ms)
         source=controller.open_source(r,now_ms=timestamp())
         ref=dict(source_id=f.sensor.source_id,sensor_id=f.sensor.sensor_id,stream_epoch=f.sensor.stream_epoch,
-            capture_ms=f.timestamp_ms,sha256=hashlib.sha256(f.data.tobytes()).hexdigest())
+            capture_ms=f.timestamp_ms,sha256=smolvlm_frame_sha256(f.data))
         d=controller.submit(source,r,sequence=index,now_ms=timestamp(),visual_reference=ref,**(rules or {'unknown_candidate':True}))
         return d['request_id'],r,f
 
@@ -64,6 +65,11 @@ class Calls(unittest.IsolatedAsyncioTestCase):
             async with human:
                 async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
                     request,r,f=await self.request(human,c,spec)
+                    reshaped=replace(f,data=f.data.reshape(48,32,3))
+                    self.assertEqual(f.data.tobytes(),reshaped.data.tobytes())
+                    self.assertNotEqual(smolvlm_frame_sha256(f.data),smolvlm_frame_sha256(reshaped.data))
+                    with self.assertRaises(ValueError):await adapter.execute(request,r,reshaped,maximum_charge=2)
+                    self.assertEqual(c.snapshot()['budget']['dispatched'],0)
                     bad=replace(f,data=f.data.copy());bad.data[:]=77
                     with self.assertRaises(ValueError):await adapter.execute(request,r,bad,maximum_charge=2)
                     with self.assertRaises(ValueError):await adapter.execute(request,dict(r,id='changed'),f,maximum_charge=2)

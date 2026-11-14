@@ -131,7 +131,7 @@ class Native(unittest.TestCase):
                 self.assertIsNotNone(children[0].returncode)
             asyncio.run(managed())
             async def on_demand():
-                from humansense import SmolVLMCalls
+                from humansense import SmolVLMCalls,smolvlm_frame_sha256
                 from humansense.capabilities import CapabilitySpec,OutputField
                 from humansense.call_policy import CallPolicy
                 from humansense.call_controller import CallController
@@ -151,7 +151,7 @@ class Native(unittest.TestCase):
                         record=await human.push_observation(thin.id,{'count':1},sensor=sensor,timestamp_ms=ts)
                         source=controller.open_source(record,now_ms=timestamp())
                         frame=InputFrame(images[0].copy(),'video',ts,sensor=sensor)
-                        ref=dict(source_id='camera',sensor_id='video',stream_epoch='native-1',capture_ms=ts,sha256=hashlib.sha256(frame.data.tobytes()).hexdigest())
+                        ref=dict(source_id='camera',sensor_id='video',stream_epoch='native-1',capture_ms=ts,sha256=smolvlm_frame_sha256(frame.data))
                         queued=controller.submit(source,record,sequence=0,now_ms=timestamp(),visual_reference=ref,unknown_candidate=True)
                         result=await adapter.execute(queued['request_id'],record,frame,maximum_charge=1)
                         self.assertIn(result['status'],('published','discarded'))

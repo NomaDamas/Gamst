@@ -6,11 +6,12 @@ through HumanSense's observation/MCP path. It does not select models, generate
 requests, change sensor/delivery cadence, or substitute for strong_vlm/text routes.
 
 ```python
-from humansense import SmolVLMCalls
+from humansense import SmolVLMCalls, smolvlm_frame_sha256
 from humansense.schema import timestamp
 
 # human already has a registered controller and a queued small_vlm request.
 # record is its original registered observation; frame is its original InputFrame.
+# At submission: visual_reference["sha256"] = smolvlm_frame_sha256(frame.data).
 # config contains explicit local checkpoint/tokenizer paths and SHA256 values.
 async with await SmolVLMCalls.open(
     human, "controller-id", "/existing/environment/bin/python", config
@@ -40,7 +41,11 @@ the controller's retained decision. The exact subject, timestamp and complete
 sensor metadata must match the original frame; retained uint8 BGR pixels are
 bounded to the native 1080p limit, copied and checked against the visual reference
 SHA256 before any await. Modified pixels, metadata or records fail before dispatch.
-The visual reference convention for this adapter is SHA256 of plain BGR `tobytes()`.
+Create the visual reference with `smolvlm_frame_sha256(frame.data)`. This versioned
+SHA256 binds a uint8/HWC/BGR format tag, three big-endian shape dimensions, and
+C-order bytes. Raw-byte SHA256 alone is rejected: identical bytes reshaped to
+different image geometry must not authorize the original capture. The native
+window still reports raw pixel hashes alongside its separately validated shape.
 
 One adapter permits one active call; a second call fails immediately rather than
 building an invisible queue. Do not use its owned worker directly or concurrently
