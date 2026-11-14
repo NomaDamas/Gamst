@@ -44,6 +44,65 @@ def read_traces(path):
             yield _strict_decode(line)
 
 
+def validate_source_trace(trace, *, task, arm, ordinal, previous, plan, by_id,
+                          expected_plan_sha256, expected_collection_sha256):
+    """Validate original unscored trace structure and lineage without assessment.
+
+    The response digest is an original producer locator; raw stdout is not
+    retained here, so this does not authenticate its contents independently.
+    """
+    if len(_encoded(trace)) + 1 > MAX_TRACE_BYTES:
+        raise ValueError('source trace exceeds 512 KiB')
+    identity = dict(schema_version=1, comparison_plan_sha256=expected_plan_sha256,
+                    collection_sha256=expected_collection_sha256)
+    trace = _snapshot(trace)
+    _keys(trace, SOURCE_KEYS, 'original three-arm trace')
+    key = _digest(trace['trace_sha256'])
+    config = plan['systems'][arm]; config_digest = plan_digest(config)
+    content = {k: v for k, v in trace.items() if k != 'trace_sha256'}
+    if (plan_digest(content) != key or trace['previous_trace_sha256'] != previous or
+            type(trace['ordinal']) is not int or trace['ordinal'] != ordinal or
+            trace['task_id'] != task['id'] or trace['arm'] != arm or
+            trace['comparison_plan_sha256'] != expected_plan_sha256 or
+            trace['collection_sha256'] != expected_collection_sha256 or
+            trace['configuration_sha256'] != config_digest or
+            trace['input_sha256'] != task['input_sha256']):
+        raise ValueError('source chain/order/input/plan/configuration mismatch')
+    request = dict(identity, task_id=task['id'], arm=arm, configuration_sha256=config_digest,
+                   configuration=config, input=by_id[task['id']])
+    if trace['request_sha256'] != plan_digest(request):
+        raise ValueError('source request mismatch')
+    if trace['measurement_status'] != 'pipeline_reported_unverified' or trace['quality_status'] != 'unscored':
+        raise ValueError('original unscored source required')
+    status = trace['status']
+    if status not in ('success', 'error', 'timeout'):
+        raise ValueError('unknown source status')
+    lifetime = _number(trace['process_lifetime_ms'], 'process lifetime', minimum=1e-9)
+    ready = trace['answer_ready_ms']
+    if ready is not None:
+        _number(ready, 'answer ready', minimum=1e-9, maximum=lifetime)
+    for field in ('response_sha256', 'stderr_sha256'):
+        if trace[field] is not None:
+            _digest(trace[field])
+    if trace['returncode'] is not None and type(trace['returncode']) is not int:
+        raise ValueError('invalid returncode')
+    if trace['diagnostic'] is not None:
+        _text(trace['diagnostic'], 'diagnostic')
+    response = trace['response']
+    if response is not None:
+        _keys(response, ('schema_version', 'status', 'answer', 'measurements'), 'response')
+        if (type(response['schema_version']) is not int or response['schema_version'] != 1 or
+                response['status'] not in ('success', 'error') or type(response['answer']) is not str or
+                type(response['measurements']) is not dict or trace['response_sha256'] is None or ready is None):
+            raise ValueError('invalid source response')
+    if status == 'success' and (response is None or response['status'] != 'success' or
+            trace['returncode'] != 0 or trace['diagnostic'] is not None):
+        raise ValueError('inconsistent source success')
+    if status == 'timeout' and trace['diagnostic'] != 'deadline_exceeded':
+        raise ValueError('inconsistent timeout')
+    return trace, key, config_digest, status, lifetime, ready
+
+
 def join(plan, spec, inputs, traces, completion, assessment, *, expected_plan_sha256,
          expected_collection_sha256, expected_trace_sha256, expected_assessment_sha256):
     """Audit portable declarations and hash lineage, not inference or measurement truth."""
@@ -97,52 +156,11 @@ def join(plan, spec, inputs, traces, completion, assessment, *, expected_plan_sh
             raise ValueError('extra source trace')
         if len(_encoded(trace)) + 1 > MAX_TRACE_BYTES:
             raise ValueError('source trace exceeds 512 KiB')
-        trace = _snapshot(trace)
-        _keys(trace, SOURCE_KEYS, 'original three-arm trace')
         task, arm = expected[ordinal]
-        key = _digest(trace['trace_sha256'])
-        config = plan['systems'][arm]; config_digest = plan_digest(config)
-        content = {k: v for k, v in trace.items() if k != 'trace_sha256'}
-        if (plan_digest(content) != key or trace['previous_trace_sha256'] != previous or
-                type(trace['ordinal']) is not int or trace['ordinal'] != ordinal or
-                trace['task_id'] != task['id'] or trace['arm'] != arm or
-                trace['comparison_plan_sha256'] != expected_plan_sha256 or
-                trace['collection_sha256'] != expected_collection_sha256 or
-                trace['configuration_sha256'] != config_digest or
-                trace['input_sha256'] != task['input_sha256']):
-            raise ValueError('source chain/order/input/plan/configuration mismatch')
-        request = dict(identity, task_id=task['id'], arm=arm, configuration_sha256=config_digest,
-                       configuration=config, input=by_id[task['id']])
-        if trace['request_sha256'] != plan_digest(request):
-            raise ValueError('source request mismatch')
-        if trace['measurement_status'] != 'pipeline_reported_unverified' or trace['quality_status'] != 'unscored':
-            raise ValueError('original unscored source required')
-        status = trace['status']
-        if status not in ('success', 'error', 'timeout'):
-            raise ValueError('unknown source status')
-        lifetime = _number(trace['process_lifetime_ms'], 'process lifetime', minimum=1e-9)
-        ready = trace['answer_ready_ms']
-        if ready is not None:
-            _number(ready, 'answer ready', minimum=1e-9, maximum=lifetime)
-        for field in ('response_sha256', 'stderr_sha256'):
-            if trace[field] is not None:
-                _digest(trace[field])
-        if trace['returncode'] is not None and type(trace['returncode']) is not int:
-            raise ValueError('invalid returncode')
-        if trace['diagnostic'] is not None:
-            _text(trace['diagnostic'], 'diagnostic')
-        response = trace['response']
-        if response is not None:
-            _keys(response, ('schema_version', 'status', 'answer', 'measurements'), 'response')
-            if (type(response['schema_version']) is not int or response['schema_version'] != 1 or
-                    response['status'] not in ('success', 'error') or type(response['answer']) is not str or
-                    type(response['measurements']) is not dict or trace['response_sha256'] is None or ready is None):
-                raise ValueError('invalid source response')
-        if status == 'success' and (response is None or response['status'] != 'success' or
-                trace['returncode'] != 0 or trace['diagnostic'] is not None):
-            raise ValueError('inconsistent source success')
-        if status == 'timeout' and trace['diagnostic'] != 'deadline_exceeded':
-            raise ValueError('inconsistent timeout')
+        trace, key, config_digest, status, lifetime, ready = validate_source_trace(
+            trace, task=task, arm=arm, ordinal=ordinal, previous=previous,
+            plan=plan, by_id=by_id, expected_plan_sha256=expected_plan_sha256,
+            expected_collection_sha256=expected_collection_sha256)
         if key not in assessments:
             raise ValueError('missing trace-bound assessment')
         scored = assessments.pop(key)
