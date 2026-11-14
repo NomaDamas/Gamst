@@ -27,3 +27,6 @@ __all__ += ['TalkNetWindows', 'decode_talknet_window', 'talknet_stream_frame']
 
 from .openeb_process import OpenEBProcess
 __all__ += ['OpenEBProcess']
+
+from .smolvlm_call import SmolVLMCalls, smolvlm_frame_sha256
+__all__ += ['SmolVLMCalls', 'smolvlm_frame_sha256']

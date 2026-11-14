@@ -491,3 +491,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Itemized cost evaluation](docs/itemized-costs.md): frozen multi-provider rates, cache/media/local charges and trace-bound quantities for full-pipeline cost comparisons.
 
 [Evaluation attempt recorder](docs/call-attempts.md): explicit async call/error/cancellation records, late receipts and frozen itemized-cost reduction.
+
+[On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to HumanSense/MCP.
