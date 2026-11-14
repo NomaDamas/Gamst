@@ -8,13 +8,13 @@ import time
 
 from .paired_replay import _execute, _encoded, _keys, _write_new
 from .perception_comparison import plan_digest, _digest
-from .three_arm_replay import validate_collection_spec, ORDER, PERMUTATIONS, MAX_TRACE_BYTES
+from .three_arm_replay import validate_collection_spec, ORDER, PERMUTATIONS, MAX_TRACE_BYTES, validate_collection_declaration
 from .runtime_channel import (ParentChannel, CollectionBudget, build_bootstrap,
     validate_instrumentation_protocol, read_declaration_paths, MAX_BYTES, HASH_FIELDS, FD_ENVIRONMENT_KEY)
 from .three_arm_evidence import _strict_decode
 
 
-def validate(plan,spec,inputs,stream,allocation,reconciliation,instrumentation,*,hashes):
+def validate(plan,spec,inputs,stream,allocation,reconciliation,instrumentation,*,hashes,portable=False):
     _keys(hashes,HASH_FIELDS,'instrumented collection identities')
     values=[];total=0
     for value in (plan,spec,inputs,stream,allocation,reconciliation,instrumentation):
@@ -23,7 +23,8 @@ def validate(plan,spec,inputs,stream,allocation,reconciliation,instrumentation,*
         values.append(_strict_decode(data))
     for value,field in zip(values,HASH_FIELDS):
         if plan_digest(value)!=_digest(hashes[field]): raise ValueError('changed frozen runtime declaration')
-    plan,spec,by_id=validate_collection_spec(values[0],values[1],values[2],
+    declaration_validator = validate_collection_declaration if portable else validate_collection_spec
+    plan,spec,by_id=declaration_validator(values[0],values[1],values[2],
         expected_plan_sha256=hashes['comparison_plan_sha256'],expected_collection_sha256=hashes['collection_sha256'])
     if any(FD_ENVIRONMENT_KEY in command['environment'] for command in spec['runner']['commands'].values()):
         raise ValueError('evaluation descriptor environment key is reserved for explicit transport')

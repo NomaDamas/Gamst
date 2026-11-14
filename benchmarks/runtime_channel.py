@@ -181,26 +181,20 @@ class CollectionBudget:
         self.used+=size
 
 
-class ParentChannel:
-    """One invocation's sockets; the collector alone certifies final source binding."""
-    def __init__(self,bootstrap,*,budget=None):
-        self.bootstrap=_strict_decode(_encoded(bootstrap))
-        self.declarations=load_declarations(self.bootstrap)
-        self.budget=budget if budget is not None else CollectionBudget()
-        self.parent,self.child=socket.socketpair()
-        self.parent.setblocking(False);self.child.set_inheritable(False)
-        self.events=[];self.reports=[];self.terminal=None;self.hello=False;self.eof=False
-        self.sequence=0;self.previous='0'*64;self.reason=None;self.closed=False
-        self.session_id=None;self.native_previous='0'*64
-    def prepare(self,environment,remaining_seconds):
-        if FD_ENVIRONMENT_KEY in environment: raise ValueError('evaluation FD must be an explicit transport delta')
-        self.bootstrap['deadline_ns']=time.monotonic_ns()+int(remaining_seconds*1e9)
-        validate_bootstrap(self.bootstrap)
-        frame(self.bootstrap)
-        return dict(env=dict(environment,**{FD_ENVIRONMENT_KEY:str(self.child.fileno())}),
-                    pass_fds=(self.child.fileno(),),close_fds=True)
-    def spawned(self):
-        self.child.close()
+class RuntimeValidationState:
+    """Pure original native journal/report validation, with no socket or EOF claim.
+
+    Callers must supply independently validated frozen declarations. The live
+    channel and offline reader share these exact accounting checks.
+    """
+    def __init__(self, bootstrap, declarations):
+        self.bootstrap = _strict_decode(_encoded(validate_bootstrap(bootstrap)))
+        self.declarations = declarations
+        self.events = []
+        self.reports = []
+        self.session_id = None
+        self.native_previous = '0' * 64
+
     def _event(self,item):
         _keys(item,('schema_version','session_id','clock_domain','sequence','previous_sha256',
             'monotonic_ns','operation_id','event','fields','sha256'),'native journal event')
@@ -530,6 +524,27 @@ class ParentChannel:
                 observed_exchange_union_ns=busy,observed_no_exchange_gap_ns=idle,operations=operations,
                 interpretation='host elapsed interval proxy; overlapping intervals must not be summed as CPU or money'))
         if _encoded(workers)!=_encoded(expected):raise ValueError('worker summary differs from observed milestones')
+
+
+class ParentChannel(RuntimeValidationState):
+    """One invocation's sockets; the collector alone certifies final source binding."""
+    def __init__(self,bootstrap,*,budget=None):
+        self.bootstrap=_strict_decode(_encoded(bootstrap))
+        super().__init__(self.bootstrap, load_declarations(self.bootstrap))
+        self.budget=budget if budget is not None else CollectionBudget()
+        self.parent,self.child=socket.socketpair()
+        self.parent.setblocking(False);self.child.set_inheritable(False)
+        self.terminal=None;self.hello=False;self.eof=False
+        self.sequence=0;self.previous='0'*64;self.reason=None;self.closed=False
+    def prepare(self,environment,remaining_seconds):
+        if FD_ENVIRONMENT_KEY in environment: raise ValueError('evaluation FD must be an explicit transport delta')
+        self.bootstrap['deadline_ns']=time.monotonic_ns()+int(remaining_seconds*1e9)
+        validate_bootstrap(self.bootstrap)
+        frame(self.bootstrap)
+        return dict(env=dict(environment,**{FD_ENVIRONMENT_KEY:str(self.child.fileno())}),
+                    pass_fds=(self.child.fileno(),),close_fds=True)
+    def spawned(self):
+        self.child.close()
     async def collect(self):
         try:
             hello_deadline=min(self.bootstrap['deadline_ns'],time.monotonic_ns()+self.bootstrap['hello_timeout_ms']*1000000)
