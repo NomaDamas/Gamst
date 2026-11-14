@@ -15,13 +15,17 @@ def configuration(value):
     value = bounded_json(value)
     required = {'manifest_path', 'manifest_sha256', 'prompt'}
     if (type(value) is not dict or not required <= set(value) or
-            set(value)-required-{'anchors', 'device', 'ode_steps', 'random_seed'}):
+            set(value)-required-{'anchors', 'device', 'ode_steps', 'random_seed', 'visual_policy'}):
         raise ValueError('explicit local SAM manifest, digest and prompt required')
     _absolute(value['manifest_path'])
     if type(value['manifest_sha256']) is not str or re.fullmatch('[0-9a-f]{64}', value['manifest_sha256']) is None:
         raise ValueError('frozen manifest SHA256 required')
+    if 'visual_policy' in value:
+        from ..sam_visual_packet import validate_visual_policy
+        value['visual_policy'] = validate_visual_policy(value['visual_policy'])
     prompt = value['prompt']
-    if type(prompt) is not str or not prompt.strip() or len(prompt) > 4096 or len(prompt.encode('utf-8')) > 4096:
+    if (type(prompt) is not str or (not prompt.strip() and not ('visual_policy' in value and prompt==''))
+            or len(prompt) > 4096 or len(prompt.encode('utf-8')) > 4096):
         raise ValueError('bounded nonempty UTF8 prompt required')
     value.setdefault('anchors', [])
     # Duration/hop dependent anchor validation happens on each actual window.
@@ -52,6 +56,8 @@ class SAMAudioContext:
         self.closed = False
         self._previous = None
         self._reason = 'initial'
+        from ..sam_visual_history import VisualCaptureHistory
+        self._visual_history = VisualCaptureHistory()
 
     @staticmethod
     def capability(config):
@@ -76,13 +82,24 @@ class SAMAudioContext:
             if self.closed:
                 raise RuntimeError('SAM context closed')
             header, payload = encode_frame(frame)
-            binding = frame_binding(header, payload, generation=0, config_id=self.spec.version)
+            from ..separation_media import request_binding
+            binding = request_binding(header, payload, config=self.config, generation=0, config_id=self.spec.version)
+            visual = visual_pending = None
+            if 'visual_policy' in self.config:
+                from ..sam_visual_packet import unpack_visual_packet
+                from ..sam_visual_window import prepare_visual
+                visual_header, pcm, _, _ = unpack_visual_packet(payload)
+                params = self.backend.visual_parameters()
+                visual = prepare_visual(payload, policy=self.config['visual_policy'],
+                    sample_count=binding['sample_count'], hop_length=self.backend.hop_length, **params)
+                visual_pending = self._visual_history.stage(visual_header)
+                payload = pcm
             # Preparation consumes the exact immutable wire snapshot validated
             # above, never a second read of the application's mutable array.
             import numpy as np
             prepared = prepare_window(np.frombuffer(payload, dtype='<f4').copy(),
                 sample_rate=48000, prompt=self.config['prompt'], anchors=self.config['anchors'],
-                hop_length=self.backend.hop_length)
+                hop_length=self.backend.hop_length, allow_empty_prompt=visual is not None)
             sensor = binding['sensor']
             identity = (binding['subject_id'], sensor['source_id'], sensor['sensor_id'],
                         sensor['stream_epoch'], sensor['coordinate_frame'], sensor['calibration_id'], tuple(sensor['channels']), sensor['capture_sequence'] is not None)
@@ -94,7 +111,12 @@ class SAMAudioContext:
                     raise ValueError('SAM capture lane changed or regressed without reset')
                 if sequence != previous_sequence+1 or binding['capture_start_ms'] > previous_end+1:
                     reason = 'gap'
-            target, residual, tokens, inference_ms = self.backend.predict(prepared)
+            if visual_pending is not None and visual_pending.reason is not None:
+                reason = visual_pending.reason
+            if visual is None:
+                target, residual, tokens, inference_ms = self.backend.predict(prepared)
+            else:
+                target, residual, tokens, inference_ms = self.backend.predict(prepared, visual=visual)
             model = deepcopy(self.backend.provenance)
             fixture = getattr(self.backend, 'fixture_engine', False)
             if fixture:
@@ -113,9 +135,13 @@ class SAMAudioContext:
                 model=model, media={})
             if reason is not None:
                 observation['window']['discontinuity_reason'] = reason
+            if visual is not None:
+                observation['prompt']['visual'] = visual.provenance()
             observation = self.spec.validate(observation)
             pair = SeparationPair(observation, target, residual, prepared.padded_samples)
             pack_pair(pair, binding, self.spec)
+            if visual_pending is not None:
+                self._visual_history.commit(visual_pending)
             self._previous = (identity, sequence, binding['capture_end_ms'])
             self._reason = None
             return pair
@@ -125,6 +151,7 @@ class SAMAudioContext:
             if self.closed:
                 raise RuntimeError('SAM context closed')
             self._previous = None; self._reason = 'reset'
+            self._visual_history.reset()
 
     def finish(self):
         return None  # No partial windows or buffered tail.
@@ -133,4 +160,5 @@ class SAMAudioContext:
         with self.lock:
             self.closed = True
             self._previous = None
+            self._visual_history.reset()
             self.backend.close()

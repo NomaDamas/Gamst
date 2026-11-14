@@ -51,7 +51,13 @@ def _binding(value):
         capability_id=_enum('audio.sam_audio.separation'),
         config_id=lambda v: type(v) is str and re.fullmatch(r'transport1\.[0-9a-f]{64}', v) is not None,
         input_sha256=_hash)
-    return _object(value, fields, required=fields)
+    required=set(fields)
+    visual=dict(audio_input_sha256=_hash,visual_inventory_sha256=_hash,
+                original_audio_epoch=identity,original_visual_epoch=identity)
+    if type(value) is dict and set(value)&set(visual):
+        required.update(visual)
+    fields.update(visual)
+    return _object(value, fields, required=required)
 
 
 def _spans(value):
@@ -80,6 +86,29 @@ def _media(value):
     return _object(value, fields, required=fields)
 
 
+def _visual(value):
+    def integer_list(v,low,high,limit):
+        return type(v) is list and 1<=len(v)<=limit and all(_integer(low,high)(x) for x in v)
+    def intervals(v):
+        return type(v) is list and 1<=len(v)<=128 and all(
+            type(row) is list and len(row)==2 and all(_integer(0,2**53-1)(t) for t in row)
+            and row[0]<=row[1] for row in v)
+    fields=dict(mapping_sha256=_hash,original_intervals_us=intervals,
+        selected_indices=lambda v:integer_list(v,0,127,512),
+        ages_sixth_us=lambda v:integer_list(v,0,1500000,512),
+        original_frames=_integer(1,128),feature_frames=_integer(1,512),
+        image_size=_integer(16,1024),encoder_batch_size=_integer(1,64),
+        mask_polarity=_enum('zero-kept'),alignment=_enum('latest-certain-past'),
+        clock_verified=_enum(False),track_identity_verified=_enum(False))
+    _object(value,fields,required=fields)
+    if (len(value['original_intervals_us'])!=value['original_frames'] or
+            len(value['selected_indices'])!=value['feature_frames'] or
+            len(value['ages_sixth_us'])!=value['feature_frames'] or
+            any(i>=value['original_frames'] for i in value['selected_indices'])):
+        raise ValueError('visual provenance dimensions differ')
+    return True
+
+
 def validate_metadata(value):
     """Every permitted nested field has fixed scalar or structural semantics.
 
@@ -101,9 +130,9 @@ def validate_metadata(value):
         discontinuity_reason=_enum('initial', 'gap', 'reset', 'reconnect'),
         clock_verified=_enum(False)))
     _object(value['prompt'], dict(sha256=_hash, raw_text_sha256=_hash,
-        anchors_sha256=_hash, utf8_bytes=_integer(1, 4096), anchor_count=_integer(0, 32),
+        anchors_sha256=_hash, utf8_bytes=_integer(0 if 'visual' in value['prompt'] else 1, 4096), anchor_count=_integer(0, 32),
         feature_spans=_spans, token_count_before=_integer(0, 8192),
-        token_count_after=_integer(0, 512), max_tokens=_integer(1, 512), truncated=_enum(True, False)))
+        token_count_after=_integer(0, 512), max_tokens=_integer(1, 512), truncated=_enum(True, False), visual=_visual))
     _object(value['model'], dict(fixture_engine=_enum(True),
         source_revision=_enum('bb4c6999d2677c7402360e426afc01ddfad6dce0'),
         runtime_manifest_sha256=_hash, sam_manifest_sha256=_hash, t5_manifest_sha256=_hash,

@@ -69,6 +69,15 @@ def frame_binding(header, payload, *, generation, config_id, owner_revision=0):
         config_id=config_id, input_sha256=hashlib.sha256(payload).hexdigest()))
 
 
+def request_binding(header, payload, *, config, generation, config_id, owner_revision=0):
+    if 'visual_policy' in config:
+        from .sam_visual_packet import visual_request_binding
+        return visual_request_binding(header,payload,policy=config['visual_policy'],
+            generation=generation,config_id=config_id,owner_revision=owner_revision)
+    return frame_binding(header,payload,generation=generation,config_id=config_id,
+                         owner_revision=owner_revision)
+
+
 def _wave(data, samples):
     if type(data) is not bytes or len(data) != samples * 4:
         raise ValueError('separation waveform must be exact mono float32 bytes')

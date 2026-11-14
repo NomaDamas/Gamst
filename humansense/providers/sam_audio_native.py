@@ -506,7 +506,13 @@ class SAMAudioNative:
             finder.remove()
             raise
 
-    def predict(self, prepared):
+    def visual_parameters(self):
+        with self.lock:
+            if self.model is None: raise RuntimeError('SAM native backend closed')
+            encoder=self.model.vision_encoder
+            return dict(image_size=encoder.image_size,batch_size=encoder.batch_size)
+
+    def predict(self, prepared, *, visual=None):
         import torch
         with self.lock, offline():
             if self.model is None: raise RuntimeError('SAM native backend closed')
@@ -514,9 +520,21 @@ class SAMAudioNative:
             features = prepared.padded_samples//prepared.hop_length
             if features > 512:
                 raise ValueError('native inference exceeds SDK512 feature-frame bound')
+            visual_args = {}
+            if visual is not None:
+                from ..sam_visual_window import PreparedVisual
+                if type(visual) is not PreparedVisual or len(visual.indices)!=features:
+                    raise ValueError('exact admitted visual window required')
+                if dict(image_size=visual.image_size,batch_size=visual.batch_size)!=self.visual_parameters():
+                    raise ValueError('native visual geometry changed after admission')
+                images,masks=visual.arrays()
+                masked=self.processor.mask_videos([torch.from_numpy(images)],[torch.from_numpy(masks)])[0]
+                selected=masked[torch.tensor(visual.indices,dtype=torch.long)]
+                del images,masks,masked
+                visual_args['masked_videos']=[selected]
             batch = self.processor(descriptions=[prepared.prompt],
                 audios=[torch.from_numpy(prepared.array()).reshape(1,-1)],
-                anchors=[list(prepared.anchors)] if prepared.anchors else None)
+                anchors=[list(prepared.anchors)] if prepared.anchors else None, **visual_args)
             if (tuple(batch.audios.shape)!=(1,1,prepared.sample_count) or batch.sizes.tolist()!=[features] or
                     batch.wav_sizes.tolist()!=[prepared.sample_count] or tuple(batch.audio_pad_mask.shape)!=(1,features) or
                     not batch.audio_pad_mask.all().item()):
