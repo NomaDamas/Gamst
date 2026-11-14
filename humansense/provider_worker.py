@@ -8,7 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
-    if profile == 'openeb.eventcd':
+    if profile == 'visual_microphone.phase':
+        from .providers.visual_microphone_context import VisualMicrophoneContext
+        provider = VisualMicrophoneContext(**config)
+    elif profile == 'openeb.eventcd':
         from .providers.openeb import OpenEBContext
         provider = OpenEBContext(**config)
     elif profile == 'efficientphys.local':

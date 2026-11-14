@@ -14,9 +14,10 @@ flowchart LR
   D --> E[Local normalized waveform and numeric metadata]
 ```
 
-This is the offline numerical engine, not yet a SensorStreams provider. Capture
-provenance, source/clock/gap contracts, bounded owned-worker execution and MCP
-integration remain required under [#144](https://github.com/NomaDamas/Gamst/issues/144).
+The [timed-window Context provider](visual-microphone-context.md) adds declared
+capture provenance, source/clock/gap validation, owned-worker execution and
+SensorStreams/MCP integration. Actual physical acceptance remains required under
+[#144](https://github.com/NomaDamas/Gamst/issues/144).
 The caller must keep raw waveform arrays outside LLM Context. A downstream
 provider will expose bounded numerical summaries only.
 
@@ -93,7 +94,7 @@ are not a calibrated speech/activity detector. `quality='not_assessed'`,
 
 The function is synchronous and bounded by input size, not a wall-clock deadline.
 Use an owned worker for an application requiring cancellation/full-duplex
-isolation; that integration is a remaining deliverable in #144. The source
+isolation; the timed-window Context provider supplies that integration. The source
 window must be complete before reconstruction starts. Do not report CPU processing
 time alone as capture-to-output latency.
 

@@ -113,7 +113,7 @@ The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDam
 [EfficientTAM streaming mask context](docs/efficienttam-stream.md) adds an explicit local worker and RF-DETR seed pipeline with bounded temporal state, capture-bound prompts and MCP-compatible observations. Trained-model quality and live performance acceptance remain pending; startup never downloads weights.
 
 [OpenEB event-camera context](docs/openeb-context.md) converts bounded EventCD slices into numerical activity and polarity grids through an isolated context worker. [Owned capture supervision](docs/openeb-process.md) bounds source reads and reaps stalled children; actual SDK/device acceptance remains pending.
-[Visual Microphone numerical engine](docs/visual-microphone.md) reconstructs an unvalidated waveform from explicit high-speed ROI windows. It is offline; managed Context integration and actual synchronized-video acceptance remain pending.
+[Visual Microphone numerical engine](docs/visual-microphone.md) reconstructs an unvalidated waveform from explicit high-speed ROI windows. [Timed-window Context integration](docs/visual-microphone-context.md) validates capture provenance and delivers numeric observations through an owned worker/MCP. Processing remains offline; actual synchronized-video acceptance is pending.
 
 [EfficientPhys face-window context](docs/efficientphys-context.md) connects capture-bound face crops to an isolated local model and MCP observations. Spectral candidates are explicitly unvalidated; actual pulse measurements remain unavailable pending reference acceptance.
 
