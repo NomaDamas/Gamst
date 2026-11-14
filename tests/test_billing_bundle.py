@@ -66,6 +66,19 @@ class BundlePersistence(OriginalAggregate):
         with self.assertRaises(ValueError):persist_bundle(self.manifest,self.root,out)
         self.assertEqual((out/'report.json').read_bytes(),before)
 
+    def test_offline_cli_creates_verified_bundle_without_account_credentials(self):
+        import subprocess
+        import sys
+        self.query('q',[self.page('a.json')]);manifest=self.root/'manifest.json'
+        manifest.write_bytes(encoded(self.manifest));out=self.root/'cli-output'
+        result=subprocess.run([sys.executable,'-m','benchmarks.billing_bundle',
+            '--manifest',str(manifest),'--assets',str(self.root),'--output',str(out)],
+            capture_output=True,text=True,timeout=10,
+            env={key:value for key,value in os.environ.items() if not any(term in key.upper() for term in ('OPENAI','TOKEN','SECRET','KEY'))})
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('actual acceptance remains incomplete',result.stdout)
+        self.assertEqual(persist_bundle(self.manifest,self.root,out)['origin'],'synthetic_fixture')
+
 
 # Helpers inherited above are useful, but avoid reporting duplicate test coverage.
 for _name in tuple(vars(OriginalAggregate)):

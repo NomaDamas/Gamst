@@ -86,3 +86,62 @@ class OriginalAggregate(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'frozen hash'):build_report(self.manifest,self.root)
         (self.root/'link.json').symlink_to(self.root/'a.json');page['path']='link.json'
         with self.assertRaises(OSError):build_report(self.manifest,self.root)
+
+    def test_empty_bucket_inventory_is_unknown_not_zero_coverage(self):
+        page=self.page('a.json');path=self.root/'a.json'
+        value=json.loads(path.read_bytes());value['data']=[]
+        data=json.dumps(value).encode();path.write_bytes(data)
+        page.update(bytes=len(data),sha256=hashlib.sha256(data).hexdigest())
+        self.query('q',[page]);report,_=build_report(self.manifest,self.root)
+        view=report['views'][0]
+        self.assertFalse(view['coverage_complete'])
+        self.assertEqual(view['missing_intervals'],[dict(start_time=0,end_time=100)])
+        self.assertIsNone(report['per_attempt_cost'])
+
+    def test_non_usd_and_missing_amount_remain_unknown(self):
+        rows=[dict(object='organization.costs.result',amount=dict(value=7,currency='eur'),project_id='p'),
+              dict(object='organization.costs.result',project_id='q')]
+        self.query('q',[self.page('a.json',rows=rows)])
+        report,_=build_report(self.manifest,self.root);view=report['views'][0]
+        self.assertEqual(view['unknown_amount_rows'],2)
+        self.assertTrue(all(row['usd_atoms'] is None for row in view['rows']))
+        self.assertIsNone(report['cross_query_total'])
+
+    def test_query_filter_mismatch_fails_and_missing_scope_stays_unverified(self):
+        q=self.query('q',[self.page('a.json')],filters={'project_ids':['different']})
+        with self.assertRaisesRegex(ValueError,'contradicts query filter'):build_report(self.manifest,self.root)
+        q['pages']=[self.page('b.json',rows=[dict(object='organization.costs.result',amount=dict(value=1,currency='usd'))])]
+        report,_=build_report(self.manifest,self.root)
+        self.assertIn('unverified_filter_scope',report['views'][0]['diagnostics'])
+        self.assertFalse(report['account_isolation_verified'])
+
+    def test_page_reference_bound_counts_aliases(self):
+        page=self.page('a.json');self.query('q',[dict(page) for _ in range(65)])
+        with self.assertRaisesRegex(ValueError,'page reference bound'):build_report(self.manifest,self.root)
+
+    def test_joint_rows_bound_prevents_expansion(self):
+        rows=[dict(object='organization.costs.result',amount=dict(value=1,currency='usd'),project_id=str(i)) for i in range(10001)]
+        self.query('q',[self.page('a.json',rows=rows)])
+        with self.assertRaisesRegex(ValueError,'joint original row bound'):build_report(self.manifest,self.root)
+
+    def test_escaped_report_bytes_are_bounded_before_publication(self):
+        rows=[dict(object='organization.costs.result',amount=dict(value=1,currency='usd'),project_id=('界'*250)+str(i)) for i in range(9000)]
+        # Multiple original files remain within each 4MiB original bound.
+        pages=[]
+        for index in range(3):
+            page=self.page(str(index)+'.json',rows=rows[index*3000:(index+1)*3000],more=index<2,cursor=str(index+1) if index<2 else None)
+            path=self.root/page['path']
+            data=json.dumps(json.loads(path.read_bytes()),ensure_ascii=False,separators=(',',':')).encode()
+            path.write_bytes(data);page.update(bytes=len(data),sha256=hashlib.sha256(data).hexdigest())
+            page['request_cursor']=str(index) if index else None
+            pages.append(page)
+        self.query('q',pages)
+        with self.assertRaisesRegex(ValueError,'expanded aggregate report'):build_report(self.manifest,self.root)
+
+    def test_diagnostic_examples_bounded_without_dropping_count(self):
+        rows=[dict(object='organization.costs.result',project_id=str(i),future_field='untrusted') for i in range(30)]
+        self.query('q',[self.page('a.json',rows=rows)])
+        report,_=build_report(self.manifest,self.root)
+        diagnostic=report['views'][0]['diagnostics']['unknown_projection_fields']
+        self.assertEqual(diagnostic['count'],30);self.assertEqual(len(diagnostic['examples']),16)
+        self.assertNotIn('untrusted',json.dumps(report))
