@@ -70,7 +70,7 @@ cursors. Configuration resets alone do not promise durable consumer progress.
 
 Retention is still bounded by the existing record count, UTF-8 payload bytes and
 capture-time expiry. `retention_changed_since_cursor=true` means some store
-capacity eviction, expiry or oversized-write rejection occurred since that
+capacity eviction, expiry, oversized-write rejection or failed SQLite mutation occurred since that
 cursor. It is a conservative **global** warning, possibly for another subject or
 already-read records; it does not count missing matching events. The first page
 returns null for this field because no baseline exists. Preserve warnings in
@@ -83,6 +83,9 @@ The store adds an AUTOINCREMENT record_offsets table with one row per retained
 record. Existing databases are backfilled in original insertion order without
 rewriting observation payloads. Eviction, pruning and deletion remove matching
 offset rows; the constant-sized SQLite sequence counter prevents offset reuse.
+Record/offset mutations commit together. On SQL failure both tables roll back,
+in-memory size accounting is rebuilt and the retention warning advances; a failed
+write cannot leave a hidden pending record that commits on the next frame.
 Use the established single-owner Store/runtime contract; concurrent external
 SQLite writers or older SDK processes must not modify the same live database.
 Reopen the store to migrate records produced by an older implementation.

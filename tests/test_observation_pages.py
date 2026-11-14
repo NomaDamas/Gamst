@@ -81,6 +81,38 @@ class Storage(unittest.TestCase):
             self.assertTrue(page(store,cursor=resumed['next_cursor'])['retention_changed_since_cursor'])
         finally:store.close()
 
+    def test_sql_failures_rollback_payload_offsets_and_memory_accounting(self):
+        store=Store(max_records=1,retention_hours=1/3600)
+        try:
+            store.add(record(0));first=page(store)
+            def consistent():
+                count=store.connection.execute('SELECT COUNT(*) FROM records').fetchone()[0]
+                offsets=store.connection.execute('SELECT COUNT(*) FROM record_offsets').fetchone()[0]
+                size=store.connection.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM records').fetchone()[0]
+                self.assertEqual(count,offsets);self.assertEqual(count,len(store._sizes));self.assertEqual(size,store.payload_bytes)
+                self.assertFalse(store.connection.in_transaction)
+            store.connection.execute("CREATE TRIGGER reject_offset BEFORE INSERT ON record_offsets BEGIN SELECT RAISE(FAIL,'fixture'); END")
+            with self.assertRaises(sqlite3.IntegrityError):store.add(record(1))
+            consistent();self.assertEqual([r['id'] for r in page(store)['items']],['0'])
+            self.assertTrue(page(store,cursor=first['next_cursor'])['retention_changed_since_cursor'])
+            store.connection.execute('DROP TRIGGER reject_offset')
+            store.connection.execute("CREATE TRIGGER reject_delete BEFORE DELETE ON records BEGIN SELECT RAISE(FAIL,'fixture'); END")
+            for action in (lambda:store.add(record(1)),lambda:store.prune(2000),lambda:store.delete('user')):
+                with self.assertRaises(sqlite3.IntegrityError):action()
+                consistent();self.assertEqual(store.evicted_records,0)
+                self.assertEqual([r['id'] for r in page(store)['items']],['0'])
+            store.connection.execute('DROP TRIGGER reject_delete')
+            store.connection.execute("CREATE TRIGGER reject_offset_delete BEFORE DELETE ON record_offsets BEGIN SELECT RAISE(ABORT,'fixture'); END")
+            for action in (lambda:store.add(record(1)),lambda:store.prune(2000),lambda:store.delete('user')):
+                with self.assertRaises(sqlite3.IntegrityError):action()
+                consistent();self.assertEqual(store.evicted_records,0)
+                self.assertEqual([r['id'] for r in page(store)['items']],['0'])
+            store.connection.execute('DROP TRIGGER reject_offset_delete')
+            store.add(record(2));consistent()
+            self.assertEqual([r['id'] for r in page(store)['items']],['2'])
+            self.assertEqual(store.evicted_records,1)
+        finally:store.close()
+
     def test_legacy_database_migration_delete_and_reopen(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as folder:
             path=Path(folder)/'legacy.sqlite';conn=sqlite3.connect(path)

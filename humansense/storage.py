@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import contextmanager
 import json
 import sqlite3
 import secrets
@@ -34,16 +35,31 @@ class Store:
         self.connection.execute("CREATE INDEX IF NOT EXISTS numeric_signal_time ON records(subject,ts) WHERE kind='observation.signal' AND json_type(payload, '$.observation.value') IN ('integer','real')")
         # Independent AUTOINCREMENT positions never reuse a deleted record's offset.
         # Backfill old databases in their original insertion order, without rewriting payloads.
-        self.connection.execute("CREATE TABLE IF NOT EXISTS record_offsets (position INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT UNIQUE NOT NULL)")
-        self.connection.execute("DELETE FROM record_offsets WHERE record_id NOT IN (SELECT id FROM records)")
-        self.connection.execute("INSERT INTO record_offsets(record_id) SELECT id FROM records WHERE id NOT IN (SELECT record_id FROM record_offsets) ORDER BY rowid")
-        self.connection.commit()
+        with self.connection:
+            self.connection.execute("CREATE TABLE IF NOT EXISTS record_offsets (position INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT UNIQUE NOT NULL)")
+            self.connection.execute("DELETE FROM record_offsets WHERE record_id NOT IN (SELECT id FROM records)")
+            self.connection.execute("INSERT INTO record_offsets(record_id) SELECT id FROM records WHERE id NOT IN (SELECT record_id FROM record_offsets) ORDER BY rowid")
+        self._reload_sizes()
+        with self._transaction():
+            self._enforce_limits()
 
+    def _reload_sizes(self):
         self._sizes = OrderedDict((row[0], row[1]) for row in self.connection.execute(
             "SELECT id,length(CAST(payload AS BLOB)) FROM records ORDER BY rowid"))
         self.payload_bytes = sum(self._sizes.values())
-        self._enforce_limits()
-        self.connection.commit()
+
+    @contextmanager
+    def _transaction(self):
+        evicted, revision = self.evicted_records, self.retention_revision
+        try:
+            with self.connection:
+                yield
+        except BaseException:
+            # SQLite rolls back both tables; rebuild only on failure, not every frame.
+            self._reload_sizes()
+            self.evicted_records = evicted
+            self.retention_revision = revision+1
+            raise
 
     def _enforce_limits(self):
         while len(self._sizes) > self.max_records or self.payload_bytes > self.max_payload_bytes:
@@ -67,14 +83,14 @@ class Store:
             self.oversized_records += 1
             self.retention_revision += 1
             return False
-        self.connection.execute("INSERT INTO records VALUES(?,?,?,?,?)", (
-            record["id"], record["subject_id"], record["timestamp_ms"], record["type"],
-            payload))
-        self.connection.execute("INSERT INTO record_offsets(record_id) VALUES(?)", (record["id"],))
-        self._sizes[record["id"]] = size
-        self.payload_bytes += size
-        self._enforce_limits()
-        self.connection.commit()
+        with self._transaction():
+            self.connection.execute("INSERT INTO records VALUES(?,?,?,?,?)", (
+                record["id"], record["subject_id"], record["timestamp_ms"], record["type"],
+                payload))
+            self.connection.execute("INSERT INTO record_offsets(record_id) VALUES(?)", (record["id"],))
+            self._sizes[record["id"]] = size
+            self.payload_bytes += size
+            self._enforce_limits()
         return True
 
     def query(self, subject=None, start=None, end=None, kind=None, limit=1000, name=None,
@@ -191,29 +207,29 @@ class Store:
         return rows
 
     def prune(self, now_ms):
-        expired = self.connection.execute("SELECT id FROM records WHERE ts < ?", (now_ms-self.retention_ms,)).fetchall()
-        if expired:
-            self.retention_revision += 1
-        for (key,) in expired:
-            self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
-            self.payload_bytes -= self._sizes.pop(key, 0)
-        self.connection.execute("DELETE FROM records WHERE ts < ?", (now_ms - self.retention_ms,))
-        self.connection.commit()
+        with self._transaction():
+            expired = self.connection.execute("SELECT id FROM records WHERE ts < ?", (now_ms-self.retention_ms,)).fetchall()
+            if expired:
+                self.retention_revision += 1
+            for (key,) in expired:
+                self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
+                self.payload_bytes -= self._sizes.pop(key, 0)
+            self.connection.execute("DELETE FROM records WHERE ts < ?", (now_ms - self.retention_ms,))
 
     def delete(self, subject=None):
         # Even a no-op deletion invalidates prior replay cursors, across subjects.
         self._cursor_key = secrets.token_bytes(32)
         self.retention_revision += 1
-        keys = self.connection.execute("SELECT id FROM records" + (" WHERE subject=?" if subject is not None else ""),
-                                       (subject,) if subject is not None else ()).fetchall()
-        for (key,) in keys:
-            self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
-            self.payload_bytes -= self._sizes.pop(key, 0)
-        if subject is None:
-            result = self.connection.execute("DELETE FROM records")
-        else:
-            result = self.connection.execute("DELETE FROM records WHERE subject=?", (subject,))
-        self.connection.commit()
+        with self._transaction():
+            keys = self.connection.execute("SELECT id FROM records" + (" WHERE subject=?" if subject is not None else ""),
+                                           (subject,) if subject is not None else ()).fetchall()
+            for (key,) in keys:
+                self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
+                self.payload_bytes -= self._sizes.pop(key, 0)
+            if subject is None:
+                result = self.connection.execute("DELETE FROM records")
+            else:
+                result = self.connection.execute("DELETE FROM records WHERE subject=?", (subject,))
         self.connection.execute("VACUUM")
         return result.rowcount
 
