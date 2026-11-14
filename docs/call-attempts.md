@@ -3,7 +3,9 @@
 `benchmarks.call_attempts.AttemptRecorder` is a repository evaluation utility for
 explicit application instrumentation. It wraps an async callback; it is not a
 model adapter, scheduler, budget gate or automatic provider discovery mechanism.
-Production SDK/MCP integration and actual provider acceptance remain separate.
+The [actual SDK client bridge](controller-attempts.md) binds text/visual client
+attempts to dispatched controller execution. Complete production/MCP telemetry,
+whole-pipeline coverage and actual provider acceptance remain separate.
 It has no third-party dependencies and never installs models or makes requests
 unless the caller's explicit callback does so.
 
