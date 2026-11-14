@@ -240,3 +240,14 @@ class Crosscheck(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report['local_binding_complete'])
         self.assertEqual(report['local_counts']['native_entries_without_transport'],1)
         self.assertEqual(report['transport_selection_sha256'],sha(frozen_selection))
+
+    async def test_nested_original_output_rejected_without_changing_sources(self):
+        await self.collect()
+        for original in (self.index.directory,self.transport):
+            before={p.relative_to(original).as_posix() for p in original.rglob('*')}
+            for output in (original,original/'nested-crosscheck'):
+                with self.assertRaisesRegex(ValueError,'outside original'):
+                    persist_crosscheck(self.manifest,self.root,self.transport,
+                        expected_inventory_sha256=hashlib.sha256((self.transport/'inventory.json').read_bytes()).hexdigest(),
+                        native_index=self.index,expected_binding=self.selection,output_directory=output)
+                self.assertEqual(before,{p.relative_to(original).as_posix() for p in original.rglob('*')})
