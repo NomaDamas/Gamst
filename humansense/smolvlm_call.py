@@ -78,20 +78,27 @@ class SmolVLMCalls:
         reference=decision['visual_reference']
         if reference is None or reference['sha256']!=smolvlm_frame_sha256(copied.data):
             raise ValueError('retained pixel bytes differ from visual reference')
-        return copied,evidence,digest
+        return copied,dict(evidence,_source_handle=pending['source']),digest
 
     def _complete(self, request_id, evidence, *, success, result_sha256):
-        try:
-            completion=self.controller.finish(request_id,success=success,
-                evidence_sha256=evidence['record_sha256'],result_sha256=result_sha256,now_ms=timestamp())
-        except ValueError:
-            # Deletion/host close erases sensory state but retains a detached bill.
-            if request_id not in self.controller.snapshot()['detached_financial_requests']:raise
-            completion={'accepted':False,'semantic_capture_ms':None}
-        # No guessed local-cost conversion. The application may later settle a
-        # verified whole charge; even failures retain unknown financial liability.
-        self.controller.settle(request_id,components=None,now_ms=timestamp())
-        return completion
+        # Receipt and result can arrive in either order. Hold the controller's
+        # reentrant lock across completion and the conditional unknown receipt.
+        with self.controller._lock:
+            state=self.controller.snapshot()
+            pending=next((r for r in state['requests'] if r['id']==request_id),None)
+            if pending is not None:
+                charged=pending['charged']
+                completion=self.controller.finish(request_id,success=success,
+                    evidence_sha256=evidence['record_sha256'],result_sha256=result_sha256,now_ms=timestamp())
+                if not charged:self.controller.settle(request_id,components=None,now_ms=timestamp())
+                return completion
+            if request_id in state['detached_financial_requests']:
+                self.controller.settle(request_id,components=None,now_ms=timestamp())
+                return {'accepted':False}
+            if evidence['_source_handle'] not in state['sources']:
+                # Deletion may already have erased a financially settled request.
+                return {'accepted':False}
+            raise ValueError('completion request is no longer available')
 
     def _validate_result(self,value,frame,pixels_sha256):
         value=self.worker.spec.validate(value)

@@ -173,3 +173,40 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                     if not task.done():task.cancel()
                     await asyncio.gather(task,return_exceptions=True)
                     await adapter.close()
+
+    async def test_verified_receipt_before_result_and_lifecycle_invalidation(self):
+        for action in ('normal','cancel','pause','reset','delete','delete_then_bill','close','invalid'):
+            code=smol_tests.WORKER.replace('DELAY','.15')
+            if action=='invalid':
+                extra="original=SmolVLMContext._observation\ndef bad(self,*args):\n    value=original(self,*args);value['model']['prompt_sha256']='0'*64;return value\nSmolVLMContext._observation=bad\n"
+                code=code.replace('w._construct=',extra+'w._construct=')
+            with self.subTest(action=action),self.fixture(code=code):
+                human,c,spec=self.setup_human()
+                async with human:
+                    async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
+                        request,r,f=await self.request(human,c,spec)
+                        task=asyncio.create_task(adapter.execute(request,r,f,maximum_charge=2))
+                        async def dispatched():
+                            while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
+                        await asyncio.wait_for(dispatched(),5)
+                        if action=='delete_then_bill':await human.delete_data(f.subject_id)
+                        c.settle(request,components={'local_compute':1},now_ms=timestamp())
+                        if action=='pause':await human.pause()
+                        elif action=='reset':await human.reset_processing()
+                        elif action=='delete':await human.delete_data(f.subject_id)
+                        elif action=='close':await human.close()
+                        elif action=='cancel':task.cancel()
+                        if action in ('cancel','invalid'):
+                            with self.assertRaises(asyncio.CancelledError if action=='cancel' else ValueError):await task
+                        else:
+                            result=await task
+                            self.assertEqual(result['status'],'published' if action=='normal' else 'discarded')
+                            if action=='normal':self.assertEqual(result['observation']['timestamp_ms'],f.timestamp_ms)
+                        state=c.snapshot()
+                        self.assertEqual(state['budget']['spent_known'],1)
+                        self.assertEqual(state['budget']['reserved_liability'],0)
+                        self.assertEqual(state['budget']['unknown_reports'],0)
+                        self.assertFalse(state['requests']);self.assertFalse(state['detached_financial_requests'])
+                        if not human.closed:
+                            records=human.store.query(f.subject_id,kind='observation.signal',name=adapter.worker.spec.output_name)
+                            self.assertEqual(len(records),1 if action=='normal' else 0)
