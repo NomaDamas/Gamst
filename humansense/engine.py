@@ -74,6 +74,8 @@ class HumanSense:
         self.sensor_inference_interval_ms = sensor_inference_interval_ms
         self._sensor_refresh = {}
         self._call_controllers = {}
+        self._call_drivers = {}
+        self._call_driver_cleanup = {}
         self._separation_media = None
 
     def enable_separation_media(self, *, subject_id='local-user', source_id, sensor_id,
@@ -112,6 +114,7 @@ class HumanSense:
         self._consent = value
         if prior and not value:
             self._generation += 1
+            self._invalidate_call_drivers('consent_revoked')
             self._clear_separation_media()
             for controller in getattr(self, '_call_controllers', {}).values():
                 controller.reset_sources(now_ms=timestamp())
@@ -611,6 +614,65 @@ class HumanSense:
                                 epoch=lambda: f'{self._session_id}:{self._generation}')
         self._call_controllers[controller_id] = controller
 
+    def _register_call_driver(self, kind, driver_id, driver):
+        """Internal opt-in ownership, including invalidated owners still reaping."""
+        self._check();identifier(driver_id)
+        if kind not in ('frame_sentinel','context_fill'):
+            raise ValueError('known owned call-driver kind required')
+        key=(kind,driver_id)
+        if (key in self._call_drivers or len(self._call_drivers)>=8 or
+                sum(k[0]==kind for k in self._call_drivers)>=4):
+            raise RuntimeError('owned call-driver ID or resource capacity unavailable')
+        if not callable(getattr(driver,'invalidate',None)) or not callable(getattr(driver,'owns_task',None)):
+            raise TypeError('owned call-driver lifecycle required')
+        self._call_drivers[key]=driver
+
+    def _track_call_driver_cleanup(self, kind, driver_id, driver, task):
+        key=(kind,driver_id)
+        if self._call_drivers.get(key) is not driver or not isinstance(task,asyncio.Task):
+            raise ValueError('original registered call-driver cleanup required')
+        self._call_driver_cleanup[task]=(key,driver)
+        def retired(completed):
+            # The task terminates only after every owned worker/task is joined.
+            owner=self._call_driver_cleanup.pop(completed,None)
+            if owner is not None and self._call_drivers.get(owner[0]) is owner[1]:
+                del self._call_drivers[owner[0]]
+            if not completed.cancelled():completed.exception()
+        task.add_done_callback(retired)
+
+    def _invalidate_call_drivers(self, reason, *, reject_self_join=False):
+        try:current=asyncio.current_task()
+        except RuntimeError:current=None
+        drivers=list(getattr(self,'_call_drivers',{}).values())
+        owned=current is not None and any(driver.owns_task(current) for driver in drivers)
+        for driver in drivers:driver.invalidate(reason)
+        if owned and reject_self_join:
+            raise RuntimeError('owned call driver cannot join its own host lifecycle; cleanup remains scheduled')
+
+    async def _join_call_drivers(self):
+        from .streams import _finish
+        tasks=list(self._call_driver_cleanup)
+        if not tasks:return
+        current=asyncio.current_task()
+        if any(driver.owns_task(current) for driver in self._call_drivers.values()):
+            raise RuntimeError('owned call driver cannot join its own cleanup')
+        async def drain():
+            if tasks:
+                outcomes=await asyncio.gather(*tasks,return_exceptions=True)
+                if any(isinstance(value,BaseException) for value in outcomes):
+                    raise RuntimeError('owned call-driver cleanup failed')
+        task=asyncio.create_task(drain())
+        try:await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await _finish(task);raise
+
+    async def get_sentinel_status(self, sentinel_id=None, limit=100, max_bytes=65536):
+        """Read-only sampled-frame diagnostics; never starts capture or inference."""
+        if sentinel_id is not None:identifier(sentinel_id)
+        items=[item.snapshot() for (kind,key),item in sorted(self._call_drivers.items())
+               if kind=='frame_sentinel' and (sentinel_id is None or key==sentinel_id)]
+        return self._bounded_query(items,limit,max_bytes)
+
     async def get_call_status(self, controller_id=None, limit=100, max_bytes=65536):
         """Read-only bounded diagnostics; totals describe whole controller scope."""
         self._bounded_query([], limit, max_bytes)
@@ -857,6 +919,7 @@ class HumanSense:
         self.paused = True
         self._analysis_results.clear()
         self._generation += 1
+        self._invalidate_call_drivers('pause',reject_self_join=True)
         self._clear_separation_media()
         await self._reset_plugins()
         return {"paused": True}
@@ -871,6 +934,7 @@ class HumanSense:
 
     async def delete_data(self, subject_id=None):
         from .streams import _finish
+        self._invalidate_call_drivers('delete',reject_self_join=True)
         cleanup = asyncio.create_task(self._delete_data(subject_id))
         try:
             return await asyncio.shield(cleanup)
@@ -880,6 +944,7 @@ class HumanSense:
 
     async def _delete_data(self, subject_id=None):
         self._generation += 1
+        self._invalidate_call_drivers('delete')
         self._clear_separation_media()
         for controller in self._call_controllers.values():
             controller.forget_subject(subject_id, now_ms=timestamp())
@@ -930,6 +995,8 @@ class HumanSense:
             raise
 
     async def _reset_all_plugins(self):
+        self._invalidate_call_drivers('reset')
+        await self._join_call_drivers()
         for controller in self._call_controllers.values():
             controller.reset_sources(now_ms=timestamp())
         self.object_memory.invalidate_visibility()
@@ -960,12 +1027,14 @@ class HumanSense:
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
         self._generation += 1
+        self._invalidate_call_drivers('reset',reject_self_join=True)
         self._clear_separation_media()
         await self._reset_plugins()
         return {"processing_reset": True}
 
     async def close(self):
         from .streams import _finish
+        self._invalidate_call_drivers('close',reject_self_join=True)
         task = getattr(self, '_close_task', None)
         if task is None:
             task = self._close_task = asyncio.create_task(self._close())
@@ -979,6 +1048,7 @@ class HumanSense:
         if self.closed:
             return
         self.closed = True
+        self._invalidate_call_drivers('close')
         for controller in self._call_controllers.values():
             controller.forget_subject(now_ms=timestamp())
             controller.close(now_ms=timestamp())
@@ -994,6 +1064,10 @@ class HumanSense:
             queue.put_nowait(None)
         errors = []
         try:
+            try:
+                await self._join_call_drivers()
+            except Exception as exc:
+                errors.append(exc)
             for streams in getattr(self, '_sensor_streams', ()):
                 try:
                     await streams.close()
