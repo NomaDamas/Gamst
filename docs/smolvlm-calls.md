@@ -49,7 +49,8 @@ window still reports raw pixel hashes alongside its separately validated shape.
 
 One adapter permits one active call; a second call fails immediately rather than
 building an invisible queue. Do not use its owned worker directly or concurrently
-finish/settle the same request while execute is running. On each call the window
+finish the same request while execute is running. Verified billing through
+controller.settle may arrive during execution. On each call the window
 state is reset, allowing nonconsecutive retained frames. After that async reset,
 actual controller reserve/dispatch rechecks host lifecycle, freshness and budget.
 Unknown or insufficient quotes block inference. Execution provenance binds the
@@ -71,10 +72,14 @@ completion time does not make them fresh.
 
 Pause/reset, subject deletion, consent revocation and host close invalidate the
 controller source/processing epoch. A result finishing afterward is discarded and
-not republished. Detached financial liability survives deletion. Every dispatched
-call—including exceptions, cancellation, empty or discarded output—reports unknown
-charges; a later verified controller settlement is required. This conservatively
-retains a budget slot/ceiling and may block later calls until accounting resolves.
+not republished. Detached financial liability survives deletion. A dispatched call without
+a verified receipt—including exceptions, cancellation, empty or discarded
+output—reports unknown charges. This conservatively retains a budget slot/ceiling
+and may block later calls until verified accounting resolves. Earlier verified
+charges are preserved without a second unknown receipt. A forgotten request with
+an already settled detached bill still discards late output without reconstructing
+erased sensory state. `actual_cost=None` means this adapter does not calculate the
+price; the controller ledger is authoritative for verified charges.
 No bill is silently set to zero just because output was discarded.
 
 HumanSense and this adapter are used on one event loop. The adapter validates the
@@ -104,3 +109,4 @@ one configured small model. It does not supply strong/text providers, automatic
 escalation, cross-window KV reuse, all-call metering or a quality-preserving savings
 claim. Include warmup, other specialist models, retries, media and local resources
 in the existing full-pipeline evaluation.
+
