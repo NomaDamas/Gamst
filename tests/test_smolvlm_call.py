@@ -149,3 +149,27 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                             with self.assertRaises(ValueError):await adapter.execute(request,r,f,maximum_charge=2)
                         self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
                         self.assertTrue(all(s['last_semantic'] is None for s in c.snapshot()['sources'].values()))
+
+    async def test_external_close_does_not_join_context_owner(self):
+        with self.fixture(delay=60):
+            human,c,spec=self.setup_human()
+            async with human:
+                adapter=await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG)
+                request,r,f=await self.request(human,c,spec)
+                async def owner():
+                    async with adapter:
+                        await adapter.execute(request,r,f,maximum_charge=2)
+                task=asyncio.create_task(owner())
+                try:
+                    async def dispatched():
+                        while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
+                    await asyncio.wait_for(dispatched(),5)
+                    await asyncio.wait_for(adapter.close(),5)
+                    with self.assertRaises(asyncio.CancelledError):await task
+                    self.assertTrue(adapter.worker.closed)
+                    self.assertTrue(all(child.returncode is not None for child in self.children))
+                    self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
+                finally:
+                    if not task.done():task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
+                    await adapter.close()

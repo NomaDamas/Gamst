@@ -126,7 +126,14 @@ class SmolVLMCalls:
         if self._closed or self.worker.closed:raise RuntimeError('adapter worker closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
         copied,evidence,pixels_sha=self._capture(request_id,record,frame)
-        self._active=asyncio.current_task()
+        task=asyncio.create_task(self._execute(request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms))
+        self._active=task
+        try:
+            return await task
+        finally:
+            if self._active is task:self._active=None
+
+    async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms):
         dispatched=False;completed=False
         try:
             # Explicit retained frames need not be consecutive in the camera stream.
@@ -156,8 +163,6 @@ class SmolVLMCalls:
             if dispatched and not completed:
                 self._complete(request_id,evidence,success=False,result_sha256=hashlib.sha256(b'failed_or_cancelled').hexdigest())
             raise
-        finally:
-            self._active=None
 
     async def _close(self):
         self._closed=True
