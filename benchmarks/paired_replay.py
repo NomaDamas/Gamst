@@ -136,13 +136,17 @@ async def _finish_owned(task):
 
 async def _execute(command, request, timeout_ms):
     started=time.perf_counter_ns()
-    proc=None; spawn=None; jobs=[]; output=b''; error=b''; response=None
+    proc=None; spawn=None; collection=None; jobs=[]; output=b''; error=b''; response=None
     status='error'; diagnostic=None; answer_ready_ms=None
     try:
         spawn=asyncio.create_task(asyncio.create_subprocess_exec(*command['argv'],cwd=command['cwd'],
             env=command['environment'],stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True))
-        proc=await asyncio.wait_for(asyncio.shield(spawn),timeout_ms/1000)
+        # Preserve caller cancellation when completion occurs in the same loop
+        # turn (wait_for can lose it on Python3.10). Spawn remains owned.
+        done,_=await asyncio.wait({spawn},timeout=timeout_ms/1000)
+        if not done: raise asyncio.TimeoutError()
+        proc=spawn.result()
         async def send():
             proc.stdin.write(_encoded(request)+b'\n')
             await proc.stdin.drain(); proc.stdin.close()
@@ -177,7 +181,10 @@ async def _execute(command, request, timeout_ms):
               asyncio.create_task(_drain(proc.stderr,MAX_STDERR_BYTES)),asyncio.create_task(proc.wait())]
         async def collect(): return await asyncio.gather(*jobs)
         remaining=max(0.,timeout_ms/1000-(time.perf_counter_ns()-started)/1e9)
-        results=await asyncio.wait_for(collect(),remaining)
+        collection=asyncio.create_task(collect())
+        done,_=await asyncio.wait({collection},timeout=remaining)
+        if not done: raise asyncio.TimeoutError()
+        results=collection.result()
         error=results[2]
         status=response['status'] if proc.returncode==0 else 'error'
         if proc.returncode!=0: diagnostic='nonzero_exit'
@@ -195,13 +202,18 @@ async def _execute(command, request, timeout_ms):
             if proc is None and spawn is not None:
                 try: proc=await spawn
                 except Exception: pass
-            if proc is not None:
-                # Every invocation owns its group, including descendants with
-                # detached stdio after a successful direct-child exit.
-                await _stop_owned(proc)
-            for job in jobs:
-                if not job.done(): job.cancel()
-            if jobs: await asyncio.gather(*jobs,return_exceptions=True)
+            try:
+                if proc is not None:
+                    # Every invocation owns its group, including descendants with
+                    # detached stdio after a successful direct-child exit.
+                    await _stop_owned(proc)
+            finally:
+                # Retrieve every owned task even if process-group cleanup fails.
+                if collection is not None and not collection.done(): collection.cancel()
+                for job in jobs:
+                    if not job.done(): job.cancel()
+                owned=jobs+([collection] if collection is not None else [])
+                if owned: await asyncio.gather(*owned,return_exceptions=True)
         cleanup_task=asyncio.create_task(cleanup())
         try:
             await asyncio.shield(cleanup_task)

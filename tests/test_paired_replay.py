@@ -112,6 +112,86 @@ class Collection(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(processes[0].returncode)
             self.assertFalse((root/'run/complete.json').exists())
 
+    async def test_spawn_completion_cancel_keeps_prefix_and_never_starts_next_arm(self):
+        for delay_cancel in (False,True):
+            with tempfile.TemporaryDirectory(dir='.') as directory:
+                root=Path(directory).resolve(); plan,inputs=setup(root)
+                plan['runner']['timeout_ms']=300
+                processes=[]; original=asyncio.create_subprocess_exec
+                loop=asyncio.get_running_loop()
+                async def launch(*args,**kwargs):
+                    if len(processes)==1:
+                        args=(sys.executable,'-c','import time; time.sleep(60)')
+                    child=await original(*args,**kwargs);processes.append(child)
+                    if len(processes)==2:
+                        if delay_cancel:loop.call_soon(loop.call_soon,task.cancel)
+                        else:loop.call_soon(task.cancel)
+                    return child
+                with patch('asyncio.create_subprocess_exec',launch):
+                    task=asyncio.create_task(run(plan,inputs,root/'run',expected_plan_sha256=plan_digest(plan)))
+                    with self.assertRaises(asyncio.CancelledError):await task
+                self.assertEqual(len(processes),2)
+                self.assertTrue(all(p.returncode is not None and p._transport.is_closing() for p in processes))
+                self.assertFalse((root/'run/complete.json').exists())
+                prefix=(root/'run/source-traces.jsonl').read_text().splitlines()
+                self.assertEqual(len(prefix),1)
+                row=json.loads(prefix[0]);digest=row.pop('trace_sha256')
+                self.assertEqual(digest,plan_digest(row));self.assertEqual(row['status'],'success')
+
+    async def test_collect_completion_cancel_preserves_cancellation_and_owned_jobs(self):
+        # Complete actual pipes/process tasks, then cancel the caller before the
+        # wait boundary resumes. Also cover malformed and nonzero child results.
+        for mode in ('ok','nan','nonzero'):
+            with tempfile.TemporaryDirectory(dir='.') as directory:
+                root=Path(directory).resolve();plan,inputs=setup(root,('ok',mode))
+                original_gather=asyncio.gather;original_spawn=asyncio.create_subprocess_exec
+                loop=asyncio.get_running_loop();groups=[];processes=[]
+                def gather(*args,**kwargs):
+                    future=original_gather(*args,**kwargs)
+                    if len(args)==4 and not kwargs:
+                        groups.append((args,future))
+                        # Cancel the third invocation, after a full first pair.
+                        if len(groups)==3:
+                            future.add_done_callback(lambda f:loop.call_soon(task.cancel))
+                    return future
+                async def spawn(*args,**kwargs):
+                    child=await original_spawn(*args,**kwargs);processes.append(child);return child
+                with patch('asyncio.gather',gather),patch('asyncio.create_subprocess_exec',spawn):
+                    task=asyncio.create_task(run(plan,inputs,root/'run',expected_plan_sha256=plan_digest(plan)))
+                    with self.assertRaises(asyncio.CancelledError):await task
+                self.assertEqual(len(processes),3)
+                self.assertEqual(len(groups),3)
+                self.assertTrue(all(p.returncode is not None and p._transport.is_closing() for p in processes))
+                self.assertTrue(all(f.done() and all(t.done() for t in tasks) for tasks,f in groups))
+                self.assertFalse((root/'run/complete.json').exists())
+                prefix=(root/'run/source-traces.jsonl').read_text().splitlines()
+                self.assertEqual(len(prefix),2)
+                previous='0'*64
+                for line in prefix:
+                    row=json.loads(line);digest=row.pop('trace_sha256')
+                    self.assertEqual(digest,plan_digest(row));self.assertEqual(row['previous_trace_sha256'],previous)
+                    previous=digest
+
+    async def test_cleanup_failure_still_joins_all_collection_tasks(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();plan,inputs=setup(root,('timeout',))
+            groups=[];processes=[];original_gather=asyncio.gather;original_spawn=asyncio.create_subprocess_exec
+            def gather(*args,**kwargs):
+                future=original_gather(*args,**kwargs)
+                if len(args)==4 and not kwargs:groups.append((args,future))
+                return future
+            async def spawn(*args,**kwargs):
+                child=await original_spawn(*args,**kwargs);processes.append(child);return child
+            try:
+                with patch('asyncio.gather',gather),patch('asyncio.create_subprocess_exec',spawn), \
+                        patch('benchmarks.paired_replay._stop_owned',side_effect=PermissionError('fixture')):
+                    with self.assertRaises(PermissionError):
+                        await _execute(plan['runner']['commands']['baseline'],{'input':inputs[0]['input']},100)
+                self.assertEqual(len(groups),1)
+                self.assertTrue(all(f.done() and all(t.done() for t in tasks) for tasks,f in groups))
+            finally:
+                for child in processes:await _stop_owned(child)
+
     async def test_group_permission_error_is_retried_but_not_silently_ignored(self):
         proc=await asyncio.create_subprocess_exec(sys.executable,'-c','import time; time.sleep(60)',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
