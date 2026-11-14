@@ -1,6 +1,5 @@
 """Explicit local SmolVLM2-500M multi-image inference; no cross-window KV cache."""
 import hashlib
-import json
 from pathlib import Path
 import re
 import stat
@@ -111,6 +110,19 @@ def load_state(checkpoint,model,torch,safe_open,precision):
     return state
 
 
+def materialize(model,device):
+    # Nonpersistent RoPE buffers are absent from safetensors/state_dict. Rebuild
+    # from the fixed architecture instead of copying uninitialized meta data.
+    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+    model.model.text_model.rotary_emb=LlamaRotaryEmbedding(model.config.text_config,device='cpu')
+    if any(v.is_meta for v in model.parameters()) or any(v.is_meta for v in model.buffers()):
+        raise ValueError('unmaterialized model state remains')
+    model.to(device).eval()
+    rotary=model.model.text_model.rotary_emb
+    rotary.original_inv_freq=rotary.inv_freq
+    return model
+
+
 class SmolVLMNative:
     """Owned bounded generation. Returned text is untrusted semantic hypothesis."""
     def __init__(self,model,processor,config):
@@ -131,7 +143,7 @@ class SmolVLMNative:
         state=load_state(checkpoint,model,torch,safe_open,config['precision'])
         if _identity(checkpoint.lstat())!=_identity(checkpoint_stat) or _identity(tokenizer_path.lstat())!=_identity(tokenizer_stat):raise ValueError('asset changed while loading')
         model.load_state_dict(state,strict=True,assign=True)
-        model.to(config['device']).eval()
+        materialize(model,config['device'])
         return cls(model,processor,config)
 
     def predict(self,frames,timestamps):

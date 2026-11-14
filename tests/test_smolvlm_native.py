@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from humansense.providers.smolvlm_native import (RUNTIME,SPECIAL,SmolVLMNative,
-    configuration,verified_file,model_config,build_processor,prepare,load_state)
+    configuration,verified_file,model_config,build_processor,prepare,load_state,materialize)
 CONFIG=dict(checkpoint_path='/explicit/model.safetensors',checkpoint_sha256='a'*64,
     tokenizer_path='/explicit/tokenizer.json',tokenizer_sha256='b'*64,max_new_tokens=2)
 
@@ -76,7 +76,9 @@ class Native(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             path=Path(directory)/'untrained.safetensors';save_file(model.state_dict(),str(path))
             with torch.device('meta'):loaded=SmolVLMForConditionalGeneration(config)
-            state=load_state(path,loaded,torch,safe_open,'float32');loaded.load_state_dict(state,strict=True,assign=True);loaded.eval()
+            state=load_state(path,loaded,torch,safe_open,'float32');loaded.load_state_dict(state,strict=True,assign=True);materialize(loaded,'cpu')
+            self.assertFalse(any(v.is_meta for v in loaded.buffers()))
+            self.assertIs(loaded.model.text_model.rotary_emb.original_inv_freq,loaded.model.text_model.rotary_emb.inv_freq)
             native=SmolVLMNative(loaded,processor,CONFIG)
             try:
                 actual=native.predict(images,[1000,1200])
