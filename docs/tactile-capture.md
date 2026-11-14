@@ -14,7 +14,7 @@ The source retains the caller's bounded reference bytes. Packets carry its hash,
 
 ## Explicit native capture
 
-Imports and construction open no devices. `TactileCapture(source, consent=True)` is required, followed by an explicit `open_digit()` or `open_gelsight(device=...)`. No first-camera selection, enumeration, automatic dependency/weight download, GUI or recording is performed.
+Imports and construction open no devices. `TactileCapture(source, consent=True)` is required, followed by an explicit `open_digit()` or `open_gelsight(device=...)`. The bridge does not probe arbitrary cameras or auto-select a device. The official DIGIT constructor enumerates DIGIT device metadata to resolve the explicitly supplied serial. No automatic dependency/weight download, GUI or recording is performed.
 
 The DIGIT bridge verifies installed `digit_interface.digit` and `digit_handler` Python wrapper hashes against [official revision87a28bbf](https://github.com/facebookresearch/digit-interface/blob/87a28bbf2beee8008a5308e9a12d72e1bc4fefb9/digit_interface/digit.py). This checks those wrappers, not all native binaries or the physical device. It calls `Digit(serial, name)`, `connect`, `set_resolution`, `set_fps`, `set_intensity`, `get_frame(transpose=True)` and `disconnect`. `transpose=True` is intentional: the default method transposes/flips pixels. Native reference geometry must be320×240 or640×480; QVGA permits30/60fps and VGA15/30fps. Requested fps/intensity must match the source's `configured_fps`/`configured_led_intensity`. Driver acceptance is not an achieved-rate guarantee.
 
