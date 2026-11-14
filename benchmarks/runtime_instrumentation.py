@@ -90,6 +90,15 @@ class EvaluationSession:
         result._identity['instrumentation_protocol_sha256']=bootstrap['instrumentation_protocol_sha256']
         return result
 
+    def binding_owner(self):
+        """Frozen external owner for separately consented request evidence."""
+        names=('comparison_plan_sha256','collection_sha256','stream_protocol_sha256',
+            'reconciliation_protocol_sha256','scope_kind','task_id','arm','stream_id',
+            'input_sha256','recording_sha256','configuration_sha256','cost_sha256')
+        result={name:deepcopy(self._task._header[name]) for name in names}
+        result['instrumentation_protocol_sha256']=self._identity.get('instrumentation_protocol_sha256')
+        return result
+
     def _mark(self, reason):
         # Finite reason vocabulary, never exception content.
         self._incomplete.add(reason)
@@ -424,6 +433,13 @@ class _Call(_Ticket):
         self.session._emit(self,'controller_dispatched',dict(liability='unknown_until_external_billing',execution_sha256=self._execution,predecessor=self._predecessor,relationship=self._relationship))
 
     async def invoke(self,callback):
+        return await self._invoke(callback,bound=False)
+
+    async def invoke_bound(self,callback):
+        """Supply the immutable binding at this same original native entry."""
+        return await self._invoke(callback,bound=True)
+
+    async def _invoke(self,callback,*,bound):
         if not self._dispatched or self._entry_requested or self._finished or self._invalidated:
             raise RuntimeError('live unique observed dispatch required at backend entry')
         # No await precedes native admission and the immediate callback invocation.
@@ -432,6 +448,13 @@ class _Call(_Ticket):
         self._entry_requested=True;task=asyncio.current_task();self.session._running.add(task)
         async def call(token):
             self.attempt_id=token;self._entered=True
+            if bound:
+                from humansense.native_entry import _issue_entry_binding
+                binding=_issue_entry_binding(dict(schema_version=1,owner_kind='task_native3',
+                    owner=self.session.binding_owner(),entry=dict(operation_id=self.id,attempt_id=token,
+                        execution_instance_sha256=self.instance_id,execution_sha256=self._execution),
+                    provider=self._provider,model_revision=self._revision,role=self._role,prompt_sha256=self._prompt))
+                return await callback(binding)
             return await callback()
         outcome='error';reported_usage=None
         try:
