@@ -47,3 +47,6 @@ Priced totals are emitted as decimal strings to preserve charge precision. Decis
 The evaluator conservatively requires both point estimates and interval bounds to meet the fixed plan targets: candidate/baseline total cost ≤0.8, candidate/baseline p95 latency ≤0.9, and quality difference ≥0. Candidate recognition of every declared critical fact is mandatory, with at least one declared critical fact overall. Missing prices, zero baseline cost or undefined resample ratios fail cost acceptance. Insufficient pairs, synthetic evidence or non-held-out data prevent the combined numerical result from passing. No tolerance is relaxed after seeing results.
 
 `meets_numeric_gates` is a calculation over supplied traces, **not a certificate that the approved goal is complete**. The independent audit must still verify real inference, unchanged configuration, source traces, scoring, correct pricing and complete pipeline timing. The original VLM-only comparative acceptance and all other capability requirements remain open until that evidence exists.
+
+The [frozen A/B/C numerical wrapper](three-arm-comparison.md) reuses these
+unchanged paired gates while keeping B diagnostic and actual acceptance incomplete.
