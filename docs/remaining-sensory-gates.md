@@ -17,7 +17,8 @@ exhaustive replacement of the acceptance map or a reduced MVP.
   [System API](https://github.com/UZ-SLAMLab/ORB_SLAM3/blob/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4/include/System.h)
   provides C++ tracking/reset/shutdown methods; no official Python binding is
   assumed. The [native ABI software slice](orbslam-native.md) calls this API but
-  is not yet a registered Context provider; its tests use a test-double header.
+  now has an [owned Context provider](orbslam-context.md); software tests use a
+  test-double header, not actual SLAM inference.
   Native build, vocabulary/settings and reference-motion evidence remain
   unverified. Source/build and license handling must be explicit.
 - **Cross-modal source separation, family13:**

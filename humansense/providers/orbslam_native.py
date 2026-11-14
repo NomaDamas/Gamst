@@ -1,6 +1,6 @@
 """Explicit ctypes binding to gamst's pinned ORB-SLAM3 native bridge.
 
-Not a complete context provider yet; use only inside an owned worker process.
+Used by orbslam_context only inside an owned worker process.
 """
 import ctypes
 import hashlib
