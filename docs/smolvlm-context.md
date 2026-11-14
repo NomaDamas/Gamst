@@ -18,6 +18,9 @@ The inference window is count-based (`window_frames`, default4, range1..4),
 with strictly increasing timestamps, `max_gap_ms` (default2000, range1..10000)
 and an absolute10second span limit. `sequence_step` (default1, range1..10000)
 allows explicitly declared regular subsampling of original capture indices.
+The provider handles ordinary sequence gaps itself so declared strides also
+work when original indices are in `SensorMetadata.sequence`. Missing sampled captures (including queue loss) break the declared capture
+index step and clear the window. Processing faults force a manager reset.
 Unexpected sequence gaps, excessive time gaps, source/epoch/calibration/shape
 changes start a new segment. Duplicate or backward time/index and malformed
 inputs reject and clear pending provider state. No interpolation or invented

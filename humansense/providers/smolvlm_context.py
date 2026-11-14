@@ -34,7 +34,7 @@ class SmolVLMContext:
         digest=hashlib.sha256(json.dumps([public,options,MODEL_ID,REVISION,PROMPT],sort_keys=True).encode()).hexdigest()
         return CapabilitySpec('vision.smolvlm2_500m','vision.semantic_window','video','smolvlm2.500m.local','1.'+digest,
             (OutputField('semantic','object'),OutputField('window','object'),OutputField('model','object')),
-            'window',window_ms=10000,lookahead_ms=0,freshness_ms=1000,stateful=True,reset_on_gap=True,
+            'window',window_ms=10000,lookahead_ms=0,freshness_ms=1000,stateful=True,reset_on_gap=False,
             interpretation='estimate',devices=(native['device'],),sensor_requirements=('uint8-bgr-camera','capture-time-source-metadata'),
             license='adapter:Apache-2.0;reference-model:Apache-2.0;substitute-weights:verify-separately')
 

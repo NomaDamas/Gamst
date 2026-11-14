@@ -152,20 +152,51 @@ class Managed(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(worker.closed);self.assertIsNotNone(self.children[-1].returncode)
 
     async def test_slow_inference_keeps_polling_and_clear_suppresses_late_result(self):
-        with self.fixture(delay=.4):
+        with self.fixture(delay=60):
             worker=await ProcessProvider.open(sys.executable,'smolvlm2.500m.local',dict(CONFIG,window_frames=1))
             async with HumanSense(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker);await streams.open('cam','video',[worker.spec.id])
                 try:
                     await streams.submit(frame(0,timestamp()))
+                    from humansense.providers.prosody import AudioProsody
+                    audio_spec=AudioProsody.capability();streams.register(audio_spec,AudioProsody)
+                    await streams.open('mic','pcm',[audio_spec.id])
+                    await streams.submit(InputFrame(np.zeros(1280,np.float32),'audio',timestamp(),sample_rate=16000,sensor=SensorMetadata('mic','pcm',0)))
+                    async def wait_audio():
+                        while not any(r['observation']['name']==audio_spec.output_name for r in human.store.latest_signals('local-user',0,timestamp())):await asyncio.sleep(.01)
+                    await asyncio.wait_for(wait_audio(),5)
                     polls=0
                     for _ in range(5):
                         await MCPServer(human).call_tool('get_observations',{'capability_id':worker.spec.id});polls+=1;await asyncio.sleep(.01)
                     self.assertEqual(polls,5)
                     await streams.clear()
-                    self.assertEqual(human.store.latest_signals('local-user',0,timestamp()),[])
+                    self.assertFalse(any(r['observation']['name']==worker.spec.output_name for r in human.store.latest_signals('local-user',0,timestamp())))
                 finally:await streams.clear();await worker.close()
             self.assertIsNotNone(self.children[-1].returncode)
+
+    async def test_managed_stride_fallback_and_overload_sequence_reset(self):
+        b=Backend();p=SmolVLMContext(b,**dict(CONFIG,sequence_step=30))
+        async with HumanSense(consent=True) as human:
+            streams=SensorStreams(human,capacity=1);streams.register(p.spec,lambda:p)
+            await streams.open('cam','video',[p.spec.id]);start=timestamp()-2000
+            try:
+                for i in range(4):
+                    await streams.submit(frame(i*30,start+i*100));await streams.drain()
+                self.assertEqual(len(b.calls),1)
+                self.assertEqual(streams.status()['streams'][0]['providers'][0]['resets'],0)
+                self.assertEqual([x['capture_sequence'] for x in human.store.latest_signals('local-user',0,timestamp())[0]['observation']['value']['window']['captures']],[0,30,60,90])
+                # An unexpected ordinary gap is handled by the provider itself.
+                await streams.submit(frame(151,start+400));await streams.drain()
+                self.assertEqual(len(p.images),1)
+                before_drop=p.segment
+                # Queue two frames without yielding: capacity1 drops the first.
+                await streams.submit(frame(181,start+500));await streams.submit(frame(211,start+600))
+                await streams.drain()
+                lane=streams.status()['streams'][0]['providers'][0]
+                self.assertEqual(lane['dropped'],1);self.assertEqual(lane['resets'],0)
+                self.assertNotEqual(p.segment,before_drop)
+                self.assertEqual(len(p.images),1);self.assertEqual(p.captures[0]['capture_sequence'],211)
+            finally:await streams.clear()
 
     async def test_real_loader_missing_assets_reaps(self):
         # Unmodified worker construction, not a backend double.
