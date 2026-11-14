@@ -66,6 +66,10 @@ class Context(unittest.TestCase):
         np.testing.assert_array_equal(rgb[0,0],[190,100,20])
         self.assertEqual(meta['box'],[2,3,76,78])
         self.assertIsNone(decode(frame(1,track=None))[1])
+        invalid=InputFrame(np.ma.array(np.ones((80,90,3),np.uint8),mask=True),'video',1000,
+            sensor=SensorMetadata('cam','video',0,coordinate_frame='image1'))
+        with self.assertRaises(ValueError):
+            face_frame(invalid,track_id='f',box=[0,0,40,40],detector_id='d',detector_version='1',clock_id='c')
         for bad in (replace(f,timestamp_ms=f.timestamp_ms+1),replace(f,data=f.data[:-1]),
                     replace(f,data=f.data+b'x'),replace(f,data=f.data[:-1]+bytes([f.data[-1]^1])),
                     replace(f,sensor=replace(f.sensor,source_id='other'))):
@@ -80,8 +84,11 @@ class Context(unittest.TestCase):
     def test_complete_window_normalization_and_spectral_truth(self):
         backend=Backend();p=EfficientPhysContext(backend,checkpoint_sha256='a'*64)
         for i in range(179):
-            value=p.process(frame(i));self.assertEqual(value['summary']['status'],'collecting')
-            self.assertIsNone(value['signal']['spectral_candidate'])
+            value=p.process(frame(i))
+            if i == 0:
+                self.assertEqual(value['summary']['status'],'collecting')
+                self.assertIsNone(value['signal']['spectral_candidate'])
+            else:self.assertIsNone(value)
         self.assertEqual(backend.calls,0)
         value=p.process(frame(179));self.assertEqual(backend.calls,1)
         self.assertEqual(backend.data.shape,(180,72,72,3))
@@ -96,8 +103,8 @@ class Context(unittest.TestCase):
         self.assertAlmostEqual(value['signal']['spectral_candidate']['equivalent_bpm'],90,delta=.02)
         self.assertLess(len(json.dumps(value)),4096)
         self.assertEqual(len(p.images),0)
-        value=p.process(frame(180));self.assertEqual(value['summary']['accumulated_frames'],1)
-        self.assertIsNone(value['signal']['spectral_candidate'])
+        self.assertIsNone(p.process(frame(180)))
+        self.assertEqual(len(p.images),1)
         p.close();p.close();self.assertTrue(backend.closed)
         with self.assertRaises(RuntimeError):p.process(frame(181))
         with self.assertRaises(RuntimeError):p.reset()
@@ -118,7 +125,7 @@ class Context(unittest.TestCase):
         f=frame(0); f=_capture_mode(f,99,0)
         self.assertEqual(p.process(f)['summary']['accumulated_frames'],1)
         f=frame(1); f=_capture_mode(f,100,1)
-        self.assertEqual(p.process(f)['summary']['accumulated_frames'],2)
+        self.assertIsNone(p.process(f));self.assertEqual(len(p.images),2)
         self.assertEqual(p.process(frame(2))['summary']['accumulated_frames'],1)
         p.reset()
         p.process(frame(8,ts=2000));b=p.process(frame(9,ts=2038))
@@ -126,7 +133,7 @@ class Context(unittest.TestCase):
         # Cumulative drift even if each individual interval is within tolerance.
         p.reset()
         for i in range(4): b=p.process(frame(i,ts=3000+i*34))
-        self.assertEqual(b['summary']['accumulated_frames'],4)
+        self.assertIsNone(b);self.assertEqual(len(p.images),4)
         b=p.process(frame(4,ts=3136));self.assertEqual(b['summary']['accumulated_frames'],1)
 
     def test_static_textured_face_and_bad_backend_rejected(self):
@@ -157,6 +164,20 @@ class Managed(unittest.IsolatedAsyncioTestCase):
             records=human.store.latest_signals('local-user',0,timestamp())
             value=records[0]['observation']['value']
             self.assertEqual(value['summary']['status'],'estimated')
+            completed_timestamp=records[0]['timestamp_ms']
+            # Polling at1Hz after a completion must not lose that completed window.
+            for i in range(180,240):
+                await streams.submit(frame(i,ts=start+round(i*1000/30)))
+                await streams.drain()
+                if i in (209,239):
+                    latest=human.store.latest_signals('local-user',0,start+9000)[0]
+                    self.assertEqual(latest['timestamp_ms'],completed_timestamp)
+                    self.assertEqual(latest['observation']['value']['summary']['status'],'estimated')
             answer=await MCPServer(human).call_tool('get_observations',{'capability_id':p.spec.id})
             self.assertIn('spectral_candidate',str(answer))
+            await streams.submit(frame(240,track=None,ts=start+8000))
+            await streams.drain()
+            latest=human.store.latest_signals('local-user',0,start+9000)[0]
+            self.assertEqual(latest['observation']['value']['summary']['status'],'face_unavailable')
+            self.assertIsNone(latest['observation']['value']['signal']['spectral_candidate'])
             await streams.clear();self.assertTrue(backend.closed)

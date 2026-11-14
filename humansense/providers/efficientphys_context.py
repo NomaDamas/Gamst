@@ -44,6 +44,12 @@ def face_frame(frame, *, track_id, box, detector_id, detector_version, clock_id)
     """
     import numpy as np
     identifier(detector_id); identifier(detector_version); identifier(clock_id)
+    # Reject masked/subclass arrays rather than silently dropping validity masks.
+    if not isinstance(frame, InputFrame) or type(frame.data) is not np.ndarray:
+        raise ValueError('plain uint8 BGR array required')
+    if box is not None:
+        if type(box) is not list or len(box) != 4: raise ValueError('xyxy box list required')
+        box = list(box)
     # Validate before copying a potentially oversized array.
     capture_binding(frame)
     frame = replace(frame, data=np.array(frame.data, copy=True, order='C'))
@@ -173,7 +179,7 @@ class EfficientPhysContext:
 
     def _clear(self):
         self.owner = self.last = self.start = self.segment = None
-        self.images = []; self.hashes = []
+        self.images = []; self.hashes = []; self.warmup_pending = True
 
     def reset(self):
         with self.lock:
@@ -235,6 +241,9 @@ class EfficientPhysContext:
                     signal['model_signal_rms'] = float(np.sqrt(np.mean(estimates.astype(np.float64)**2)))
                     status = 'estimated' if signal['spectral_candidate'] is not None else 'insufficient_signal'
                 self.images=[];self.hashes=[];self.start=None
+        if status == 'collecting':
+            if not self.warmup_pending: return None
+            self.warmup_pending = False
         return self.spec.validate(dict(signal=signal,summary=dict(status=status,track_id=meta['track_id'],
             state_segment=self.segment,capture_start_ms=observed_start,capture_end_ms=ts,
             accumulated_frames=count,required_frames=180,nominal_fps=30,effective_fps=effective_fps,

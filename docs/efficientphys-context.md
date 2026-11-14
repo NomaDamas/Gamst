@@ -93,8 +93,10 @@ The unverified clock declaration does not establish actual physical synchronizat
 
 Completed windows are nonoverlapping. Buffer retention is bounded to180RGB crops
 (about2.8MB) and their evidence hashes; normalization and native tensors require
-additional bounded temporary memory. While collecting, only current progress is
-returned. Explicit face loss clears the window. Static RGB crops, including static
+additional bounded temporary memory. A collecting marker is emitted only at initialization/reset/discontinuity;
+ordinary continued collection returns no observation. A completed window therefore
+remains the latest observation until the next result or invalidation, retaining
+its original capture timestamp and freshness without artificial refresh. Explicit face loss clears the window. Static RGB crops, including static
 spatial texture, skip inference and report `insufficient_variation`. Dynamic
 lighting/motion can still mimic physiology: this gate is not a quality classifier.
 Reset clears all retained media; close also closes the backend and forbids reuse.
@@ -129,8 +131,8 @@ current physiology.
 
 Six focused tests cover strict packet provenance/color/loss, real cadence/jitter/
 drift/gaps, identity reset, static-window rejection,180frame buffering and exact
-normalization, synthetic known-frequency DSP, typed SensorStreams→MCP context and
-closure. Tests use synthetic predictors for contract coverage, not accuracy.
+normalization, synthetic known-frequency DSP, typed SensorStreams→MCP context,1Hz post-completion polling without overwriting
+completed evidence, loss invalidation and closure. Tests use synthetic predictors for contract coverage, not accuracy.
 The extended `examples/validate_efficientphys_fixture.py` additionally executes the
 actual pinned native graph through a real owned worker using temporary generated
 **untrained** parameters, checks a complete window and resets it. No downloaded
