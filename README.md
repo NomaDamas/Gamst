@@ -20,7 +20,15 @@ gamst gives agents a shared layer for observing behavior, tracking changes, and 
 
 **Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
-## A context layer for an ecosystem of tools
+## 🗂️ Contents
+
+[🌱 Context layer](#overview) · [✨ Capabilities](#capabilities) · [🚀 Quick start](#quick-start) · [🏠 Complete local stack](#local-stack)<br>
+[🐍 Python SDK](#python-sdk) · [🔌 Context MCP](#mcp) · [🎥 Vision & voice](#perception) · [🤝 Companion](#companion) · [🌐 Integrations](#integrations)<br>
+[🖥️ Dashboard guide](#dashboard-guide) · [🗄️ Retention](#retention) · [🧩 Optional providers](#providers) · [📊 Benchmarking](#benchmarking)<br>
+[🔒 Privacy](#privacy) · [🧪 Validation](#validation) · [📚 Documentation](#documentation) · [📄 License](#license)
+
+<a id="overview"></a>
+## 🌱 A context layer for an ecosystem of tools
 
 Connect vision, voice and other perception tools once; reuse their timestamped
 observations in dashboards, LLM/VLM prompts, MCP agents and streaming applications.
@@ -46,33 +54,7 @@ implementation, not a fork or endorsement of those projects.
 
 **[Streaming protocols, plugin authoring, provider setup and examples →](docs/streaming-and-plugins.md)**
 
-## Run the complete local stack
-
-On Apple Silicon with Python 3.10+:
-
-```bash
-sh scripts/setup_local.sh
-.venv/bin/python scripts/run_local.py --language ko
-```
-
-Open **http://127.0.0.1:8766**, choose camera/microphone inputs, consent, and start. Omit `--language ko` for automatic speech language detection, or use `--language en`. Pinning a language improves short-window transcription stability.
-
-The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landmarker, Qwen3-VL 2B and a local llama.cpp runner into **`.local-models/`**. It does not configure global agent settings or start device capture. The local launcher connects Companion to the same local VLM; existing agents can consume context without using Companion.
-
-```bash
-# Live context from the SAME session (4 Hz delivery, inference has its own latency)
-.venv/bin/python examples/live_context.py
-
-# MCP stdio bridge to that running session
-.venv/bin/python -m humansense.mcp_live
-
-# Stop this checkout's stack, then remove installer-owned models
-.venv/bin/python scripts/run_local.py --stop
-.venv/bin/python scripts/local_models.py remove --yes
-```
-
-[Setup, agent integration and removal](docs/local-setup.md) · [Realtime behavior](docs/realtime.md) · [Public browser preview](https://blog.nomadamas.org/Gamst/)
-
+<a id="capabilities"></a>
 ## ✨ What it provides
 
 | Capability | Output | Available behavior |
@@ -84,6 +66,7 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 | 🤝 **Agent Responses** | Suggested next action or generated reply | Context-aware Companion using a configured local or authorized remote provider |
 | 🎥 **Perception Plugins** | Video/audio measurements and transcripts | OpenCV, MediaPipe, Silero VAD, faster-whisper adapters |
 
+<a id="quick-start"></a>
 ## 🚀 Quick start
 
 Requires **Python 3.10+**. From this checkout:
@@ -110,6 +93,9 @@ python -m pip install -e '.[vision,audio]'
 
 The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). For compatibility, the distribution remains `humansense-sdk`, the Python import remains `humansense`, and the SDK class remains `HumanSense`. Existing `humansense*` commands, plugin entry points and wire protocol names remain supported.
 
+<details>
+<summary>🧩 Additional sensor and model integrations</summary>
+
 [EfficientTAM streaming mask context](docs/efficienttam-stream.md) adds an explicit local worker and RF-DETR seed pipeline with bounded temporal state, capture-bound prompts and MCP-compatible observations. Trained-model quality and live performance acceptance remain pending; startup never downloads weights.
 
 [OpenEB event-camera context](docs/openeb-context.md) converts bounded EventCD slices into numerical activity and polarity grids through an isolated context worker. [Owned capture supervision](docs/openeb-process.md) bounds source reads and reaps stalled children; actual SDK/device acceptance remains pending.
@@ -119,8 +105,39 @@ The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDam
 
 [BME688/BSEC2 environment context](docs/bsec2-context.md) separates sensor measurements, algorithm estimates and available trained gas-pattern candidates through a bounded firmware callback bridge. Actual hardware and trained-pattern acceptance remain pending.
 
+</details>
+
 After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`; these are aliases of the existing commands. For example, `gamst demo` and `python -m humansense demo` run the same CLI. Install from this repository or a built wheel; a PyPI release under the new name is not claimed.
 
+<a id="local-stack"></a>
+## 🏠 Run the complete local stack
+
+On Apple Silicon with Python 3.10+:
+
+```bash
+sh scripts/setup_local.sh
+.venv/bin/python scripts/run_local.py --language ko
+```
+
+Open **http://127.0.0.1:8766**, choose camera/microphone inputs, consent, and start. Omit `--language ko` for automatic speech language detection, or use `--language en`. Pinning a language improves short-window transcription stability.
+
+The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landmarker, Qwen3-VL 2B and a local llama.cpp runner into **`.local-models/`**. It does not configure global agent settings or start device capture. The local launcher connects Companion to the same local VLM; existing agents can consume context without using Companion.
+
+```bash
+# Live context from the SAME session (4 Hz delivery, inference has its own latency)
+.venv/bin/python examples/live_context.py
+
+# MCP stdio bridge to that running session
+.venv/bin/python -m humansense.mcp_live
+
+# Stop this checkout's stack, then remove installer-owned models
+.venv/bin/python scripts/run_local.py --stop
+.venv/bin/python scripts/local_models.py remove --yes
+```
+
+[Setup, agent integration and removal](docs/local-setup.md) · [Realtime behavior](docs/realtime.md) · [Public browser preview](https://blog.nomadamas.org/Gamst/)
+
+<a id="python-sdk"></a>
 ## 🐍 Python SDK
 
 ```python
@@ -222,6 +239,7 @@ Agents connected to the same runtime through `humansense.mcp_live` can use:
 `get_vlm_status` returns applied settings; `get_context` and the WebSocket context
 subscription include the temporal result. Settings do not start camera capture.
 
+<a id="mcp"></a>
 ## 🔌 MCP for AI agents
 
 Start the stdio server:
@@ -262,6 +280,7 @@ Camera and microphone capture require explicit consent and installed extras. Exa
 
 Use `video: null` for microphone-only capture. Optional local model paths are `face_model_path`, `vad_model_path`, and `asr_model_path`. Capture and queries share the same MCP runtime. Separately started MCP and dashboard processes do not share live capture.
 
+<a id="perception"></a>
 ## 🎥 Vision & voice
 
 | Backend | Install extra | Measurements / requirements |
@@ -283,6 +302,7 @@ human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
 
 No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 is an optional gated-model provider; biometric re-identification is not included.
 
+<a id="companion"></a>
 ## 🤝 Context-aware Companion
 
 Configure an actual chat-completions server and installed model:
@@ -297,6 +317,7 @@ Choose **Companion에게 보내기** in the dashboard, or call the MCP `chat` to
 
 For evidence-citing semantic analysis, configure `HUMANSENSE_REASONING_URL` and `HUMANSENSE_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
 
+<a id="integrations"></a>
 ## 🌐 WebSocket & integrations
 
 ```bash
@@ -310,47 +331,8 @@ The loopback WebSocket service exposes the same tool calls. Events are the defau
 - **LiveKit / Pipecat:** [Decoded-media bridges](docs/integrations.md) with explicit participant attribution, media-clock mapping, and mono/16kHz conversion. Native framework compatibility still needs validation.
 - **Custom models:** implement `PerceptionPlugin.process(frame)` to supply signals with model IDs and versions. The output contract remains independent of the backend.
 
-## 🔒 Evidence & privacy
-
-- Obtain participant consent before setting `consent=True` or starting capture.
-- Raw camera frames and microphone audio are never persisted by the built-in store.
-- SQLite defaults to memory; disk persistence is opt-in and retention is configurable.
-- `pause()` and `delete_data()` invalidate pending processing; late model results cannot restore deleted observations.
-- Keep observations separate from hypotheses. Expression scores do not establish inner emotions, diagnoses, deception, or hidden intentions.
-- Third-party packages and model weights retain their own licenses. No REA or closed-source implementation is bundled; see [third-party notes](docs/third-party.md).
-
-## 🧪 Development & validation
-
-```bash
-python -m unittest discover -s tests -v
-node integrations/typescript/client.test.mjs
-python -m humansense demo
-python -m benchmarks.runtime --samples 200
-```
-
-The streaming refactor is covered by **150 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. The Hugging Face voice adapter was exercised with real SUPERB weights and public audio fixtures; Ollama contracts use fixtures. Model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
-
-## 📚 Documentation
-
-| Guide | Contents |
-| --- | --- |
-| [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
-| [Predictions & feedback](docs/predictions.md) | Target registration, outcomes, held-out calibration |
-| [Model reasoning](docs/reasoning.md) | Local/provider analysis and citation validation |
-| [Companion](docs/companion.md) | Context-aware conversations |
-| [Tracking](docs/tracking.md) | Stream-local association and ambiguity |
-| [Media bridges](docs/integrations.md) | External streams, clocks, PCM conversion |
-| [Evaluation](docs/evaluation.md) | Hardware checks and evaluation gates |
-| [Completion audit](docs/completion-audit.md) | Implemented, missing, and unverified requirements |
-| [GitHub publishing](docs/github-push.md) | Publish the delivery bundle from a connected host |
-
-## 📄 License
-
-Original code is licensed under **Apache-2.0**. See [LICENSE](LICENSE). Review each dependency and model-weight license before redistribution.
-
-
-### Local demo settings and visual guides
-
+<a id="dashboard-guide"></a>
+## 🖥️ Local demo settings and visual guides
 Open `http://127.0.0.1:8766`. Camera controls include English/Chinese/Korean/auto
 speech recognition and independent face-point/person-region overlays. Start,
 Stop and Clear are grouped together. Model switches in Settings stop actual
@@ -397,8 +379,8 @@ The launcher automatically detects `.local-models/sam3/ready.json` after install
 Settings distinguishes downloaded/configured SAM3 from a model that has actually
 completed inference. SAM3 object boundaries are not body joints or emotions.
 
-### Bounded live data retention
-
+<a id="retention"></a>
+## 🗄️ Bounded live data retention
 Raw camera/audio buffers are not stored in the record database. Capture queues,
 model windows and subscriber queues are bounded; older pending input is replaced
 when processing or consumers fall behind. Sending context is not an instruction
@@ -420,6 +402,14 @@ transcripts and derived observations remain subject to the same storage limits.
 Disk-backed SQLite may retain allocated free pages for reuse after expiry; payload
 limits are not a physical database-file-size guarantee. Downstream agents and LLM
 providers control their own retention independently.
+
+<a id="providers"></a>
+## 🧩 Optional providers and controller integrations
+
+These are opt-in integrations with individual validation boundaries. Expand a category to inspect the original setup and acceptance notes.
+
+<details>
+<summary><strong>👁️ Vision, geometry and perception</strong></summary>
 
 Optional [local gaze context](docs/gaze-context.md) connects L2CS gaze heads to bounded MediaPipe face crops through the `l2cs.gaze` worker profile. Actual checkpoint accuracy and calibrated camera conventions remain pending; model files are supplied explicitly.
 
@@ -446,6 +436,11 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 
 [Calibrated container level and volume context](docs/calibrated-fill.md).
 
+</details>
+
+<details>
+<summary><strong>🎙️ Voice and audiovisual context</strong></summary>
+
 [Windowed vocal-expression model context](docs/vocal-expression.md).
 [English/Korean transcript-interval rate estimates](docs/speaking-rate.md)
 reuse accepted ASR revisions without another model call, with units and unavailable
@@ -463,6 +458,11 @@ and audiovisual active-speaker association remain open.
 bounded local worker inputs for the [windowed TalkNet provider](docs/talknet-context.md).
 The local worker emits capture-timed audiovisual activity scores through SDK/MCP;
 actual trained-model, synchronization and quality acceptance remain in#118.
+
+</details>
+
+<details>
+<summary><strong>📡 Physical sensor and task-specific providers</strong></summary>
 
 [Classic ESP32 CSI channel-variation context](docs/esp32-csi.md) decodes an explicit
 20MHz receiver profile and exposes bounded amplitude/phase/temporal features
@@ -483,6 +483,11 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 
 [Small semantic model engine](docs/smolvlm-native.md): explicit local SmolVLM2-500M multi-image inference. [Capture-window Context integration](docs/smolvlm-context.md) connects an owned worker to SensorStreams/MCP. Actual trained-model acceptance remains pending.
 
+</details>
+
+<details>
+<summary><strong>🧠 Model calls, budgets and evaluation records</strong></summary>
+
 [Optional call recommendations](docs/call-policy.md): evidence-bound periodic, change, novelty and task-conflict rules. Context delivery stays independent; recommendations do not execute models or authorize spending.
 
 [Optional call budget ledger](docs/call-budget.md): bounded atomic reservations, explicit unknown liabilities and verified-charge settlement. Controller/API integration remains separate.
@@ -500,3 +505,64 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Evaluation attempt recorder](docs/call-attempts.md): explicit async call/error/cancellation records, late receipts and frozen itemized-cost reduction.
 
 [On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to HumanSense/MCP.
+
+</details>
+
+<a id="benchmarking"></a>
+## 📊 Benchmarking with Gamst Bench
+
+[Gamst Bench](https://github.com/NomaDamas/Gamst-bench) evaluates whether this context layer preserves useful evidence while reducing full-system cost and response latency. [Dashboard](https://gamst-bench.jinminseong.com/#benchmarks) · [Evaluation MCP](https://github.com/NomaDamas/Gamst-bench/blob/main/docs/MCP.md) · [Matched comparisons](https://github.com/NomaDamas/Gamst-bench/blob/main/docs/COMPARISONS.md).
+
+**Two MCP roles:** this repository's MCP delivers live perception/context to an agent. Gamst Bench's MCP orchestrates dataset preparation, native evaluation, scoring commands and run artifacts on GCP. They are separate servers.
+
+- **Core:** FastBench (brief events), SPOT Detection (timely response/silence), OVO (past/current/future reasoning), OmniPro (AV proactive understanding), StreamArena (continuous agent sessions).
+- **Supporting:** StreamingBench (understanding regression), Inf-Streams-Eval (long-session quality and resource behavior).
+- **Matched systems:** full VLM, Gamst + LLM, Gamst + selective VLM + LLM, periodic VLM and native reference methods. Freeze checkpoint, consumer, hardware, prompts and input availability before comparing.
+- **Evidence:** published numbers, directly reproduced official scores and modified Gamst tracks remain separate. A native runner's successful exit is not an independently validated score.
+
+✅ Evaluation MCP, ten native execution recipes, dashboard and source-linked documentation are implemented in Gamst Bench.<br>
+⏳ GCP setup, data access, Gamst-specific model adapters, actual native runs, independent scoring and full cost/event-latency evidence remain pending. No superiority or completed long-duration acceptance is claimed.
+
+For this evaluation campaign, model execution and benchmark dataset downloads happen **on GCP only**. The local SDK/demo instructions elsewhere in this README describe product capabilities, not instructions to run the evaluation campaign locally.
+
+<a id="privacy"></a>
+## 🔒 Evidence & privacy
+
+- Obtain participant consent before setting `consent=True` or starting capture.
+- Raw camera frames and microphone audio are never persisted by the built-in store.
+- SQLite defaults to memory; disk persistence is opt-in and retention is configurable.
+- `pause()` and `delete_data()` invalidate pending processing; late model results cannot restore deleted observations.
+- Keep observations separate from hypotheses. Expression scores do not establish inner emotions, diagnoses, deception, or hidden intentions.
+- Third-party packages and model weights retain their own licenses. No REA or closed-source implementation is bundled; see [third-party notes](docs/third-party.md).
+
+<a id="validation"></a>
+## 🧪 Development & validation
+
+```bash
+python -m unittest discover -s tests -v
+node integrations/typescript/client.test.mjs
+python -m humansense demo
+python -m benchmarks.runtime --samples 200
+```
+
+The streaming refactor is covered by **150 Python tests** plus dashboard/category-chart JavaScript checks. Earlier release QA also verified wheel installation, real local perception models and MCP communication. The Hugging Face voice adapter was exercised with real SUPERB weights and public audio fixtures; Ollama contracts use fixtures. Model accuracy is not established. See [measured refactor QA](docs/qa-streaming.md), [streaming validation scope](docs/streaming-and-plugins.md#validation-scope) and [v0.2 QA](docs/qa-v0.2.0.md). The [synthetic benchmark](docs/runtime-benchmark.md) reports actual core measurements, not camera/model performance. FPS targets, model accuracy, and an eight-hour soak are not yet validated.
+
+<a id="documentation"></a>
+## 📚 Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
+| [Predictions & feedback](docs/predictions.md) | Target registration, outcomes, held-out calibration |
+| [Model reasoning](docs/reasoning.md) | Local/provider analysis and citation validation |
+| [Companion](docs/companion.md) | Context-aware conversations |
+| [Tracking](docs/tracking.md) | Stream-local association and ambiguity |
+| [Media bridges](docs/integrations.md) | External streams, clocks, PCM conversion |
+| [Evaluation](docs/evaluation.md) | Hardware checks and evaluation gates |
+| [Completion audit](docs/completion-audit.md) | Implemented, missing, and unverified requirements |
+| [GitHub publishing](docs/github-push.md) | Publish the delivery bundle from a connected host |
+
+<a id="license"></a>
+## 📄 License
+
+Original code is licensed under **Apache-2.0**. See [LICENSE](LICENSE). Review each dependency and model-weight license before redistribution.
