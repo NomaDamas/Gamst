@@ -26,7 +26,12 @@ The plan has exactly these fields:
   `precision`, `hardware`, `policy`, `warm_state`, `sampling`, `window_lookahead`.
   A's sampling string must be `periodic_1fps`.
 - `baseline_sampling`: exactly `period_ms:1000`, integer `phase_ms` in0..999,
-  and nonempty `audio_policy`/`task_policy` strings. Frame opportunities do not
+  mandatory `time_origin_policy` (`recording_start` or `capture_epoch`),
+  and nonempty `audio_policy`/`task_policy` strings. `recording_start` measures phase
+  from the first capture timestamp of each immutable recording; `capture_epoch`
+  measures phase from zero in that recording’s capture timestamp domain. These
+  produce different sampling schedules and are frozen into both derived plans.
+  Frame opportunities do not
   imply one billed request per frame; batching/cache accounting stays separate.
 
 Rows are exactly3 per declared task, one for each arm. Each row contains:

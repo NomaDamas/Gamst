@@ -16,7 +16,7 @@ def fixture(evidence='measured', mode='priced'):
     common = {k: copy.deepcopy(v) for k, v in old.items() if k not in ('schema_version', 'systems')}
     plan = dict(schema_version=1, primary_comparison='C_vs_A', comparison=common,
                 systems={a: copy.deepcopy(old['systems']['baseline' if a == 'A' else 'candidate']) for a in 'ABC'},
-                baseline_sampling=dict(period_ms=1000, phase_ms=0, audio_policy='same frozen ASR', task_policy='same causal tasks'))
+                baseline_sampling=dict(period_ms=1000, phase_ms=0, time_origin_policy='recording_start', audio_policy='same frozen ASR', task_policy='same causal tasks'))
     plan['systems']['A']['sampling'] = 'periodic_1fps'
     rows = []
     for row in old_rows:
@@ -85,13 +85,19 @@ class ThreeArm(unittest.TestCase):
 
     def test_frozen_sampling_and_exact_schema(self):
         plan, rows = fixture()
-        for key, value in (('period_ms', 999), ('period_ms', True), ('phase_ms', 1000), ('phase_ms', -1), ('audio_policy', '')):
+        for key, value in (('period_ms', 999), ('period_ms', True), ('phase_ms', 1000), ('phase_ms', -1), ('time_origin_policy', 'implicit'), ('audio_policy', '')):
             bad = copy.deepcopy(plan); bad['baseline_sampling'][key] = value
             with self.assertRaises(ValueError):project_pair_plan(bad, 'C', expected_plan_sha256=plan_digest(bad))
         for mutate in (lambda p:p.update(primary_comparison='B_vs_A'), lambda p:p['systems']['A'].update(sampling='1fps allegedly'),
                        lambda p:p.update(runner={}), lambda p:p['systems'].update(D={})):
             bad = copy.deepcopy(plan); mutate(bad)
             with self.assertRaises(ValueError):project_pair_plan(bad, 'C', expected_plan_sha256=plan_digest(bad))
+        epoch = copy.deepcopy(plan); epoch['baseline_sampling']['time_origin_policy'] = 'capture_epoch'
+        derived = project_pair_plan(epoch, 'C', expected_plan_sha256=plan_digest(epoch))
+        self.assertEqual(derived['three_arm_origin']['baseline_sampling']['time_origin_policy'], 'capture_epoch')
+        self.assertNotEqual(plan_digest(derived), plan_digest(project_pair_plan(plan, 'C', expected_plan_sha256=plan_digest(plan))))
+        missing = copy.deepcopy(plan); del missing['baseline_sampling']['time_origin_policy']
+        with self.assertRaises(ValueError):project_pair_plan(missing, 'C', expected_plan_sha256=plan_digest(missing))
         with self.assertRaises(ValueError):project_pair_plan(plan, 'A', expected_plan_sha256=plan_digest(plan))
         bad = copy.deepcopy(rows); bad[0]['receipt_verified'] = True
         with self.assertRaises(ValueError):run(plan, bad)

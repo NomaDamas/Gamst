@@ -49,9 +49,10 @@ def validate_three_arm_plan(plan, *, expected_plan_sha256):
     for config in plan['systems'].values():
         _keys(config, CONFIG, 'system configuration')
     sampling = plan['baseline_sampling']
-    _keys(sampling, {'period_ms', 'phase_ms', 'audio_policy', 'task_policy'}, 'baseline sampling')
+    _keys(sampling, {'period_ms', 'phase_ms', 'time_origin_policy', 'audio_policy', 'task_policy'}, 'baseline sampling')
     if (type(sampling['period_ms']) is not int or sampling['period_ms'] != 1000 or
             type(sampling['phase_ms']) is not int or not 0 <= sampling['phase_ms'] < 1000 or
+            sampling['time_origin_policy'] not in ('recording_start', 'capture_epoch') or
             any(type(sampling[k]) is not str or not 1 <= len(sampling[k]) <= 4096
                 for k in ('audio_policy', 'task_policy')) or plan['systems']['A']['sampling'] != 'periodic_1fps'):
         raise ValueError('explicit periodic 1fps baseline, phase and audio/task policies required')
