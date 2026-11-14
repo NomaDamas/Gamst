@@ -121,3 +121,33 @@ class Calls(unittest.IsolatedAsyncioTestCase):
         release.set()
         with self.assertRaises(asyncio.CancelledError):await task
         await closing;self.assertTrue(done.is_set());self.assertIsNone(b._backend_task)
+
+    async def test_encoder_does_not_block_loop_and_close_joins_it(self):
+        import threading
+        from unittest.mock import patch
+        started=threading.Event();release=threading.Event();finished=threading.Event();calls=[]
+        original=VisualContextCalls._encode
+        def encode(request):
+            started.set()
+            try:
+                if not release.wait(5):raise TimeoutError('test encoder release missing')
+                return original(request)
+            finally:finished.set()
+        async def complete(request):calls.append(request);return dict(text='ok',usage=None)
+        a=self.adapter(complete);rid,r,f=await self.queued()
+        with patch.object(VisualContextCalls,'_encode',staticmethod(encode)):
+            task=asyncio.create_task(a.execute(rid,r,f,'q',maximum_charge=10))
+            async def running():
+                while not started.is_set():await asyncio.sleep(.001)
+            try:
+                await asyncio.wait_for(running(),1)
+                with self.assertRaisesRegex(RuntimeError,'busy'):await a.execute(rid,r,f,'q',maximum_charge=10)
+                task.cancel();closing=asyncio.create_task(a.close())
+                for _ in range(10):await asyncio.sleep(0)
+                task.cancel()
+                self.assertFalse(task.done());self.assertFalse(closing.done());self.assertFalse(finished.is_set())
+            finally:release.set()
+            with self.assertRaises(asyncio.CancelledError):await task
+            await closing
+        self.assertTrue(finished.is_set());self.assertEqual(calls,[])
+        self.assertEqual(self.c.snapshot()['budget']['dispatched'],0)

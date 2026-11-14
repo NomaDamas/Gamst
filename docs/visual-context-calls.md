@@ -43,12 +43,15 @@ must already be installed; construction does not import OpenCV or download asset
 
 The adapter encodes the exact pixels as lossless PNG (no resize/crop), capped at
 8MiB. The entire ASCII-escaped JSON request is capped at12MiB. Record/question
-bounds are the same as [TextContextCalls](text-context-calls.md). PNG encoding,
-copying and hashing are bounded synchronous preparation on the calling loop;
-there is no hard realtime latency guarantee. Measure preparation and whole-call
+bounds are the same as [TextContextCalls](text-context-calls.md). Pixel validation/copying and final request hashing are bounded synchronous work.
+PNG encoding and request-size validation run in an owned background thread,
+which cancellation/close joins before releasing the operation. Python cannot
+forcibly stop the encoder; cleanup waits for it. There is no hard realtime
+latency guarantee. Measure preparation and whole-call
 latency on the target device, and supply smaller retained source frames when
 appropriate. Encoding still occurs before budget rejection, but a denied request
-never invokes the client. Its compute cost belongs in whole-pipeline evaluation.
+never invokes the client. Its compute cost belongs in whole-pipeline evaluation. The client timeout starts
+after preparation, not at execute entry; measure total latency separately.
 
 The completion coroutine receives a private dictionary with provider,
 model_revision and the same two text messages as TextContextCalls, plus:

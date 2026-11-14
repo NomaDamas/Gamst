@@ -111,10 +111,16 @@ class TextContextCalls:
         finally:
             if self._active is task:self._active=None
 
+    async def _prepare_execution(self,request):
+        return request
+
     async def _execute(self,request_id,request,evidence,maximum_charge,ttl_ms):
-        dispatched=completed=False;prompt_sha=_digest(request)
+        dispatched=completed=False
         try:
             if self._closed:raise RuntimeError('adapter closed')
+            request=await self._prepare_execution(request)
+            if self._closed:raise RuntimeError('adapter closed')
+            prompt_sha=_digest(request)
             reserved=self.controller.reserve(request_id,provider=self._provider,model_revision=self._revision,
                 prompt_sha256=prompt_sha,maximum_charge=maximum_charge,ttl_ms=ttl_ms,now_ms=timestamp())
             if reserved['status']!='reserved':return reserved

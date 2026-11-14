@@ -1,4 +1,5 @@
 """Explicit retained-image context for application-owned async VLM clients."""
+import asyncio
 import base64
 from dataclasses import asdict
 import hashlib
@@ -8,6 +9,7 @@ from .capabilities import SensorMetadata
 from .plugins import InputFrame
 from .smolvlm_call import smolvlm_frame_sha256
 from .text_context_call import TextContextCalls
+from .streams import _finish
 
 
 class VisualContextCalls(TextContextCalls):
@@ -33,6 +35,18 @@ class VisualContextCalls(TextContextCalls):
         reference=None if pending is None else pending['decision']['visual_reference']
         if reference is None or reference['sha256']!=source_sha:
             raise ValueError('retained pixels differ from visual reference')
+        request['_pixels']=pixels
+        request['_capture_ms']=frame.timestamp_ms
+        request['_source_sha']=source_sha
+        result=await self._start(request_id,request,evidence,maximum_charge,ttl_ms)
+        if result.get('accepted'):
+            result.update(interpretation='untrusted_visual_response',source_frame_sha256=source_sha,
+                          image_sha256=request['images'][0]['sha256'],capture_ms=frame.timestamp_ms)
+        return result
+
+    @staticmethod
+    def _encode(request):
+        pixels=request.pop('_pixels');capture=request.pop('_capture_ms');source_sha=request.pop('_source_sha')
         import cv2
         ok,encoded=cv2.imencode('.png',pixels,[cv2.IMWRITE_PNG_COMPRESSION,1])
         if not ok:raise ValueError('PNG encoding failed')
@@ -40,11 +54,16 @@ class VisualContextCalls(TextContextCalls):
         if len(png)>8*1024*1024:raise ValueError('PNG exceeds 8 MiB')
         request['images']=[dict(mime_type='image/png',data_base64=base64.b64encode(png).decode('ascii'),
             sha256=hashlib.sha256(png).hexdigest(),source_frame_sha256=source_sha,
-            capture_ms=frame.timestamp_ms,shape=list(pixels.shape))]
+            capture_ms=capture,shape=list(pixels.shape))]
         if len(json.dumps(request,ensure_ascii=True,allow_nan=False,separators=(',',':')).encode())>12*1024*1024:
             raise ValueError('serialized visual request exceeds 12 MiB')
-        result=await self._start(request_id,request,evidence,maximum_charge,ttl_ms)
-        if result.get('accepted'):
-            result.update(interpretation='untrusted_visual_response',source_frame_sha256=source_sha,
-                          image_sha256=hashlib.sha256(png).hexdigest(),capture_ms=frame.timestamp_ms)
-        return result
+        return request
+
+    async def _prepare_execution(self,request):
+        # Thread work cannot be forcibly cancelled. Retain and join it before
+        # releasing the owned operation, including repeated caller cancellation.
+        preparation=asyncio.create_task(asyncio.to_thread(self._encode,request))
+        try:return await asyncio.shield(preparation)
+        except asyncio.CancelledError:
+            await _finish(asyncio.gather(preparation,return_exceptions=True))
+            raise
