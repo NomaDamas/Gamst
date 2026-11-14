@@ -79,6 +79,21 @@ class Paths(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.provider.process(self.frame(2))
 
 
+    def test_maximum_labels_histories_and_reference_provenance_fit_context(self):
+        import json
+        source=images.Similarity();source.setUp();image=source.texture(1023,511)
+        self.backend.rows=tuple((10+i*100,100,20+i*100,110,.987654321,i,chr(0x10000+i)*256) for i in range(8))
+        for i in range(8):
+            frame=InputFrame(image,'video',2**53-801+i*100,'s'*128,sensor=SensorMetadata(
+                'c'*128,'i'*128,i,'f'*128,stream_epoch='e'*128,calibration_id='k'*128))
+            result=self.provider.process(frame)
+            self.assertLessEqual(len(json.dumps(result,ensure_ascii=True).encode()),65536)
+        self.assertEqual(result['geometry']['status'],'estimated',result['geometry'])
+        self.assertEqual([len(obj['observations']) for obj in result['objects']],[8]*8)
+        self.assertEqual(len(result['detections'][0]['label']),256)
+        self.assertNotIn('label',result['objects'][0])
+
+
 class Discovery(unittest.TestCase):
     def test_profile_discovery_does_not_import_optional_runtime(self):
         code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("rfdetr.compensated_trajectories",'+repr(CONFIG)+');assert not {"cv2","numpy","rfdetr","torch"}&sys.modules.keys()'
