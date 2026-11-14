@@ -43,7 +43,40 @@ monetary flags remain false/incomplete.
 
 Current tests execute the actual collector, Text/Visual SDK, loopback Responses
 HTTP, original evidence sink and readers. They use explicit synthetic origins.
-Native4 reader integration, additional cancellation/failure cases, standalone
-crosscheck persistence and final independent review/full-suite/CI remain required
+Native4 reader integration, additional adversarial coverage and final independent
+review/full-suite/CI remain required
 before #276 can close. The aggregate importer itself was merged separately in
 PR #278. Original sources and prior completed bundles are never amended.
+
+## Separate persisted output and offline command
+
+`persist_crosscheck` writes a new private directory containing `crosscheck.json`
+and a completion file written last. Reuse recomputes the crosscheck and compares
+all expected bytes. Rehashing a changed report and its completion does not make
+it accepted. Neither original transport files nor prior aggregate bundles are
+modified. A supplied reader-issued native index represents its original verified
+snapshot; the CLI below reopens and verifies original native files on every run.
+
+```sh
+python3 -m benchmarks.billing_crosscheck_bundle \
+  --manifest /absolute/input/acquisition.json \
+  --assets /absolute/input \
+  --transport /absolute/original-transport \
+  --transport-inventory-sha256 ORIGINAL_INVENTORY_SHA256 \
+  --native-root /absolute/original-collector \
+  --native-files /absolute/input/native-file-identities.json \
+  --selection /absolute/input/transport-selection.json \
+  --sidecar-ordinal 0 \
+  --output /absolute/new-crosscheck
+```
+
+`native-file-identities.json` maps each of the eleven fixed original filenames
+to its exact `bytes` and `sha256`; it is not a replacement native report.
+`transport-selection.json` contains the explicit declaration described above.
+All original files remain necessary. The command makes no provider calls and
+prints no raw responses, prompts, credentials or monetary estimate.
+
+Integration tests include a real HTTP body received before cancellation, and a
+native entry whose connection fails or reaches its own deadline before any send.
+Both retain unknown per-attempt cost. A source-collector timeout is not substituted
+for a completed transport failure record.
