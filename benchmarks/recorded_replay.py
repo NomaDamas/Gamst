@@ -28,11 +28,15 @@ class RecordedSourceReplay:
         self.max_drift = _integer(max_drift_ns, 1, 1_000_000_000)
         self.human = self.streams = self.clock = None
         self.jobs = set(); self.reads = set(); self.closed = False
+        self.lane_refs = []; self.provider_outcomes = []
         self.close_task = self.cleanup_task = self.run_task = None; self.snapshots = {}; self.snapshot_bytes = 0
         self.counters = {s['source_id']:dict(declared=sum(r['source_id']==s['source_id'] for r in self.manifest['records']),
             attempted=0,captured=0,dropped=0,verified_reads=0,submitted=0,submit_refused=0,
             last_submitted_sequence=None) for s in self.manifest['sources']}
         self.manifest_sha256 = digest(self.manifest)
+        self.records_by_source = {s['source_id']:[] for s in self.manifest['sources']}
+        for ordinal, record in enumerate(self.manifest['records']):
+            self.records_by_source[record['source_id']].append((ordinal,record))
         self.started_ns = time.monotonic_ns()
 
     async def _read(self, record):
@@ -54,8 +58,7 @@ class RecordedSourceReplay:
 
     async def _source(self, source):
         sid = source['source_id']; counters = self.counters[sid]
-        for ordinal, record in enumerate(self.manifest['records']):
-            if record['source_id'] != sid: continue
+        for ordinal, record in self.records_by_source[sid]:
             payload = None; failure = None
             try:
                 payload = await self._read(record)
@@ -136,7 +139,10 @@ class RecordedSourceReplay:
         try:
             # Actual bytes are preflighted before providers activate and verified
             # again at acquisition. Neither read is hidden as free model work.
-            for record in self.manifest['records']: await self._read(record)
+            verified = set()
+            for record in self.manifest['records']:
+                if record['payload_path'] not in verified:
+                    await self._read(record); verified.add(record['payload_path'])
             self.human = HumanSense(consent=True)
             self.streams = SensorStreams(self.human,capacity=2,max_streams=16,
                 max_packet_bytes=8*1024**2,max_buffer_bytes=256*1024**2)
@@ -144,6 +150,7 @@ class RecordedSourceReplay:
                 if spec.id not in self.streams.factories:self.streams.register(spec,factory)
             for source in self.manifest['sources']:
                 await self.streams.open(source['source_id'],source['sensor_id'],[self.profiles[source['source_id']][0].id])
+            self.lane_refs = [(key,lane) for key,stream in self.streams.streams.items() for lane in stream['lanes']]
             self.human.register_capability(MAPPING)
             self.clock = ReplayClock(self.manifest,max_drift_ns=self.max_drift)
             for source in self.manifest['sources']:
@@ -160,7 +167,11 @@ class RecordedSourceReplay:
             await self._until(self.manifest['duration_ns'])
             self.clock.check()
             self.last_status=self.streams.status()
-            self.journal.emit('acquisition_finished',dict(counters=self.counters))
+            for sid,counters in self.counters.items():
+                self.journal.emit('acquisition_finished',dict(source_id=sid,counters=counters))
+            for source in self.manifest['sources']:
+                await self.streams.finish(source['source_id'],source['sensor_id'])
+            self.clock.check()
         finally:
             await self._cleanup()
 
@@ -191,6 +202,10 @@ class RecordedSourceReplay:
         if self.jobs:await asyncio.gather(*self.jobs,return_exceptions=True)
         for task in tuple(self.reads):await _finish(task)
         if self.human is not None:await self.human.close()
+        self.provider_outcomes=[dict(source_id=key[0],sensor_id=key[1],capability_id=lane['spec'].id,
+            stream_epoch=lane['epoch'],**{k:lane[k] for k in ('accepted','processed','dropped','errors','resets')})
+            for key,lane in self.lane_refs]
+        self.lane_refs.clear()
         self.ended_ns=time.monotonic_ns()
 
 

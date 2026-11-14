@@ -40,7 +40,7 @@ def profiles_for(manifest, profiles):
     sources = {s['source_id']:s for s in manifest['sources']}
     if type(profiles) is not dict or set(profiles) != set(sources):
         raise ValueError('one explicit profile per declared source required')
-    result = {}; copied_bytes = 0
+    result = {}; copied_bytes = 0; capabilities = {}
     for sid, declaration in profiles.items():
         _keys(declaration, ('profile', 'delay_ms'))
         delay = _integer(declaration['delay_ms'], 0, 500)
@@ -66,6 +66,9 @@ def profiles_for(manifest, profiles):
                 spec, factory = OpenCVFlow.capability(), OpenCVFlow
         else:
             raise ValueError('unsupported explicit source profile')
+        if spec.id in capabilities and capabilities[spec.id] != spec:
+            raise ValueError('same capability cannot have conflicting profile configurations')
+        capabilities[spec.id] = spec
         result[sid] = (spec, factory)
     if copied_bytes > 256*1024**2:
         raise ValueError('joint replay snapshot memory admission exceeds256MiB')

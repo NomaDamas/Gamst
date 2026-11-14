@@ -9,9 +9,10 @@ from humansense.engine import _window_ms
 class ReplayClock:
     def __init__(self, manifest, *, max_drift_ns=50_000_000):
         self.max_drift_ns = _integer(max_drift_ns, 1, 1_000_000_000)
+        source_sha256 = digest(manifest)
         self.wall_ns = time.time_ns()
         self.monotonic_ns = time.monotonic_ns()
-        self.mapping = dict(schema_version=1, source_manifest_sha256=digest(manifest),
+        self.mapping = dict(schema_version=1, source_manifest_sha256=source_sha256,
             recording_id=manifest['recording_id'], origin_capture_ns=manifest['origin_capture_ns'],
             duration_ns=manifest['duration_ns'], sdk_anchor_ms=self.wall_ns//1_000_000,
             wall_anchor_ns=self.wall_ns, monotonic_anchor_ns=self.monotonic_ns,
