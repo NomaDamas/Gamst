@@ -140,6 +140,24 @@ class ControllerTests(unittest.TestCase):
         reserve(c,retry['request_id'],1100);c.dispatch(retry['request_id'],now_ms=1100)
         self.assertEqual(c.snapshot()['budget']['reserved_liability'],40)
 
+    def test_failed_threshold_retries_preserve_newer_hysteresis_and_billing(self):
+        c=controller();h=c.open_source(record(),now_ms=1000);d=submit(c,h,1);t=d['request_id']
+        reserve(c,t);c.dispatch(t,now_ms=1000);finish(c,t,d,1001)
+        c.settle(t,components={'input':1},now_ms=1001)
+        event=submit(c,h,2,1100,change_score=1,needs_visual=True);old=event['request_id']
+        reserve(c,old,1100);c.dispatch(old,now_ms=1100);finish(c,old,event,1101,False)
+        c.settle(old,components=None,now_ms=1101)
+        submit(c,h,3,1150,change_score=0)
+        retry=c.submit(h,record(1100),sequence=4,now_ms=1200,visual_reference=visual(1100),change_score=1,needs_visual=True)
+        self.assertEqual(retry['status'],'queued')
+        self.assertFalse(c.snapshot()['sources'][h]['active'])
+        self.assertEqual(c.snapshot()['sources'][h]['last_capture'],1150)
+        new=retry['request_id'];reserve(c,new,1200);c.dispatch(new,now_ms=1200)
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],40)
+        finish(c,new,retry,1201,False);c.settle(new,components={'input':1},now_ms=1201)
+        again=c.submit(h,record(1100),sequence=5,now_ms=1300,visual_reference=visual(1100),change_score=1,needs_visual=True)
+        self.assertEqual(again['status'],'queued')
+
     def test_provider_version_and_channel_change_require_new_source(self):
         c=controller();h=c.open_source(record(),now_ms=1000)
         for mutate in ('model','channels'):

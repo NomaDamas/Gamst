@@ -111,13 +111,25 @@ class CallController:
             if _owner(record, d)[1] != s['owner']:
                 raise ValueError('source epoch/configuration mismatch')
             capture = d['evidence']['capture_ms']
-            if s['last_capture'] is not None and capture < s['last_capture']:
-                raise ValueError('capture order regression')
             self._submission_seq = sequence
             fingerprint = _digest(dict(record=d['evidence']['record_sha256'], rules=rules))
             for r in self._requests.values():
                 if r['source'] == handle and r['fingerprint'] == fingerprint and not r['finished'] and not r['discard']:
                     return dict(status='coalesced_exact', request_id=r['id'], decision=deepcopy(r['decision']))
+            attempts = [r for r in self._requests.values()
+                        if r['source'] == handle and r['fingerprint'] == fingerprint]
+            attempts += [r for r in self._recent
+                         if r['source'] == handle and r.get('fingerprint') == fingerprint]
+            prior = max(attempts, key=lambda r:r['order']) if attempts else None
+            retry = prior is not None and self._retryable(prior)
+            if s['last_capture'] is not None and capture < s['last_capture'] and not retry:
+                raise ValueError('capture order regression')
+            threshold = prior is not None and (prior.get('trigger_reason') or prior.get('decision', {}).get('reason')) == 'change_threshold_entered'
+            if retry and threshold and d['desired_route'] == 'none':
+                # Re-admit a retained failed threshold demand, without resetting
+                # source hysteresis or replacing its original evidence.
+                d = self._policy.recommend(record, now_ms=now, change_active=False,
+                    last_dispatch_ms=s['last_dispatch'], last_semantic_capture_ms=s['last_semantic'], **rules)
             if any(b != 'cooldown' for b in d['blockers']):
                 return dict(status='rejected', reason='invalid_dispatch_evidence', decision=d)
             if d['desired_route'] == 'none':
@@ -139,13 +151,14 @@ class CallController:
             token = f'{self._scope}:request:{self._request_seq}'
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
             self._requests[token] = dict(id=token, source=handle, fingerprint=fingerprint,
-                state='pending', decision=d, record=record, rules=rules,
+                state='pending', order=self._request_seq, decision=d, record=record, rules=rules,
                 freshness_ms=record['observation']['capability']['freshness_ms'],
                 submitted_ms=now, expires_ms=min(2**53-1, now+self._retention), priority=priority,
                 reservation=None, execution=None, finished=False, charged=False,
                 discard=False, outcome=None)
             # The event is now retained even if cooldown or price blocks execution.
-            s.update(active=d['proposed_change_active'], last_capture=capture)
+            if not retry:
+                s.update(active=d['proposed_change_active'], last_capture=capture)
             return dict(status='queued', request_id=token, decision=deepcopy(d))
 
     def _blockers(self, r, now):
@@ -238,9 +251,17 @@ class CallController:
                     self._retire(r, 'completed')
             return result
 
+    @staticmethod
+    def _retryable(r):
+        if 'retryable' in r:
+            return r['retryable']
+        return (r['discard'] and not r['finished']) or (r['finished'] and not r['outcome']['accepted'])
+
     def _retire(self, r, reason):
         self._retired += 1
         self._recent.append(dict(id=r['id'], source=r['source'], reason=reason,
+            order=r['order'], fingerprint=r['fingerprint'], retryable=self._retryable(r),
+            trigger_reason=r['decision']['reason'],
             evidence=deepcopy(r['decision']['evidence']), outcome=deepcopy(r['outcome'])))
         del self._requests[r['id']]
 
