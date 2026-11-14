@@ -7,7 +7,7 @@ import uuid
 
 from ..capabilities import CapabilitySpec,OutputField,SensorMetadata,bounded_json,identifier
 from ..plugins import InputFrame
-from .smolvlm_native import SmolVLMNative,configuration as native_configuration,MODEL_ID,REVISION,PROMPT
+from .smolvlm_native import SmolVLMNative,configuration as native_configuration,MODEL_ID,REVISION,PROMPT,prompt_text
 
 
 def configuration(config):
@@ -31,7 +31,7 @@ class SmolVLMContext:
     def capability(**config):
         native,options=configuration(config)
         public={k:v for k,v in native.items() if not k.endswith('_path')}
-        digest=hashlib.sha256(json.dumps([public,options,MODEL_ID,REVISION,PROMPT],sort_keys=True).encode()).hexdigest()
+        digest=hashlib.sha256(json.dumps([public,options,MODEL_ID,REVISION,prompt_text([0,1000])],sort_keys=True).encode()).hexdigest()
         return CapabilitySpec('vision.smolvlm2_500m','vision.semantic_window','video','smolvlm2.500m.local','1.'+digest,
             (OutputField('semantic','object'),OutputField('window','object'),OutputField('model','object')),
             'window',window_ms=10000,lookahead_ms=0,freshness_ms=1000,stateful=True,reset_on_gap=False,
@@ -104,7 +104,8 @@ class SmolVLMContext:
                 evidence_sha256=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
                 clock_verified=False,native_stateful_video=False,additional_lookahead_ms=0),
             model=dict(id=MODEL_ID,reference_revision=REVISION,checkpoint_sha256=self.native['checkpoint_sha256'],
-                tokenizer_sha256=self.native['tokenizer_sha256'],prompt_sha256=hashlib.sha256(PROMPT.encode()).hexdigest(),
+                tokenizer_sha256=self.native['tokenizer_sha256'],prompt_sha256=hashlib.sha256(prompt_text([c['timestamp_ms'] for c in captures]).encode()).hexdigest(),
+                prompt_hash_stage='before-image-token-expansion',instruction_sha256=hashlib.sha256(PROMPT.encode()).hexdigest(),
                 preprocessing='BGR-RGB.Lanczos.longest512.square512.no-split.mean-std0.5',
                 device=self.native['device'],precision=self.native['precision'],
                 input_tokens=None if result is None else result['input_tokens'],output_tokens=None if result is None else result['output_tokens'],

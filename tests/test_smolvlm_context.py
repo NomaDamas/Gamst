@@ -52,6 +52,8 @@ class Window(unittest.TestCase):
         value=p.process(frame(3));self.assertEqual(value['semantic']['text'],'visible scene')
         self.assertEqual(value['window']['captures'][0]['pixels_sha256'],expected)
         self.assertEqual(b.calls[0][0][0][0,0].tolist(),[0,0,0]);self.assertEqual(b.calls[0][1],[1000,1500,2000,2500])
+        from humansense.providers.smolvlm_native import prompt_text
+        self.assertEqual(value['model']['prompt_sha256'],hashlib.sha256(prompt_text([1000,1500,2000,2500]).encode()).hexdigest())
         self.assertEqual(value['window']['capture_end_ms'],2500);self.assertTrue(value['window']['complete'])
         self.assertEqual(p.images,[]);self.assertIsNone(p.process(frame(4)))
         p.close();p.close();self.assertTrue(b.closed)

@@ -88,6 +88,8 @@ capture times/indices/hashes, source/epoch/calibration/shape, a segment ID and
 canonical window evidence hash; model/revision/checkpoint/tokenizer/prompt/
 preprocessing/precision provenance; measured input/output token counts,
 truncation and native-call elapsed milliseconds. Cost remains unknown. The
+prompt hash covers the actual relative-time prompt before image-token expansion;
+a separate hash identifies the fixed instruction text. The
 reference revision identifies the intended architecture, not proof that a
 caller-supplied checkpoint contains official trained weights.
 
