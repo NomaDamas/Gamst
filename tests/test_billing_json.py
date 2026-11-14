@@ -28,6 +28,7 @@ class OriginalNumbers(unittest.TestCase):
         self.assertIs(decode_original(b'true'), True)
 
     def test_numeric_bounds_before_arithmetic(self):
+        self.assertEqual(source_number('1e000018').value, 10**18)
         for number in ('1e9999999', '1e19', '1e-19', '9'*39, 'NaN', 'Infinity', '01', '+1'):
             with self.subTest(number=number), self.assertRaises(ValueError):
                 decode_original(number.encode())

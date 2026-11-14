@@ -38,7 +38,7 @@ def source_number(lexeme):
     if match is None:
         raise ValueError('strict source JSON number required')
     integer, fraction, exponent = match.group(2), match.group(3) or '', match.group(4) or '0'
-    if len(integer) + len(fraction) > 38 or len(exponent.lstrip('+-')) > 2 or abs(int(exponent)) > 18:
+    if len(integer) + len(fraction) > 38 or abs(int(exponent)) > 18:
         raise ValueError('source decimal digits or exponent exceed bound')
     # Decimal construction/as_tuple are exact and independent of caller precision.
     sign, digits, scale = Decimal(lexeme).as_tuple()
