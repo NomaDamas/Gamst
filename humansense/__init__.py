@@ -33,3 +33,6 @@ __all__ += ['SmolVLMCalls', 'smolvlm_frame_sha256']
 
 from .text_context_call import TextContextCalls
 __all__ += ['TextContextCalls']
+
+from .visual_context_call import VisualContextCalls
+__all__ += ['VisualContextCalls']
