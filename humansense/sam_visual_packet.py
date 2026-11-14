@@ -234,5 +234,37 @@ def visual_request_binding(outer_header, payload, *, policy, generation,
     binding.update(input_sha256=_digest(payload),audio_input_sha256=_digest(pcm),
         visual_inventory_sha256=_digest(inventory),
         original_audio_epoch=original_sensor['stream_epoch'],
-        original_visual_epoch=header['visual_sensor']['stream_epoch'])
+        original_visual_epoch=header['visual_sensor']['stream_epoch'],
+        visual_source_id=header['visual_sensor']['source_id'],
+        visual_sensor_id=header['visual_sensor']['sensor_id'])
     return bounded_json(binding)
+
+
+def validate_visual_policy(value):
+    """Dependency-light validation before any worker is launched."""
+    value=bounded_json(value)
+    _keys(value,'clock width height audio_sensor visual_sensor track_id segment_id mask_origin mask_polarity')
+    _integer(value['width'],16,640); _integer(value['height'],16,480)
+    for name in ('track_id','segment_id'): identifier(value[name])
+    if value['mask_polarity']!='zero-kept':
+        raise ValueError('zero-kept visual policy required')
+    _keys(value['mask_origin'],'producer_id revision')
+    for v in value['mask_origin'].values(): identifier(v)
+    clock=value['clock']
+    _keys(clock,'audio_clock_id camera_clock_id alignment_id camera_to_audio_offset_us clock_error_us max_age_us')
+    for k in ('audio_clock_id','camera_clock_id','alignment_id'): identifier(clock[k])
+    _integer(clock['camera_to_audio_offset_us'],-(2**53-1),2**53-1)
+    _integer(clock['max_age_us'],1,250000)
+    _integer(clock['clock_error_us'],0,clock['max_age_us'])
+    for name in ('audio_sensor','visual_sensor'):
+        source=value[name]
+        _keys(source,'source_id sensor_id coordinate_frame calibration_id channels')
+        if type(source['channels']) is not list:
+            raise ValueError('declared channel list required')
+        SensorMetadata(**dict(source,channels=tuple(source['channels']),sequence=0))
+        if name=='visual_sensor':
+            if source['channels']!=['R','G','B'] or any(source[k] is None for k in ('coordinate_frame','calibration_id')):
+                raise ValueError('calibrated RGB visual source required')
+        elif len(source['channels'])!=1:
+            raise ValueError('mono audio source required')
+    return value

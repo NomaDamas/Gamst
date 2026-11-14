@@ -141,6 +141,7 @@ def main():
     source = sys.stdin.buffer
     provider = spec = None
     separation_protocol = None
+    separation_config = None
     try:
         while True:
             head_size, payload_size = sizes(_read_exact(source, 8))
@@ -160,15 +161,16 @@ def main():
                         separation_protocol = PROTOCOL
                     elif requested is not None:
                         raise ValueError('JSON providers cannot negotiate separation media')
+                    separation_config = request['config']
                     provider, spec = _construct(request['profile'], request['config'])
                     result = dict(spec=spec_value(spec))
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
                 elif operation == 'process' and provider is not None:
                     if separation_protocol is not None:
-                        from .separation_media import frame_binding, pack_pair
+                        from .separation_media import request_binding, pack_pair
                         binding = request['separation_binding']
-                        expected = frame_binding(request['frame'], payload,
+                        expected = request_binding(request['frame'], payload, config=separation_config,
                             generation=binding['generation'], config_id=spec.version,
                             owner_revision=binding['owner_revision'])
                         if binding != expected:
