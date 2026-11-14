@@ -3,6 +3,40 @@
 Single-scale/two-orientation adaptation of Davis et al. SIGGRAPH 2014's
 basic released implementation and Simoncelli/Portilla complex steerable bands.
 See docs/visual-microphone.md and licenses/visual-microphone.txt.
+
+Visual Microphone algorithm adaptation
+
+Based on The Visual Microphone: Passive Recovery of Sound from Video,
+Abe Davis, Michael Rubinstein, Neal Wadhwa, Gautham J. Mysore,
+Fredo Durand and William T. Freeman, SIGGRAPH 2014.
+Original implementation: Myers Abraham Davis (Abe Davis), MIT.
+Complex steerable pyramid construction: Eero Simoncelli (1997), modified
+by Javier Portilla (1997). Source: VMSlim/matlabPyrTools in the official archive.
+
+The following license is supplied in the archive's License.rtf:
+
+The MIT License (MIT)
+Copyright (c) 2014 MIT
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+The original archive also contains an author note about MIT patent/pending
+status. This preserves source provenance and is not a determination of
+current patent status. MATLAB and third-party runtime licenses are separate;
+this Python path does not embed or require MATLAB or native MEX binaries.
 """
 import math
 import hashlib
