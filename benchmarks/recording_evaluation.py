@@ -9,16 +9,22 @@ import time
 from humansense.recording_scope import RecordingScope, RecordingScopeOwner
 from humansense.streams import _finish
 from .recording_native_schema import (validate_recording_scope_protocol, run_context,
-    digest, sha, integer, keys, snapshot, REASONS, preflight_recording_collection, preflight_native_capacity)
+    digest, sha, integer, keys, snapshot, REASONS, preflight_recording_collection, preflight_native_capacity, _freeze)
 
 
 class RecordingEvaluationSession(RecordingScopeOwner):
+    @property
+    def declarations(self):return self._declarations
+
+    @property
+    def context(self):return self._context
+
     @classmethod
     def from_frozen(cls, declarations, writer, *, run_nonce, execution_ordinal,
                     retain_evaluation_hashes=False, retain_financial_documents=False, collection_declarations=None):
         if retain_evaluation_hashes is not True:
             raise PermissionError('separate external evaluation hash retention consent required')
-        self=cls(); self.declarations=validate_recording_scope_protocol(declarations)
+        self=cls(); self._declarations=validate_recording_scope_protocol(declarations)
         bundles=[self.declarations] if collection_declarations is None else collection_declarations
         self.preflight=(preflight_native_capacity(self.declarations['collection'])
             if collection_declarations is None and len(self.declarations['collection']['recordings'])>1
@@ -27,9 +33,10 @@ class RecordingEvaluationSession(RecordingScopeOwner):
             raise ValueError('collection preflight belongs to another frozen collection')
         if not any(digest(v)==digest(self.declarations) for v in bundles):
             raise ValueError('current original recording absent from collection preflight')
-        self.context=run_context(self.declarations,run_nonce,execution_ordinal)
+        self._context=_freeze(run_context(self.declarations,run_nonce,execution_ordinal))
         if writer.context!=self.context: raise ValueError('writer belongs to another recording execution')
         writer.bind_capacity(self.declarations['collection']['capacity'])
+        self._declarations=_freeze(self._declarations)
         q=self.declarations['scope_protocol']
         if type(retain_financial_documents) is not bool or retain_financial_documents!=q['retain_financial_documents']:
             raise PermissionError('financial retention must match explicit frozen consent')
@@ -112,7 +119,8 @@ class RecordingEvaluationSession(RecordingScopeOwner):
 
     def bind_backend(self,binding_index,backend,kind):
         integer(binding_index,0,len(self._bindings)-1)
-        if kind not in ('callback','in_process','process'): raise ValueError('explicit backend lifetime kind required')
+        if kind!={'async_client_callback':'callback','in_process_backend':'in_process','process_adapter':'process'}[self._bindings[binding_index]['entry_boundary']]:
+            raise ValueError('actual backend kind differs from frozen entry boundary')
         with self._lock:
             if self._activated or self._closed: raise RuntimeError('backend identity freezes before activation')
             key=(binding_index,id(backend))
@@ -218,12 +226,13 @@ class RecordingEvaluationSession(RecordingScopeOwner):
         if evaluation_scope.binding_index!=binding_index or evaluation_scope.scope_index!=0:
             raise ValueError('direct source operation requires explicit stream binding')
         refs=snapshot(capture_refs,16384)
-        if type(refs) is not list or len(refs)>16: raise ValueError('bounded capture locators required')
+        if type(refs) is not list or not 1<=len(refs)<=16: raise ValueError('bounded nonempty original capture locators required')
         records=self.declarations['source_manifest']['records'];sources=self.declarations['source_manifest']['sources']
         for ref in refs:
             keys(ref,('kind','source_index','capture_ordinal','record_sha256','mapping_sha256'))
             si=integer(ref['source_index'],0,len(sources)-1);ri=integer(ref['capture_ordinal'],0,len(records)-1)
             if (ref['kind']!='capture' or records[ri]['source_id']!=sources[si]['source_id'] or
+                    records[ri]['source_id'] not in self._bindings[binding_index]['source_ids'] or
                     ref['record_sha256']!=digest(records[ri]) or self._mapping is None or ref['mapping_sha256']!=digest(self._mapping)):
                 raise ValueError('capture locator differs from immutable source')
         expected=digest(dict(binding=binding_index,operation_kind=operation_kind,capture_refs=refs))
@@ -382,6 +391,8 @@ class RecordingEvaluationSession(RecordingScopeOwner):
             return _ProcessWork(self,kind,metadata,ordinal,binding,parent,token)
 
     def _register_worker(self,binding,kind,native_id=None,token=None):
+        if kind!={'async_client_callback':'callback','in_process_backend':'in_process','process_adapter':'process'}[self._bindings[binding]['entry_boundary']]:
+            raise ValueError('registered lifetime kind differs from frozen entry boundary')
         if len(self._workers)>=1024 or sum(not w['closed'] for w in self._workers.values())>=256:
             raise RuntimeError('bounded worker lifetime inventory exhausted')
         ordinal=len(self._workers)

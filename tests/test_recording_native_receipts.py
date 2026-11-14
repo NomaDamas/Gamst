@@ -63,8 +63,7 @@ class DeclaredReceipts(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(lookup_canonical_operation(index,0)['unknown_liability'])
         with self.assertRaises(RuntimeError):await observer.attach_declared_receipt(bound[0],receipt,source)
 
-    async def test_original_invoice_line_cannot_rebind_across_abc_owners(self):
-        from benchmarks.recording_native_validation import validate_recording_native_collection
+    async def collection_runs(self,*,distinct_lines=False,changed_document=False):
         runs=[]
         for ordinal in range(3):
             observer,writer,clock=await self.recording(ordinal);bound=[]
@@ -74,17 +73,36 @@ class DeclaredReceipts(unittest.IsolatedAsyncioTestCase):
             ticket=observer.reserve_call(self.c,rid,provider='test.client',model_revision='v1',prompt_sha256='b'*64,evaluation_scope=scope)
             self.c.reserve(rid,provider='test.client',model_revision='v1',prompt_sha256='b'*64,maximum_charge=2,ttl_ms=1000,now_ms=timestamp())
             self.c.dispatch(rid,now_ms=timestamp());ticket.dispatched();await ticket.invoke_bound(actual);ticket.finish('completed')
-            source=b'original declared invoice'
+            source=b'original declared invoice'+(str(ordinal).encode() if changed_document else b'')
+            line_id='line-'+str(ordinal) if distinct_lines else 'same-original-line'
             receipt=dict(schema_version=1,kind='recording_declared_receipt',origin='synthetic_fixture',money_basis='unknown',
                 provider='test.client',revision='v1',account_scope='account',invoice_id='invoice',
                 source_document_sha256=hashlib.sha256(source).hexdigest(),source_document_bytes=len(source),
-                lines=[dict(line_id='same-original-line',quantities={'request':1},claim_sha256=digest([
-                    'gamst.recording.claim.v1','test.client','account','invoice','same-original-line']))])
+                lines=[dict(line_id=line_id,quantities={'request':1},claim_sha256=digest([
+                    'gamst.recording.claim.v1','test.client','account','invoice',line_id]))])
             await observer.attach_declared_receipt(bound[0],receipt,source)
             observer.backend_closed(0,actual);await observer.close()
             runs.append(dict(declarations=observer.declarations,directory=writer.output,
                 terminal_sha256=hashlib.sha256((writer.output/'terminal.json').read_bytes()).hexdigest(),
                 source_inventory=observer.declarations['source_manifest']))
+        return runs
+
+    async def test_original_invoice_line_cannot_rebind_across_abc_owners(self):
+        from benchmarks.recording_native_validation import validate_recording_native_collection
+        runs=await self.collection_runs()
         with self.assertRaisesRegex(ValueError,'reused across arms'):
             validate_recording_native_collection(runs)
         self.assertEqual(self.c.snapshot()['budget']['reserved_liability'],6)
+
+    async def test_same_invoice_document_must_remain_identical_with_disjoint_lines(self):
+        from benchmarks.recording_native_validation import validate_recording_native_collection
+        runs=await self.collection_runs(distinct_lines=True)
+        report=validate_recording_native_collection(runs)
+        self.assertEqual(report['unique_claim_count'],3)
+        self.assertEqual(report['actual_acceptance'],'incomplete')
+
+    async def test_disjoint_lines_cannot_hide_changed_invoice_document(self):
+        from benchmarks.recording_native_validation import validate_recording_native_collection
+        runs=await self.collection_runs(distinct_lines=True,changed_document=True)
+        with self.assertRaisesRegex(ValueError,'changed revision/document across runs'):
+            validate_recording_native_collection(runs)

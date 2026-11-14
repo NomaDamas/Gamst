@@ -68,6 +68,18 @@ class ChannelTests(unittest.IsolatedAsyncioTestCase):
         if process.returncode is None:process.kill()
         await process.wait()
 
+    async def test_parent_snapshot_and_declarations_are_issued_immutable_state(self):
+        from benchmarks.recording_native_channel import NativeRunInventory
+        with self.assertRaises(TypeError):NativeRunInventory({'parent_reaped':True})
+        parent=ParentNativeChannel(self.context,self.d,paths=self.paths,output=self.root/'guarded-parent',deadline_ns=time.monotonic_ns()+10**9)
+        try:
+            with self.assertRaises(TypeError):parent.context['nonce']='b'*64
+            with self.assertRaises(TypeError):parent.declarations['collection']['capacity']['max_entries_per_run']=999999
+            value=parent.snapshot()
+            self.assertIs(type(value),NativeRunInventory)
+            with self.assertRaises(TypeError):value['parent_reaped']=True
+        finally:await parent.abort()
+
     async def test_actual_subprocess_bootstrap_live_chunks_and_parent_reap(self):
         parent=self.parent();process=await self.process(parent)
         collection=asyncio.create_task(parent.collect())
