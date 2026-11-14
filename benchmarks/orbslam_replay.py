@@ -135,7 +135,13 @@ async def replay(manifest,output,*,rotate=False,max_starts_per_minute=6):
         except BaseException as exc:error=exc
         finally:
             if provider is not None:
-                try:await _finish(asyncio.create_task(provider.close()))
+                cleanup=asyncio.create_task(provider.close())
+                try:
+                    try:await asyncio.shield(cleanup)
+                    except asyncio.CancelledError as exc:
+                        # Cleanup must finish, but cancellation must not become success.
+                        if error is None:error=exc
+                        await _finish(cleanup)
                 except BaseException as exc:
                     if error is None:error=exc
             ordered=sorted(elapsed)

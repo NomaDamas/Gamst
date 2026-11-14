@@ -79,3 +79,24 @@ class Replay(unittest.IsolatedAsyncioTestCase):
         rows=[json.loads(line) for line in (root/'cancelled.jsonl').read_text().splitlines()]
         self.assertEqual(rows[-1]['status'],'failed');self.assertEqual(rows[-1]['error_type'],'CancelledError')
         self.assertEqual(rows[-1]['completed_observations'],0)
+
+    async def test_cancellation_first_arriving_during_cleanup_remains_failed(self):
+        from humansense import ProcessProvider
+        root,path,m=self.assets()
+        original=ProcessProvider.close
+        for count in (1,4):
+            entered=asyncio.Event();release=asyncio.Event();children=[]
+            async def delayed_close(provider):
+                children.append(provider._process);entered.set()
+                await release.wait();await original(provider)
+            out=root/('cleanup-cancel-'+str(count)+'.jsonl')
+            with patch.object(ProcessProvider,'close',delayed_close):
+                task=asyncio.create_task(replay(path,out))
+                await asyncio.wait_for(entered.wait(),5)
+                for _ in range(count):task.cancel();await asyncio.sleep(0)
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):await task
+            self.assertTrue(all(child.returncode is not None for child in children))
+            rows=[json.loads(line) for line in out.read_text().splitlines()]
+            self.assertEqual(rows[-1]['completed_observations'],3)
+            self.assertEqual(rows[-1]['status'],'failed');self.assertEqual(rows[-1]['error_type'],'CancelledError')
