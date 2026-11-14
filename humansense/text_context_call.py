@@ -36,13 +36,13 @@ class TextContextCalls:
 
     async def __aexit__(self,*args):await self.close()
 
-    def _prepare(self,request_id,record,question):
+    def _prepare(self,request_id,record,question,*,routes=('text_llm',)):
         record=bounded_json(record,max_bytes=131072)
         if type(question) is not str or not question.strip() or len(question.encode())>4096:
             raise ValueError('nonempty question must be at most 4096 UTF-8 bytes')
         pending=next((r for r in self.controller.snapshot()['requests'] if r['id']==request_id),None)
-        if pending is None or pending['state']!='pending' or pending['decision']['desired_route']!='text_llm':
-            raise ValueError('pending text_llm request required')
+        if pending is None or pending['state']!='pending' or pending['decision']['desired_route'] not in routes:
+            raise ValueError('pending request for the selected route required')
         evidence=pending['decision']['evidence']
         if _digest(record)!=evidence['record_sha256']:
             raise ValueError('record differs from retained request evidence')
@@ -95,6 +95,12 @@ class TextContextCalls:
         if self._closed:raise RuntimeError('adapter closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
         request,evidence=self._prepare(request_id,record,question)
+        return await self._start(request_id,request,evidence,maximum_charge,ttl_ms)
+
+    async def _start(self,request_id,request,evidence,maximum_charge,ttl_ms):
+        self.human._check()
+        if self._closed:raise RuntimeError('adapter closed')
+        if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
         task=asyncio.create_task(self._execute(request_id,request,evidence,maximum_charge,ttl_ms))
         self._active=task
         try:return await asyncio.shield(task)
