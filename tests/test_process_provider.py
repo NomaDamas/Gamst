@@ -62,6 +62,9 @@ class Wire(unittest.TestCase):
             self.assertEqual(restored.sensor.channels, ('left', 'right'))
         with self.assertRaises(ValueError):
             encode_frame(frame(np.array([object()], dtype=object)))
+        for data in (np.ma.array([1],mask=True,dtype=np.uint8),np.matrix([[1]],dtype=np.uint8)):
+            with self.assertRaisesRegex(ValueError,'plain ndarray'):
+                encode_frame(frame(data))
 
 
 class Processes(unittest.IsolatedAsyncioTestCase):

@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'orbslam3.monocular':
+        from .providers.orbslam_context import ORBSLAMContext
+        return ORBSLAMContext.capability(**config)
     if profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
         return SmolVLMContext.capability(**config)

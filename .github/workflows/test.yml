@@ -29,6 +29,7 @@ jobs:
       - run: python -c "import cv2, numpy; print(cv2.__version__, numpy.__version__)"
       - run: c++ --version
       - run: python -m unittest discover -s tests -p test_orbslam_native.py -v
+      - run: python -m unittest discover -s tests -p test_orbslam_context.py -v
       - run: python -m unittest discover -s tests -p test_motion_provider.py -v
       - run: python -m unittest discover -s tests -p test_openeb.py -v
       - run: python -m unittest discover -s tests -p test_openeb_process.py -v

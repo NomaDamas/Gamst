@@ -1,6 +1,6 @@
 # ORB-SLAM3 native ABI — software slice
 
-This private binding is not yet a registered gamst Context provider. It is the
+This private binding underlies the [owned camera-pose Context provider](orbslam-context.md). It is the
 first slice of [#186](https://github.com/NomaDamas/Gamst/issues/186), tracked by
 [#191](https://github.com/NomaDamas/Gamst/issues/191). Family6 remains incomplete.
 No trained vocabulary, upstream runtime or camera dataset is installed here.
@@ -13,7 +13,8 @@ may load it (`GAMST_PROVIDER_WORKER=1`). That environment marker is a misuse gua
 not a security sandbox. Do not load it in an application/server process. Upstream
 can terminate the process on invalid native inputs or block during shutdown;
 a supervising worker must enforce deadlines and reap only its own child. The
-registered provider and its supervision integration are still required in #186.
+registered provider uses ProcessProvider supervision; actual native acceptance
+remains required in #186.
 
 There is one native construction per process, including failed construction.
 `close()` is idempotent in Python; reset does not replenish the lifetime frame
