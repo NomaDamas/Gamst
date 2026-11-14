@@ -487,3 +487,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Call admission diagnostics](docs/call-admission.md): desired/reserved/dispatched routes, bounded denial outcomes, provider provenance and unresolved semantic coverage.
 
 [Controller lifecycle replay](docs/controller-replay.md): isolated synthetic policy/accounting traces and frozen paired-collector integration; not model-quality or cost evidence.
+
+[Itemized cost evaluation](docs/itemized-costs.md): frozen multi-provider rates, cache/media/local charges and trace-bound quantities for full-pipeline cost comparisons.

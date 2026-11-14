@@ -96,6 +96,31 @@ class Evidence(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row['resource_cost']==1 for row in result['rows']))
         self.assertFalse(result['comparison']['meets_numeric_gates'])
 
+    async def test_itemized_join_binds_all_rates_and_failed_call_charges(self):
+        from test_itemized_costs import itemized
+        plan=copy.deepcopy(self.plan); plan['cost']=itemized()[0]['cost']; digest=plan_digest(plan)
+        complete=await run(plan,self.inputs,Path(self.directory.name).resolve()/'itemized',expected_plan_sha256=digest)
+        traces=list(read_traces(Path(self.directory.name).resolve()/'itemized/source-traces.jsonl'))
+        assessment=copy.deepcopy(self.assessment)
+        assessment.update(plan_sha256=digest,last_trace_sha256=complete['last_trace_sha256'])
+        for entry,trace in zip(assessment['entries'],traces):
+            entry['trace_sha256']=trace['trace_sha256']
+            entry['cost_quantities']={key:1 for key in plan['cost']['rate_card']}
+        args=dict(plan=plan,traces=traces,completion=complete,assessment=assessment,
+                  expected_plan_sha256=digest,expected_trace_sha256=complete['last_trace_sha256'])
+        result=self.joined(**args,expected_assessment_sha256=plan_digest(assessment))
+        self.assertTrue(any(t['status']!='success' for t in traces))
+        self.assertTrue(all(row['cost_quantities']['request']==1 for row in result['rows']))
+        self.assertFalse(result['comparison']['meets_numeric_gates'])
+        original=copy.deepcopy(assessment)
+        del assessment['entries'][0]['cost_quantities']['local']
+        with self.assertRaises(ValueError):
+            self.joined(**args,expected_assessment_sha256=plan_digest(assessment))
+        assessment.clear();assessment.update(copy.deepcopy(original))
+        assessment['entries'][0]['cost_quantities']['request']=2
+        with self.assertRaises(ValueError):
+            self.joined(**args,expected_assessment_sha256=plan_digest(original))
+
     async def test_failed_answers_cannot_receive_quality_or_critical_fact_credit(self):
         failed=next(i for i,t in enumerate(self.traces) if t['status']!='success')
         for update in ({'quality_score':.5},{'correct_critical_facts':['fact']}):
