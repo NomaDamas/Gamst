@@ -43,7 +43,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_beamforming.py -v
       - run: python -m unittest discover -s tests -p test_duplex.py -v
       - run: python -m unittest discover -s tests -p test_piv.py -v
-      - run: python -m unittest discover -s tests -p test_fill.py -v
+      - run: python -m unittest discover -s tests -p 'test_fill*.py' -v
       - run: python -m unittest discover -s tests -p test_vocal_expression.py -v
       - run: python -m unittest discover -s tests -p test_speaking_rate.py -v
       - run: python -m unittest discover -s tests -p test_diarization.py -v
