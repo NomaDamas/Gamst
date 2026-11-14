@@ -72,9 +72,8 @@ asyncio.run(main())
 '''
 
 
-def setup(root,mode='ok',script=SCRIPT):
+def setup(root,mode='ok',script=SCRIPT,*,provider='test.client',revision='v1',extra_input=None,timeout_ms=3000):
     plan,spec,inputs,stream,reconciliation=fixture(root)
-    provider,revision='test.client','v1'
     if script==SMOL_SCRIPT:
         from humansense.provider_profiles import capability
         from humansense.providers.smolvlm_native import configuration
@@ -82,12 +81,14 @@ def setup(root,mode='ok',script=SCRIPT):
         contract=capability('smolvlm2.500m.local',dict(configuration(CONFIG),window_frames=1))
         provider,revision=contract.provider,contract.version
     plan['comparison']['cost']['rate_card']={'request':dict(provider=provider,revision=revision,unit='request',category='request',per_unit=1)}
-    inputs[0]['input']['mode']=mode;plan['comparison']['tasks'][0]['input_sha256']=plan_digest(inputs[0]['input'])
+    inputs[0]['input']['mode']=mode
+    if extra_input is not None:inputs[0]['input'].update(extra_input)
+    plan['comparison']['tasks'][0]['input_sha256']=plan_digest(inputs[0]['input'])
     path=root/'instrumented-child.py';path.write_text(script)
     python=str(Path(sys.executable).resolve())
     command=dict(argv=[python,str(path)],cwd=str(root),environment={'PYTHONPATH':str(PROJECT)+os.pathsep+str(PROJECT/'tests')},
         artifacts={python:hashlib.sha256(Path(python).read_bytes()).hexdigest(),str(path):hashlib.sha256(path.read_bytes()).hexdigest()})
-    spec['runner'].update(commands={arm:copy.deepcopy(command) for arm in 'ABC'},timeout_ms=3000)
+    spec['runner'].update(commands={arm:copy.deepcopy(command) for arm in 'ABC'},timeout_ms=timeout_ms)
     spec['comparison_plan_sha256']=plan_digest(plan)
     stream.update(comparison_plan_sha256=plan_digest(plan),collection_sha256=plan_digest(spec))
     targets=[];rules=[]
