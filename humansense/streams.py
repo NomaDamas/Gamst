@@ -87,7 +87,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
     def __init__(self, human, *, capacity=2, max_streams=16,
                  max_packet_bytes=4*1024*1024, max_buffer_bytes=64*1024*1024):
         for value, maximum in ((capacity, 64), (max_streams, 64),
-                               (max_packet_bytes, 16*1024*1024), (max_buffer_bytes, 256*1024*1024)):
+                               (max_packet_bytes, 32*1024*1024), (max_buffer_bytes, 256*1024*1024)):
             if type(value) is not int or not 1 <= value <= maximum:
                 raise ValueError('invalid stream resource bound')
         self.manager_id = uuid.uuid4().hex

@@ -27,6 +27,12 @@ class ProcessProvider:
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
                    separation_owner=None, evaluation_observer=None):
+        if profile == 'pg.physical.local':
+            if separation_owner is not None:raise ValueError('PG has no private separation media')
+            if evaluation_observer is not None:
+                raise ValueError('PG canonical worker evaluation instrumentation is unavailable')
+            from .pg_physical_process import PGPhysicalProcess
+            return await PGPhysicalProcess.open(python,config,startup_timeout=startup_timeout,inference_timeout=inference_timeout)
         from .separation_media import PROFILE, PROTOCOL, SeparationMediaOwner
         if profile == PROFILE:
             if type(separation_owner) is not SeparationMediaOwner:
