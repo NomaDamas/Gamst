@@ -2,11 +2,10 @@
 import argparse
 from decimal import Decimal
 from fractions import Fraction
-import json
 from pathlib import Path
 import re
 
-from .paired_replay import _keys, _write_new
+from .paired_replay import _encoded, _keys, _write_new
 from .perception_comparison import _digest, _text, plan_digest
 from .three_arm_comparison import _read, _snapshot
 
@@ -15,6 +14,8 @@ CATEGORIES = ('perception', 'resident_idle', 'startup', 'capture_sensor', 'media
 COUNTERS = ('captured', 'sampled', 'vlm_calls', 'attempted', 'dropped')
 LIMIT = 2**63-1
 MAX_ENTRIES = 10000
+MAX_REPORT_BYTES = 16*1024*1024
+MAX_IDENTIFIER_CHARS = 256
 
 
 def _int(value, label, minimum=0):
@@ -51,6 +52,8 @@ def _list(value, label, maximum=MAX_ENTRIES):
 
 def _identifier(value, label):
     _text(value, label)
+    if len(value) > MAX_IDENTIFIER_CHARS:
+        raise ValueError('identifier/unit label exceeds 256 characters: '+label)
     return value
 
 
@@ -75,8 +78,9 @@ def validate_protocol(protocol, *, expected_protocol_sha256):
     for key, rate in rates.items():
         _identifier(key, 'rate ID')
         _keys(rate, ('provider', 'revision', 'unit', 'per_unit'), 'rate')
-        for field in ('provider', 'revision', 'unit'):
+        for field in ('provider', 'revision'):
             _text(rate[field], field)
+        _identifier(rate['unit'], 'rate unit')
         price = rate['per_unit']
         if (type(price) is not str or len(price) > 64 or
                 re.fullmatch(r'(0|[1-9][0-9]*)(\.[0-9]+)?', price) is None):
@@ -90,7 +94,7 @@ def validate_protocol(protocol, *, expected_protocol_sha256):
             raise ValueError('unique component and supported category required')
         if component['kind'] not in ('monetary', 'proxy') or component['coverage'] not in ('interval', 'event'):
             raise ValueError('explicit component kind/coverage required')
-        _text(component['unit'], 'component unit'); _text(component['source_unit'], 'source unit')
+        _identifier(component['unit'], 'component unit'); _identifier(component['source_unit'], 'source unit')
         conversion = component['atomic_per_source']
         _keys(conversion, ('numerator', 'denominator'), 'atomic conversion')
         _int(conversion['numerator'], 'conversion numerator', 1)
@@ -106,6 +110,7 @@ def validate_protocol(protocol, *, expected_protocol_sha256):
     if categories != set(CATEGORIES):
         raise ValueError('declare every required boundary category, including not-applicable components')
     streams, namespaces, resources = {}, {}, {}
+    declared_lanes = 0
     for stream in _list(protocol['streams'], 'streams', 1000):
         _keys(stream, ('id', 'arm', 'recording_sha256', 'clock_domain', 'requested_duration_ns',
             'execution_namespace', 'cache_namespace', 'isolation_evidence_sha256', 'sources', 'requirements'), 'stream')
@@ -141,6 +146,9 @@ def validate_protocol(protocol, *, expected_protocol_sha256):
                 raise ValueError('explicit component requirement required')
             _text(requirement['reason'], 'requirement reason')
             lanes = _list(requirement['lanes'], 'resource lanes', 256)
+            declared_lanes += len(lanes)
+            if declared_lanes > MAX_ENTRIES:
+                raise ValueError('total declared resource lanes exceed 10000')
             if bool(lanes) != (requirement['state'] == 'required'):
                 raise ValueError('required components need lanes; not-applicable components have none')
             seen = set()
@@ -182,10 +190,13 @@ def evaluate(protocol, ledger, *, expected_protocol_sha256, expected_ledger_sha2
     _text(ledger['reviewer'], 'reviewer'); _digest(ledger['source_evidence_sha256'])
     frozen = {s['id']: s for s in protocol['streams']}
     components = {c['id']: c for c in protocol['components']}
-    observations, reports, issues = {}, {}, []
+    observations, reports, issues = {}, {}, {}
     entry_count = 0
     def incomplete(sid, reason):
-        issues.append(dict(stream_id=sid, reason=reason))
+        key = (sid, reason)
+        if key not in issues:
+            issues[key] = dict(stream_id=sid, reason=reason, occurrences=0)
+        issues[key]['occurrences'] += 1
     for stream in _list(ledger['streams'], 'observed streams', 1000):
         _keys(stream, ('id', 'clock_domain', 'start_ns', 'end_ns', 'utc_anchor', 'availability', 'counters'), 'observed stream')
         sid = stream['id']
@@ -375,7 +386,7 @@ def evaluate(protocol, ledger, *, expected_protocol_sha256, expected_ledger_sha2
                     incomplete(sid, 'unmeasured resource interval: '+cid)
         report = reports[sid]
         report['known_rate_derived_atomic'] = _ratio(rate_totals[sid])
-        report['complete_accounting'] = not any(i['stream_id'] == sid for i in issues)
+        report['complete_accounting'] = not any(i['stream_id'] == sid for i in issues.values())
         report['known_subtotal_per_elapsed_hour'] = _ratio(Fraction(report['known_monetary_atomic']*3600*10**9, report['elapsed_ns']))
         report['declared_complete_cost_per_elapsed_hour'] = (report['known_subtotal_per_elapsed_hour'] if report['complete_accounting'] else None)
         report['known_proxy_per_elapsed_hour'] = {unit:_ratio(Fraction(q*3600*10**9, report['elapsed_ns']))
@@ -384,10 +395,10 @@ def evaluate(protocol, ledger, *, expected_protocol_sha256, expected_ledger_sha2
     for sid, report in reports.items():
         arm = canonical[report['arm']]
         arm['stream_ids'].append(sid); arm['known_monetary_atomic'] += report['known_monetary_atomic']
-    return dict(schema_version=1, protocol_sha256=expected_protocol_sha256, ledger_sha256=expected_ledger_sha256,
+    result = dict(schema_version=1, protocol_sha256=expected_protocol_sha256, ledger_sha256=expected_ledger_sha256,
         comparison_plan_sha256=protocol['comparison_plan_sha256'], collection_sha256=protocol['collection_sha256'],
         currency=protocol['currency'], currency_unit=protocol['currency_unit'], rate_revision=protocol['rate_revision'],
-        streams=reports, canonical_arms=canonical, incomplete_reasons=issues,
+        streams=reports, canonical_arms=canonical, incomplete_reasons=list(issues.values()),
         declared_accounting_complete=not issues, structural_hash_integrity_verified=True,
         receipt_authenticity_verified=False, measurement_truth_verified=False, isolation_verified=False,
         instrumentation_coverage_verified=False, whole_pipeline_cost_verified=False,
@@ -395,6 +406,11 @@ def evaluate(protocol, ledger, *, expected_protocol_sha256, expected_ledger_sha2
         certification='Frozen declarations and exact observed-ledger arithmetic only. Declared completeness is not '
         'proof of whole-pipeline measurement, provider authenticity, isolation, real inference or missing-call coverage. '
         'No allocation or daily extrapolation is performed; task numerical gates are unchanged.')
+    # Bound compact bytes including the newline used by both output artifacts and stdout.
+    # Never truncate reasons or suppress incomplete state to fit the bound.
+    if len(_encoded(result)) + 1 > MAX_REPORT_BYTES:
+        raise ValueError('serialized stream report exceeds 16 MiB')
+    return result
 
 
 def main():
@@ -406,7 +422,7 @@ def main():
                       expected_ledger_sha256=args.ledger_sha256)
     output = Path(args.output); output.mkdir(mode=0o700, parents=False, exist_ok=False)
     _write_new(output/'report.json', result)
-    print(json.dumps(result, indent=2, allow_nan=False))
+    print(_encoded(result).decode('ascii'))
 
 
 if __name__ == '__main__':

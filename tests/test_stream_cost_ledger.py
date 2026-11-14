@@ -5,6 +5,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from benchmarks.paired_replay import _encoded
 
 from benchmarks.perception_comparison import plan_digest
 from benchmarks.stream_cost_ledger import CATEGORIES, COUNTERS, evaluate
@@ -282,6 +285,8 @@ class StreamCostLedger(unittest.TestCase):
             self.assertEqual(run.returncode,0,run.stderr)
             self.assertEqual(json.loads((output/'report.json').read_text()),self.evaluate())
             before=(output/'report.json').read_bytes()
+            self.assertEqual(run.stdout.encode('ascii'),before)
+            self.assertLessEqual(len(before),16*1024*1024)
             self.assertNotEqual(subprocess.run(cmd,capture_output=True,text=True,timeout=20).returncode,0)
             self.assertEqual(before,(output/'report.json').read_bytes())
             self.assertEqual(original,(protocol.read_bytes(),ledger.read_bytes()))
@@ -290,3 +295,98 @@ class StreamCostLedger(unittest.TestCase):
                 result=subprocess.run(command,capture_output=True,text=True,timeout=20)
                 self.assertNotEqual(result.returncode,0)
                 self.assertFalse(bad.exists())
+
+    def test_declared_lane_limit_and_exact_aggregated_incomplete_counts(self):
+        def lane_fixture(count):
+            protocol,ledger=fixture()
+            for component in protocol['components']:
+                component['id']=(component['category']+'-').ljust(256,'x')
+            template=copy.deepcopy(protocol['streams'][0])
+            protocol['streams']=[]
+            for index in range(count):
+                stream=copy.deepcopy(template)
+                stream.update(id='stream-'+str(index),arm='ABC'[index%3],
+                    execution_namespace='exec-'+str(index),cache_namespace='cache-'+str(index))
+                stream['requirements']={component['id']:dict(state='required',reason='All frozen lanes required',
+                    lanes=[dict(resource_id='resource-'+str(index),lane_id=str(ci)+'-'+str(li)) for li in range(256)])
+                    for ci,component in enumerate(protocol['components'])}
+                protocol['streams'].append(stream)
+            ledger['entries']=[]
+            for index,observed in enumerate(ledger['streams']):
+                observed['id']='stream-'+str(index)
+                observed['clock_domain']=template['clock_domain']
+            return protocol,ledger
+        protocol,ledger=lane_fixture(3)
+        result=self.evaluate(protocol,ledger)
+        self.assertFalse(result['declared_accounting_complete'])
+        self.assertEqual(len(result['incomplete_reasons']),30)
+        self.assertTrue(all(reason['occurrences']==256 for reason in result['incomplete_reasons']))
+        self.assertEqual(sum(reason['occurrences'] for reason in result['incomplete_reasons']),7680)
+        self.assertEqual(len({(i['stream_id'],i['reason']) for i in result['incomplete_reasons']}),30)
+        self.assertLess(len(_encoded(result))+1,100_000)
+        protocol,ledger=lane_fixture(4)
+        with self.assertRaisesRegex(ValueError,'lanes'):
+            self.evaluate(protocol,ledger)
+
+    def test_identifier_and_unit_label_bounds(self):
+        for field in ('unit','source_unit'):
+            protocol=copy.deepcopy(self.protocol);protocol['components'][3][field]='x'*257
+            with self.subTest(field=field),self.assertRaises(ValueError):self.evaluate(protocol=protocol)
+        for field in ('id','execution_namespace','cache_namespace'):
+            protocol=copy.deepcopy(self.protocol);protocol['streams'][0][field]='x'*257
+            with self.subTest(field=field),self.assertRaises(ValueError):self.evaluate(protocol=protocol)
+        protocol=copy.deepcopy(self.protocol);protocol['streams'][0]['sources'][0]['id']='x'*257
+        with self.assertRaises(ValueError):self.evaluate(protocol=protocol)
+        protocol=copy.deepcopy(self.protocol);protocol['rates']['cpu']['unit']='x'*257
+        with self.assertRaises(ValueError):self.evaluate(protocol=protocol)
+
+    def test_report_bound_includes_compact_newline(self):
+        size=len(_encoded(self.evaluate()))+1
+        with patch('benchmarks.stream_cost_ledger.MAX_REPORT_BYTES',size):
+            self.assertTrue(self.evaluate()['declared_accounting_complete'])
+        with patch('benchmarks.stream_cost_ledger.MAX_REPORT_BYTES',size-1):
+            with self.assertRaisesRegex(ValueError,'serialized stream report'):
+                self.evaluate()
+
+    def test_actual_output_amplification_rejected_before_cli_output_creation(self):
+        protocol,ledger=fixture()
+        frozen_template=copy.deepcopy(protocol['streams'][0]);observed_template=copy.deepcopy(ledger['streams'][0])
+        protocol['streams']=[];ledger['streams']=[];ledger['entries']=[]
+        source_ids=[('source-'+str(i)+'-').ljust(256,'s') for i in range(9)]
+        for i in range(1000):
+            sid=('stream-'+str(i)+'-').ljust(256,'t')
+            frozen=copy.deepcopy(frozen_template)
+            frozen.update(id=sid,arm='ABC'[i%3],execution_namespace='exec-'+str(i),cache_namespace='cache-'+str(i),
+                sources=[dict(id=source,semantics='captured_only',required_counters=list(COUNTERS)) for source in source_ids])
+            for requirement in frozen['requirements'].values():
+                requirement.update(state='not_applicable',reason='Explicit fixture declaration only',lanes=[])
+            protocol['streams'].append(frozen)
+            observed=copy.deepcopy(observed_template)
+            observed.update(id=sid,availability=[dict(start_ns=100,end_ns=2_000_000_100,state='available',
+                reason='Single complete availability interval',evidence_sha256='8'*64)],
+                counters=[dict(source_id=source,start={key:None for key in COUNTERS},
+                    end={key:None for key in COUNTERS}) for source in source_ids])
+            ledger['streams'].append(observed)
+        ledger['protocol_sha256']=plan_digest(protocol)
+        protocol_bytes=_encoded(protocol);ledger_bytes=_encoded(ledger)
+        self.assertLess(len(protocol_bytes)+1,16*1024*1024)
+        self.assertLess(len(ledger_bytes)+1,16*1024*1024)
+        self.assertEqual(sum(len(s['availability'])+len(s['counters']) for s in ledger['streams']),10000)
+        # The artifacts are independently within input bounds. Forty-five thousand
+        # distinct unknown-counter reasons still amplify the report past 16 MiB.
+        args=dict(expected_protocol_sha256=plan_digest(protocol),expected_ledger_sha256=plan_digest(ledger))
+        with self.assertRaisesRegex(ValueError,'serialized stream report exceeds 16 MiB'):
+            evaluate(protocol,ledger,**args)
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory);pp=root/'protocol.json';lp=root/'ledger.json';out=root/'out'
+            pp.write_bytes(protocol_bytes+b'\n');lp.write_bytes(ledger_bytes+b'\n')
+            cmd=[sys.executable,'-m','benchmarks.stream_cost_ledger','--protocol',str(pp),'--ledger',str(lp),
+                 '--protocol-sha256',args['expected_protocol_sha256'],'--ledger-sha256',args['expected_ledger_sha256'],
+                 '--output',str(out)]
+            run=subprocess.run(cmd,capture_output=True,text=True,timeout=60)
+            self.assertNotEqual(run.returncode,0)
+            self.assertIn('serialized stream report exceeds 16 MiB',run.stderr)
+            self.assertFalse(out.exists())
+            self.assertEqual(run.stdout,'')
+            self.assertEqual(pp.read_bytes(),protocol_bytes+b'\n')
+            self.assertEqual(lp.read_bytes(),ledger_bytes+b'\n')

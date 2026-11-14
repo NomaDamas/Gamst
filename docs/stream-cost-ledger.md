@@ -55,3 +55,13 @@ Per stream, the report includes actual elapsed and available/unavailable/unknown
 `declared_accounting_complete` and each stream's `complete_accounting` mean only completeness against this frozen declaration. They do not establish that it is an adequate real-world boundary. `structural_hash_integrity_verified` means the supplied frozen artifacts and structural checks match. `receipt_authenticity_verified`, `measurement_truth_verified`, `isolation_verified`, `instrumentation_coverage_verified`, and `whole_pipeline_cost_verified` remain false. `actual_acceptance` always remains `incomplete`; `allocation_implemented` is false.
 
 Each input is bounded to 16 MiB, with at most 1,000 streams, 256 components/rates/sources/lanes per relevant declaration, and 10,000 combined availability, counter and cost entries. Integer inputs are in `[0, 2^63−1]`, with positive denominators; exact intermediate rationals are bounded to 256-bit numerators/denominators. JSON duplicate keys, nonfinite values, booleans in integer fields and extra fields are rejected. APIs detach inputs before validation. Unknown required components, missing cost coverage, pending bills or unreconciled rounding produce explicit incomplete reports; malformed identities, partitions, duplicate charge lines and invalid quantities fail closed.
+
+Resource declarations also have a global 10,000-lane limit. IDs and unit labels
+are limited to 256 characters. Repeated incompleteness findings for the same
+stream and reason/component are aggregated with an exact `occurrences` count;
+for coverage gaps this counts deficient interval segments, not inferred lost
+frames. Each affected component remains visible, and the frozen protocol retains
+its resource-lane identities for audit. Diagnostics are never silently dropped.
+The complete compact JSON report, including its final newline, is limited to
+16 MiB before either API return or CLI output creation. Oversized reports fail
+closed. Both `report.json` and CLI stdout use that same bounded compact encoding.
