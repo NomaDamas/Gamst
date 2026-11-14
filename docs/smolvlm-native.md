@@ -85,7 +85,8 @@ calibrated certainty scores and no claim of measured physical quantities.
 `python -m unittest discover -s tests -p test_smolvlm_native.py -v` checks
 configuration, bounded local assets and optional-runtime isolation. In the
 pinned CI environment it additionally constructs the full500M architecture on
-meta (no weights), runs an actually executed **tiny untrained SmolVLM** with a
+meta (no weights), compares all489tensor keys/shapes to the pinned official
+safetensors header metadata (no tensor data downloaded), runs an actually executed **tiny untrained SmolVLM** with a
 generated tokenizer, tests the shared strict safetensors loader, RGB processing,
 image-token counts, greedy reference parity, repeated-call cache isolation,
 input bounds and malformed weights. This is algorithm/processor evidence,

@@ -1,4 +1,5 @@
 import hashlib
+import json
 from importlib.metadata import version,PackageNotFoundError
 from pathlib import Path
 import subprocess
@@ -50,6 +51,9 @@ class Native(unittest.TestCase):
         previous=torch.get_num_threads();self.addCleanup(torch.set_num_threads,previous);torch.set_num_threads(1)
         # Full production architecture is materialized on meta only; no trained weights.
         with torch.device('meta'):full=SmolVLMForConditionalGeneration(model_config(SmolVLMConfig))
+        header=json.loads((Path(__file__).parent/'fixtures/smolvlm_500m_header.json').read_text())
+        self.assertEqual({k:list(v.shape) for k,v in full.state_dict().items()},
+                         {k:v['shape'] for k,v in header['tensors'].items()})
         self.assertTrue(450_000_000<sum(p.numel() for p in full.parameters())<550_000_000)
         del full
         vocab={'fixture_'+str(i):i for i in range(49280)}
