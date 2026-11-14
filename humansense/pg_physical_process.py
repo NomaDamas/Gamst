@@ -47,6 +47,7 @@ class PGPhysicalProcess:
             raise ValueError('inference timeout must be0.01..600s')
         config=configuration(config);self=cls();self.config=config;self.spec=capability(config)
         self.timeout=inference_timeout;self.closed=False;self._busy=False;self._sequence=0
+        self._operation=None;self._close_task=None
         self._epoch=uuid.uuid4().hex;self._reset_generation=0;self._states=OrderedDict();self._owner=None
         self._native=await PGCanonicalProcess.open(python,config['graph'],config['graph_sha'],config['lock'],config['lock_sha'],
             config['canonical'],config['canonical_sha'],stage_root=config['stage_root'],startup_timeout=startup_timeout,generation=config['generation'])
@@ -62,9 +63,22 @@ class PGPhysicalProcess:
         if self.closed:raise RuntimeError('PG provider closed')
         return None
 
+    async def _close(self):
+        operation=self._operation
+        if operation is not None and not operation.done():operation.cancel()
+        try:await self._native.close()
+        finally:
+            if operation is not None:await _drain(operation)
+            if self._operation is operation:self._busy=False;self._operation=None
+
     async def close(self):
+        if asyncio.current_task() is self._operation:raise RuntimeError('PG operation cannot close itself')
         self.closed=True;self._reset_generation+=1;self._states.clear()
-        await self._native.close()
+        if self._close_task is None:self._close_task=asyncio.create_task(self._close())
+        try:await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            await _finish(self._close_task)
+            raise
 
     def _capture(self,frame):
         if not isinstance(frame,InputFrame) or frame.modality!='video' or frame.sample_rate is not None or not isinstance(frame.sensor,SensorMetadata):
@@ -114,7 +128,20 @@ class PGPhysicalProcess:
         if self._busy:raise RuntimeError('PG accepts one in-flight request, no queue')
         # Admission and ownership are synchronous up to task creation.
         header,payload=self._capture(frame);key=self._admit(header);generation=self._reset_generation
-        self._busy=True;task=None
+        self._busy=True
+        operation=asyncio.create_task(self._process_owned(header,payload,key,generation))
+        self._operation=operation
+        try:return await asyncio.shield(operation)
+        except asyncio.CancelledError as initial:
+            operation.cancel()
+            try:await _finish(asyncio.create_task(self.close()))
+            except BaseException as cleanup:raise initial from cleanup
+            raise
+        finally:
+            if self._operation is operation and operation.done():self._operation=None;self._busy=False
+
+    async def _process_owned(self,header,payload,key,generation):
+        task=None
         try:
             loop=asyncio.get_running_loop();deadline=loop.time()+self.timeout
             task=asyncio.create_task(self._exchange(header,payload))
@@ -130,7 +157,8 @@ class PGPhysicalProcess:
         except BaseException as initial:
             # A partial write/read/protocol error poisons the only worker. Reap
             # before completing cancellation; late bytes cannot serve a new call.
-            try:await _finish(asyncio.create_task(self.close()))
+            self.closed=True;self._reset_generation+=1;self._states.clear()
+            try:await _finish(asyncio.create_task(self._native.close()))
             except BaseException as cleanup:raise initial from cleanup
             finally:
                 if task is not None:

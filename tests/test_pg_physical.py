@@ -81,6 +81,25 @@ class Contract(unittest.TestCase):
             with self.assertRaises(ValueError):validate_result(row,'transparency',execution)
             self.assertEqual(capability(cfg).streaming_mode,'frame')
 
+    def test_mutating_caller_crop_after_snapshot_cannot_change_owned_packet(self):
+        import threading
+        import numpy as np
+        from humansense import pg_generation
+        crop=[0,0,8,8];arr=np.zeros((8,8,3),np.uint8)
+        entered=threading.Event();mutated=threading.Event();original=pg_generation.layout
+        def mutate():
+            if entered.wait(5):crop[:]=[0,0,999,8]+list(range(10000));mutated.set()
+        thread=threading.Thread(target=mutate);thread.start()
+        def checked(shape,owned):
+            self.assertIsNot(owned,crop);entered.set();self.assertTrue(mutated.wait(5))
+            return original(shape,owned)
+        try:
+            with patch('humansense.pg_generation.layout',side_effect=checked):
+                packet=pack_capture(arr,crop,'mass',track_provenance='caller')
+        finally:entered.set();thread.join(5)
+        self.assertFalse(thread.is_alive());head,payload=unpack_capture(packet)
+        self.assertEqual(head['crop'],[0,0,8,8]);self.assertEqual(len(payload),192)
+
 
 @unittest.skipUnless(importlib.util.find_spec('numpy'),'optional numpy')
 class Owned(unittest.IsolatedAsyncioTestCase):
@@ -162,6 +181,39 @@ class Owned(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(owner.closed);self.assertEqual(owner._sequence,0)
             finally:await owner.close()
             self.assertIsNotNone(child.returncode)
+
+    async def test_external_close_joins_owned_operation_and_repeated_cancellation(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            cfg=config(Path(temp).resolve());owner,child=await self.opened(cfg,'hang')
+            caller=asyncio.create_task(owner.process(frame()))
+            await asyncio.wait_for(child.stderr.readexactly(1),10)
+            operation=owner._operation
+            closing=asyncio.create_task(owner.close())
+            # Wait on the actual owned close start, not an arbitrary delay.
+            while owner._close_task is None:await asyncio.sleep(0)
+            closing.cancel();closing.cancel()
+            with self.assertRaises(asyncio.CancelledError):await closing
+            self.assertTrue(operation.done());self.assertFalse(owner._busy)
+            self.assertTrue(owner._close_task.done());self.assertIsNotNone(child.returncode)
+            self.assertTrue(child._transport.is_closing())
+            with self.assertRaises(asyncio.CancelledError):await caller
+            await owner.close();self.assertIsNone(owner._operation)
+            self.assertEqual(list(Path(cfg['stage_root']).iterdir()),[])
+
+    async def test_cancel_before_owned_operation_first_step_still_reaps(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            cfg=config(Path(temp).resolve());owner,child=await self.opened(cfg,'hang')
+            real=asyncio.shield;hooked=[]
+            def shield(task):
+                if task is owner._operation and not hooked:
+                    hooked.append(True);task.cancel();asyncio.current_task().cancel()
+                return real(task)
+            with patch('humansense.pg_physical_process.asyncio.shield',side_effect=shield):
+                caller=asyncio.create_task(owner.process(frame()))
+                with self.assertRaises(asyncio.CancelledError):await caller
+            self.assertEqual(hooked,[True]);self.assertTrue(owner.closed);self.assertFalse(owner._busy)
+            self.assertIsNone(owner._operation);self.assertIsNotNone(child.returncode)
+            self.assertEqual(list(Path(cfg['stage_root']).iterdir()),[])
 
     async def test_state_subject_cap_gap_and_epoch_reset(self):
         from dataclasses import replace

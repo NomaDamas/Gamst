@@ -146,6 +146,11 @@ def pack_capture(pixels,crop,concept,*,track_provenance):
     import struct
     from .capabilities import identifier
     if type(pixels) is not np.ndarray or pixels.dtype!=np.uint8:raise ValueError('plain uint8 RGB array required')
+    if type(crop) not in (list,tuple) or len(crop)!=4:raise ValueError('bounded plain four-coordinate crop required')
+    # Snapshot only four positions before any validating or pixel-copy work.
+    # Never copy/serialize a caller list again after a GIL-releasing operation.
+    try:crop=[crop[index] for index in range(4)]
+    except IndexError as error:raise ValueError('crop changed during ownership transfer') from error
     shape=list(pixels.shape);layout(shape,crop)
     if type(concept) is not str or concept not in ANSWERS:raise ValueError('supported physical concept required')
     identifier(track_provenance)
