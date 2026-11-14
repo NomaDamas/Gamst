@@ -39,6 +39,63 @@ class VisualContext(unittest.TestCase):
             self.context.process(replace(self.packet,timestamp_ms=2001))
         self.assertFalse(hasattr(self.backend,'visual'))
 
+    def test_new_visual_ids_with_regressed_time_never_reach_backend(self):
+        source=windows.Window();source.setUp();f=source.fixture
+        policy=visual_policy(unpack_visual_packet(f.packet().data)[0])
+        backend=Backend();context=SAMAudioContext(backend,dict(audio.CONFIG,prompt='',visual_policy=policy))
+        try:
+            context.process(f.packet())
+            old=backend.visual
+            f.audio=replace(f.audio,timestamp_ms=2040,sensor=replace(f.audio.sensor,sequence=2))
+            f.kw['sequences']=list(range(20,30))
+            f.kw['visual_sensor']=replace(f.kw['visual_sensor'],capture_sequence=20)
+            f.kw['intervals_us']=[[a+40000,b+40000] for a,b in f.kw['intervals_us']]
+            with self.assertRaisesRegex(ValueError,'time regressed'):context.process(f.packet())
+            self.assertIs(backend.visual,old)
+        finally:context.close()
+
+    def test_clock_provenance_and_maximum_shape_wire_budget(self):
+        import json
+        from humansense.provider_wire import encode_frame,envelope,parse_header
+        from humansense.separation_media import request_binding,pack_pair
+        from humansense.separation_metadata import _visual
+        np=windows.fixtures.np
+        source=windows.Window();source.setUp();f=source.fixture
+        name='x'*128
+        end=9007199250000
+        f.audio=replace(f.audio,data=np.full(192000,.125,dtype=np.float32),
+            timestamp_ms=end,subject_id=name,sensor=replace(f.audio.sensor,
+            source_id=name,sensor_id=name,coordinate_frame=name,calibration_id=name,stream_epoch=name))
+        f.rgb=np.zeros((128,3,16,16),dtype=np.uint8);f.masks=np.zeros((128,1,16,16),dtype=np.uint8)
+        start=end*1000-4000000
+        f.kw['intervals_us']=[[start+i*31250-1,start+i*31250-1] for i in range(128)]
+        f.kw['sequences']=list(range(128))
+        f.kw['visual_sensor']=replace(f.kw['visual_sensor'],source_id=name,sensor_id=name,
+            coordinate_frame=name,calibration_id=name,stream_epoch=name,capture_sequence=0)
+        for key in ('audio_clock_id','camera_clock_id','alignment_id'):f.kw['clock'][key]=name
+        f.kw['clock']['clock_error_us']=1
+        packet=f.packet();policy=visual_policy(unpack_visual_packet(packet.data)[0])
+        backend=Backend();backend.hop_length=375
+        backend.visual_parameters=lambda:dict(image_size=16,batch_size=64)
+        config=dict(audio.CONFIG,prompt='',anchors=[['+',i/8,(i+1)/8] for i in range(32)],visual_policy=policy)
+        context=SAMAudioContext(backend,config)
+        try:
+            pair=context.process(packet)
+            visual=pair.observation['prompt']['visual']
+            self.assertEqual(visual['clock'],policy['clock'])
+            self.assertEqual(visual['age_reference'],'nominal-mapped-exposure-end')
+            self.assertEqual(visual['feature_frames'],512)
+            bad=dict(visual,clock=dict(visual['clock'],clock_error_us=True))
+            with self.assertRaises(ValueError):_visual(bad)
+            binding=request_binding(*encode_frame(packet),config=config,generation=2**63-1,
+                owner_revision=2**63-1,config_id=context.spec.version)
+            observation,media,payload=pack_pair(pair,binding,context.spec)
+            wire=envelope(dict(id=2**63-1,ok=True,result=observation,separation=media),payload)
+            n=int.from_bytes(wire[:4],'big')
+            parsed=parse_header(wire[8:8+n])
+            self.assertEqual(parsed['result']['prompt']['visual'],visual)
+        finally:context.close()
+
     def test_reset_clears_both_histories(self):
         self.context.process(self.packet)
         self.context.reset()

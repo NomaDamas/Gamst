@@ -87,6 +87,17 @@ def _media(value):
     return _object(value, fields, required=fields)
 
 
+def _visual_clock(value):
+    def identity(v):
+        identifier(v)
+        return True
+    fields=dict(audio_clock_id=identity,camera_clock_id=identity,alignment_id=identity,
+        camera_to_audio_offset_us=_integer(-(2**53-1),2**53-1),
+        clock_error_us=_integer(0,250000),max_age_us=_integer(1,250000))
+    _object(value,fields,required=fields)
+    return value['clock_error_us']<=value['max_age_us']
+
+
 def _visual(value):
     def integer_list(v,low,high,limit):
         return type(v) is list and 1<=len(v)<=limit and all(_integer(low,high)(x) for x in v)
@@ -100,6 +111,7 @@ def _visual(value):
         original_frames=_integer(1,128),feature_frames=_integer(1,512),
         image_size=_integer(16,1024),encoder_batch_size=_integer(1,64),
         mask_polarity=_enum('zero-kept'),alignment=_enum('latest-certain-past'),
+        clock=_visual_clock,age_reference=_enum('nominal-mapped-exposure-end'),
         clock_verified=_enum(False),track_identity_verified=_enum(False))
     _object(value,fields,required=fields)
     if (len(value['original_intervals_us'])!=value['original_frames'] or

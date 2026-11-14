@@ -18,6 +18,7 @@ class PreparedVisual:
     mapping_sha256: str
     image_size: int
     batch_size: int
+    clock: tuple
 
     def provenance(self):
         return dict(mapping_sha256=self.mapping_sha256,
@@ -26,6 +27,7 @@ class PreparedVisual:
             original_frames=self.shape[0], feature_frames=len(self.indices),
             image_size=self.image_size, encoder_batch_size=self.batch_size,
             mask_polarity='zero-kept', alignment='latest-certain-past',
+            clock=dict(self.clock), age_reference='nominal-mapped-exposure-end',
             clock_verified=False, track_identity_verified=False)
 
     def arrays(self):
@@ -64,4 +66,4 @@ def prepare_visual(packet, *, policy, sample_count, hop_length, image_size, batc
     digest=hashlib.sha256(canon(mapping).encode()).hexdigest()
     return PreparedVisual(rgb,masks,(len(intervals),3,header['height'],header['width']),
         alignment.indices,tuple(tuple(v) for v in intervals),alignment.ages_sixth_us,
-        digest,image_size,batch_size)
+        digest,image_size,batch_size,tuple(sorted(clock.items())))

@@ -70,3 +70,20 @@ class CaptureHistory(unittest.TestCase):
         fresh=VisualCaptureHistory()
         fresh.commit(fresh.stage(self.advance(10)))
         with self.assertRaises(ValueError): fresh.stage(self.advance(9))
+
+    def test_new_ids_cannot_hide_capture_time_regression(self):
+        self.history.commit(self.history.stage(self.advance(10,10)))
+        for intervals in ([[1040000,1040000],[1140000,1140000]],
+                          [[1900000,1900000],[2000000,2000000]],
+                          [[1899999,1900001],[2000000,2000001]]):
+            changed=self.advance(20)
+            for frame,interval in zip(changed['frames'],intervals):
+                frame['interval_us']=interval
+            with self.assertRaises(ValueError):self.history.stage(changed)
+        # Failed transactions preserve the frontier and valid overlapping IDs.
+        self.history.commit(self.history.stage(self.advance(19)))
+        changed=self.advance(1)
+        changed['visual_sensor']['stream_epoch']='new-clock-epoch'
+        pending=self.history.stage(changed)
+        self.assertEqual(pending.reason,'reconnect')
+        self.history.commit(pending)

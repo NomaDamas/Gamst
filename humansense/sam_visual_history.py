@@ -66,6 +66,11 @@ class VisualCaptureHistory:
                 else:
                     if sequence<=last:
                         raise ValueError('unretained or late original capture cannot be verified')
+                    if last >= 0:
+                        previous_interval = entries[last][0]
+                        interval = fingerprint[0]
+                        if interval[0] < previous_interval[0] or interval[1] <= previous_interval[1]:
+                            raise ValueError('new visual capture time regressed without epoch reset')
                     entries[sequence]=fingerprint
                     last=sequence
             # Old captures outside this bounded retained inventory cannot be

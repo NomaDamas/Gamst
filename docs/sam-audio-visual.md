@@ -106,8 +106,10 @@ cannot authorize visual packets. The owner reserves output media plus twice the
 composite request size before dispatch. This is an ownership budget, not a peak
 process-memory measurement. Cancellation and stream clearing reap the owned
 worker and invalidate reservations and late results. Context and MCP expose
-bounded alignment metadata, original capture intervals, hashes and declared
-uncertainty; they do not contain RGB tensors or inline separated waveforms.
+bounded alignment metadata, original capture intervals, hashes and the frozen
+clock declaration (clock/alignment IDs, offset, error and maximum age).
+`ages_sixth_us` is explicitly nominal age from the mapped exposure end; add
+`6 * clock_error_us` for conservative worst-case age. They do not contain RGB tensors or inline separated waveforms.
 
 ## Recorded replay
 
