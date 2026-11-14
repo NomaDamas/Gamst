@@ -65,3 +65,8 @@ its resource-lane identities for audit. Diagnostics are never silently dropped.
 The complete compact JSON report, including its final newline, is limited to
 16 MiB before either API return or CLI output creation. Oversized reports fail
 closed. Both `report.json` and CLI stdout use that same bounded compact encoding.
+
+[Within-stream allocation](stream-cost-allocation.md) is an additive protocol for
+exact attribution of this ledger's known quantities and billed amounts. It leaves
+original invoices and this ledger validator unchanged; source-attempt and numeric
+integration remain separate work.

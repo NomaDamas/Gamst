@@ -62,4 +62,3 @@ class VerifiedSources(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def remove(self):
         if self in sys.meta_path:
             sys.meta_path.remove(self)
-
