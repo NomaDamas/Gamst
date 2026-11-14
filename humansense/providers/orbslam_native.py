@@ -97,8 +97,15 @@ class ORBSLAMNative:
         # 16px borders, and initializes an octree from rounded width/height.
         # Keep conservative margins rather than passing degenerate grids.
         smallest=min(width,height)/float(values['ORBextractor.scaleFactor'])**(int(values['ORBextractor.nLevels'])-1)
-        if smallest<80 or width<height/2:
+        if smallest<80:
             raise ValueError('camera shape produces a degenerate ORB pyramid/grid')
+        for level in range(int(values['ORBextractor.nLevels'])):
+            scale=float(values['ORBextractor.scaleFactor'])**level
+            # Conservative floor/ceil also covers cvRound's tie behavior.
+            usable_width=math.floor(width/scale)-32
+            usable_height=math.ceil(height/scale)-32
+            if 2*usable_width<=usable_height:
+                raise ValueError('camera shape produces a degenerate ORB octree')
         self._shape=(int(height),int(width))
         self._lock=threading.RLock();self._handle=None
         lib=ctypes.CDLL(library_path);self._lib=lib

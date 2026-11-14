@@ -110,6 +110,8 @@ class Native(unittest.TestCase):
             with self.subTest(old=old):
                 self.settings.write_text(SETTINGS.replace(old,new))
                 with self.assertRaises(ValueError):ORBSLAMNative(**self.args())
+        self.settings.write_text(SETTINGS.replace('Camera.width: 96','Camera.width: 200').replace('Camera.height: 96','Camera.height: 400'))
+        with self.assertRaisesRegex(ValueError,'octree'):ORBSLAMNative(**self.args())
         self.settings.write_text(SETTINGS+'Camera1.k1: 0.0\n')
         with self.assertRaises(ValueError):ORBSLAMNative(**self.args())
         self.settings.write_text(SETTINGS+'Camera1.k1: 0.0\nCamera1.k2: 0.0\nCamera1.p1: 0.0\nCamera1.p2: 0.0\n')

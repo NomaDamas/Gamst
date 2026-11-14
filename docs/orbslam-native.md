@@ -61,8 +61,9 @@ real fields. The wrapper rejects missing/duplicate/unknown fields, atlas filenam
 YAML extensions, incomplete distortion coefficients, nonfinite values and invalid
 bounds. Optional distortion is k1/k2/p1/p2, optionally k3. Input is uint8 grayscale
 matching the calibration dimensions exactly: height32..1080, width32..1920.
-The smallest pyramid level must retain at least80pixels on each axis and width
-must be at least half the height, avoiding degenerate upstream feature grids.
+The smallest pyramid level must retain at least80pixels on each axis. At every
+level, the usable width after feature borders must exceed half the usable height;
+conservative floor/ceil bounds cover rounding and avoid a zero-cell octree.
 No resize, image-based calibration estimation or default camera intrinsics occur.
 
 Extractor limits: features1..5000, levels1..8, scaleFactor1.01..2.0,
