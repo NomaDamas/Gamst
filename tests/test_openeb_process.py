@@ -110,6 +110,22 @@ class Owned(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):await task
             self.assertIsNotNone(self.children[-1].returncode)
 
+    async def test_spawn_completion_and_caller_cancel_preserves_cancellation(self):
+        loop=asyncio.get_running_loop()
+        async def spawn(*args,**kwargs):
+            child=await self.real_spawn(sys.executable,'-u','-c',
+                FAKE.replace('# START_HOOK','time.sleep(60)'),**kwargs)
+            self.children.append(child)
+            # Let the shield see spawn completion, then cancel its waiter in
+            # that same turn. wait_for on Python 3.10 used to swallow this.
+            loop.call_soon(loop.call_soon,task.cancel)
+            return child
+        with patch('asyncio.create_subprocess_exec',spawn):
+            task=asyncio.create_task(OpenEBProcess.open(sys.executable,CONFIG,startup_timeout=.5))
+            with self.assertRaises(asyncio.CancelledError):await task
+        self.assertEqual(len(self.children),1)
+        self.assertIsNotNone(self.children[0].returncode)
+
     async def test_read_timeout_allows_unrelated_async_progress(self):
         code=FAKE.replace('# READ_HOOK','time.sleep(60)')
         with self.fixture(code):
