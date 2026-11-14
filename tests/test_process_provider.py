@@ -87,6 +87,22 @@ class Processes(unittest.IsolatedAsyncioTestCase):
             return process
         return patch('asyncio.create_subprocess_exec', spawn)
 
+    async def test_completed_exchange_does_not_swallow_caller_cancellation(self):
+        with self.fixture():
+            provider=await ProcessProvider.open(sys.executable,'audio.prosody',{})
+            child=self.children[-1]
+            real_exchange=provider._exchange
+            async def exchange(*args):
+                result=await real_exchange(*args)
+                asyncio.get_running_loop().call_soon(task.cancel)
+                return result
+            with patch.object(provider,'_exchange',exchange):
+                task=asyncio.create_task(provider.process(frame()))
+                with self.assertRaises(asyncio.CancelledError):await task
+            self.assertTrue(provider.closed)
+            self.assertIsNotNone(child.returncode)
+            await provider.close()
+
     async def test_cooperative_exit_is_reaped_without_signalling(self):
         # Real children, not mocked wait results: close acknowledgement, EOF
         # and worker-side validation failure all have cooperative exit paths.

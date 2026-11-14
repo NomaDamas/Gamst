@@ -127,10 +127,17 @@ class ProcessProvider:
                 raise RuntimeError('provider worker is closed; explicitly reopen its stream')
             if input_frame is not None:
                 fields['frame'], payload = encode_frame(input_frame)
+            exchange = asyncio.create_task(self._exchange(operation, payload, fields))
             try:
-                return await asyncio.wait_for(self._exchange(operation, payload, fields),
-                                              self.timeout if timeout is None else timeout)
+                # Explicit ownership preserves caller cancellation even when the
+                # response completes in the same loop turn (including Python 3.10).
+                done, _ = await asyncio.wait({exchange}, timeout=self.timeout if timeout is None else timeout)
+                if not done:
+                    raise asyncio.TimeoutError()
+                return exchange.result()
             except BaseException:
+                exchange.cancel()
+                await _finish(asyncio.gather(exchange, return_exceptions=True))
                 await _finish(asyncio.create_task(self._stop()))
                 raise
 

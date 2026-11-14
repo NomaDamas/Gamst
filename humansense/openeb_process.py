@@ -104,7 +104,11 @@ class OpenEBProcess:
         spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','humansense.openeb_capture_worker',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,limit=32768))
         try:
-            self._child=transport._process=await asyncio.wait_for(asyncio.shield(spawn),startup_timeout)
+            # wait_for can lose caller cancellation when its future completes in
+            # the same turn on Python 3.10. Keep spawn ownership until reaped.
+            done,_=await asyncio.wait({spawn},timeout=startup_timeout)
+            if not done:raise asyncio.TimeoutError()
+            self._child=transport._process=spawn.result()
             remaining=deadline-loop.time()
             if remaining<=0:raise asyncio.TimeoutError()
             result,data=await transport._request('start',config=config,timeout=remaining)
