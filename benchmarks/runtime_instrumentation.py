@@ -355,7 +355,7 @@ class _Call(_Ticket):
         self._prompt=prompt;self._evidence=evidence;self._subject=subject
         self._controller=controller;self._request_id=request_id;self._execution=None
         self._predecessor=None;self._relationship='root'
-        self._dispatched=False;self._entered=False;self._invalidated=False
+        self._dispatched=False;self._entry_requested=False;self._entered=False;self._invalidated=False
         self.attempt_id=None;self.instance_id=hashlib.sha256(uuid.uuid4().bytes+uuid.uuid4().bytes).hexdigest()
 
     def _scrub(self):
@@ -376,14 +376,14 @@ class _Call(_Ticket):
         self.session._emit(self,'controller_dispatched',dict(liability='unknown_until_external_billing',execution_sha256=self._execution,predecessor=self._predecessor,relationship=self._relationship))
 
     async def invoke(self,callback):
-        if not self._dispatched or self._entered or self._finished or self._invalidated:
+        if not self._dispatched or self._entry_requested or self._finished or self._invalidated:
             raise RuntimeError('live unique observed dispatch required at backend entry')
         # No await precedes native admission and the immediate callback invocation.
         # Cancellation before this coroutine entry never fabricates a native row.
         self.session._emit(self,'backend_entry_admission',dict(execution_instance_sha256=self.instance_id))
-        self._entered=True;task=asyncio.current_task();self.session._running.add(task)
+        self._entry_requested=True;task=asyncio.current_task();self.session._running.add(task)
         async def call(token):
-            self.attempt_id=token
+            self.attempt_id=token;self._entered=True
             return await callback()
         outcome='error';reported_usage=None
         try:
@@ -400,6 +400,7 @@ class _Call(_Ticket):
             outcome='cancelled';raise
         finally:
             self.session._running.discard(task)
+            if not self._entered:self.session._mark('native_admission_failed_before_callback')
             try:self.session._emit(self,'backend_invocation_finished',dict(status=outcome,attempt_id=self.attempt_id,reported_usage=reported_usage,usage_verified=False))
             except BaseException:self.session._mark('terminal_observation_failed')
 

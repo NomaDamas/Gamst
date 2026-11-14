@@ -192,6 +192,22 @@ class Text(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await observer.close(),frozen)
         self.assertTrue(frozen['terminal'])
 
+    async def test_native_admission_refusal_does_not_claim_callback_entry(self):
+        from unittest.mock import patch
+        observer=session(self.root);called=[]
+        async def callback(request):called.append(True);return dict(text='ok',usage=None)
+        async def refused(*args,**kwargs):raise ValueError('controlled native admission refusal')
+        adapter=self.adapter(callback,evaluation_observer=observer)
+        request,record=await self.queued()
+        with patch.object(observer._task,'invoke',refused):
+            with self.assertRaises(ValueError):await adapter.execute(request,record,'q',maximum_charge=1)
+        report=await observer.close()
+        self.assertFalse(called);self.assertEqual(report['reports'][0]['attempts'],[])
+        publication=next(e for e in report['journal'] if e['event']=='call_publication_finished')
+        self.assertFalse(publication['fields']['invoked'])
+        self.assertIn('native_admission_failed_before_callback',report['incomplete_reasons'])
+        self.assertEqual(report['dispatched_without_invocation'],1)
+
     async def test_private_text_cannot_be_used_as_structural_terminal_reason(self):
         observer=session(self.root)
         worker=observer.reserve_work('worker_lifecycle',dict(worker_id='worker'))
