@@ -111,6 +111,54 @@ class Sources(unittest.TestCase):
                     with self.assertRaises(ValueError): native._local_tokenizer(types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(from_pretrained=factory)),declaration)
                 factory.assert_not_called();self.assertEqual(list(stage.iterdir()),[])
 
+    def test_auxiliary_tokenizer_files_cannot_override_constructor_settings(self):
+        from unittest.mock import Mock
+        native._tokenizer_auxiliary({
+            'special_tokens_map.json':json.dumps({'pad_token':{'content':'<pad>','special':True},
+                'eos_token':'</s>','additional_special_tokens':['<extra_id_0>']}).encode(),
+            'added_tokens.json':b'{"<extra_id_0>":3}'})
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).absolute();assets=root/'assets';assets.mkdir();stage=root/'stage';stage.mkdir(mode=0o700)
+            (assets/'tokenizer.json').write_text('{}')
+            # No added_tokens_decoder: exercise the builtin legacy merge path.
+            (assets/'tokenizer_config.json').write_text('{"tokenizer_class":"T5TokenizerFast"}')
+            cases=[('special_tokens_map.json',{field:value}) for field,value in (
+                ('vocab_file','/outside.model'),('tokenizer_file','/outside.json'),
+                ('from_slow',True),('fast_tokenizer_files',['/outside.json']),
+                ('pad_token',{'content':'pad','vocab_file':'/outside.model'}),
+                ('additional_special_tokens',[{'content':{'nested':'token'}}]))]
+            cases += [('added_tokens.json',value) for value in ({'token':True},{'token':10000000},
+                {'token':{'vocab_file':'/outside.model'}},['token'])]
+            for name,value in cases:
+                with self.subTest(name=name,value=value):
+                    path=assets/name;path.write_text(json.dumps(value))
+                    declaration={'t5':{'root':str(assets),'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in assets.iterdir()}}}
+                    factory=Mock(side_effect=AssertionError('auxiliary override reached constructor'))
+                    with patch.dict(os.environ,GAMST_SAM_TOKENIZER_DIR=str(stage)):
+                        with self.assertRaises(ValueError): native._local_tokenizer(types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(from_pretrained=factory)),declaration)
+                    factory.assert_not_called();self.assertEqual(list(stage.iterdir()),[])
+                    path.unlink()
+
+    def test_t5_resolved_aliases_and_preconstructor_label_maps_are_bounded(self):
+        from unittest.mock import Mock
+        def config(**values):
+            aliases={'num_hidden_layers':'num_layers','num_attention_heads':'num_heads'}
+            return types.SimpleNamespace(**{aliases.get(k,k):v for k,v in values.items()})
+        factory=Mock(side_effect=config);transformers=types.SimpleNamespace(T5Config=factory)
+        resolved=native._t5_configuration(transformers,b'{"num_hidden_layers":6,"num_attention_heads":8}')
+        self.assertEqual((resolved.num_layers,resolved.num_heads),(6,8))
+        for value in ({'num_hidden_layers':10000000},{'num_attention_heads':10000000}):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                native._t5_configuration(transformers,json.dumps(value).encode())
+        factory.reset_mock()
+        for value in (0,129,True,10000000):
+            with self.subTest(labels=value),self.assertRaises(ValueError):
+                native._t5_configuration(transformers,json.dumps({'num_labels':value}).encode())
+        factory.assert_not_called()
+        # Constructor defaults are bounded too, independently of raw aliases.
+        with self.assertRaises(ValueError):
+            native._t5_configuration(types.SimpleNamespace(T5Config=lambda **kw:types.SimpleNamespace(num_layers=129)),b'{}')
+
 
 @unittest.skipUnless(HAS_TORCH,'optional Torch unavailable')
 class TensorPolicies(unittest.TestCase):
@@ -387,7 +435,7 @@ class ConstructorFixture(unittest.TestCase):
             def load_state_dict(self,*args,**kwargs):
                 raise AssertionError('must bypass permissive upstream override')
         upstream.SAMAudio=Graph
-        transformer=types.ModuleType('transformers');transformer.T5Config=lambda **config:config;transformer.T5EncoderModel=Encoder;transformer.T5TokenizerFast=FixtureTokenizer
+        transformer=types.ModuleType('transformers');transformer.T5Config=lambda **config:types.SimpleNamespace(**config);transformer.T5EncoderModel=Encoder;transformer.T5TokenizerFast=FixtureTokenizer
         calls=[]
         def tokenizer(root,**kwargs):
             calls.append((root,kwargs));self.assertEqual((Path(root)/'config.json').read_bytes(),b'{}');return FixtureTokenizer()
@@ -460,6 +508,10 @@ class BuiltinTokenizerSnapshot(unittest.TestCase):
             from tokenizers import Tokenizer,models,pre_tokenizers,processors
         except ImportError as error:
             self.skipTest('installed optional Transformers runtime incompatible: '+str(error))
+        resolved=native._t5_configuration(transformers,b'{"num_hidden_layers":6,"num_attention_heads":8}')
+        self.assertEqual((resolved.num_layers,resolved.num_heads),(6,8))
+        for data in (b'{"num_hidden_layers":129}',b'{"num_attention_heads":257}'):
+            with self.assertRaises(ValueError): native._t5_configuration(transformers,data)
         raw=Tokenizer(models.WordLevel({'<pad>':0,'</s>':1,'<unk>':2,'hello':3},unk_token='<unk>'))
         raw.pre_tokenizer=pre_tokenizers.Whitespace()
         raw.post_processor=processors.TemplateProcessing(single='$A </s>',special_tokens=[('</s>',1)])

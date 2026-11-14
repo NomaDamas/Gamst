@@ -102,6 +102,8 @@ def _config_bounds(value, depth=0):
                 raise ValueError('configuration layer/codebook count exceeds SDK bound')
             if key in ('n_heads','num_heads') and (type(item) is not int or not 1 <= item <= 256):
                 raise ValueError('configuration attention heads exceed SDK bound')
+            if key == 'num_labels' and (type(item) is not int or not 1 <= item <= 128):
+                raise ValueError('configuration label map exceeds SDK bound')
             _config_bounds(item, depth+1)
     elif type(value) is list:
         if len(value) > 64: raise ValueError('configuration list exceeds bound')
@@ -338,31 +340,40 @@ def _asset_budget(declaration):
         raise ValueError('aggregate serialized assets exceed SDK24.5GiB bound')
 
 
+_SPECIAL_TOKENS = frozenset(('eos_token','unk_token','pad_token','bos_token','sep_token','cls_token','mask_token'))
+
+
+def _special_token(value):
+    if type(value) is str:
+        if not 0<len(value.encode('utf8'))<=512: raise ValueError('bounded special token required')
+        return
+    if type(value) is not dict or 'content' not in value or set(value)-{'content','lstrip','rstrip','normalized','single_word','special','__type'}:
+        raise ValueError('builtin AddedToken settings required')
+    if type(value['content']) is not str: raise ValueError('special token content must be text')
+    _special_token(value['content'])
+    for key,item in value.items():
+        if key not in ('content','__type') and type(item) is not bool:
+            raise ValueError('boolean AddedToken setting required')
+    if '__type' in value and value['__type']!='AddedToken': raise ValueError('builtin AddedToken required')
+
+
+def _special_tokens(value):
+    if type(value) is not list or len(value)>512: raise ValueError('bounded special tokens required')
+    for item in value: _special_token(item)
+
+
 def _tokenizer_configuration(data):
     """Closed T5 settings: no constructor-controlled paths or slow fallback."""
     config=_json(data,128*1024)
     boolean={'clean_up_tokenization_spaces','split_special_tokens','spaces_between_special_tokens',
              'do_lower_case','add_bos_token','add_eos_token'}
-    tokens={'eos_token','unk_token','pad_token','bos_token','sep_token','cls_token','mask_token'}
-    allowed=boolean|tokens|{'tokenizer_class','model_max_length','extra_ids','additional_special_tokens',
+    allowed=boolean|_SPECIAL_TOKENS|{'tokenizer_class','model_max_length','extra_ids','additional_special_tokens',
         'added_tokens_decoder','extra_special_tokens','model_input_names','padding_side','truncation_side','legacy','add_prefix_space'}
     if type(config) is not dict or set(config)-allowed or config.get('tokenizer_class') not in ('T5Tokenizer','T5TokenizerFast'):
         raise ValueError('unsupported T5 tokenizer settings or asset references')
-    def token(value):
-        if type(value) is str:
-            if not 0<len(value.encode('utf8'))<=512: raise ValueError('bounded special token required')
-            return
-        if type(value) is not dict or 'content' not in value or set(value)-{'content','lstrip','rstrip','normalized','single_word','special','__type'}:
-            raise ValueError('builtin AddedToken settings required')
-        if type(value['content']) is not str: raise ValueError('special token content must be text')
-        token(value['content'])
-        for key,item in value.items():
-            if key not in ('content','__type') and type(item) is not bool:
-                raise ValueError('boolean AddedToken setting required')
-        if '__type' in value and value['__type']!='AddedToken': raise ValueError('builtin AddedToken required')
     for key,value in config.items():
         if key in boolean and type(value) is not bool: raise ValueError('boolean tokenizer setting required')
-        if key in tokens and value is not None: token(value)
+        if key in _SPECIAL_TOKENS and value is not None: _special_token(value)
         if key in ('model_max_length','extra_ids') and (type(value) is not int or not ((key=='model_max_length' and value==1000000000000000019884624838656) or (1 if key=='model_max_length' else 0)<=value<=(8192 if key=='model_max_length' else 256))):
             raise ValueError('tokenizer count exceeds SDK bound')
         if key in ('padding_side','truncation_side') and value not in ('left','right'): raise ValueError('tokenizer side required')
@@ -370,14 +381,43 @@ def _tokenizer_configuration(data):
         if key=='add_prefix_space' and value is not None: raise ValueError('slow tokenizer conversion unsupported')
         if key=='model_input_names' and value!=['input_ids','attention_mask']: raise ValueError('T5 model inputs required')
         if key=='additional_special_tokens':
-            if type(value) is not list or len(value)>512: raise ValueError('bounded special tokens required')
-            for item in value: token(item)
+            _special_tokens(value)
         if key=='extra_special_tokens' and value!={}: raise ValueError('extra named token roles unsupported')
         if key=='added_tokens_decoder':
             if type(value) is not dict or len(value)>512: raise ValueError('bounded added tokens required')
             for name,item in value.items():
                 if re.fullmatch('[0-9]{1,7}',name) is None: raise ValueError('bounded added token ID required')
-                token(item)
+                _special_token(item)
+
+
+def _tokenizer_auxiliary(snapshots):
+    # Transformers' legacy special-token loader merges arbitrary keys into
+    # constructor kwargs, even overriding explicit false/None values.
+    if 'special_tokens_map.json' in snapshots:
+        mapping=_json(snapshots['special_tokens_map.json'],128*1024)
+        if type(mapping) is not dict or set(mapping)-(_SPECIAL_TOKENS|{'additional_special_tokens'}):
+            raise ValueError('only builtin special-token roles supported')
+        for key,value in mapping.items():
+            if key=='additional_special_tokens': _special_tokens(value)
+            elif value is not None: _special_token(value)
+    if 'added_tokens.json' in snapshots:
+        mapping=_json(snapshots['added_tokens.json'],512*1024)
+        if type(mapping) is not dict or len(mapping)>512:
+            raise ValueError('bounded added-token mapping required')
+        for token,index in mapping.items():
+            _special_token(token)
+            if type(index) is not int or not 0<=index<=9999999:
+                raise ValueError('bounded added token ID required')
+
+
+def _t5_configuration(transformers, data):
+    config=_json(data,128*1024)
+    _config_bounds(config)
+    # T5Config normalizes alias keys (e.g. num_hidden_layers) and fills
+    # constructor defaults. Bound the actual resolved values before any graph.
+    config=transformers.T5Config(**config)
+    _config_bounds(vars(config))
+    return config
 
 
 def _local_tokenizer(transformers, declaration):
@@ -394,6 +434,7 @@ def _local_tokenizer(transformers, declaration):
     snapshots={name:_file(root/name,digest,128*1024 if name.endswith('config.json') else 32*1024*1024,retain=True)
                for name,digest in declaration['t5']['files'].items() if name != 'model.safetensors'}
     _tokenizer_configuration(snapshots['tokenizer_config.json'])
+    _tokenizer_auxiliary(snapshots)
     for name,data in snapshots.items():
         descriptor=os.open(directory/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         with os.fdopen(descriptor,'wb') as stream: stream.write(data)
@@ -449,9 +490,7 @@ class SAMAudioNative:
                 from sam_audio.model.text_encoder import T5TextEncoder
                 t5root = declaration['t5']['root']
                 # Construct config from verified immutable bytes, never Hub.
-                t5config = json.loads(_file(Path(t5root)/'config.json', declaration['t5']['files']['config.json'],128*1024,retain=True))
-                _config_bounds(t5config)
-                t5config = transformers.T5Config(**t5config)
+                t5config = _t5_configuration(transformers, _file(Path(t5root)/'config.json', declaration['t5']['files']['config.json'],128*1024,retain=True))
                 class LocalT5(T5TextEncoder):
                     def __init__(self, cfg):
                         torch.nn.Module.__init__(self)
