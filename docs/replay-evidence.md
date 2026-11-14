@@ -103,3 +103,7 @@ unknown-accounting rejection and failure credit/latency. Synthetic evidence cann
 pass the combined gate. Actual VLM-only/SDK+VLM pipelines, model/resource measurement,
 independent scoring and held-out acceptance remain required by #57/#10; no weights
 are installed and no performance improvement is established here.
+
+For mixed provider, media and local costs, use the frozen
+[itemized cost mode](itemized-costs.md). Each reviewed assessment entry adds the
+complete `cost_quantities` dictionary; unknown quantities cannot default to zero.

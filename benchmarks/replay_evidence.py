@@ -50,7 +50,7 @@ def join(plan, inputs, traces, completion, assessment, *, expected_plan_sha256,
     if type(entries) is not list or len(entries)!=2*len(tasks): raise ValueError('assess every source trace exactly once')
     assessments={}
     for entry in entries:
-        _keys(entry,ASSESSMENT_KEYS,'assessment entry'); key=_digest(entry['trace_sha256'])
+        _keys(entry,ASSESSMENT_KEYS + (('cost_quantities',) if mode=='itemized' else ()), 'assessment entry'); key=_digest(entry['trace_sha256'])
         if key in assessments: raise ValueError('duplicate assessed trace')
         assessments[key]=entry
     if type(inputs) is not list or len(inputs)!=len(tasks): raise ValueError('complete recorded inputs required')
@@ -105,6 +105,7 @@ def join(plan, inputs, traces, completion, assessment, *, expected_plan_sha256,
             latency_ms=max(lifetime,timeout) if failed else ready,
             **{k:scored[k] for k in ('quality_score','correct_critical_facts','usage','peak_memory_bytes','dropped_frames')})
         if mode=='resource': row['resource_cost']=scored['resource_cost']
+        if mode=='itemized': row['cost_quantities']=scored['cost_quantities']
         rows.append(row); previous=key
     if len(rows)!=len(expected) or previous!=expected_trace_sha256 or assessments:
         raise ValueError('missing/truncated source traces or unmatched assessment')

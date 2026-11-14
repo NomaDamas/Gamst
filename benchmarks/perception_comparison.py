@@ -102,11 +102,30 @@ def validate_plan(plan, *, expected_plan_sha256):
             raise ValueError('declare all four exclusive token-bucket prices')
         for value in rates.values():
             _number(value, 'price', maximum=1e9)
+    elif mode == 'itemized':
+        _text(cost.get('currency'), 'currency')
+        _text(cost.get('accounting_protocol'), 'full pipeline accounting protocol')
+        if cost.get('scope') != 'full_pipeline':
+            raise ValueError('declare full_pipeline cost scope')
+        card = cost.get('rate_card')
+        if type(card) is not dict or not 1 <= len(card) <= 64:
+            raise ValueError('declare 1..64 frozen itemized rates')
+        categories = set(charges) | {'media', 'request', 'local_compute', 'other'}
+        for key, rate in card.items():
+            if type(key) is not str or not 1 <= len(key) <= 128:
+                raise ValueError('bounded rate ID required')
+            if type(rate) is not dict or set(rate) != {'provider','revision','unit','category','per_unit'}:
+                raise ValueError('exact itemized rate fields required')
+            for name in ('provider','revision','unit'):
+                _text(rate[name], name)
+            if type(rate['category']) is not str or rate['category'] not in categories:
+                raise ValueError('unsupported cost category')
+            _number(rate['per_unit'], 'itemized rate', maximum=1e9)
     elif mode == 'resource':
         _text(cost.get('unit'), 'resource unit')
         _text(cost.get('definition'), 'measured total resource-cost definition')
     elif mode != 'unknown':
-        raise ValueError('cost mode must be priced, resource or unknown')
+        raise ValueError('cost mode must be priced, itemized, resource or unknown')
     return digest, task_map, charges, mode
 
 
@@ -141,6 +160,13 @@ def _compare(plan, rows, *, expected_plan_sha256):
             raise ValueError('correct_critical_facts must be bounded fact IDs')
         if len(set(facts)) != len(facts) or set(facts)-set(task_map[task_id]['critical_facts']):
             raise ValueError('unknown/duplicate scored critical fact')
+        if mode == 'itemized':
+            quantities = row.get('cost_quantities')
+            if type(quantities) is not dict or set(quantities) != set(cost['rate_card']):
+                raise ValueError('every frozen rate requires an explicit quantity')
+            for quantity in quantities.values():
+                if type(quantity) is not int or not 0 <= quantity <= 10**12:
+                    raise ValueError('cost quantities must be bounded exact nonnegative integers')
         if mode == 'resource':
             _number(row.get('resource_cost'), 'measured total resource cost')
         paired[task_id, system] = row
@@ -152,6 +178,9 @@ def _compare(plan, rows, *, expected_plan_sha256):
         if mode == 'priced':
             charge = sum(Decimal(row['usage'][k])*Decimal(str(rates[k]))/Decimal(1000000)
                          for k in charges)
+        elif mode == 'itemized':
+            charge = sum(Decimal(row['cost_quantities'][key])*Decimal(str(rate['per_unit']))
+                         for key, rate in cost['rate_card'].items())
         else:
             charge = Decimal(str(row['resource_cost'])) if mode == 'resource' else None
         numeric[key] = (charge, Decimal(str(row['latency_ms'])), Decimal(str(row['quality_score'])))
@@ -192,11 +221,15 @@ def _compare(plan, rows, *, expected_plan_sha256):
         summaries[system] = dict(latency_p50_ms=_percentile([r['latency_ms'] for r in selected], .5),
             latency_p95_ms=_percentile([r['latency_ms'] for r in selected], .95),
             quality_mean=sum(r['quality_score'] for r in selected)/len(selected),
-            cost=(str(sum(row_cost(r) for r in selected)) if mode == 'priced' else
+            cost=(str(sum(row_cost(r) for r in selected)) if mode in ('priced', 'itemized') else
                   float(sum(row_cost(r) for r in selected)) if mode == 'resource' else None),
             usage={k: sum(r['usage'][k] for r in selected) for k in (*charges, 'calls')},
             peak_memory_bytes=max(r['peak_memory_bytes'] for r in selected),
             dropped_frames=sum(r['dropped_frames'] for r in selected))
+        if mode == 'itemized':
+            summaries[system]['cost_quantities'] = {
+                key: sum(row['cost_quantities'][key] for row in selected)
+                for key in cost['rate_card']}
     return dict(plan_sha256=digest, pairs=len(pairs), evidence=evidence, summaries=summaries,
         point={k: float(v) if v is not None else None for k, v in point.items()},
         paired_bootstrap_95={k: [float(v) for v in bounds] if bounds else None for k, bounds in intervals.items()},
