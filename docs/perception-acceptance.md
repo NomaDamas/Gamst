@@ -47,3 +47,9 @@ Minimum evidence records identify commit, model/checkpoint hash, dependency vers
 Before each implementation merge, link the affected entries, test commands/results and remaining validation issues in the PR. Before release, rerun real-model/device scenarios and matched efficiency evaluation; preserve all scope not yet proven. Each unavailable hardware/research path must have a separately linked subissue before its package can be considered for completion.
 
 Food software integration: [SegFormer-B0 context](food-context.md); trained checkpoint and held-out target-cuisine/unknown-food acceptance remain open in [#148](https://github.com/NomaDamas/Gamst/issues/148). Generated untrained graph tests do not satisfy family 20.
+
+2026-11-14 scope audit: [remaining sensory paths and issue-state reconciliation](remaining-sensory-gates.md)
+links dedicated required mapping #186, SAM-Audio #187, tactile #188 and radio
+pose/action #189 subissues. These are additions to the tracking hierarchy, not
+newly optional families or claims of implementation support. Physical-concept
+acceptance remains under #105; all other existing family gates still apply.
