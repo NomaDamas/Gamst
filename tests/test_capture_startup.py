@@ -33,6 +33,17 @@ class Gate:
 
 
 class CaptureStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.loop_errors = []
+        self.loop = asyncio.get_running_loop()
+        self.previous_handler = self.loop.get_exception_handler()
+        self.loop.set_exception_handler(lambda loop, context: self.loop_errors.append(context))
+
+    async def asyncTearDown(self):
+        await asyncio.sleep(0)
+        self.loop.set_exception_handler(self.previous_handler)
+        self.assertEqual(self.loop_errors, [], 'Owned startup must not leak background exceptions')
+
     async def test_cancel_or_stop_owns_late_camera_and_microphone_constructors(self):
         for audio in (False, True):
             for cancel in (False, True):
@@ -121,4 +132,31 @@ class CaptureStartupTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 gate.allow.set()
                 await asyncio.gather(*(t for t in (active, queued, stop) if t is not None), return_exceptions=True)
+                await session.stop()
+
+    async def test_stopped_startup_can_restart_with_fresh_handle(self):
+        camera, fresh = Device(), Device()
+        gate = Gate(camera)
+        class Runtime:
+            async def push_video(self, *args, **kwargs): pass
+        session = CaptureSession(Runtime(), video=0, consent=True)
+        module = SimpleNamespace(VideoCapture=gate)
+        with patch.dict('sys.modules', {'cv2': module}):
+            start = asyncio.create_task(session.start()); stop = None
+            try:
+                await asyncio.wait_for(gate.entered.wait(), 2)
+                stop = asyncio.create_task(session.stop()); await asyncio.sleep(0)
+                gate.allow.set()
+                with self.assertRaisesRegex(RuntimeError, 'interrupted by stop'): await start
+                await stop
+                module.VideoCapture = lambda _: fresh
+                await session.start()
+                self.assertTrue(session.status()['running'])
+                self.assertIs(session._camera, fresh)
+                await session.stop()
+                self.assertEqual(camera.calls, ['release'])
+                self.assertEqual(fresh.calls, ['release'])
+            finally:
+                gate.allow.set()
+                await asyncio.gather(*(t for t in (start, stop) if t is not None), return_exceptions=True)
                 await session.stop()

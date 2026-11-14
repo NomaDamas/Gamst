@@ -60,9 +60,12 @@ class CaptureSession:
             self._cleanup_task = None
             # The session, not the caller, owns native startup. Cancelling a
             # to_thread waiter cannot stop a constructor or recover its result.
-            self._startup_task = asyncio.create_task(self._start(), name="humansense-capture-startup")
+            self._startup_task = asyncio.create_task(self._run_startup(), name="humansense-capture-startup")
             try:
-                return await asyncio.shield(self._startup_task)
+                result, error = await asyncio.shield(self._startup_task)
+                if error is not None:
+                    raise error
+                return result
             except BaseException:
                 cleanup = self._begin_cleanup()
                 try:
@@ -71,6 +74,14 @@ class CaptureSession:
                     # Preserve the startup failure; cleanup errors remain in status.
                     pass
                 raise
+
+    async def _run_startup(self):
+        # Return the outcome to its owner rather than raising in an abandoned
+        # shield: Python 3.14 logs such exceptions even if cleanup later joins.
+        try:
+            return await self._start(), None
+        except BaseException as exc:
+            return None, exc
 
     async def _start(self):
         if not self.consent:
