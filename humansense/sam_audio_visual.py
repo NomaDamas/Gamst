@@ -97,7 +97,7 @@ def visual_allocation_bounds(*, frame_count, height, width, feature_count,
     size = _integer(image_size, 16, 1024, 'vision image size')
     original = n*4*h*w  # RGB plus one binary-mask channel.
     expanded = m*3*h*w
-    preprocess = original+2*expanded+m*3*size*size+4*m*3*(h*w+3*size*size)
+    preprocess = 3*original+2*expanded+m*3*size*size+4*m*3*(h*w+3*size*size)
     if original > 16*1024*1024 or expanded > 64*1024*1024 or preprocess > 128*1024*1024:
         raise ValueError('visual expansion exceeds admission budget')
     return dict(original_bytes=original, expanded_rgb_bytes=expanded,
