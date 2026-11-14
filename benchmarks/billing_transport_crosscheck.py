@@ -13,21 +13,37 @@ _NATIVE_KEYS = ('schema_version','owner_kind','owner','entry','provider','model_
 def _selection(value, index):
     if type(value) is not dict or set(value)!=_BINDING_KEYS:
         raise ValueError('exact independent transport selection required')
+    # Copy bounded immutable scalars before validation/hash/IO. No later read
+    # may consult the caller's mutable declaration (including its nested owner).
+    value={key:value[key] for key in _BINDING_KEYS}
+    for key in _BINDING_KEYS-{'owner'}:
+        item=value[key]
+        if type(item) is not str or not 1<=len(item)<=256 or len(item.encode('utf-8'))>1024:
+            raise ValueError('bounded selection scalar required')
     if value['owner_kind']!='task_native3' or type(index) is not ValidatedNative3Index:
         raise ValueError('original collector native3 index required; other readers must be explicitly integrated')
+    data=index.snapshot();original_owner=value['owner']
+    if type(original_owner) is not dict or set(original_owner)!=set(data['owner']):
+        raise ValueError('exact original owner fields required')
+    owned_owner={}
+    for key in data['owner']:
+        item=original_owner[key]
+        if item is not None and (type(item) is not str or len(item)>256 or len(item.encode('utf-8'))>1024):
+            raise ValueError('bounded native3 owner scalar required')
+        owned_owner[key]=item
+    value['owner']=owned_owner
     validate_owner(value['owner_kind'],value['owner'])
     if value['projection_version']!=PROJECTION or value['transport_version']!=TRANSPORT:
         raise ValueError('supported concrete transport selection required')
     if value['role'] not in ('perception','small_vlm','strong_vlm','text_llm'):
         raise ValueError('known original native role required')
-    data=index.snapshot()
     if encoded(value['owner'])!=encoded(data['owner']): raise ValueError('selection owner differs from original native scope')
     provider=dict(provider=value['provider'],model_revision=value['model_revision'])
     if provider not in data['declared_provider_revisions']:
         raise ValueError('selection provider/model absent from original declaration')
     selection=encoded(value)
     if len(selection)>8192: raise ValueError('selection declaration exceeds bound')
-    return data,selection
+    return data,value,selection
 
 
 def _query_relation(query, manifest, account_scope, diagnostics, pointer):
@@ -64,7 +80,7 @@ def crosscheck_transport(manifest, asset_directory, transport_directory, *,
     pending integration of its separately reviewed reader, never duck-typed.
     No caller verification callback or hand-authored native dictionary is accepted.
     """
-    native,selection_bytes=_selection(expected_binding,native_index)
+    native,expected_binding,selection_bytes=_selection(expected_binding,native_index)
     manifest=validate_manifest(manifest)
     aggregate,_=build_report(manifest,asset_directory)
     transport=read_responses_evidence(transport_directory,expected_inventory_sha256=expected_inventory_sha256)

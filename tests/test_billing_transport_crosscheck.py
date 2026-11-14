@@ -222,3 +222,21 @@ class Crosscheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('actual acceptance remains incomplete',result.stdout)
         self.assertEqual(json.loads((self.root/'cli-crosscheck'/'crosscheck.json').read_bytes()),self.check())
+
+    async def test_mutated_caller_selection_cannot_hide_an_uncovered_original_lane(self):
+        from unittest.mock import patch
+        from benchmarks.billing_aggregate import build_report
+        await self.collect()
+        frozen_selection=encoded(self.selection)
+        self.transport=self.root/'empty-for-mutation'
+        sink=ResponsesEvidenceSession(self.transport,owner_kind='task_native3',expected_owner=self.selection['owner'],
+            retain_response_bytes=True,retain_financial_hashes=True)
+        await sink.close()
+        def change_after_freeze(*args,**kwargs):
+            self.selection['role']='strong_vlm'
+            self.selection['owner']['arm']='B'
+            return build_report(*args,**kwargs)
+        with patch('benchmarks.billing_transport_crosscheck.build_report',side_effect=change_after_freeze):report=self.check()
+        self.assertFalse(report['local_binding_complete'])
+        self.assertEqual(report['local_counts']['native_entries_without_transport'],1)
+        self.assertEqual(report['transport_selection_sha256'],sha(frozen_selection))
