@@ -60,7 +60,9 @@ For an existing native EventCD producer, use
 `humansense.providers.openeb`. Input is a plain one-dimensional NumPy structured
 array with integer fields in x,y,p,t order. Masked/subclass arrays, noninteger
 fields, out-of-image coordinates, polarities other than0/1, unordered/negative
-timestamps and more than8192events are rejected. Native padding is never serialized.
+timestamps and more than8192events are rejected. Input record itemsize is limited to32bytes (at most262144input bytes), before
+copying; the native16byte aligned EventCD layout is supported. Native padding is
+never serialized.
 
 The gamst-specific packet is **not** an OpenEB RAW/DAT encoding: little-endian
 header `<8sHHQQI` contains magic `GECD001\n`, width,height,start_us,end_us,count;
@@ -147,9 +149,9 @@ capture is `not_verified`; detection/physical-motion flags are false.
 python3 -m unittest discover -s tests -p test_openeb.py -v
 ```
 
-Eight tests cover exact wire layout and histogram/rate oracles, empty/equal-time
+Nine tests cover exact wire layout and histogram/rate oracles, empty/equal-time
 slices, int64 time precision, gaps/overlap/clock/lifecycle, malformed CRC/fields,
-masked/oversized inputs, maximum payload, installed-API call shape/early closure
+masked/oversized/padded inputs, maximum payload, installed-API call shape/early closure
 and a real owned context worker→SensorStreams→MCP path with generated events.
 They do not prove actual RAW decoding, native memory bounds, camera accuracy or
 latency. Real SDK/recording/device evidence, supervision, overflow/disconnect,

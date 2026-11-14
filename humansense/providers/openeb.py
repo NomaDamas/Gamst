@@ -37,7 +37,7 @@ def _events(events,width,height,start_us,end_us):
     import numpy as np
     _geometry(width,height);_interval(start_us,end_us)
     if (type(events) is not np.ndarray or events.ndim != 1 or len(events) > MAX_EVENTS or
-            events.dtype.names != ('x','y','p','t') or
+            events.dtype.names != ('x','y','p','t') or events.dtype.itemsize > 32 or events.nbytes > MAX_EVENTS*32 or
             any(events.dtype.fields[k][0].kind not in 'iu' or events.dtype.fields[k][0].subdtype is not None for k in ('x','y','p','t'))):
         raise ValueError('plain bounded structured EventCD integer x/y/p/t array required')
     if len(events) and (np.any(events['x'] < 0) or np.any(events['x'] >= width) or

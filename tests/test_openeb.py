@@ -102,6 +102,17 @@ class Context(unittest.TestCase):
         data[-4:]=struct.pack('<I',zlib.crc32(data[:-4]))
         with self.assertRaises(ValueError):decode_event_packet(bytes(data))
 
+    def test_input_padding_bounded_before_owned_snapshot(self):
+        dtype=np.dtype({'names':['x','y','p','t'],'formats':['u2','u2','i2','i8'],
+            'offsets':[0,2,4,8],'itemsize':4096})
+        oversized=np.zeros(2,dtype=dtype)
+        with self.assertRaises(ValueError):event_packet(oversized,width=16,height=8,start_us=0,end_us=0)
+        aligned=np.dtype({'names':['x','y','p','t'],'formats':['u2','u2','i2','i8'],
+            'offsets':[0,2,4,8],'itemsize':16})
+        native=np.zeros(2,dtype=aligned);native['p']=1
+        decoded=decode_event_packet(event_packet(native,width=16,height=8,start_us=0,end_us=0))[4]
+        self.assertEqual(decoded['p'].tolist(),[1,1])
+
     def test_max_packet_no_native_padding_and_owned_decode(self):
         source=np.zeros(MAX_EVENTS,dtype=events().dtype);source['p']=1
         data=event_packet(source,width=16,height=8,start_us=0,end_us=0)
