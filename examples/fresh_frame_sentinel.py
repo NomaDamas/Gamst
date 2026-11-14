@@ -23,12 +23,29 @@ from humansense.schema import timestamp
 from humansense.smolvlm_call import smolvlm_frame_sha256
 
 
-def _read(path, maximum):
+def _read(path, maximum, *, owner=None):
+    if not hasattr(os,'O_NONBLOCK'):raise ValueError('bounded example reader requires nonblocking descriptor support')
     path=Path(path).resolve(strict=True)
-    with path.open('rb') as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise ValueError('regular application-owned input file required')
-        data=stream.read(maximum+1)
+    if owner is not None and not path.is_relative_to(owner):
+        raise ValueError('raw file escapes manifest owner directory')
+    # A FIFO must not wait for a writer before its type can be checked. Pin a
+    # non-inheritable descriptor and reject final-component symlink swaps.
+    flags=os.O_RDONLY|os.O_NONBLOCK|getattr(os,'O_NOFOLLOW',0)
+    descriptor=os.open(path,flags)
+    try:
+        opened=os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):raise ValueError('regular application-owned input file required')
+        current=path.resolve(strict=True)
+        if owner is not None and not current.is_relative_to(owner):
+            raise ValueError('raw file escapes manifest owner directory')
+        named=current.stat()
+        if (opened.st_dev,opened.st_ino)!=(named.st_dev,named.st_ino):
+            raise ValueError('input identity changed during descriptor admission')
+        if opened.st_size>maximum:raise ValueError('example input byte limit exceeded')
+        with os.fdopen(descriptor,'rb') as stream:
+            descriptor=None;data=stream.read(maximum+1)
+    finally:
+        if descriptor is not None:os.close(descriptor)
     if len(data)>maximum:raise ValueError('example input byte limit exceeded')
     return data
 
@@ -68,12 +85,12 @@ def declaration(path):
         paths.append(resolved);previous=(capture['timestamp_ms'],capture['capture_index'])
     if value['captures'][-1]['timestamp_ms']-value['captures'][0]['timestamp_ms']>60000:
         raise ValueError('example capture span limited to one minute')
-    return value,sensor,paths,hashlib.sha256(original).hexdigest()
+    return value,sensor,paths,hashlib.sha256(original).hexdigest(),path.parent
 
 
 async def run(args):
     import numpy as np
-    manifest,sensor,paths,manifest_digest=declaration(args.manifest)
+    manifest,sensor,paths,manifest_digest,owner=declaration(args.manifest)
     config=json.loads(_read(args.config,131072))
     if type(args.interval_ms) is not int or not 1<=args.interval_ms<=10000:
         raise ValueError('example interval must be 1..10000 ms')
@@ -98,7 +115,7 @@ async def run(args):
             sentinel.start()
             for capture,path in zip(manifest['captures'],paths):
                 await asyncio.sleep(max(0,(capture['timestamp_ms']-timestamp())/1000))
-                raw=_read(path,math.prod(manifest['shape']))
+                raw=_read(path,math.prod(manifest['shape']),owner=owner)
                 if len(raw)!=math.prod(manifest['shape']):raise ValueError('exact raw BGR byte count required')
                 pixels=np.frombuffer(raw,dtype=np.uint8).reshape(manifest['shape']).copy()
                 raw=None

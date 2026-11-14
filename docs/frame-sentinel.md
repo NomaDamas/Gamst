@@ -51,6 +51,9 @@ Replace the illustrative timestamp/hash with the original producer values. Raw
 paths stay inside the manifest's owner directory. The example rejects malformed
 hashes, oversized inputs, path escapes or changed pixels; it erases its mutable
 producer copy after each offer and joins its own reader/sentinel on failure.
+Its local-file reader requires nonblocking descriptor support, rejects non-regular
+files before reading (including a FIFO without a writer), and checks the opened
+descriptor's identity and owner containment against path swaps.
 
 ## Clocks, ownership and admission
 

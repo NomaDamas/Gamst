@@ -2,7 +2,9 @@
 import asyncio
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -419,6 +421,45 @@ class OwnedDrivers(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(d.buffer));d.task=None
             await h._join_call_drivers()
         finally:gate.set();await h.close()
+
+
+class RecordedInput(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os,'mkfifo'),'FIFO fixture requires POSIX')
+    def test_fifo_open_is_bounded_in_an_owned_subprocess(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            fifo=Path(directory).resolve()/'capture.bgr';os.mkfifo(fifo)
+            code='''
+import sys
+from examples.fresh_frame_sentinel import _read
+try:_read(sys.argv[1],4608)
+except ValueError as error:assert 'regular' in str(error)
+else:raise AssertionError('FIFO accepted')
+'''
+            # A subprocess timeout reaps this owned probe even on regression;
+            # asyncio.wait_for cannot interrupt a blocking in-loop FIFO open.
+            result=subprocess.run([sys.executable,'-c',code,str(fifo)],capture_output=True,timeout=2)
+            self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_descriptor_admission_rejects_symlink_swap_and_changed_identity(self):
+        from examples.fresh_frame_sentinel import _read
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();owner=root/'owner';owner.mkdir()
+            raw=owner/'capture.bgr';raw.write_bytes(b'original')
+            outside=root/'outside.bgr';outside.write_bytes(b'outside')
+            original_open=os.open
+            def swapped(path,flags):
+                raw.unlink();raw.symlink_to(outside)
+                return original_open(path,flags)
+            with patch('examples.fresh_frame_sentinel.os.open',swapped):
+                with self.assertRaises((OSError,ValueError)):_read(raw,4608,owner=owner)
+            raw.unlink();raw.write_bytes(b'original')
+            def replaced(path,flags):
+                descriptor=original_open(path,flags)
+                raw.unlink();raw.write_bytes(b'different inode')
+                return descriptor
+            with patch('examples.fresh_frame_sentinel.os.open',replaced):
+                with self.assertRaisesRegex(ValueError,'identity changed'):_read(raw,4608,owner=owner)
+            self.assertEqual(_read(raw,4608,owner=owner),b'different inode')
 
 
 if __name__=='__main__':unittest.main()
