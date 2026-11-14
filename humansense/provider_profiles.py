@@ -6,6 +6,9 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    if profile == 'openeb.eventcd':
+        from .providers.openeb import OpenEBContext
+        return OpenEBContext.capability(**config)
     if profile == 'efficientphys.local':
         from .providers.efficientphys_context import EfficientPhysContext, configuration
         return EfficientPhysContext.capability(**configuration(config))
