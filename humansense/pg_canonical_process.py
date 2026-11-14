@@ -25,7 +25,7 @@ async def _deadline(task,seconds):
 class PGCanonicalProcess:
     """Fixed local model worker. No generation interface until a later delivery."""
     @classmethod
-    async def open(cls,python,graph,graph_sha,lock,lock_sha,canonical,canonical_sha,*,stage_root,startup_timeout=120):
+    async def open(cls,python,graph,graph_sha,lock,lock_sha,canonical,canonical_sha,*,stage_root,startup_timeout=120,generation=None):
         if type(startup_timeout) not in (int,float) or not .01<=startup_timeout<=600:
             raise ValueError('PG startup timeout must be0.01..600 seconds')
         graph=validate_manifest(graph,expected_sha256=graph_sha)
@@ -40,8 +40,12 @@ class PGCanonicalProcess:
         source=_absolute(graph['bundle_root'])
         if root==source or root.is_relative_to(source) or source.is_relative_to(root):
             raise ValueError('source and staging directory overlap')
-        request=_encoded(dict(graph=graph,graph_sha=graph_sha,lock=lock,lock_sha=lock_sha,
-            canonical=canonical,canonical_sha=canonical_sha))
+        request_value=dict(graph=graph,graph_sha=graph_sha,lock=lock,lock_sha=lock_sha,canonical=canonical,canonical_sha=canonical_sha)
+        if generation is not None:
+            from .pg_generation import policy
+            generation=policy(generation,graph['execution'])
+            request_value['generation']=generation
+        request=_encoded(request_value)
         if len(request)>REQUEST_LIMIT:raise ValueError('PG request exceeds bound')
         total=sum(row['size'] for row in canonical['shards'])
         if canonical['budgets']['disk_bytes']<total+len(request):
@@ -75,6 +79,10 @@ class PGCanonicalProcess:
             expected={'status','canonical_sha256','graph_schema_sha256','planned_storage_bytes',
                 'trained_identity_verified','reference_parity_verified','runtime_compatibility_verified',
                 'resource_admission','actual_acceptance'}
+            if generation is not None:
+                expected.add('generation_sha256')
+                if response.get('generation_sha256')!=hashlib.sha256(_encoded(generation)).hexdigest():
+                    raise ValueError('generation startup policy mismatch')
             if (set(response)!=expected or response['canonical_sha256']!=canonical_sha or
                 response['graph_schema_sha256']!=canonical['graph_schema_sha256'] or
                 type(response['planned_storage_bytes']) is not int or not 0<response['planned_storage_bytes']<=512*1024**3 or

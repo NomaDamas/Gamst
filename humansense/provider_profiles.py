@@ -3,6 +3,9 @@ from .capabilities import bounded_json
 
 
 def capability(profile, config):
+    if profile == 'pg.physical.local':
+        from .pg_physical_process import capability as pg_capability
+        return pg_capability(config)
     if profile == 'opencv.rfdetr.stereo':
         from .providers.stereo_context import StereoMetricContext
         return StereoMetricContext.capability(**config)
