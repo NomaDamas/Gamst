@@ -700,6 +700,17 @@ class HumanSense:
         result['scope'] = 'retained_registered_observations'
         return result
 
+    async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
+                                   max_bytes=65536, capability_id=None, source_id=None,
+                                   sensor_id=None, events_only=False):
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        from .observation_pages import observation_page
+        self._prune()
+        return observation_page(self.store, subject_id=subject_id, cursor=cursor, limit=limit,
+            max_bytes=max_bytes, capability_id=capability_id, source_id=source_id,
+            sensor_id=sensor_id, events_only=events_only)
+
     async def get_transcripts(self, subject_id='local-user', window='1h', limit=16, max_bytes=32768):
         if self.closed:
             raise RuntimeError('runtime is closed')

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import json
 import sqlite3
+import secrets
 from pathlib import Path
 
 
@@ -15,6 +16,8 @@ class Store:
             raise ValueError("storage limits must be positive integers")
         self.max_records, self.max_payload_bytes = max_records, max_payload_bytes
         self.evicted_records = self.oversized_records = 0
+        self.retention_revision = 0
+        self._cursor_key = secrets.token_bytes(32)
         self.retention_ms = int(retention_hours * 3_600_000)
         path = str(uri)
         if path.startswith("sqlite:///"):
@@ -29,6 +32,11 @@ class Store:
         self.connection.execute("CREATE INDEX IF NOT EXISTS subject_kind_time ON records(subject,kind,ts)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS signal_name_time ON records(subject,kind,json_extract(payload,'$.observation.name'),ts)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS numeric_signal_time ON records(subject,ts) WHERE kind='observation.signal' AND json_type(payload, '$.observation.value') IN ('integer','real')")
+        # Independent AUTOINCREMENT positions never reuse a deleted record's offset.
+        # Backfill old databases in their original insertion order, without rewriting payloads.
+        self.connection.execute("CREATE TABLE IF NOT EXISTS record_offsets (position INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT UNIQUE NOT NULL)")
+        self.connection.execute("DELETE FROM record_offsets WHERE record_id NOT IN (SELECT id FROM records)")
+        self.connection.execute("INSERT INTO record_offsets(record_id) SELECT id FROM records WHERE id NOT IN (SELECT record_id FROM record_offsets) ORDER BY rowid")
         self.connection.commit()
 
         self._sizes = OrderedDict((row[0], row[1]) for row in self.connection.execute(
@@ -41,8 +49,10 @@ class Store:
         while len(self._sizes) > self.max_records or self.payload_bytes > self.max_payload_bytes:
             key, size = self._sizes.popitem(last=False)
             self.connection.execute("DELETE FROM records WHERE id=?", (key,))
+            self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
             self.payload_bytes -= size
             self.evicted_records += 1
+            self.retention_revision += 1
 
     def status(self):
         return dict(retention_ms=self.retention_ms, records=len(self._sizes),
@@ -55,10 +65,12 @@ class Store:
         size = len(payload.encode('utf-8'))
         if size > self.max_payload_bytes:
             self.oversized_records += 1
+            self.retention_revision += 1
             return False
         self.connection.execute("INSERT INTO records VALUES(?,?,?,?,?)", (
             record["id"], record["subject_id"], record["timestamp_ms"], record["type"],
             payload))
+        self.connection.execute("INSERT INTO record_offsets(record_id) VALUES(?)", (record["id"],))
         self._sizes[record["id"]] = size
         self.payload_bytes += size
         self._enforce_limits()
@@ -89,6 +101,26 @@ class Store:
         args.append(max(0, min(int(limit), 100_000)))
         rows = self.connection.execute(sql, args).fetchall()
         return [json.loads(row[0]) for row in reversed(rows)]
+
+    def observation_page_rows(self, *, subject, after, limit, capability_id=None,
+                              source_id=None, sensor_id=None, events_only=False):
+        """Internal ingestion-order selection; caller validates filters/page limits."""
+        upper = self.connection.execute("SELECT seq FROM sqlite_sequence WHERE name='record_offsets'").fetchone()
+        upper = upper[0] if upper else 0
+        clauses = ["r.subject=?", "r.kind='observation.signal'", "o.position>?", "o.position<=?",
+                   "json_type(r.payload,'$.observation.capability')='object'"]
+        args = [subject, after, upper]
+        for field,value in (("capability.id",capability_id),("sensor.source_id",source_id),("sensor.sensor_id",sensor_id)):
+            if value is not None:
+                clauses.append("json_extract(r.payload,'$.observation."+field+"')=?")
+                args.append(value)
+        if events_only:
+            clauses += ["json_type(r.payload,'$.observation.value.events')='array'",
+                        "json_array_length(r.payload,'$.observation.value.events')>0"]
+        sql = "SELECT o.position,r.payload FROM record_offsets o JOIN records r ON r.id=o.record_id WHERE "
+        sql += " AND ".join(clauses) + " ORDER BY o.position LIMIT ?"
+        rows = self.connection.execute(sql,args+[limit]).fetchall()
+        return [(position,json.loads(payload)) for position,payload in rows],upper
 
     def get_many(self, ids):
         if not ids:
@@ -160,15 +192,22 @@ class Store:
 
     def prune(self, now_ms):
         expired = self.connection.execute("SELECT id FROM records WHERE ts < ?", (now_ms-self.retention_ms,)).fetchall()
+        if expired:
+            self.retention_revision += 1
         for (key,) in expired:
+            self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
             self.payload_bytes -= self._sizes.pop(key, 0)
         self.connection.execute("DELETE FROM records WHERE ts < ?", (now_ms - self.retention_ms,))
         self.connection.commit()
 
     def delete(self, subject=None):
+        # Even a no-op deletion invalidates prior replay cursors, across subjects.
+        self._cursor_key = secrets.token_bytes(32)
+        self.retention_revision += 1
         keys = self.connection.execute("SELECT id FROM records" + (" WHERE subject=?" if subject is not None else ""),
                                        (subject,) if subject is not None else ()).fetchall()
         for (key,) in keys:
+            self.connection.execute("DELETE FROM record_offsets WHERE record_id=?", (key,))
             self.payload_bytes -= self._sizes.pop(key, 0)
         if subject is None:
             result = self.connection.execute("DELETE FROM records")
