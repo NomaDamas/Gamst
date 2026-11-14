@@ -213,3 +213,33 @@ bounded chart histories and shared assets. A real local Qwen VLM fixture test
 covers temporal frames → numerical observations → MCP context. Hugging Face and
 Ollama adapter contracts are fixture-tested; model accuracy and end-to-end use of
 an installed Hugging Face classifier or Ollama daemon are not yet certified.
+
+## Capture completion and device cleanup
+
+`CaptureSession.status()` reports a background camera/processing error immediately.
+`running=false` means capture is stopping, not that the native handle is already
+released. `cleanup_pending` distinguishes that interval. The session retains one
+owned cleanup task per generation; concurrent `stop()` calls join it instead of
+releasing a handle twice. Background cleanup exceptions remain in `errors` and
+are consumed even if no caller is waiting.
+
+`await session.wait()` waits for the capture loops and device release/provider
+reset before raising capture or cleanup errors. `await session.stop()` and async
+context exit also join cleanup. Cancelling a wait stops that session; cancelling
+a wait/stop repeatedly does not abandon its cleanup. `CancelledError` is raised
+after cleanup finishes, while any cleanup failures remain in session status.
+Native threaded device I/O cannot be interrupted by asyncio: cleanup can wait
+for a blocked read/release, and there is no guaranteed shutdown deadline. The
+camera I/O lock keeps release serialized with an already-running read.
+
+A restart joins previous cleanup before acquiring new handles or clearing old
+errors. Successful cleanup permits restart; failed release/reset prevents reuse
+of the same session and its error remains observable. Construct a new session
+only after the application has resolved the underlying device failure. Do not
+race fresh device startup against stop/pause; in-flight native startup handle
+ownership is tracked separately in [#213](https://github.com/NomaDamas/Gamst/issues/213). No physical capture
+quality or platform driver guarantee follows from the fake-device tests.
+
+Call `wait()`/`stop()` from the application owner, not inside a capture delivery
+callback. A capture task cannot join itself: `wait()` rejects that use, and
+`stop()` schedules cleanup then raises an explicit error instead of deadlocking.
