@@ -24,3 +24,6 @@ __all__ += ['MaskTrackingPipeline']
 
 from .audiovisual import TalkNetWindows, decode_talknet_window, talknet_stream_frame
 __all__ += ['TalkNetWindows', 'decode_talknet_window', 'talknet_stream_frame']
+
+from .openeb_process import OpenEBProcess
+__all__ += ['OpenEBProcess']
