@@ -1,0 +1,29 @@
+# HumanSense and MCP call-controller integration
+
+Register a fresh controller explicitly with `human.register_call_controller('main', controller)`. Up to eight controllers may be registered; IDs must be unique. Registration requires consent and a non-paused, open HumanSense instance. A controller cannot bind to a second runtime or be reused after standalone source activity. Its budget remains exclusively owned. Registration never starts a model, device, transport or periodic delivery task.
+
+The bound controller checks runtime consent/pause/close before source opening, submission, reservation and dispatch, even when the application retains a direct Python reference. Input records must use the current runtime processing epoch and the registered capability's model provenance. A processing-generation change immediately invalidates result acceptance, including the interval before asynchronous plugin cleanup runs. Once bound, lifecycle timestamps come from the runtime clock; caller-supplied `now_ms` cannot revive stale evidence. Backward wall-clock movement is conservatively clamped to the last observed controller time. All other `CallController` rules still apply.
+
+`pause()`, `reset_processing()` and the normal plugin reset path close source handles, release undispatched reservations and discard future output from already-dispatched requests. They do not reset budget totals or pretend execution was cancelled remotely. Resume requires opening new sources with newly registered observations. Assigning `human.consent = False` invalidates processing generation and synchronously closes controller sources; no new dispatch is admitted. Granting consent again does not revive old source handles.
+
+## Deletion and outstanding charges
+
+`delete_data(subject_id)` removes that subject's pending requests, source associations, retained sensory receipts and observation bodies. For already dispatched unsettled calls, the controller retains only an opaque request-to-reservation mapping. Old result acknowledgements are rejected; `settle(request_id, components=..., now_ms=...)` remains available through the application's saved controller reference. Unknown charges still retain liability/capacity. Do not discard this handle or replace the ledger to manufacture a refund.
+
+Financial evidence/model-correlation fields are conservatively redacted across the entire controller's ledger when any subject is deleted, because bounded old receipts cannot establish subject ownership indefinitely. Exact aggregate financial totals, unit/pricing identity, opaque reservation IDs, timestamps, state and charge components remain. These totals cover all subjects; they are not a per-subject cost report. Other subjects' observation state is not erased by this redaction, although HumanSense's existing global processing reset closes all source handles and suppresses pending processing results.
+
+Closing HumanSense forgets all sensory associations and closes controller admission while preserving detached outstanding bills. `get_call_status()` and late financial settlement remain available after close. No raw prompt/response/media body is stored in the accounting ledger. Application-owned copies, returned dispatch observations, external providers and transport buffers have their own deletion obligations; this SDK cannot erase those copies. Durable crash recovery and multi-process accounting remain unimplemented, as documented by the primitives.
+
+## Bounded read-only status
+
+Python and MCP expose `get_call_status(controller_id=None, limit=100, max_bytes=65536)`. It returns diagnostic entries for controllers, requests, detached liabilities, receipts and sources. It exposes desired routes, blockers, capture/source evidence, request states and whole-controller financial totals. It does not expose full observation values, actual prompt text or generated response text. No remote MCP tool creates controllers or reserves/dispatches calls.
+
+The entry limit is 1–100 and the aggregate serialized entry budget 1024–262144 bytes, excluding the small response envelope. Whole entries are retained or omitted; `total_count`, `returned_count`, `omitted_count` and `truncated` are explicit. Select `controller_id` to narrow results. A too-small budget can return no entries with truncation; increase it to inspect a larger controller summary. This is a bounded current snapshot, not a stable pagination stream or durable audit log. Receipt-eviction counts remain separate from output truncation. MCP polling is not automatic Context injection into an LLM.
+
+## Executable wiring
+
+Run `python -m examples.call_controller_demo` from the repository root. The example uses actual registered observations, controller admission, evidence/prompt hashes, application-owned async invocation, result acknowledgement, charge settlement and status retrieval. The callback is explicitly synthetic: no model weights, paid endpoint or camera are used, and the reported units are not measured costs. Replace the callback, complete price quote and evidence capture with verified application implementations.
+
+A failed/cancelled transport reports unknown billing; an invalidated result cannot prevent independent financial settlement. In production, also reconcile outstanding bills after timeouts and handle consent/deletion during transport. The controller suppresses output acceptance but does not terminate an application-owned external request. Do not treat callback success, diagnostics or fixture tests as proof of real-model quality or savings.
+
+This implements the software integration in #159. Required real-model acceptance #150 and frozen A/B/C quality/cost/latency evaluation #57/#135 remain open, as do broader capability acceptance gates. No automatic LLM dispatch or sensor/delivery cadence change is introduced.

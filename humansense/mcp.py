@@ -36,6 +36,8 @@ def tool_definitions() -> list[dict]:
                     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144}}
     specs = [
         ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors. Continue with next_offset and revision.", {"offset": {"type": "integer", "minimum": 0, "maximum": 256}, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"], "revision": {"type": "string", "minLength": 64, "maxLength": 64}}, ()),
+        ("get_call_status", "Read-only bounded call-controller diagnostics. No model calls or cadence changes. Financial totals cover whole controller, not a selected subject. No raw observations, prompts or responses.",
+         {"controller_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
         ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
         ("finish_sensor_stream", "Drain and finalize one existing typed sensor stream, then close it. Does not stop its application-owned producer or open devices. Use IDs from get_sensor_status. No raw media returned.",
          {"manager_id": identifier_field, "source_id": identifier_field, "sensor_id": identifier_field},

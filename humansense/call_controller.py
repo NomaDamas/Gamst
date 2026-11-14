@@ -56,9 +56,36 @@ class CallController:
         self._submission_seq = -1
         self._clock = self._retired = self._overflow = 0
         self._closed = False
+        self._runtime_guard = self._runtime_clock = self._record_guard = self._runtime_epoch = None
+        self._detached = {}
+
+    def bind_runtime(self, *, guard, clock, validate_record, epoch):
+        """One-way binding of a fresh instance to an application-owned runtime."""
+        with self._lock:
+            if self._runtime_guard is not None or self._source_seq or self._closed or self._budget.snapshot()['accepted']:
+                raise ValueError('runtime binding requires a fresh unbound controller')
+            if not all(callable(f) for f in (guard, clock, validate_record, epoch)):
+                raise ValueError('runtime callbacks required')
+            self._runtime_guard, self._runtime_clock, self._record_guard = guard, clock, validate_record
+            self._runtime_epoch = epoch
+
+    def _admit(self, record=None):
+        if self._runtime_guard is not None:
+            self._runtime_guard()
+        if record is not None and self._record_guard is not None:
+            self._record_guard(record)
+
+    def _runtime_active(self):
+        try:
+            self._admit()
+            return True
+        except (RuntimeError, PermissionError):
+            return False
 
     def _time(self, now_ms):
         now = _ms(now_ms)
+        if self._runtime_clock is not None:
+            now = max(self._clock, _ms(self._runtime_clock()))
         if now < self._clock:
             raise ValueError('controller clock regression')
         self._clock = now
@@ -80,6 +107,7 @@ class CallController:
             now = self._time(now_ms)
             if self._closed:
                 raise RuntimeError('controller closed')
+            self._admit(record)
             decision = self._policy.recommend(record, now_ms=now)
             base, owner = _owner(record, decision)
             if any(s['base'] == base for s in self._sources.values()):
@@ -103,6 +131,7 @@ class CallController:
             now = self._time(now_ms); s = self._source(handle)
             if self._closed:
                 raise RuntimeError('controller closed')
+            self._admit(record)
             sequence = _integer(sequence, 2**53-1)
             if sequence <= self._submission_seq:
                 raise ValueError('submission replay or reordering')
@@ -139,12 +168,12 @@ class CallController:
                     s.update(active=d['proposed_change_active'], last_capture=capture)
                 return dict(status='context_only', decision=d)
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
-            if len(self._requests) >= self._max_requests:
+            if len(self._requests) + len(self._detached) >= self._max_requests:
                 victims = [r for r in self._requests.values() if r['state'] == 'pending' and r['priority'] > priority]
                 if victims:
                     victim = max(victims, key=lambda r:(r['priority'], r['submitted_ms']))
                     self._retire(victim, 'preempted_uninspected')
-            if len(self._requests) >= self._max_requests:
+            if len(self._requests) + len(self._detached) >= self._max_requests:
                 self._overflow += 1
                 return dict(status='rejected', reason='request_capacity', decision=d)
             # A newer attempt permanently supersedes older retry eligibility.
@@ -185,6 +214,7 @@ class CallController:
         _sha(prompt_sha256); identifier(provider); identifier(model_revision)
         with self._lock:
             now = self._time(now_ms); r = self._request(token)
+            self._admit(r.get('record'))
             if r['state'] != 'pending':
                 raise ValueError('request already reserved or dispatched')
             blockers = self._blockers(r, now)
@@ -204,6 +234,7 @@ class CallController:
     def dispatch(self, token, *, now_ms):
         with self._lock:
             now = self._time(now_ms); r = self._request(token)
+            self._admit(r.get('record'))
             if r['state'] != 'reserved':
                 raise ValueError('reserved request required')
             blockers = self._blockers(r, now)
@@ -231,7 +262,9 @@ class CallController:
             if evidence_sha256 != r['decision']['evidence']['record_sha256']:
                 raise ValueError('completion evidence mismatch')
             s = self._sources.get(r['source'])
-            valid = success and not r['discard'] and not self._closed and s is not None
+            valid = success and not r['discard'] and not self._closed and s is not None and self._runtime_active()
+            if self._runtime_epoch is not None:
+                valid = valid and r['decision']['evidence']['processing_epoch'] == self._runtime_epoch()
             semantic = valid and r['decision']['desired_route'] in ('small_vlm', 'strong_vlm')
             if semantic:
                 capture = r['decision']['evidence']['capture_ms']
@@ -246,7 +279,13 @@ class CallController:
 
     def settle(self, token, *, components, now_ms):
         with self._lock:
-            now = self._time(now_ms); r = self._request(token)
+            now = self._time(now_ms)
+            if type(token) is str and token in self._detached:
+                result = self._budget.settle(self._detached[token], components=components, now_ms=now)
+                if result['state'] == 'settled':
+                    del self._detached[token]
+                return result
+            r = self._request(token)
             if r['state'] != 'dispatched' or r['charged']:
                 raise ValueError('single dispatched financial settlement required')
             result = self._budget.settle(r['reservation']['token'], components=components, now_ms=now)
@@ -309,6 +348,37 @@ class CallController:
                     self.cancel(r['id'], now_ms=now)
             del self._sources[handle]
 
+    def reset_sources(self, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms)
+            for handle in list(self._sources):
+                self.close_source(handle, now_ms=now)
+
+    def forget_subject(self, subject_id=None, *, now_ms):
+        """Erase sensory associations; retain only opaque unsettled financial handles.
+
+        Ledger evidence is conservatively redacted across the whole controller,
+        since bounded historical receipts cannot prove subject ownership forever.
+        """
+        with self._lock:
+            now = self._time(now_ms)
+            handles = {h for h,s in self._sources.items()
+                       if subject_id is None or s['base'][0] == subject_id}
+            for r in list(self._requests.values()):
+                subject = r['decision']['evidence']['subject_id']
+                if subject_id is not None and subject != subject_id:
+                    continue
+                if r['state'] == 'reserved':
+                    self._budget.release(r['reservation']['token'], now_ms=now)
+                if r['state'] == 'dispatched' and not r['charged']:
+                    self._detached[r['id']] = r['reservation']['token']
+                del self._requests[r['id']]
+            for h in handles:
+                del self._sources[h]
+            self._recent = deque((r for r in self._recent
+                if subject_id is not None and r['evidence']['subject_id'] != subject_id), maxlen=self._recent.maxlen)
+            self._budget.redact_evidence()
+
     def close(self, *, now_ms):
         with self._lock:
             now = self._time(now_ms)
@@ -319,14 +389,15 @@ class CallController:
 
     def snapshot(self, *, now_ms=None):
         with self._lock:
-            if now_ms is not None:
-                self._time(now_ms)
+            if now_ms is not None or self._runtime_clock is not None:
+                self._time(self._clock if now_ms is None else now_ms)
             requests = sorted(self._requests.values(), key=lambda r:(r['priority'], r['submitted_ms'], r['id']))
             return deepcopy(dict(closed=self._closed, sources=self._sources,
                 requests=[dict(id=r['id'], source=r['source'], state=r['state'], priority=r['priority'],
                     decision=r['decision'], blockers=self._blockers(r, self._clock),
                     expires_ms=r['expires_ms'], finished=r['finished'], charged=r['charged'],
                     discard=r['discard'], execution=r['execution']) for r in requests],
+                detached_financial_requests=list(self._detached),
                 recent=list(self._recent), omitted_receipts=self._retired-len(self._recent),
                 overflow_rejections=self._overflow, budget=self._budget.snapshot(),
                 executes_model=False, changes_sensor_cadence=False, durable=False))

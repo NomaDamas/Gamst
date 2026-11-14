@@ -481,3 +481,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Optional call budget ledger](docs/call-budget.md): bounded atomic reservations, explicit unknown liabilities and verified-charge settlement. Controller/API integration remains separate.
 
 [Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; HumanSense/MCP lifecycle integration remains required.
+
+[HumanSense/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.

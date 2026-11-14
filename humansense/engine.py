@@ -73,6 +73,22 @@ class HumanSense:
             raise ValueError('sensor_inference_interval_ms must be between 0 and 5000')
         self.sensor_inference_interval_ms = sensor_inference_interval_ms
         self._sensor_refresh = {}
+        self._call_controllers = {}
+
+    @property
+    def consent(self):
+        return self._consent
+
+    @consent.setter
+    def consent(self, value):
+        if type(value) is not bool:
+            raise TypeError('consent must be an explicit boolean')
+        prior = getattr(self, '_consent', False)
+        self._consent = value
+        if prior and not value:
+            self._generation += 1
+            for controller in getattr(self, '_call_controllers', {}).values():
+                controller.reset_sources(now_ms=timestamp())
 
     async def __aenter__(self):
         if self.closed:
@@ -550,6 +566,66 @@ class HumanSense:
                 'truncated': page['truncated'], 'entry_byte_budget': max_bytes,
                 'meaning': 'registered_contracts_only', 'activation': 'explicit_application_setup'}
 
+    def register_call_controller(self, controller_id, controller):
+        """Bind a fresh opt-in controller; never starts external calls."""
+        from .call_controller import CallController
+        self._check(); identifier(controller_id)
+        if type(controller) is not CallController:
+            raise TypeError('CallController required')
+        if controller_id in self._call_controllers or len(self._call_controllers) >= 8:
+            raise ValueError('duplicate controller ID or controller capacity')
+        def validate_record(record):
+            observation = record.get('observation', {})
+            if observation.get('processing_epoch') != f'{self._session_id}:{self._generation}':
+                raise ValueError('observation is from an obsolete or foreign runtime epoch')
+            spec = self.perception_capabilities.get(observation.get('capability', {}).get('id'))
+            if record.get('models') != [{'id': spec.provider, 'version': spec.version, 'backend': 'plugin'}]:
+                raise ValueError('observation provenance differs from registered capability')
+        controller.bind_runtime(guard=self._check, clock=timestamp, validate_record=validate_record,
+                                epoch=lambda: f'{self._session_id}:{self._generation}')
+        self._call_controllers[controller_id] = controller
+
+    async def get_call_status(self, controller_id=None, limit=100, max_bytes=65536):
+        """Read-only bounded diagnostics; totals describe whole controller scope."""
+        self._bounded_query([], limit, max_bytes)
+        if controller_id is not None:
+            identifier(controller_id)
+            if controller_id not in self._call_controllers:
+                raise ValueError('unknown call controller')
+        rows = []
+        for name, controller in sorted(self._call_controllers.items()):
+            if controller_id is not None and name != controller_id:
+                continue
+            state = controller.snapshot()
+            budget = {k:v for k,v in state['budget'].items() if k not in ('active', 'recent')}
+            rows.append(dict(kind='controller', controller_id=name, closed=state['closed'],
+                source_count=len(state['sources']), request_count=len(state['requests']),
+                detached_financial_count=len(state['detached_financial_requests']),
+                overflow_rejections=state['overflow_rejections'], omitted_receipts=state['omitted_receipts'],
+                budget=budget, accounting_scope='whole_controller_all_subjects'))
+            for request in state['requests']:
+                decision = request['decision']
+                rows.append(dict(kind='request', controller_id=name, request_id=request['id'],
+                    source=request['source'], state=request['state'], priority=request['priority'],
+                    desired_route=decision['desired_route'], reason=decision['reason'], blockers=request['blockers'],
+                    evidence=decision['evidence'], expires_ms=request['expires_ms'],
+                    finished=request['finished'], charged=request['charged'], discard=request['discard']))
+            for token in state['detached_financial_requests']:
+                rows.append(dict(kind='detached_liability', controller_id=name, request_id=token,
+                    meaning='sensory_associations_deleted_billing_unresolved'))
+            for receipt in reversed(state['recent']):
+                rows.append(dict(kind='receipt', controller_id=name, request_id=receipt['id'],
+                    reason=receipt['reason'], evidence=receipt['evidence']))
+            for handle, source in state['sources'].items():
+                rows.append(dict(kind='source', controller_id=name, source=handle,
+                    identity=list(source['base']), owner_revision=source['owner'],
+                    last_dispatch_ms=source['last_dispatch'], last_semantic_capture_ms=source['last_semantic']))
+        page = self._bounded_query(rows, limit, max_bytes)
+        return dict(entries=page['items'], total_count=len(rows), returned_count=page['returned_count'],
+            omitted_count=len(rows)-page['returned_count'], truncated=page['truncated'], entry_byte_budget=max_bytes,
+            paused=self.paused, consent=self.consent, closed=self.closed,
+            executes_model=False, changes_sensor_cadence=False, quality_preservation_proven=False)
+
     async def get_sensor_status(self):
         if self.closed:
             raise RuntimeError('runtime is closed')
@@ -755,6 +831,8 @@ class HumanSense:
 
     async def _delete_data(self, subject_id=None):
         self._generation += 1
+        for controller in self._call_controllers.values():
+            controller.forget_subject(subject_id, now_ms=timestamp())
         deleted = self.store.delete(subject_id)
         self.object_memory.clear(subject_id)
         self.transcript_memory.clear(subject_id)
@@ -802,6 +880,8 @@ class HumanSense:
             raise
 
     async def _reset_all_plugins(self):
+        for controller in self._call_controllers.values():
+            controller.reset_sources(now_ms=timestamp())
         self.object_memory.invalidate_visibility()
         self.transcript_memory.interrupt()
         errors = []
@@ -848,6 +928,9 @@ class HumanSense:
         if self.closed:
             return
         self.closed = True
+        for controller in self._call_controllers.values():
+            controller.forget_subject(now_ms=timestamp())
+            controller.close(now_ms=timestamp())
         self.object_memory.clear()
         self.transcript_memory.clear()
         self._generation += 1
