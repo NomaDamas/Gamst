@@ -32,13 +32,13 @@ Camera1.fx: 100.0
 Camera1.fy: 100.0
 Camera1.cx: 16.0
 Camera1.cy: 16.0
-Camera.width: 32
-Camera.height: 32
+Camera.width: 96
+Camera.height: 96
 Camera.fps: 30
 Camera.RGB: 0
 ORBextractor.nFeatures: 1000
 ORBextractor.scaleFactor: 1.2
-ORBextractor.nLevels: 8
+ORBextractor.nLevels: 1
 ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 Viewer.KeyFrameSize: 0.05
@@ -74,7 +74,7 @@ class Native(unittest.TestCase):
         n=ORBSLAMNative(**dict(self.args(),**kwargs));self.addCleanup(n.close);return n
 
     def test_abi_tracking_lost_reset_lifetime_bound_and_single_session(self):
-        n=self.open(max_frames=3);image=np.zeros((32,32),dtype=np.uint8)
+        n=self.open(max_frames=3);image=np.zeros((96,96),dtype=np.uint8)
         self.assertIsNone(n.track(image,0)['world_to_camera'])
         image[:]=2;result=n.track(image,1)
         self.assertTrue(result['map_changed']);self.assertEqual(result['world_to_camera'][0][3],1)
@@ -98,8 +98,11 @@ class Native(unittest.TestCase):
     def test_required_types_ranges_and_distortion_are_checked_before_native_open(self):
         replacements=(('Camera.RGB: 0\n',''),('Camera.fps: 30','Camera.fps: 30.0'),
                       ('Camera1.fx: 100.0','Camera1.fx: 100'),
-                      ('Camera.width: 32','Camera.width: 032'),
-                      ('ORBextractor.nLevels: 8','ORBextractor.nLevels: 9'),
+                      ('Camera.width: 96','Camera.width: 096'),
+                      ('Camera.width: 96','Camera.width: 32'),
+                      ('Camera.height: 96','Camera.height: 400'),
+                      ('ORBextractor.nLevels: 1','ORBextractor.nLevels: 8'),
+                      ('ORBextractor.nLevels: 1','ORBextractor.nLevels: 9'),
                       ('ORBextractor.scaleFactor: 1.2','ORBextractor.scaleFactor: 1.0'),
                       ('ORBextractor.minThFAST: 7','ORBextractor.minThFAST: 21'),
                       ('Viewer.ViewpointF: 500.0\n',''))
@@ -113,7 +116,7 @@ class Native(unittest.TestCase):
         self.open()
 
     def test_malformed_and_native_error_are_not_pose(self):
-        n=self.open();image=np.ones((32,32),dtype=np.uint8)
+        n=self.open();image=np.ones((96,96),dtype=np.uint8)
         for bad in (image.astype(float),image[:1],image[:,:,None]):
             with self.assertRaises(ValueError):n.track(bad,0)
         n.track(image[:,::-1],0)

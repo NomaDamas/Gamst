@@ -93,6 +93,12 @@ class ORBSLAMNative:
                 or not 0<=float(values['Camera1.cx'])<width or not 0<=float(values['Camera1.cy'])<height
                 or not 0<float(values['Camera.fps'])<=240):
             raise ValueError('invalid bounded pinhole calibration')
+        # Upstream divides the usable pyramid extent into 35px cells after
+        # 16px borders, and initializes an octree from rounded width/height.
+        # Keep conservative margins rather than passing degenerate grids.
+        smallest=min(width,height)/float(values['ORBextractor.scaleFactor'])**(int(values['ORBextractor.nLevels'])-1)
+        if smallest<80 or width<height/2:
+            raise ValueError('camera shape produces a degenerate ORB pyramid/grid')
         self._shape=(int(height),int(width))
         self._lock=threading.RLock();self._handle=None
         lib=ctypes.CDLL(library_path);self._lib=lib
