@@ -158,9 +158,20 @@ class ProcessProvider:
         return self.spec.validate(result) if operation in ('process', 'process_regions', 'finish', 'endpoint') and result is not None else result
 
     async def _request(self, operation, *, payload=b'', timeout=None, input_frame=None, **fields):
+        owner = self._separation_owner if input_frame is not None else None
+        request_revision = None
+        if owner is not None:
+            # Admission precedes the lock: a request that starts before/during
+            # reset must not become a fresh request merely by waiting behind it.
+            owner._check()
+            if owner.reset_pending:
+                raise PermissionError('separation request invalidated by provider reset')
+            request_revision = owner.revision
         async with self._lock:
             if self.closed or self._process is None:
                 raise RuntimeError('provider worker is closed; explicitly reopen its stream')
+            if owner is not None and (owner.reset_pending or request_revision != owner.revision):
+                raise PermissionError('separation request invalidated by provider reset')
             if input_frame is not None:
                 fields['frame'], payload = encode_frame(input_frame)
                 if self._separation_owner is not None:

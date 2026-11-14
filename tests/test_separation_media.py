@@ -499,6 +499,23 @@ w.main()
             fresh = await provider.process(self.frame(2, 'new'))
             self.assertEqual(len(owner.retrieve(fresh['media']['reference'], 'target', stream_epoch='new')), 192000)
 
+    async def test_process_started_during_reset_cannot_queue_and_rebind_old_epoch(self):
+        with self.fixture():
+            provider, owner = await self.open({'delay': .05})
+            active = asyncio.create_task(provider.process(self.frame()))
+            while provider._sequence < 2: await asyncio.sleep(0)
+            reset = asyncio.create_task(provider.reset())
+            while not owner.reset_pending: await asyncio.sleep(0)
+            # This starts after reset intent, while the active exchange still
+            # owns the pipe. It must fail admission before awaiting that lock.
+            with self.assertRaises(PermissionError):
+                await asyncio.wait_for(provider.process(self.frame(1)), .02)
+            self.assertIsNone(await active)
+            await reset
+            self.assertEqual((owner._store.bytes, owner.epoch), (0, None))
+            fresh = await provider.process(self.frame(2, 'new'))
+            self.assertEqual(len(owner.retrieve(fresh['media']['reference'], 'target', stream_epoch='new')), 192000)
+
     async def test_cancel_reset_while_waiting_reaps_inflight_worker(self):
         with self.fixture():
             provider, owner = await self.open({'delay': 60}, inference_timeout=600)
