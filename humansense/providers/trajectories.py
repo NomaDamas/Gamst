@@ -13,16 +13,23 @@ from ..plugins import InputFrame
 class ImageTrajectories:
     """Process complete, already-associated normalized-image track snapshots locally."""
 
-    def __init__(self, *, max_gap_ms=1000, max_samples=8):
+    def __init__(self, *, max_gap_ms=1000, max_samples=8, event_rules=None):
         if type(max_gap_ms) is not int or not 1 <= max_gap_ms <= 10000:
             raise ValueError('max_gap_ms must be 1..10000')
         if type(max_samples) is not int or not 2 <= max_samples <= 8:
             raise ValueError('max_samples must be 2..8')
+        from .image_events import ImageEventRules
+        self._rules = None if event_rules is None else ImageEventRules(event_rules)
+        if self._rules is not None and max_samples < 3 and any(r['kind'] == 'reversal' for r in self._rules.describe()):
+            raise ValueError('reversal rules require at least three retained observations')
         self._gap, self._samples = max_gap_ms, max_samples
-        version = '1.' + hashlib.sha256(json.dumps([max_gap_ms, max_samples]).encode()).hexdigest()
+        options = [max_gap_ms, max_samples]
+        if self._rules is not None: options.append(self._rules.describe())
+        version = '1.' + hashlib.sha256(json.dumps(options).encode()).hexdigest()
         self.spec = CapabilitySpec('vision.image_trajectories', 'vision.trajectories', 'video',
             'gamst.image_trajectories', version,
-            (OutputField('objects', 'array'), OutputField('geometry', 'object')),
+            (OutputField('objects', 'array'), OutputField('geometry', 'object')) +
+            (() if self._rules is None else (OutputField('events','array'),OutputField('event_summary','object'))),
             'native', stateful=True, reset_on_gap=True, freshness_ms=max_gap_ms,
             interpretation='estimate', devices=('cpu',),
             sensor_requirements=('associated-image-tracks', 'declared-camera-motion'), license='Apache-2.0')
@@ -123,11 +130,14 @@ class ImageTrajectories:
             output.append(dict(track_id=track, segment_id=segment, observations=history,
                 velocity_image_s=velocity, velocity_interval_ms=interval,
                 identity_verified=False, visibility='observed', predictions=[]))
-        result = self.spec.validate(dict(objects=output, geometry=dict(
+        result = dict(objects=output, geometry=dict(
             units='normalized_image', image_size=size, coordinate_frame=sensor.coordinate_frame,
             timestamp_ms=ts, stream_epoch=sensor.stream_epoch, tracker_id=data['tracker_id'],
             tracker_version=data['tracker_version'], camera_motion=data['camera_motion'],
             continuity=continuous, complete_snapshot=True, metric_geometry=False,
-            camera_motion_compensated=False, evidence_verified=False)))
+            camera_motion_compensated=False, evidence_verified=False))
+        if self._rules is not None:
+            result.update(self._rules.evaluate(result))
+        result = self.spec.validate(result)
         self._owner, self._last, self._tracks = owner, (ts, seq, data['camera_motion']), pending
         return result

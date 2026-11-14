@@ -435,6 +435,7 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 
 [Observed image trajectories](docs/image-trajectories.md).
 [RF-DETR pixel-to-trajectory streaming Context](docs/rfdetr-trajectories.md).
+[Opt-in ROI, finite-line and direction-reversal event candidates](docs/image-events.md).
 
 [Metric track motion context: velocity, acceleration and approach](docs/metric-kinematics.md).
 
