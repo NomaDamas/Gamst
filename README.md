@@ -434,6 +434,7 @@ Optional [visual appearance history](docs/visual-retrieval.md) uses `dinov3.retr
 [Playback-reference duplex audio](docs/duplex-audio.md) adds an optional WebRTC AEC3 transform with separate preserved ambient and cleaned-speech lanes. Missing reference is explicit; actual acoustic and live duplex acceptance remains pending.
 
 [Observed image trajectories](docs/image-trajectories.md).
+[RF-DETR pixel-to-trajectory streaming Context](docs/rfdetr-trajectories.md).
 
 [Metric track motion context: velocity, acceleration and approach](docs/metric-kinematics.md).
 

@@ -138,6 +138,11 @@ def capability(profile, config):
         if set(config) != {'path', 'files'} or type(config['path']) is not str:
             raise ValueError('qwen3.asr requires only local path and file hashes')
         return QwenStreamingASR.capability(artifact_version(config['files']))
+    if profile == 'rfdetr.trajectories':
+        from .providers.detection_trajectories import RFDETRTrajectories, configuration
+        args = configuration(config)
+        return RFDETRTrajectories.capability('1.12.1.eager.sha256.'+args['sha256'],
+            **{k:v for k,v in args.items() if k not in ('path','sha256')})
     if profile == 'rfdetr.nano':
         from .providers.detection import RFDETRObjects
         import re

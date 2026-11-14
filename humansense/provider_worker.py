@@ -89,6 +89,9 @@ def _construct(profile, config):
     elif profile == 'qwen3.asr':
         from .providers.qwen_asr import QwenStreamingASR
         provider = QwenStreamingASR.from_local(**config)
+    elif profile == 'rfdetr.trajectories':
+        from .providers.detection_trajectories import RFDETRTrajectories
+        provider = RFDETRTrajectories.from_local(**config)
     elif profile == 'rfdetr.nano':
         from .providers.detection import RFDETRObjects
         provider = RFDETRObjects.from_local(**config)
