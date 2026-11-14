@@ -165,5 +165,6 @@ they are not permission to alter original gates or replace missing measurements.
 prefix, bound to the original request, response and source trace. Its completion
 artifact is `runtime-complete.json`. `instrumentation_complete` means the bounded
 transport inventory closed consistently; it never means complete bills, complete
-physical coverage, authentic receipts or actual acceptance. Failed transport can
-therefore coexist with an otherwise successful original source response.
+physical coverage, authentic receipts or actual acceptance. A protocol failure triggers prompt owned cleanup and an error outcome for that
+invocation. Any original response already received retains its original digest;
+failed instrumentation never becomes a successful measurement report.
