@@ -88,9 +88,12 @@ into sensory memory as a new observation. Controller/MCP diagnostics retain
 bounded provenance/hashes, not question/response bodies. Text completion never
 satisfies outstanding visual semantic-audit coverage.
 
-All dispatched calls settle initially as unknown, including success, failure,
-timeout and cancellation. `actual_cost=None` retains the reservation liability
-and financial slot until the application calls controller.settle with verified
+Dispatched calls without a verified receipt settle as unknown, including success,
+failure, timeout and cancellation. Verified receipts may arrive before or after
+completion; an earlier settlement is preserved without a second unknown receipt.
+`actual_cost=None` means this adapter does not calculate a price; consult the
+controller ledger for verified charges. Without such a receipt the reservation
+liability and financial slot remain until controller.settle receives verified
 charge components. Never convert token counts to a guessed whole charge, refund
 a cancelled remote request, or exclude retries/media/local compute from actual
 accounting. Unknown cost may block later calls; this is deliberate admission

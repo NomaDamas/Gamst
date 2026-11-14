@@ -3,6 +3,7 @@ import asyncio
 import inspect
 import json
 import math
+from copy import deepcopy
 
 from .capabilities import bounded_json, identifier
 from .call_controller import _digest
@@ -50,8 +51,9 @@ class TextContextCalls:
             dict(role='user',content=json.dumps(dict(question=question,observation_record=record),
                                                ensure_ascii=False,allow_nan=False,separators=(',',':')))])
         # Includes escaped nested JSON, so the wire-style budget exceeds record budget.
-        request=bounded_json(request,max_bytes=262144)
-        return request,evidence
+        if len(json.dumps(request,ensure_ascii=True,allow_nan=False,separators=(',',':')).encode())>262144:
+            raise ValueError('serialized request exceeds 262144 bytes')
+        return request,dict(evidence,_source_handle=pending['source'])
 
     @staticmethod
     def _response(result):
@@ -69,14 +71,24 @@ class TextContextCalls:
         return result
 
     def _complete(self,request_id,evidence,*,success,result_sha256):
-        try:
-            completion=self.controller.finish(request_id,success=success,evidence_sha256=evidence['record_sha256'],
-                                               result_sha256=result_sha256,now_ms=timestamp())
-        except ValueError:
-            if request_id not in self.controller.snapshot()['detached_financial_requests']:raise
-            completion={'accepted':False}
-        self.controller.settle(request_id,components=None,now_ms=timestamp())
-        return completion
+        # Receipt and result can arrive in either order. Hold the controller's
+        # reentrant lock across completion and the conditional unknown receipt.
+        with self.controller._lock:
+            state=self.controller.snapshot()
+            pending=next((r for r in state['requests'] if r['id']==request_id),None)
+            if pending is not None:
+                charged=pending['charged']
+                completion=self.controller.finish(request_id,success=success,
+                    evidence_sha256=evidence['record_sha256'],result_sha256=result_sha256,now_ms=timestamp())
+                if not charged:self.controller.settle(request_id,components=None,now_ms=timestamp())
+                return completion
+            if request_id in state['detached_financial_requests']:
+                self.controller.settle(request_id,components=None,now_ms=timestamp())
+                return {'accepted':False}
+            if evidence['_source_handle'] not in state['sources']:
+                # Deletion may already have erased a financially settled request.
+                return {'accepted':False}
+            raise ValueError('completion request is no longer available')
 
     async def execute(self,request_id,record,question,*,maximum_charge,ttl_ms=1000):
         self.human._check()
@@ -85,7 +97,11 @@ class TextContextCalls:
         request,evidence=self._prepare(request_id,record,question)
         task=asyncio.create_task(self._execute(request_id,request,evidence,maximum_charge,ttl_ms))
         self._active=task
-        try:return await task
+        try:return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            await _finish(asyncio.gather(task,return_exceptions=True))
+            raise
         finally:
             if self._active is task:self._active=None
 
@@ -101,8 +117,10 @@ class TextContextCalls:
             dispatched=True
             # Give the client its own copy; mutation cannot change ledger provenance.
             deadline=asyncio.get_running_loop().time()+self._timeout
-            self._backend_task=asyncio.create_task(self._completion(bounded_json(request,max_bytes=262144)))
-            response=await asyncio.wait_for(self._backend_task,timeout=self._timeout)
+            self._backend_task=asyncio.create_task(self._completion(deepcopy(request)))
+            done,_=await asyncio.wait({self._backend_task},timeout=self._timeout)
+            if not done:raise asyncio.TimeoutError('completion exceeded deadline')
+            response=self._backend_task.result()
             if asyncio.get_running_loop().time()>=deadline:
                 raise asyncio.TimeoutError('completion exceeded deadline')
             value=self._response(response)
@@ -120,7 +138,12 @@ class TextContextCalls:
             if dispatched and not completed:
                 self._complete(request_id,evidence,success=False,result_sha256=_digest('failed_or_cancelled'))
             raise
-        finally:self._backend_task=None
+        finally:
+            backend=self._backend_task
+            if backend is not None:
+                if not backend.done():backend.cancel()
+                await _finish(asyncio.gather(backend,return_exceptions=True))
+                self._backend_task=None
 
     async def _close(self):
         task=self._active
