@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+from time import monotonic as _now
 
 from .pg_artifact import validate_manifest,_encoded,_json
 from .pg_canonical import validate_canonical
@@ -15,6 +16,7 @@ REQUEST_LIMIT=8*1024**2
 
 
 async def _deadline(task,seconds):
+    if seconds<=0:raise TimeoutError('PG owned worker deadline exceeded')
     done,_=await asyncio.wait({task},timeout=seconds)
     if not done:raise TimeoutError('PG owned worker deadline exceeded')
     return task.result()
@@ -56,13 +58,16 @@ class PGCanonicalProcess:
             with path.open('xb') as stream:stream.write(request)
             os.chmod(path,0o400)
             env=os.environ.copy();env.update(HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',HF_HUB_DISABLE_TELEMETRY='1')
+            deadline=_now()+startup_timeout
             spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','humansense.pg_canonical_worker',
                 '--request',str(path),'--sha256',hashlib.sha256(request).hexdigest(),
                 stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,
                 env=env,limit=65536))
-            self._process=await asyncio.shield(spawn)
+            self._process=await _deadline(spawn,deadline-_now())
+            if _now()>=deadline:raise TimeoutError('PG owned worker deadline exceeded')
             self._read_task=asyncio.create_task(self._process.stdout.readline())
-            raw=await _deadline(self._read_task,startup_timeout)
+            raw=await _deadline(self._read_task,deadline-_now())
+            if _now()>=deadline:raise TimeoutError('PG owned worker deadline exceeded')
             if not raw or len(raw)>65536:raise ValueError('missing/bounded PG worker response required')
             response=_json(raw,65536)
             if type(response) is not dict or response.get('status')!='loaded':
@@ -79,12 +84,16 @@ class PGCanonicalProcess:
             self.receipt=response
             return self
         except BaseException as initial:
-            try:
-                if self._process is None and spawn is not None:
-                    self._process=await _finish(spawn)
-                await _finish(asyncio.create_task(self.close()))
-            except BaseException as cleanup:
-                raise initial from cleanup
+            acquisition_error=None
+            if self._process is None and spawn is not None:
+                try:self._process=await _finish(spawn)
+                except BaseException as error:acquisition_error=error
+            # Exec failure must not bypass cleanup merely because acquisition
+            # re-raises. A late acquired handle is used ONLY to stop/reap it.
+            try:await _finish(asyncio.create_task(self.close()))
+            except BaseException as cleanup:raise initial from cleanup
+            if acquisition_error is not None and acquisition_error is not initial:
+                raise initial from acquisition_error
             raise
 
     async def _stop(self):

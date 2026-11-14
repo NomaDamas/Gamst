@@ -291,6 +291,65 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(children[0].returncode);self.assertTrue(children[0]._transport.is_closing())
                 self.assertEqual(list(stage.iterdir()),[])
 
+    async def test_actual_exec_failure_cleans_owned_request_directory(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            root=Path(temp).resolve();bundle=root/'bundle';bundle.mkdir();stage=root/'stage';stage.mkdir()
+            graph,sha,lock,lock_sha,spec,_=basic(bundle)
+            invalid=root/'not-python';invalid.write_text('not an executable image');invalid.chmod(0o700)
+            with self.assertRaises(OSError):
+                await PGCanonicalProcess.open(str(invalid),graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage))
+            self.assertEqual(list(stage.iterdir()),[])
+            self.assertEqual(invalid.read_text(),'not an executable image')
+
+    async def test_spawn_deadline_keeps_late_handle_only_for_reap(self):
+        from humansense import pg_canonical_process as process_module
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            root=Path(temp).resolve();bundle=root/'bundle';bundle.mkdir();stage=root/'stage';stage.mkdir()
+            graph,sha,lock,lock_sha,spec,_=basic(bundle);children=[]
+            spawned=asyncio.Event();release=asyncio.Event();expired=asyncio.Event()
+            real=asyncio.create_subprocess_exec;real_deadline=process_module._deadline
+            async def spawn(*args,**kwargs):
+                request=args[args.index('--request')+1]
+                code="import pathlib,sys,json; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); print(json.dumps(dict(status='loaded',canonical_sha256=r['canonical_sha'],graph_schema_sha256=r['canonical']['graph_schema_sha256'],planned_storage_bytes=4,trained_identity_verified=False,reference_parity_verified=False,runtime_compatibility_verified=False,resource_admission='unavailable',actual_acceptance='incomplete')),flush=True);sys.stdin.buffer.read()"
+                child=await real(sys.executable,'-u','-c',code,request,**kwargs)
+                children.append(child);spawned.set();await release.wait();return child
+            async def deadline(task,seconds):
+                try:return await real_deadline(task,seconds)
+                except TimeoutError:expired.set();raise
+            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
+                 patch('humansense.pg_canonical_process._deadline',side_effect=deadline):
+                task=asyncio.create_task(PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage),startup_timeout=.01))
+                try:
+                    await asyncio.wait_for(spawned.wait(),5)
+                    await asyncio.wait_for(expired.wait(),5)
+                    self.assertFalse(task.done())  # Parent is still acquiring ownership for cleanup.
+                finally:release.set()
+                with self.assertRaises(TimeoutError):await task
+            self.assertIsNotNone(children[0].returncode);self.assertTrue(children[0]._transport.is_closing())
+            self.assertEqual(list(stage.iterdir()),[])
+
+    async def test_response_uses_remaining_startup_budget(self):
+        from humansense import pg_canonical_process as process_module
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            root=Path(temp).resolve();bundle=root/'bundle';bundle.mkdir();stage=root/'stage';stage.mkdir()
+            graph,sha,lock,lock_sha,spec,_=basic(bundle);children=[];budgets=[]
+            real=asyncio.create_subprocess_exec;real_deadline=process_module._deadline
+            async def spawn(*args,**kwargs):
+                request=args[args.index('--request')+1]
+                code="import pathlib,sys,json; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); print(json.dumps(dict(status='loaded',canonical_sha256=r['canonical_sha'],graph_schema_sha256=r['canonical']['graph_schema_sha256'],planned_storage_bytes=4,trained_identity_verified=False,reference_parity_verified=False,runtime_compatibility_verified=False,resource_admission='unavailable',actual_acceptance='incomplete')),flush=True);sys.stdin.buffer.read()"
+                child=await real(sys.executable,'-u','-c',code,request,**kwargs);children.append(child);return child
+            async def deadline(task,seconds):
+                budgets.append(seconds);return await real_deadline(task,seconds)
+            # Controlled application clock; actual asyncio timers/subprocesses
+            # are unchanged. No host scheduling-speed assumption is involved.
+            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
+                 patch('humansense.pg_canonical_process._deadline',side_effect=deadline), \
+                 patch('humansense.pg_canonical_process._now',side_effect=[100.,100.,104.,104.,105.]):
+                owner=await PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage),startup_timeout=10)
+                await owner.close()
+            self.assertEqual(budgets[:2],[10.,6.])
+            self.assertIsNotNone(children[0].returncode);self.assertEqual(list(stage.iterdir()),[])
+
     async def test_source_stage_overlap_rejected_before_spawn(self):
         with tempfile.TemporaryDirectory(dir='.') as temp:
             root=Path(temp).resolve();graph,sha,lock,lock_sha,spec,_=basic(root)
