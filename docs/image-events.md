@@ -92,7 +92,8 @@ RF-DETR partial snapshots clear both stages and emit no candidates. Static-camer
 mode is still caller-declared; undetected motion/ID errors can invalidate the
 candidate. Rules do not change user delivery cadence or wake a consumer model.
 Each delivered snapshot contains candidates for its latest pair/triple only;
-a slower consumer must explicitly retain event records if it needs every event.
+a slower consumer can use [cursor replay](observation-pages.md) for intermediate
+records while they remain retained; this is not lossless event delivery.
 
 Tests cover analytic geometry, deadbands/finite segments, reversal, provenance
 boundaries, output limits and actual pixel-worker/Context/MCP propagation with
