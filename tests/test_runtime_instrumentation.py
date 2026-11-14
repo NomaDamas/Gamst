@@ -75,6 +75,21 @@ class Text(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('journal_sink_failed',report['incomplete_reasons'])
                 self.assertEqual(report['dispatched_without_invocation'],int(event!='call_capacity_reserved'))
 
+    async def test_cancellation_after_dispatch_before_callback_has_no_native_attempt(self):
+        class CancelAtDispatch:
+            def emit(self,event):
+                if event['event']=='controller_dispatched':raise asyncio.CancelledError()
+        observer=session(self.root,journal=CancelAtDispatch());called=[]
+        async def callback(request):called.append(True);return dict(text='ok',usage=None)
+        adapter=self.adapter(callback,evaluation_observer=observer)
+        request,record=await self.queued()
+        with self.assertRaises(asyncio.CancelledError):await adapter.execute(request,record,'q',maximum_charge=1)
+        report=await observer.close()
+        self.assertFalse(called);self.assertEqual(report['reports'][0]['attempts'],[])
+        self.assertEqual(report['provider_counters'],[])
+        self.assertEqual(report['dispatched_without_invocation'],1)
+        self.assertTrue(report['unresolved_billing']);self.assertEqual(self.c.snapshot()['budget']['unknown_reports'],1)
+
     async def test_error_and_cancellation_keep_counts_and_drain(self):
         for cancel in (False,True):
             observer=session(self.root);started=asyncio.Event();drained=[]
@@ -106,7 +121,8 @@ class Text(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observer.snapshot()['private_subject_mappings'],0)
         args=dict(quantities={'request':1},line_claims=['b'*64],evidence_sha256='c'*64)
         observer.attach_declared_lines(operation,**args)
-        self.assertFalse(observer.snapshot()['unresolved_billing'])
+        self.assertFalse(observer.snapshot()['unresolved_attempt_billing'])
+        self.assertTrue(observer.snapshot()['unresolved_billing'])
         report=await observer.close()
         with self.assertRaises(RuntimeError):observer.attach_declared_lines(operation,**args)
         observer.invalidate('delete',subject_id='local-user')
@@ -175,6 +191,17 @@ class Text(unittest.IsolatedAsyncioTestCase):
         frozen=observer.snapshot()
         self.assertEqual(await observer.close(),frozen)
         self.assertTrue(frozen['terminal'])
+
+    async def test_private_text_cannot_be_used_as_structural_terminal_reason(self):
+        observer=session(self.root)
+        worker=observer.reserve_work('worker_lifecycle',dict(worker_id='worker'))
+        with self.assertRaises(ValueError):worker.finish('PRIVATE EXCEPTION')
+        worker.finish('closed')
+        request,record=await self.queued()
+        call=observer.reserve_call(self.c,request,provider='test.client',model_revision='v1',prompt_sha256='a'*64)
+        with self.assertRaises(ValueError):call.release('PRIVATE EXCEPTION')
+        call.release('unadmitted')
+        self.assertNotIn('PRIVATE',str(await observer.close()))
 
     async def test_explicit_retention_and_capacity_reject_before_dispatch(self):
         with self.assertRaises(PermissionError):session(self.root,retain_evaluation_hashes=False)

@@ -61,14 +61,16 @@ class EvaluationSession:
     @classmethod
     def from_channel(cls,channel):
         """Load only the parent-owned bounded declaration artifacts, never code."""
-        from .three_arm_comparison import _read
+        from .runtime_channel import load_declarations
         bootstrap=channel.bootstrap
         paths=bootstrap['paths']
         names=('plan','collection','inputs','stream_protocol','allocation_protocol',
                'reconciliation_protocol','instrumentation_protocol')
         if type(paths) is not dict or set(paths)!=set(names):
             raise ValueError('exact parent declaration path inventory required')
-        values={name:_read(paths[name]) for name in names}
+        values=deepcopy(channel.declarations) if hasattr(channel,'declarations') else load_declarations(bootstrap)
+        if type(values) is not dict or set(values)!=set(names):
+            raise ValueError('exact verified parent declaration payloads required')
         for name,key in (('plan','comparison_plan_sha256'),('collection','collection_sha256'),('inputs','inputs_sha256'),
                 ('stream_protocol','stream_protocol_sha256'),('allocation_protocol','allocation_protocol_sha256'),
                 ('reconciliation_protocol','reconciliation_protocol_sha256'),
@@ -237,7 +239,7 @@ class EvaluationSession:
     def _unmeasured_boundary(self):
         # Observing an SDK invocation does not measure its hardware/cloud bill,
         # physical sensor availability or all declared resource lanes.
-        return [dict(component_id=cid,resource_id=lane['resource_id'],lane_id=lane['lane_id'],
+        return [dict(component_id=cid,kind=self._components[cid]['kind'],unit=self._components[cid]['unit'],resource_id=lane['resource_id'],lane_id=lane['lane_id'],
             status='unknown',quantity=None,billed_amount=None,
             reason='runtime instrumentation does not measure this frozen resource/billing lane')
             for cid,requirement in self._stream_declaration['requirements'].items()
@@ -287,7 +289,8 @@ class EvaluationSession:
             provider_counters=[dict(provider=p,revision=r,role=role,count=n) for (p,r,role),n in sorted(provider_counts.items())],
             worker_measurements=workers,
             dispatched_without_invocation=sum(isinstance(t,_Call) and t._dispatched and t.attempt_id is None for t in self._tickets.values()),
-            incomplete_reasons=sorted(self._incomplete),unresolved_billing=unresolved,
+            incomplete_reasons=sorted(self._incomplete),unresolved_attempt_billing=unresolved,
+            unresolved_billing=(unresolved or any(lane['kind']=='monetary' for lane in self._unmeasured_boundary())),
             monetary_cost=None,physical_capture_counters=None,
             required_boundary_lanes=self._unmeasured_boundary(),
             source_availability='unknown; SDK lifecycle is not physical capture availability',
@@ -409,7 +412,8 @@ class _Call(_Ticket):
     def release(self,reason):
         if self._finished:return
         # Reasons are structural SDK states, not third-party exception messages.
-        if type(reason) is not str or len(reason)>128:raise ValueError('bounded release reason required')
+        if reason not in ('unadmitted','completed','published','discarded','error','cancelled','timeout','failed','success'):
+            raise ValueError('known structural release reason required')
         try:self._finish('call_capacity_released',dict(dispatched=self._dispatched,invoked=self._entered,reason=reason))
         finally:self._scrub()
 
@@ -430,7 +434,8 @@ class _Work(_Ticket):
         self._marks[name]=self.session._emit(self,name,fields)
 
     def finish(self,outcome):
-        if type(outcome) is not str or len(outcome)>128:raise ValueError('bounded worker outcome required')
+        if outcome not in ('closed','completed','error','cancelled','timeout'):
+            raise ValueError('known structural worker outcome required')
         if self._finished:return
         end=self._finish('work_finished',dict(kind=self.kind,outcome=outcome))
         self._marks['work_finished']=end
