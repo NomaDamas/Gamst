@@ -477,3 +477,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Small semantic model engine](docs/smolvlm-native.md): explicit local SmolVLM2-500M multi-image inference. [Capture-window Context integration](docs/smolvlm-context.md) connects an owned worker to SensorStreams/MCP. Actual trained-model acceptance remains pending.
 
 [Optional call recommendations](docs/call-policy.md): evidence-bound periodic, change, novelty and task-conflict rules. Context delivery stays independent; recommendations do not execute models or authorize spending.
+
+[Optional call budget ledger](docs/call-budget.md): bounded atomic reservations, explicit unknown liabilities and verified-charge settlement. Controller/API integration remains separate.
