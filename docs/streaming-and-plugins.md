@@ -232,14 +232,14 @@ Native threaded device I/O cannot be interrupted by asyncio: cleanup can wait
 for a blocked read/release, and there is no guaranteed shutdown deadline. The
 camera I/O lock keeps release serialized with an already-running read.
 
-A restart joins previous cleanup before acquiring new handles or clearing old
-errors. Successful cleanup permits restart; failed release/reset prevents reuse
+A restart joins previous cleanup and lets existing completion waiters report
+their errors before acquiring new handles or clearing old errors. Successful cleanup permits restart; failed release/reset prevents reuse
 of the same session and its error remains observable. Construct a new session
 only after the application has resolved the underlying device failure. Do not
 race fresh device startup against stop/pause; in-flight native startup handle
 ownership is tracked separately in [#213](https://github.com/NomaDamas/Gamst/issues/213). No physical capture
 quality or platform driver guarantee follows from the fake-device tests.
 
-Call `wait()`/`stop()` from the application owner, not inside a capture delivery
-callback. A capture task cannot join itself: `wait()` rejects that use, and
+Call lifecycle methods from the application owner, not inside capture delivery
+or cleanup/reset callbacks. Restart from either owned task is rejected. An owned task cannot join itself: `wait()` rejects that use, and
 `stop()` schedules cleanup then raises an explicit error instead of deadlocking.

@@ -32,6 +32,9 @@ class CaptureSession:
         self._errors: list[str] = []
         self._start_lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task | None = None
+        self._waiters = 0
+        self._waiters_done = asyncio.Event()
+        self._waiters_done.set()
         self._camera_io_lock = threading.Lock()
         self._audio_delivery_slots = threading.BoundedSemaphore(8)
         self._capture_generation = 0
@@ -39,11 +42,17 @@ class CaptureSession:
         self._counts = {"video_frames": 0, "audio_windows": 0, "dropped_audio_windows": 0}
 
     async def start(self):
+        current = asyncio.current_task()
+        if current in self._tasks or current is self._cleanup_task:
+            raise RuntimeError("Capture or cleanup task cannot start its own session")
         # Do not replace a previous generation's handles while its owned
         # cleanup is still releasing devices or resetting provider state.
         async with self._start_lock:
             if self._cleanup_task is not None:
                 await self._join_cleanup(self._cleanup_task)
+                # Existing waiters must report their generation's errors before
+                # restart clears diagnostics and replaces capture tasks.
+                await self._waiters_done.wait()
             if self._running:
                 return self
             self._cleanup_task = None
@@ -211,8 +220,8 @@ class CaptureSession:
     async def stop(self):
         """Join device release/reset, even if this waiter is cancelled repeatedly."""
         cleanup = self._begin_cleanup()
-        if asyncio.current_task() in self._tasks:
-            raise RuntimeError("Capture task cannot join its own cleanup; stop requested")
+        if asyncio.current_task() in self._tasks or asyncio.current_task() is cleanup:
+            raise RuntimeError("Capture or cleanup task cannot join its own cleanup; stop requested")
         await self._join_cleanup(cleanup)
 
     async def _cleanup(self):
@@ -271,27 +280,34 @@ class CaptureSession:
         Cancelling a waiter stops capture and still joins release before raising
         CancelledError. Native device I/O cannot be interrupted by asyncio.
         """
-        if asyncio.current_task() in self._tasks:
-            raise RuntimeError("Capture task cannot wait for its own completion")
-        tasks = tuple(self._tasks)
+        if asyncio.current_task() in self._tasks or asyncio.current_task() is self._cleanup_task:
+            raise RuntimeError("Capture or cleanup task cannot wait for its own completion")
+        self._waiters += 1
+        self._waiters_done.clear()
         try:
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            if tasks or self._cleanup_task is not None:
-                try:
-                    await self._join_cleanup(self._begin_cleanup())
-                except Exception:
-                    # Preserve both the original failure and cleanup diagnostics.
-                    if not self._errors:
-                        raise
-        except asyncio.CancelledError:
+            tasks = tuple(self._tasks)
             try:
-                await self.stop()
-            except Exception:
-                pass  # recorded cleanup errors remain visible; preserve cancellation
-            raise
-        if self._errors:
-            raise RuntimeError("; ".join(self._errors))
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if tasks or self._cleanup_task is not None:
+                    try:
+                        await self._join_cleanup(self._begin_cleanup())
+                    except Exception:
+                        # Preserve both the original failure and cleanup diagnostics.
+                        if not self._errors:
+                            raise
+            except asyncio.CancelledError:
+                try:
+                    await self.stop()
+                except Exception:
+                    pass  # recorded cleanup errors remain visible; preserve cancellation
+                raise
+            if self._errors:
+                raise RuntimeError("; ".join(self._errors))
+        finally:
+            self._waiters -= 1
+            if self._waiters == 0:
+                self._waiters_done.set()
 
     def status(self):
         return {"running": self._running, "paused": self._paused,

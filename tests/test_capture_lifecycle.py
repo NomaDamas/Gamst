@@ -122,12 +122,13 @@ class CaptureLifecycleTests(unittest.IsolatedAsyncioTestCase):
             acquired.append(camera)
             return camera
         session = CaptureSession(runtime, video=0, consent=True)
-        restart = None
+        restart = old_waiter = None
         with patch.dict('sys.modules', {'cv2': SimpleNamespace(VideoCapture=open_camera)}):
             try:
                 await session.start()
                 await asyncio.wait_for(first.entered.wait(), 2)
                 restart = asyncio.create_task(session.start())
+                old_waiter = asyncio.create_task(session.wait())
                 await asyncio.sleep(0)
                 self.assertEqual(len(acquired), 1)
                 first.release_gate.set()
@@ -135,6 +136,8 @@ class CaptureLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(restart.done())
                 self.assertEqual(len(acquired), 1)
                 reset_gate.set()
+                with self.assertRaisesRegex(RuntimeError, 'Camera frame read failed'):
+                    await old_waiter
                 self.assertIs(await restart, session)
                 self.assertTrue(session.status()['running'])
                 self.assertTrue(first.released)
@@ -146,6 +149,8 @@ class CaptureLifecycleTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 first.release_gate.set()
                 reset_gate.set()
+                if old_waiter is not None:
+                    await asyncio.gather(old_waiter, return_exceptions=True)
                 if restart is not None:
                     await asyncio.gather(restart, return_exceptions=True)
                 await session.stop()
@@ -290,3 +295,14 @@ class CaptureLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(camera.releases, 1)
             finally:
                 await session.stop()
+
+    async def test_cleanup_callback_cannot_restart_or_join_itself(self):
+        for operation in ('start', 'stop', 'wait'):
+            class Runtime:
+                async def reset_processing(self):
+                    await getattr(session, operation)()
+            session = CaptureSession(Runtime(), video=0, consent=True)
+            with self.assertRaisesRegex(RuntimeError, 'cannot'):
+                await asyncio.wait_for(session.stop(), 2)
+            self.assertFalse(session.status()['cleanup_pending'])
+            self.assertIn('reset_processing', ' '.join(session.status()['errors']))
