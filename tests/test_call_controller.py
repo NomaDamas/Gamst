@@ -158,6 +158,24 @@ class ControllerTests(unittest.TestCase):
         again=c.submit(h,record(1100),sequence=5,now_ms=1300,visual_reference=visual(1100),change_score=1,needs_visual=True)
         self.assertEqual(again['status'],'queued')
 
+    def test_receipt_eviction_cannot_resurrect_superseded_failed_demand(self):
+        c=controller(receipt_limit=1);h=c.open_source(record(),now_ms=1000)
+        baseline=submit(c,h,1);t=baseline['request_id'];reserve(c,t);c.dispatch(t,now_ms=1000)
+        finish(c,t,baseline,1001);c.settle(t,components={'input':1},now_ms=1001)
+        a=submit(c,h,2,1100,change_score=1,needs_visual=True);t=a['request_id']
+        reserve(c,t,1100);c.dispatch(t,now_ms=1100);finish(c,t,a,1101,False)
+        c.settle(t,components=None,now_ms=1101)
+        b=c.submit(h,record(1100),sequence=3,now_ms=1200,visual_reference=visual(1100),change_score=1,needs_visual=True)
+        bt=b['request_id'];reserve(c,bt,1200);c.dispatch(bt,now_ms=1200)
+        finish(c,bt,b,1201);c.settle(bt,components={'input':1},now_ms=1201)
+        query=submit(c,h,4,1300,query=True,change_score=1);qt=query['request_id']
+        reserve(c,qt,1300);c.dispatch(qt,now_ms=1300);finish(c,qt,query,1301)
+        c.settle(qt,components={'input':1},now_ms=1301)
+        with self.assertRaisesRegex(ValueError,'capture order regression'):
+            c.submit(h,record(1100),sequence=5,now_ms=1400,visual_reference=visual(1100),change_score=1,needs_visual=True)
+        self.assertEqual(len(c.snapshot()['requests']),1)
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],20)
+
     def test_provider_version_and_channel_change_require_new_source(self):
         c=controller();h=c.open_source(record(),now_ms=1000)
         for mutate in ('model','channels'):

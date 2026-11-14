@@ -147,6 +147,11 @@ class CallController:
             if len(self._requests) >= self._max_requests:
                 self._overflow += 1
                 return dict(status='rejected', reason='request_capacity', decision=d)
+            # A newer attempt permanently supersedes older retry eligibility.
+            # Evicting its receipt must not resurrect an older unknown bill.
+            for old in list(self._requests.values()) + list(self._recent):
+                if old['source'] == handle and old.get('fingerprint') == fingerprint:
+                    old['superseded'] = True
             self._request_seq += 1
             token = f'{self._scope}:request:{self._request_seq}'
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
@@ -253,6 +258,8 @@ class CallController:
 
     @staticmethod
     def _retryable(r):
+        if r.get('superseded', False):
+            return False
         if 'retryable' in r:
             return r['retryable']
         return (r['discard'] and not r['finished']) or (r['finished'] and not r['outcome']['accepted'])
