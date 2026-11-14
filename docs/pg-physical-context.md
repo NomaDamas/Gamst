@@ -27,3 +27,5 @@ Order checks are per source/sensor/capture epoch/subject/concept. Different conc
 ## Evidence boundary
 
 Tests cover actual subprocess transport at the maximum RGB size, cleanup/cancellation/timeout/protocol failures, exact pinned original generate invocation on a tiny explicit machinery graph, original eval preprocessing parity, ownership/abstention/order and SDK→MCP Context. These are software evidence, not trained PG inference, historical runtime compatibility, physical correctness, cheap inference or demonstrated real-time performance.
+
+The generic ProcessProvider evaluation observer is not yet supported by this canonical-worker transport. Explicit evaluation_observer requests fail before spawning, rather than silently dropping instrumentation or claiming an actual cost trace. This remains an open actual accounting/resource integration gate.

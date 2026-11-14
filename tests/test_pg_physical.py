@@ -162,6 +162,15 @@ class Owned(unittest.IsolatedAsyncioTestCase):
             finally:await owner.close()
             self.assertIsNotNone(child.returncode)
 
+    async def test_evaluation_observer_is_not_silently_dropped_by_special_dispatch(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            cfg=config(Path(temp).resolve())
+            with patch('humansense.pg_physical_process.PGPhysicalProcess.open') as opened:
+                with self.assertRaisesRegex(ValueError,'instrumentation is unavailable'):
+                    await ProcessProvider.open(sys.executable,'pg.physical.local',cfg,evaluation_observer=object())
+                opened.assert_not_called()
+            self.assertEqual(list(Path(cfg['stage_root']).iterdir()),[])
+
     async def test_native_missing_runtime_unavailable_not_fixture_result(self):
         with tempfile.TemporaryDirectory(dir='.') as temp:
             cfg=config(Path(temp).resolve())

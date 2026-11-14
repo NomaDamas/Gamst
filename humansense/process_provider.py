@@ -1,6 +1,8 @@
 """Explicitly owned local subprocesses isolate incompatible ML dependencies."""
 import asyncio
 import os
+import uuid
+from .call_controller import _digest
 from pathlib import Path
 import tempfile
 
@@ -24,9 +26,11 @@ class ProcessProvider:
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
-                   separation_owner=None):
+                   separation_owner=None, evaluation_observer=None):
         if profile == 'pg.physical.local':
             if separation_owner is not None:raise ValueError('PG has no private separation media')
+            if evaluation_observer is not None:
+                raise ValueError('PG canonical worker evaluation instrumentation is unavailable')
             from .pg_physical_process import PGPhysicalProcess
             return await PGPhysicalProcess.open(python,config,startup_timeout=startup_timeout,inference_timeout=inference_timeout)
         from .separation_media import PROFILE, PROTOCOL, SeparationMediaOwner
@@ -51,6 +55,9 @@ class ProcessProvider:
         self._process = None
         self._close_task = None
         self._sequence, self.closed = 0, False
+        self._evaluation_observer=evaluation_observer
+        self._worker_id=uuid.uuid4().hex
+        self._lifecycle_ticket=None
         self._separation_owner = separation_owner
         if separation_owner is not None:
             separation_owner._authorize_configuration(self.config)
@@ -63,6 +70,13 @@ class ProcessProvider:
             worker_environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
                                       HF_HUB_DISABLE_TELEMETRY='1', VLLM_NO_USAGE_STATS='1',
                                       VLLM_ENABLE_V1_MULTIPROCESSING='0')
+        if evaluation_observer is not None:
+            try:
+                self._lifecycle_ticket=evaluation_observer.reserve_work("worker_lifecycle",dict(worker_id=self._worker_id,
+                    profile=profile,configuration_sha256=_digest(self.config)))
+            except BaseException:
+                if separation_owner is not None:separation_owner.close()
+                raise
         spawn = staging = None
         try:
             if separation_owner is not None:
@@ -70,27 +84,42 @@ class ProcessProvider:
                 # worker before its tokenizer constructor can return.
                 staging = tempfile.TemporaryDirectory(prefix='.gamst-sam-tokenizer-', dir='.')
                 worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
+            if self._lifecycle_ticket is not None:self._lifecycle_ticket.event('spawn_begin')
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
                 'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment))
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
+            if self._lifecycle_ticket is not None:self._lifecycle_ticket.event("handle_acquired")
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
             response = await self._request('start', profile=profile, config=self.config,
                                            timeout=startup_timeout, **extra)
             if response != {'spec': spec_value(self.spec), **extra}:
                 raise RuntimeError('worker capability/provenance differs from selected contract')
+            if self._lifecycle_ticket is not None:self._lifecycle_ticket.event("handshake_ready")
             return self
         except BaseException:
+            self._observe_lifecycle("handshake_failed")
             if self._process is None and spawn is not None:
                 try:
                     self._process = await _finish(spawn)
+                    self._observe_lifecycle("handle_acquired")
                 except Exception:
                     pass
             await _finish(asyncio.create_task(self._stop()))
+            if self._process is None and (spawn is None or (spawn.done() and (spawn.cancelled() or spawn.exception() is not None))):
+                if self._lifecycle_ticket is not None:
+                    try:self._lifecycle_ticket.finish("error")
+                    except BaseException:pass
             raise
         finally:
             if staging is not None:
                 staging.cleanup()
+
+    def _observe_lifecycle(self, event):
+        ticket=getattr(self,"_lifecycle_ticket",None)
+        if ticket is not None:
+            try:ticket.event(event)
+            except BaseException:pass
 
     async def _stop(self):
         self.closed = True
@@ -116,6 +145,7 @@ class ProcessProvider:
             # before asking Popen to signal (and poll) the same child.
             try:
                 await asyncio.wait_for(process.wait(), .1)
+                self._observe_lifecycle("reap_confirmed")
                 return
             except asyncio.TimeoutError:
                 pass
@@ -132,8 +162,13 @@ class ProcessProvider:
                 except ProcessLookupError:
                     pass
                 await process.wait()
+            self._observe_lifecycle("reap_confirmed")
         finally:
             transport.close()
+            ticket=getattr(self,"_lifecycle_ticket",None)
+            if ticket is not None:
+                try:ticket.finish("closed")
+                except BaseException:pass
 
     async def _exchange(self, operation, payload, fields):
         process = self._process
@@ -175,7 +210,7 @@ class ProcessProvider:
             raise ValueError('whole-window separation controls cannot publish media')
         return self.spec.validate(result) if operation in ('process', 'process_regions', 'finish', 'endpoint') and result is not None else result
 
-    async def _request(self, operation, *, payload=b'', timeout=None, input_frame=None, **fields):
+    async def _request(self, operation, *, payload=b'', timeout=None, input_frame=None, evaluation_operation_id=None, **fields):
         owner = self._separation_owner if input_frame is not None else None
         request_revision = None
         if owner is not None:
@@ -201,7 +236,22 @@ class ProcessProvider:
                     owner._bind(fields['separation_binding'])
                     owner._reserve(fields['separation_binding']['sample_count'],
                         request_bytes=len(payload) if 'visual_policy' in self.config else 0)
-            exchange = asyncio.create_task(self._exchange(operation, payload, fields))
+            ticket=None
+            observer=getattr(self,"_evaluation_observer",None)
+            if observer is not None:
+                try:
+                    ticket=observer.reserve_work("worker_operation",dict(worker_id=self._worker_id,
+                        operation=operation,parent_operation_id=evaluation_operation_id))
+                except BaseException:
+                    if self._separation_owner is not None:self._separation_owner._release()
+                    if operation != "start":await _finish(asyncio.create_task(self._stop()))
+                    raise
+            async def invoke():
+                if ticket is not None:ticket.event("operation_started")
+                return await self._exchange(operation,payload,fields)
+            exchange = asyncio.create_task(invoke())
+            outcome="error"
+
             try:
                 # Explicit ownership preserves caller cancellation even when the
                 # response completes in the same loop turn (including Python 3.10).
@@ -209,6 +259,7 @@ class ProcessProvider:
                 if not done:
                     raise asyncio.TimeoutError()
                 result = exchange.result()
+                outcome="completed"
                 if self._separation_owner is not None and operation == 'process':
                     pair, binding = result
                     if binding['owner_revision'] != self._separation_owner.revision:
@@ -222,40 +273,46 @@ class ProcessProvider:
                     observation['media'] = self._separation_owner._admit(pair, binding)
                     return self.spec.validate(observation)
                 return result
-            except BaseException:
+            except BaseException as exc:
+                outcome="cancelled" if isinstance(exc,asyncio.CancelledError) else "timeout" if isinstance(exc,asyncio.TimeoutError) else "error"
                 exchange.cancel()
                 await _finish(asyncio.gather(exchange, return_exceptions=True))
-                await _finish(asyncio.create_task(self._stop()))
+                if operation != "start":await _finish(asyncio.create_task(self._stop()))
                 raise
             finally:
                 if self._separation_owner is not None:
                     self._separation_owner._release()
+                if ticket is not None:
+                    try:ticket.finish(outcome)
+                    except BaseException:
+                        if operation != "start":await _finish(asyncio.create_task(self._stop()))
+                        raise
 
-    async def process(self, frame):
-        return await self._request('process', input_frame=frame)
+    async def process(self, frame, *, evaluation_operation_id=None):
+        return await self._request('process', input_frame=frame,evaluation_operation_id=evaluation_operation_id)
 
-    async def process_regions(self, frame, evidence):
+    async def process_regions(self, frame, evidence, *, evaluation_operation_id=None):
         evidence = bounded_json(evidence)
-        return await self._request('process_regions', input_frame=frame, evidence=evidence)
+        return await self._request('process_regions', input_frame=frame, evidence=evidence,evaluation_operation_id=evaluation_operation_id)
 
-    async def endpoint(self):
+    async def endpoint(self, *, evaluation_operation_id=None):
         """Serialize a nonterminal utterance endpoint; unsupported workers fail closed."""
-        return await self._request('endpoint')
+        return await self._request('endpoint',evaluation_operation_id=evaluation_operation_id)
 
-    async def finish(self):
-        return await self._request('finish')
+    async def finish(self, *, evaluation_operation_id=None):
+        return await self._request('finish',evaluation_operation_id=evaluation_operation_id)
 
-    async def reset(self):
+    async def reset(self, *, evaluation_operation_id=None):
         if self._separation_owner is not None:
             self._separation_owner._reset()
             try:
-                await self._request('reset')
+                await self._request('reset',evaluation_operation_id=evaluation_operation_id)
                 self._separation_owner._reset_complete()
             except BaseException:
                 await _finish(asyncio.create_task(self._stop()))
                 raise
         else:
-            await self._request('reset')
+            await self._request('reset',evaluation_operation_id=evaluation_operation_id)
 
     def revoke_separation_media(self):
         """Synchronous lifecycle intent, before waiting for a stalled worker."""
@@ -266,7 +323,7 @@ class ProcessProvider:
         if self._separation_owner is not None and isinstance(result, dict):
             self._separation_owner.discard(result.get('media', {}).get('reference'))
 
-    async def _close(self):
+    async def _close(self, evaluation_operation_id=None):
         try:
             if self._separation_owner is not None and self._lock.locked():
                 # Revocation already happened synchronously in close(). Do not
@@ -275,15 +332,15 @@ class ProcessProvider:
                 await _finish(asyncio.create_task(self._stop()))
                 return
             if not self.closed:
-                await self._request('close', timeout=2)
+                await self._request('close', timeout=2,evaluation_operation_id=evaluation_operation_id)
         finally:
             await _finish(asyncio.create_task(self._stop()))
 
-    async def close(self):
+    async def close(self, *, evaluation_operation_id=None):
         if self._separation_owner is not None:
             self._separation_owner.close()
         if self._close_task is None:
-            self._close_task = asyncio.create_task(self._close())
+            self._close_task = asyncio.create_task(self._close(evaluation_operation_id))
         try:
             await asyncio.shield(self._close_task)
         except asyncio.CancelledError:

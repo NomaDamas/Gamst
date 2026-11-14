@@ -32,17 +32,20 @@ class SmolVLMCalls:
     admission and output lifecycle, while the application owns this worker lifetime.
     """
     @classmethod
-    async def open(cls, human, controller_id, python, config, *, startup_timeout=120, inference_timeout=30):
+    async def open(cls, human, controller_id, python, config, *, startup_timeout=120, inference_timeout=30, evaluation_observer=None):
         human._check(); identifier(controller_id)
         if controller_id not in human._call_controllers:
             raise ValueError('registered HumanSense controller required')
+        if evaluation_observer is not None:human._register_evaluation_observer(evaluation_observer)
         native = configuration(config)
         worker = await ProcessProvider.open(python,'smolvlm2.500m.local',dict(native,window_frames=1),
-            startup_timeout=startup_timeout,inference_timeout=inference_timeout)
+            startup_timeout=startup_timeout,inference_timeout=inference_timeout,
+            **({"evaluation_observer":evaluation_observer} if evaluation_observer is not None else {}))
         try:
             human._check()
             human.register_capability(worker.spec)
             self=cls();self.human=human;self.controller=human._call_controllers[controller_id]
+            self._evaluation_observer=evaluation_observer
             self.worker=worker;self.native=native;self._active=None;self._closed=False;self._close_task=None
             return self
         except BaseException:
@@ -142,9 +145,14 @@ class SmolVLMCalls:
 
     async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms):
         dispatched=False;completed=False
+        ticket=None;outcome="unadmitted"
         try:
             # Explicit retained frames need not be consecutive in the camera stream.
             await self.worker.reset()
+            if self._evaluation_observer is not None:
+                ticket=self._evaluation_observer.reserve_call(self.controller,request_id,provider=self.worker.spec.provider,
+                    model_revision=self.worker.spec.version,
+                    prompt_sha256=hashlib.sha256(prompt_text([copied.timestamp_ms]).encode()).hexdigest())
             reserved=self.controller.reserve(request_id,provider=self.worker.spec.provider,
                 model_revision=self.worker.spec.version,
                 prompt_sha256=hashlib.sha256(prompt_text([copied.timestamp_ms]).encode()).hexdigest(),
@@ -152,24 +160,36 @@ class SmolVLMCalls:
             if reserved['status']!='reserved':return reserved
             admission=self.controller.dispatch(request_id,now_ms=timestamp())
             if admission['status']!='dispatched':return admission
-            dispatched=True
-            value=self._validate_result(await self.worker.process(copied),copied,pixels_sha)
+            dispatched=True;outcome="error"
+            if ticket is not None:ticket.dispatched()
+            callback=lambda:self.worker.process(copied,**({"evaluation_operation_id":ticket.id} if ticket is not None else {}))
+            raw=await (ticket.invoke(callback) if ticket is not None else callback())
+            value=self._validate_result(raw,copied,pixels_sha)
             success=bool(value['semantic']['text'].strip()) and value['semantic']['status']=='described'
             completion=self._complete(request_id,evidence,success=success,result_sha256=_digest(value));completed=True
             if not completion['accepted']:
+                outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)
             # No await between accepted epoch validation and push_signal's initial
             # synchronous store emission. As with HumanSense, use one event loop.
             if evidence['processing_epoch']!=f'{self.human._session_id}:{self.human._generation}':
+                outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)
             self.human._check()
             observation=await self.human.push_observation(self.worker.spec.id,value,sensor=copied.sensor,
                 subject_id=copied.subject_id,timestamp_ms=copied.timestamp_ms)
+            outcome='published'
             return dict(status='published',accepted=True,observation=observation,actual_cost=None)
-        except BaseException:
+        except BaseException as exc:
+            outcome="cancelled" if isinstance(exc,asyncio.CancelledError) else "timeout" if isinstance(exc,asyncio.TimeoutError) else "error"
             if dispatched and not completed:
                 self._complete(request_id,evidence,success=False,result_sha256=hashlib.sha256(b'failed_or_cancelled').hexdigest())
             raise
+        finally:
+            if ticket is not None:
+                try:
+                    if dispatched:ticket.finish(outcome)
+                finally:ticket.release(outcome)
 
     async def _close(self):
         self._closed=True
