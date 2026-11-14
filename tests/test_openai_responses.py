@@ -173,6 +173,21 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('possible_send',[x['event'] for x in m['milestones']]);self.assertEqual(self.calls,[])
 
 
+    async def test_session_closes_all_leases_when_one_unused_artifact_fails(self):
+        self.hold=asyncio.Event();p,b=self.prepare();active=asyncio.create_task(p.invoke(b));await self.entered.wait()
+        other=OpenAIResponsesClient._loopback_fixture(port=self.server.sockets[0].getsockname()[1],api_key='fixture-other-key',
+            model_revision='fixture-model',account_scope='fixture-account',project_id='fixture-project',evidence_session=self.sink)
+        unused=other.prepare(request());real_write=self.sink._write
+        def fail_one(name,raw):
+            if name=='call-0001.json':raise OSError('fixture manifest failure')
+            return real_write(name,raw)
+        with patch.object(self.sink,'_write',side_effect=fail_one):result=await self.sink.close()
+        with self.assertRaises(asyncio.CancelledError):await active
+        self.assertTrue(result['incomplete']);self.assertFalse(self.sink._leases)
+        self.assertTrue(p._task.done());self.assertIsNone(p.writer);self.assertIsNone(other._lease)
+        await other.close();self.assertIsNone(other._key)
+
+
 
 class Projection(unittest.TestCase):
     def test_missing_details_are_unknown_not_cached_zero(self):
@@ -207,3 +222,86 @@ class OriginalEntry(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(seen[0]['prompt_sha256'],_digest(request))
             await adapter.close()
         await harness.asyncTearDown()
+
+class SDKTransport(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp=Transport.asyncSetUp
+    manifest=Transport.manifest
+    async def asyncTearDown(self):
+        if hasattr(self,'adapter'):
+            await self.adapter.close();await self.harness.asyncTearDown();await self.observer.close()
+        await Transport.asyncTearDown(self)
+
+    async def sdk(self,visual=False,journal=None):
+        from test_runtime_instrumentation import session
+        from test_text_context_call import Calls
+        from humansense.text_context_call import TextContextCalls
+        from humansense.visual_context_call import VisualContextCalls
+        self.harness=Calls();await self.harness.asyncSetUp()
+        self.observer=session(Path(self.tmp.name).resolve(),provider='openai',revision='fixture-model',journal=journal)
+        await self.client.close();await self.sink.close()
+        self.sink=ResponsesEvidenceSession(Path(self.tmp.name)/'sdk-evidence',owner_kind='task_native3',expected_owner=self.observer.binding_owner(),retain_response_bytes=True,retain_financial_hashes=True)
+        self.client=OpenAIResponsesClient._loopback_fixture(port=self.server.sockets[0].getsockname()[1],api_key='fixture-key',model_revision='fixture-model',account_scope='fixture-account',project_id='fixture-project',evidence_session=self.sink)
+        self.adapter=(VisualContextCalls if visual else TextContextCalls)(self.harness.h,'main',self.client,provider='openai',model_revision='fixture-model',evaluation_observer=self.observer)
+        if visual:
+            from test_visual_context_call import Calls as Visual
+            return await Visual.queued(self.harness)
+        return await self.harness.queued()
+
+    async def test_actual_text_sdk_native_entry_and_http_identity(self):
+        rid,record=await self.sdk()
+        result=await self.adapter.execute(rid,record,'fixture SDK question',maximum_charge=5)
+        self.assertTrue(result['accepted']);self.assertEqual(result['text'],'fixture answer')
+        self.assertIsNone(result['actual_cost']);self.assertFalse(result['usage_verified'])
+        self.assertEqual(len(self.calls),1)
+        report=await self.observer.close();m=self.manifest();attempts=report['reports'][0]['attempts']
+        self.assertEqual(len(attempts),1);self.assertEqual(m['entry_binding']['entry']['attempt_id'],attempts[0]['attempt_id'])
+        self.assertEqual(m['sdk_request_sha256'],result['prompt_sha256']);self.assertEqual(m['entry_binding']['entry']['execution_sha256'],attempts[0]['execution_sha256'])
+        self.assertEqual(self.harness.c.snapshot()['budget']['reserved_liability'],5)
+        self.assertNotIn('fixture SDK question',json.dumps(report))
+        wire=json.loads(self.calls[0][1]);self.assertEqual(json.loads(wire['input'][0]['content'][0]['text'])['observation_record'],record)
+
+    async def test_actual_visual_sdk_png_unchanged_and_one_native_call(self):
+        try:import cv2;import numpy as np
+        except ImportError:self.skipTest('optional vision unavailable')
+        import base64
+        rid,record,frame=await self.sdk(visual=True)
+        result=await self.adapter.execute(rid,record,frame,'fixture visual question',maximum_charge=5)
+        wire=json.loads(self.calls[0][1]);uri=wire['input'][0]['content'][1]['image_url']
+        png=base64.b64decode(uri.split(',',1)[1],validate=True)
+        np.testing.assert_array_equal(cv2.imdecode(np.frombuffer(png,np.uint8),cv2.IMREAD_COLOR),frame.data)
+        self.assertTrue(result['accepted']);self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.manifest()['sdk_request_sha256'],result['prompt_sha256'])
+        report=await self.observer.close();self.assertEqual(report['provider_counters'][0]['count'],1)
+
+    async def test_unknown_quote_releases_unused_evidence_with_no_native_or_http(self):
+        rid,record=await self.sdk()
+        result=await self.adapter.execute(rid,record,'fixture question',maximum_charge=None)
+        self.assertEqual(result['status'],'blocked');self.assertEqual(self.calls,[])
+        self.assertEqual(self.manifest()['terminal'],'not_entered');self.assertIsNone(self.client._lease)
+        report=await self.observer.close();self.assertEqual(report['reports'][0]['attempts'],[])
+
+    async def test_sink_full_refuses_before_controller_dispatch(self):
+        rid,record=await self.sdk();self.sink._max=1024
+        with self.assertRaises(RuntimeError):await self.adapter.execute(rid,record,'fixture question',maximum_charge=5)
+        self.assertEqual(self.calls,[]);self.assertEqual(self.harness.c.snapshot()['budget']['dispatched'],0)
+        report=await self.observer.close();self.assertEqual(report['reports'][0]['attempts'],[])
+
+    async def test_cancel_after_dispatch_before_entry_has_no_http_or_native(self):
+        class Cancel:
+            def emit(self,event):
+                if event['event']=='controller_dispatched':raise asyncio.CancelledError()
+        rid,record=await self.sdk(journal=Cancel())
+        with self.assertRaises(asyncio.CancelledError):await self.adapter.execute(rid,record,'fixture question',maximum_charge=5)
+        self.assertEqual(self.calls,[]);self.assertEqual(self.manifest()['terminal'],'not_entered')
+        report=await self.observer.close();self.assertEqual(report['reports'][0]['attempts'],[])
+        self.assertEqual(self.harness.c.snapshot()['budget']['reserved_liability'],5)
+
+    async def test_sensory_delete_discards_late_result_but_preserves_external_financial_evidence(self):
+        rid,record=await self.sdk();self.hold=asyncio.Event()
+        task=asyncio.create_task(self.adapter.execute(rid,record,'fixture private question',maximum_charge=5))
+        await self.entered.wait();await self.harness.h.delete_data();self.hold.set()
+        result=await task;self.assertFalse(result['accepted'])
+        self.assertEqual(self.harness.c.snapshot()['budget']['reserved_liability'],5)
+        self.assertEqual(self.observer.snapshot()['private_subject_mappings'],0)
+        self.assertIsNotNone(self.manifest()['entry_binding']);self.assertEqual(len(self.calls),1)
+        self.assertIsNone(self.client._lease)

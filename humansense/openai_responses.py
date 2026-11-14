@@ -56,8 +56,9 @@ class OpenAIResponsesClient(BoundCompletion):
 
     async def _close(self):
         lease=self._lease
-        if lease is not None:lease.invalidate();await lease.release()
-        self._key=None
+        try:
+            if lease is not None:lease.invalidate();await lease.release()
+        finally:self._key=None
 
     async def close(self):
         self._closed=True
@@ -149,6 +150,7 @@ class _Prepared(PreparedCall):
             except BaseException:
                 # Late handles must be collected and closed, never retried.
                 try:
+                    if not self._connect.done():self._connect.cancel()
                     await _finish(self._connect)
                     reader,self.writer=self._connect.result()
                 except BaseException:pass
@@ -175,6 +177,7 @@ class _Prepared(PreparedCall):
         finally:
             if self.writer is not None:
                 self.writer.close()
+                self.writer.transport.abort()  # Local socket ownership ends without waiting on peer TLS shutdown.
                 try:await _finish(asyncio.create_task(self.writer.wait_closed()))
                 except (ConnectionError,OSError):pass
             self._connect=None;self.writer=None
@@ -238,13 +241,16 @@ class _Prepared(PreparedCall):
 
     async def _release(self):
         self.invalidate()
-        if self._task is not None:await asyncio.gather(self._task,return_exceptions=True)
-        if not self._terminal:
-            self.manifest['terminal']='cancelled' if self._started else 'not_entered'
-            self.manifest['failure_category']='cancelled' if self._started else None
-            self.mark('terminal');self.body=b'';self._terminal=True
-            self.client._sink.finish(self,self.manifest,b'')
-        if self.client._lease is self:self.client._lease=None
+        try:
+            if self._task is not None:await asyncio.gather(self._task,return_exceptions=True)
+            if not self._terminal:
+                self.manifest['terminal']='cancelled' if self._started else 'not_entered'
+                self.manifest['failure_category']='cancelled' if self._started else None
+                self.mark('terminal');self.body=b'';self._terminal=True
+                self.client._sink.finish(self,self.manifest,b'')
+        finally:
+            self.body=b'';self.raw.clear()
+            if self.client._lease is self:self.client._lease=None
 
     async def release(self):
         if self.owns_task(asyncio.current_task()):self.invalidate();raise RuntimeError('prepared call cannot join itself')

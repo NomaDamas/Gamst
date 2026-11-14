@@ -37,10 +37,13 @@ class ResponsesEvidenceSession:
     def __init__(self,directory,*,owner_kind,expected_owner,retain_response_bytes=False,retain_financial_hashes=False,max_bytes=64*1024*1024):
         if retain_response_bytes is not True or retain_financial_hashes is not True:raise PermissionError('both separate retention consents must be exactly True')
         if type(max_bytes) is not int or not RESERVATION+1024<=max_bytes<=64*1024*1024:raise ValueError('bounded evidence capacity required')
-        self.owner_kind=owner_kind;self._owner=encoded(validate_owner(owner_kind,expected_owner))
+        self._owner_kind=owner_kind;self._owner=encoded(validate_owner(owner_kind,expected_owner))
         self._fd,self.directory=_directory(directory)
         self._max=max_bytes;self._used=1024;self._reserved=0;self._leases=set();self._refs=[];self._next=0
         self._closing=False;self._closed=False;self._close_task=None;self._incomplete=False;self._identities={}
+
+    @property
+    def owner_kind(self):return self._owner_kind
 
     def expected_owner(self):return json.loads(self._owner)
 
@@ -99,13 +102,14 @@ class ResponsesEvidenceSession:
                 raw_path=lease.raw_path,raw_sha256=raw_hash if not self._incomplete else None,raw_bytes=len(raw),state='incomplete' if self._incomplete else 'sealed')
             if len(encoded(reference))>REFERENCE:self._incomplete=True;raise RuntimeError('inventory reference quota exceeded')
             self._refs.append(reference);self._reserved-=RESERVATION
-            self._used+=RESERVATION if self._incomplete else written+len(encoded(reference))
+            self._used+=RESERVATION if self._incomplete else written+REFERENCE
             self._leases.remove(lease)
 
     async def _close(self):
         leases=tuple(self._leases)
         for lease in leases:lease.invalidate()
-        for lease in leases:await lease.release()
+        outcomes=await asyncio.gather(*(lease.release() for lease in leases),return_exceptions=True)
+        if any(isinstance(value,BaseException) for value in outcomes):self._incomplete=True
         result=dict(schema_version=1,kind='openai_responses_inventory',owner_kind=self.owner_kind,
             owner_sha256=hashlib.sha256(self._owner).hexdigest(),entries=sorted(self._refs,key=lambda x:x['ordinal']),
             incomplete=self._incomplete,actual_acceptance='incomplete',receipt_authenticity_verified=False,
