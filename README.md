@@ -83,7 +83,7 @@ python -m humansense demo
 python -m humansense dashboard
 ```
 
-Open **http://127.0.0.1:8766**, give processing consent, and enter a message such as `설명이 어려워요. 다시 설명해 주세요.`
+Open **http://127.0.0.1:8766**, give processing consent, and enter a message such as `I am having trouble understanding. Please explain again.`
 
 The core SDK and MCP have **no runtime dependencies**. The dashboard supports text input and browser audio-energy measurements without extras. For camera analysis and native camera/microphone capture:
 
@@ -151,7 +151,7 @@ async def main():
         retention_hours=24,
     ) as human:
         result = await human.push_text(
-            "다시 설명해 주세요.", subject_id="local-user"
+            "Please explain again.", subject_id="local-user"
         )
 
         print(result["predictions"]["conversation"])
@@ -313,7 +313,7 @@ export HUMANSENSE_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
 python -m humansense dashboard
 ```
 
-Choose **Companion에게 보내기** in the dashboard, or call the MCP `chat` tool. The Companion uses conversation history, observation context, and the suggested strategy to generate a reply. Without a configured backend it reports an error instead of producing a fake model response.
+Choose **Send to Companion** in the dashboard, or call the MCP `chat` tool. The Companion uses conversation history, observation context, and the suggested strategy to generate a reply. Without a configured backend it reports an error instead of producing a fake model response.
 
 For evidence-citing semantic analysis, configure `HUMANSENSE_REASONING_URL` and `HUMANSENSE_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
 
@@ -339,7 +339,7 @@ Stop and Clear are grouped together. Model switches in Settings stop actual
 inference; pause capture before changing them. Chart labels use readable names
 while MCP observation keys stay stable.
 
-Settings → **실제 모델 테스트** sends a synthetic blue-square image to the configured
+Settings → **Actual model test** sends a synthetic blue-square image to the configured
 local VLM and reports its response and latency without using camera or microphone.
 Settings → **Advanced · MCP** lists the running service's tool schemas, models,
 observation keys and WebSocket address. `get_features` / `configure_feature` share
