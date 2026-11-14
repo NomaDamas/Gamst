@@ -9,9 +9,8 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 def _construct(profile, config):
     spec = capability(profile, config)
     if profile == 'sam_audio.text_temporal.local':
-        # Reserved transport contract. The separately reviewed native loader is
-        # #201; never substitute an unrelated provider or download a model here.
-        raise RuntimeError('SAM Audio native adapter is not implemented (#201)')
+        from .providers.sam_audio_context import SAMAudioContext
+        provider = SAMAudioContext.from_local(config)
     elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)

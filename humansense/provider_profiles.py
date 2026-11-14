@@ -4,8 +4,8 @@ from .capabilities import bounded_json
 
 def capability(profile, config):
     if profile == 'sam_audio.text_temporal.local':
-        from .separation_media import capability as separation_capability
-        return separation_capability(config)
+        from .providers.sam_audio_context import SAMAudioContext
+        return SAMAudioContext.capability(config)
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')

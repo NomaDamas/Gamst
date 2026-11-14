@@ -1,6 +1,7 @@
 """Fixture transport evidence only: no SAM installation or trained inference."""
 import asyncio
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import json
@@ -226,7 +227,8 @@ class Retention(unittest.IsolatedAsyncioTestCase):
 FIXTURE = '''
 import time
 from humansense import provider_worker as w
-from humansense.separation_media import SeparationPair
+from humansense.separation_media import SeparationPair, capability
+w.capability=lambda profile,config:capability(config)
 class Fixture:
     def __init__(self, config): self.config=config
     def process(self, frame):
@@ -259,12 +261,19 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
         for child in leaked: child.kill(); await child.wait()
         self.assertEqual(leaked, [])
 
+    @contextmanager
     def fixture(self, code=FIXTURE):
         async def spawn(*args, **kwargs):
             child = await self.real_spawn(sys.executable, '-u', '-c', code, **kwargs)
             self.children.append(child)
             return child
-        return patch('asyncio.create_subprocess_exec', spawn)
+        from humansense.provider_profiles import capability as production_capability
+        # Explicit fixture contract; production discovery accepts only native
+        # manifest/prompt configuration and has no fixture option or fallback.
+        def contract(profile, config):
+            return capability(config) if profile == PROFILE else production_capability(profile,config)
+        with patch('asyncio.create_subprocess_exec', spawn), patch('humansense.process_provider.capability',contract):
+            yield
 
     async def open(self, config=None, **kwargs):
         owner = self.human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device')
@@ -566,14 +575,16 @@ w.main()
                 await provider.process(self.frame())
             self.assertTrue(provider.closed)
 
-    async def test_nonmedia_profiles_cannot_opt_in_and_native_is_unavailable(self):
+    async def test_nonmedia_profiles_cannot_opt_in_and_native_missing_assets_fails_closed(self):
         owner = self.human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device')
         with self.assertRaises(ValueError):
             await ProcessProvider.open(sys.executable, 'audio.prosody', {}, separation_owner=owner)
         with self.assertRaises(PermissionError): await ProcessProvider.open(sys.executable, PROFILE, {})
         # Production path has no fake/native substitution and must fail closed.
         with self.assertRaises(RuntimeError):
-            await ProcessProvider.open(sys.executable, PROFILE, {}, separation_owner=owner)
+            await ProcessProvider.open(sys.executable, PROFILE,
+                dict(manifest_path='/missing/sam-manifest.json',manifest_sha256='0'*64,prompt='fixture only'),
+                separation_owner=owner)
         self.assertTrue(owner.closed)
 
     async def test_legacy_json_worker_still_rejects_binary_reply(self):

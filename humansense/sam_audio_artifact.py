@@ -99,11 +99,11 @@ def _regular_path(path, *, directory=False):
     return info
 
 
-def _file(path, expected, limit, *, retain=False):
+def _file(path, expected, limit, *, retain=False, allow_empty=False):
     if expected is not None:
         _digest(expected)
     before = _regular_path(path)
-    if not 0 < before.st_size <= limit:
+    if not (0 if allow_empty else 1) <= before.st_size <= limit:
         raise ValueError('asset file size outside declared SDK bound')
     digest, blocks, count = hashlib.sha256(), [], 0
     descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
@@ -193,7 +193,7 @@ def verify_manifest(value, *, expected_sha256):
         root = _absolute(source['root']); _regular_path(root, directory=True)
         total = 0
         for name, digest in source['files'].items():
-            total += _file(root/name, digest, 4*1024*1024)
+            total += _file(root/name, digest, 4*1024*1024, allow_empty=True)
             if total > 64*1024*1024:
                 raise ValueError('source group exceeds64MiB')
     sam = value['sam']
