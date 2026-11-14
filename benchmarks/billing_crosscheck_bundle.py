@@ -14,6 +14,11 @@ def persist_crosscheck(manifest, asset_directory, transport_directory, *,
     _reject_source_output(output_directory, (native_index.directory, transport_directory))
     report=crosscheck_transport(manifest,asset_directory,transport_directory,
         expected_inventory_sha256=expected_inventory_sha256,native_index=native_index,expected_binding=expected_binding)
+    return _persist_report(report, output_directory)
+
+
+def _persist_report(report, output_directory):
+    """Publish already recomputed evidence; completion remains the last write."""
     payload=encoded(report)
     files={'crosscheck.json':payload,'completion.json':encoded(dict(schema_version=1,
         kind='transport_crosscheck_bundle_complete',files={'crosscheck.json':dict(bytes=len(payload),sha256=sha(payload))}))}

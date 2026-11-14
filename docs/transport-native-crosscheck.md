@@ -80,3 +80,43 @@ Integration tests include a real HTTP body received before cancellation, and a
 native entry whose connection fails or reaches its own deadline before any send.
 Both retain unknown per-attempt cost. A source-collector timeout is not substituted
 for a completed transport failure record.
+
+## Recording-native4 crosscheck (integration in progress)
+
+`benchmarks.billing_native4_crosscheck.crosscheck_recording_transport` uses the
+reader-issued recording index, original declaration file and its exact byte hash,
+and expected original terminal hash. It reopens the artifacts and validates them
+before matching; a caller hash is never simply attached to a cached index. Native4
+owners retain original context, scope and binding indices. They are not converted
+to native3 task/attempt identities.
+
+The complete selected lane is enumerated once before matching transport entries.
+Every entry is compared by its original ticket, entry ordinal, instance, request
+decision, entry-event and prompt hashes. Missing transport evidence remains an
+uncovered native entry. An incomplete original prefix or outstanding reservation
+prevents a complete structural result. Original native liability counters remain
+separate from possible sends, responses and money; structural completeness never
+settles a financial liability.
+
+`benchmarks.billing_native4_bundle.persist_recording_crosscheck` writes a separate
+private output and recomputes its content before accepting reuse. The native3
+command and schema remain unchanged. Native4 reports explicitly use schema 2.
+
+```sh
+python3 -m benchmarks.billing_native4_bundle \
+  --manifest /absolute/input/acquisition.json \
+  --assets /absolute/input \
+  --transport /absolute/original-transport \
+  --transport-inventory-sha256 ORIGINAL_TRANSPORT_SHA256 \
+  --native-root /absolute/original-native4 \
+  --declarations /absolute/input/original-recording-declarations.json \
+  --declarations-sha256 ORIGINAL_DECLARATIONS_FILE_SHA256 \
+  --terminal-sha256 ORIGINAL_TERMINAL_FILE_SHA256 \
+  --selection /absolute/input/transport-selection.json \
+  --output /absolute/new-native4-crosscheck
+```
+
+The original native4 producer/reader review fixes, comprehensive failure cases,
+independent integration review and full-suite/CI checks remain required. The
+current synthetic tests do not certify an original provider invoice, account
+isolation, real model quality, latency or savings.
