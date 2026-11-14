@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import asdict, replace
 import hashlib
 import struct
+import time
 
 from .capabilities import SensorMetadata, bounded_json, identifier
 from .call_controller import _digest
@@ -126,29 +127,35 @@ class SmolVLMCalls:
             raise ValueError('bounded unvalidated semantic result required')
         return value
 
-    async def execute(self, request_id, record, frame, *, maximum_charge, ttl_ms=1000):
+    async def execute(self, request_id, record, frame, *, maximum_charge, ttl_ms=1000, dispatch_deadline_ns=None):
         """Execute exactly one pending small_vlm request, then publish if still valid.
 
         Callers supply the original registered record/pixels and a verified budget
         ceiling. Actual charges remain unknown until a separate controller.settle.
+        Optional dispatch_deadline_ns is an absolute reading of this host's
+        time.monotonic_ns clock, never a capture timestamp or remote clock.
         """
         self.human._check()
         if self._closed or self.worker.closed:raise RuntimeError('adapter worker closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
+        if dispatch_deadline_ns is not None and (type(dispatch_deadline_ns) is not int or not 1<=dispatch_deadline_ns<=2**63-1):
+            raise ValueError('bounded absolute host monotonic dispatch deadline required')
         copied,evidence,pixels_sha=self._capture(request_id,record,frame)
-        task=asyncio.create_task(self._execute(request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms))
+        task=asyncio.create_task(self._execute(request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns))
         self._active=task
         try:
             return await task
         finally:
             if self._active is task:self._active=None
 
-    async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms):
+    async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns):
         dispatched=False;completed=False
         ticket=None;outcome="unadmitted"
         try:
             # Explicit retained frames need not be consecutive in the camera stream.
             await self.worker.reset()
+            if dispatch_deadline_ns is not None and time.monotonic_ns()>dispatch_deadline_ns:
+                return dict(status='blocked',blockers=['dispatch_deadline_exceeded'])
             if self._evaluation_observer is not None:
                 ticket=self._evaluation_observer.reserve_call(self.controller,request_id,provider=self.worker.spec.provider,
                     model_revision=self.worker.spec.version,
@@ -158,6 +165,9 @@ class SmolVLMCalls:
                 prompt_sha256=hashlib.sha256(prompt_text([copied.timestamp_ms]).encode()).hexdigest(),
                 maximum_charge=maximum_charge,ttl_ms=ttl_ms,now_ms=timestamp())
             if reserved['status']!='reserved':return reserved
+            if dispatch_deadline_ns is not None and time.monotonic_ns()>dispatch_deadline_ns:
+                self.controller.cancel(request_id,now_ms=timestamp())
+                return dict(status='blocked',blockers=['dispatch_deadline_exceeded'])
             admission=self.controller.dispatch(request_id,now_ms=timestamp())
             if admission['status']!='dispatched':return admission
             dispatched=True;outcome="error"

@@ -2,7 +2,11 @@
 import asyncio
 from dataclasses import replace
 import json
+import os
+from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -37,7 +41,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
         return replace(f,sensor=replace(f.sensor,stream_epoch='camera-epoch',capture_sequence=index),**changes)
     async def open(self,h,**options):
         f=self.frame()
-        settings=dict(maximum_charge=2,interval_ms=30,deadline_tolerance_ms=29);settings.update(options)
+        settings=dict(maximum_charge=2,interval_ms=1000,deadline_tolerance_ms=999);settings.update(options)
         return await FreshFrameSentinel.open(h,'audit','main',sys.executable,CONFIG,sensor=f.sensor,
             frame_shape=f.data.shape,**settings)
     async def until(self,predicate,timeout=5):
@@ -51,7 +55,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_timer_without_any_detector_original_context_and_readonly_mcp(self):
         with self.fixture():
-            h,c=self.human();s=await self.open(h)
+            h,c=self.human();s=await self.open(h,interval_ms=100,deadline_tolerance_ms=99)
             f=self.frame();expected=smolvlm_frame_sha256(f.data);s.offer(f);f.data[:]=97;s.start()
             await self.until(lambda:s.snapshot()['counters'].get('accepted',0)==1)
             point=s.snapshot()['last_accepted_capture_point']
@@ -72,7 +76,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
 
     async def test_slow_worker_latest_slot_does_not_block_audio_or_context(self):
         with self.fixture(delay=.2):
-            h,c=self.human();s=await self.open(h);f=self.frame();digest=smolvlm_frame_sha256(f.data)
+            h,c=self.human();s=await self.open(h,interval_ms=100,deadline_tolerance_ms=99);f=self.frame();digest=smolvlm_frame_sha256(f.data)
             s.offer(f);s.start()
             await self.until(lambda:c.snapshot()['budget']['dispatched']==1)
             raw=s._active_frame['frame'].data
@@ -95,7 +99,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
             with self.subTest(action=action),self.fixture(delay=60):
                 h,c=self.human();s=await self.open(h);s.offer(self.frame());s.start()
                 await self.until(lambda:c.snapshot()['budget']['dispatched']==1)
-                rid=s._active_meta['request_id'];active=s._active_frame['frame'].data
+                rid=s._active_meta['request_id'];active=s._active_frame['frame'].data;live_mapping=s._active_meta
                 s.offer(self.frame(1));pending=s._candidate['frame'].data
                 if action=='early_delete':c.settle(rid,components={'local_compute':1},now_ms=timestamp())
                 if action=='revoke':h.consent=False
@@ -104,6 +108,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
                             'early_delete':h.delete_data,'close':h.close}[action]
                     task=asyncio.create_task(method());await asyncio.sleep(0)
                 self.assertTrue(np.all(active==0));self.assertTrue(np.all(pending==0))
+                self.assertFalse(live_mapping)
                 self.assertIsNone(s.snapshot()['binding']);self.assertIsNone(s.snapshot()['last_accepted_capture_point'])
                 if action!='revoke':await task
                 await s.close()
@@ -154,6 +159,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
             await s._tick();await self.until(lambda:s._active_task is None)
             self.assertEqual(s.snapshot()['counters']['skipped_ticks'],9)
             self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+            await asyncio.sleep(.005)
             s.offer(self.frame(10));await self.tick(s);await self.until(lambda:s._active_task is None)
             self.assertEqual(s.snapshot()['counters']['capture_index_gap'],1)
             self.assertTrue(any(e['kind']=='between_sample_points' for e in s.snapshot()['events']))
@@ -216,6 +222,174 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(child.returncode is not None for child in self.children))
             self.assertFalse(h._call_drivers);self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
 
+    async def test_dispatch_deadline_after_real_worker_reset_prevents_backend_entry(self):
+        code=WORKER.replace('DELAY','0').replace('w._construct=',
+            'original_reset=SmolVLMContext.reset\ndef reset(self):\n    time.sleep(.08)\n    return original_reset(self)\nSmolVLMContext.reset=reset\nw._construct=')
+        with self.fixture(code=code):
+            h,c=self.human();s=await self.open(h,interval_ms=100,deadline_tolerance_ms=20)
+            s.offer(self.frame());await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(s.snapshot()['counters']['dispatch_deadline_missed'],1)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+            self.assertFalse(c.snapshot()['requests']);self.assertIsNone(s.snapshot()['last_accepted_capture_point'])
+            # Expired, unadmitted work does not consume the next valid call's capacity.
+            await s.close();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(self.frame(1));await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+
+    async def test_expiry_after_reservation_returns_capacity_without_native_attempt(self):
+        import time
+        with self.fixture():
+            h,c=self.human();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(self.frame());reserve=c.reserve
+            def expire(*args,**kwargs):
+                result=reserve(*args,**kwargs)
+                # Simulate host scheduling delay during synchronous admission.
+                s._active_meta['due_monotonic_ns']=1
+                clock.return_value=time.perf_counter_ns()+2000000000
+                return result
+            with patch('humansense.smolvlm_call.time.monotonic_ns',return_value=time.perf_counter_ns()) as clock,patch.object(c,'reserve',expire):
+                await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+            self.assertFalse(c.snapshot()['requests'])
+            self.assertEqual(s.snapshot()['counters']['dispatch_deadline_missed'],1)
+            s.offer(self.frame(1));await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+
+    async def test_cancelled_open_and_host_revoke_during_startup_reap_and_retire(self):
+        code=WORKER.replace('DELAY','0').replace('w.main()','time.sleep(.15)\nw.main()')
+        for reason in ('cancel','revoke'):
+            with self.subTest(reason=reason),self.fixture(code=code):
+                h,c=self.human();opened=asyncio.create_task(self.open(h))
+                await self.until(lambda:bool(h._call_drivers) and bool(self.children))
+                if reason=='cancel':opened.cancel()
+                else:h.consent=False
+                with self.assertRaises((asyncio.CancelledError,RuntimeError)):await opened
+                self.assertTrue(all(child.returncode is not None for child in self.children))
+                self.assertFalse(h._call_drivers);self.assertFalse(h._call_driver_cleanup)
+
+    async def test_owned_pixel_bound_and_bounded_readonly_history(self):
+        with self.fixture(delay=.1):
+            h,c=self.human();f=self.frame();s=await self.open(h,max_owned_bytes=f.data.nbytes,history_limit=3,
+                interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(f);await self.tick(s);await self.until(lambda:c.snapshot()['budget']['dispatched']==1)
+            self.assertFalse(s.offer(self.frame(1))['accepted'])
+            self.assertEqual(s.snapshot()['owned_pixel_bytes'],f.data.nbytes)
+            await self.until(lambda:s._active_task is None)
+            for index in range(1,8):s.offer(self.frame(index))
+            before=s.snapshot();self.assertEqual(len(before['events']),3);self.assertGreater(before['omitted_events'],0)
+            copy=await h.get_sentinel_status();copy['items'][0]['configuration']['interval_ms']=1
+            s.config['interval_ms']=1
+            self.assertEqual(s.snapshot(),before)
+
+    async def test_stale_selected_and_late_due_are_uninspected_without_dispatch(self):
+        import time
+        with self.fixture():
+            h,c=self.human();s=await self.open(h,max_age_ms=10)
+            s.offer(self.frame());owned=s._candidate['frame'].data
+            await asyncio.sleep(.025);await self.tick(s)
+            self.assertTrue(np.all(owned==0));self.assertEqual(s.snapshot()['counters']['stale_selected_capture'],1)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            await s.close();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=20)
+            s.offer(self.frame());s._origin=time.monotonic_ns()-50000000
+            await s._tick()
+            self.assertEqual(s.snapshot()['counters']['deadline_missed'],1)
+            self.assertIsNone(s.snapshot()['last_accepted_capture_point']);self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+
+    async def test_authoritative_observer_tracks_one_actual_call_and_worker_lifetime(self):
+        from test_runtime_instrumentation import session
+        from humansense.provider_profiles import capability
+        from humansense.providers.smolvlm_native import configuration
+        with tempfile.TemporaryDirectory(dir='.') as directory,self.fixture():
+            contract=capability('smolvlm2.500m.local',dict(configuration(CONFIG),window_frames=1))
+            observer=session(Path(directory).resolve(),contract.provider,contract.version)
+            h,c=self.human();s=await self.open(h,evaluation_observer=observer,interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(self.frame());await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(s.snapshot()['counters']['accepted'],1)
+            await s.close();report=await observer.close()
+            self.assertEqual(report['provider_counters'][0]['count'],1)
+            self.assertEqual(len(report['reports'][0]['attempts']),1)
+            self.assertTrue(report['worker_measurements'][0]['reap_confirmed'])
+            self.assertTrue(report['unresolved_billing']);self.assertIsNone(report['monetary_cost'])
+
+    async def test_cooldown_and_unknown_inflight_liability_do_not_advance_sample_point(self):
+        for mode in ('cooldown','unknown_liability'):
+            with self.subTest(mode=mode),self.fixture():
+                budget=CallBudget(unit='fixture',pricing_revision='fixture',ceiling=100,max_inflight=1)
+                h,c=self.human(budget=budget,cooldown_ms=600000 if mode=='cooldown' else 0)
+                s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+                s.offer(self.frame());await self.tick(s);await self.until(lambda:s._active_task is None)
+                first=s.snapshot()['last_accepted_capture_point'];self.assertIsNotNone(first)
+                await asyncio.sleep(.005)
+                s.offer(self.frame(1));await self.tick(s);await self.until(lambda:s._active_task is None)
+                self.assertEqual(s.snapshot()['last_accepted_capture_point'],first)
+                self.assertEqual(s.snapshot()['counters']['accepted'],1)
+                self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+                self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
+
+    async def test_other_callers_pending_request_is_never_executed_with_sentinel_pixels(self):
+        with self.fixture():
+            h,c=self.human();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+            other=self.frame();other=replace(other,sensor=replace(other.sensor,source_id='other.camera'))
+            other.data[:]=77;digest=smolvlm_frame_sha256(other.data)
+            record=await h.push_observation(s.spec.id,dict(capture_available=True,capture_index=0,
+                width=48,height=32,pixels_sha256=digest),sensor=other.sensor,timestamp_ms=other.timestamp_ms)
+            source=c.open_source(record,now_ms=timestamp())
+            pending=c.submit(source,record,sequence=1,now_ms=timestamp(),query=True,needs_visual=True,
+                visual_reference=dict(source_id=other.sensor.source_id,sensor_id=other.sensor.sensor_id,
+                    stream_epoch=other.sensor.stream_epoch,capture_ms=other.timestamp_ms,sha256=digest))
+            self.assertEqual(pending['status'],'queued')
+            own=self.frame(1);s.offer(own);await self.tick(s);await self.until(lambda:s._active_task is None)
+            point=s.snapshot()['last_accepted_capture_point'];self.assertIsNotNone(point)
+            self.assertEqual(point['frame_sha256'],smolvlm_frame_sha256(own.data))
+            self.assertNotEqual(point['request_id'],pending['request_id'])
+            foreign=next(row for row in c.snapshot()['requests'] if row['id']==pending['request_id'])
+            self.assertEqual(foreign['state'],'pending');self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+
+    async def test_deadline_domain_integer_validation_and_registration_overflow_before_spawn(self):
+        with self.fixture():
+            h,c=self.human();instances=[]
+            for index in range(4):
+                f=self.frame()
+                instances.append(await FreshFrameSentinel.open(h,'audit'+str(index),'main',sys.executable,CONFIG,
+                    sensor=f.sensor,frame_shape=f.data.shape))
+            with patch('humansense.frame_sentinel.SmolVLMCalls.open',side_effect=AssertionError('overflow spawned worker')):
+                with self.assertRaises(RuntimeError):await self.open(h)
+            for invalid in (True,1.0,0,-1,2**63):
+                with self.assertRaises(ValueError):
+                    await instances[0].adapter.execute('not_retained',{},None,maximum_charge=2,dispatch_deadline_ns=invalid)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            await asyncio.gather(*(instance.close() for instance in instances))
+            self.assertFalse(h._call_drivers)
+
+    async def test_example_actual_worker_original_hash_and_stale_recording_failure(self):
+        from examples.fresh_frame_sentinel import parser,run
+        from dataclasses import asdict
+        for case in ('fresh','stale','corrupt'):
+            stale=case=='stale'
+            with self.subTest(case=case),tempfile.TemporaryDirectory(dir='.') as directory,self.fixture():
+                root=Path(directory);f=self.frame(ts=timestamp()-(30000 if stale else 0))
+                (root/'frame.bgr').write_bytes(f.data.tobytes())
+                manifest=dict(schema_version=1,subject_id=f.subject_id,sensor=asdict(f.sensor),shape=list(f.data.shape),
+                    captures=[dict(path='frame.bgr',timestamp_ms=f.timestamp_ms,capture_index=0,frame_sha256=smolvlm_frame_sha256(f.data))])
+                if case=='corrupt':manifest['captures'][0]['frame_sha256']='0'*64
+                (root/'manifest.json').write_text(json.dumps(manifest));(root/'config.json').write_text(json.dumps(CONFIG))
+                args=parser().parse_args(['--manifest',str(root/'manifest.json'),'--config',str(root/'config.json'),
+                    '--python',sys.executable,'--maximum-charge','2','--unit','fixture','--pricing-revision','fixture',
+                    '--ceiling','10','--interval-ms','100','--max-age-ms','10000'])
+                if case=='corrupt':
+                    with self.assertRaisesRegex(ValueError,'recorded shape/pixels differ'):await run(args)
+                    self.assertTrue(all(child.returncode is not None for child in self.children))
+                    continue
+                result=await run(args)
+                self.assertEqual(result['captures'][0]['timestamp_ms'],f.timestamp_ms)
+                self.assertEqual(result['captures'][0]['frame_sha256'],smolvlm_frame_sha256(f.data))
+                self.assertEqual(result['budget']['dispatched'],0 if stale else 1)
+                self.assertEqual(result['captures'][0]['accepted'],not stale)
+                self.assertTrue(result['worker_reaped']);self.assertEqual(result['consumer_llm_invocations'],0)
+                self.assertIsNone(result['actual_cost'])
+
 
 class OwnedDrivers(unittest.IsolatedAsyncioTestCase):
     async def test_shared_bounded_driver_registry_revoke_retire_identity_and_self_join(self):
@@ -247,6 +421,45 @@ class OwnedDrivers(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(d.buffer));d.task=None
             await h._join_call_drivers()
         finally:gate.set();await h.close()
+
+
+class RecordedInput(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os,'mkfifo'),'FIFO fixture requires POSIX')
+    def test_fifo_open_is_bounded_in_an_owned_subprocess(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            fifo=Path(directory).resolve()/'capture.bgr';os.mkfifo(fifo)
+            code='''
+import sys
+from examples.fresh_frame_sentinel import _read
+try:_read(sys.argv[1],4608)
+except ValueError as error:assert 'regular' in str(error)
+else:raise AssertionError('FIFO accepted')
+'''
+            # A subprocess timeout reaps this owned probe even on regression;
+            # asyncio.wait_for cannot interrupt a blocking in-loop FIFO open.
+            result=subprocess.run([sys.executable,'-c',code,str(fifo)],capture_output=True,timeout=2)
+            self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_descriptor_admission_rejects_symlink_swap_and_changed_identity(self):
+        from examples.fresh_frame_sentinel import _read
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();owner=root/'owner';owner.mkdir()
+            raw=owner/'capture.bgr';raw.write_bytes(b'original')
+            outside=root/'outside.bgr';outside.write_bytes(b'outside')
+            original_open=os.open
+            def swapped(path,flags):
+                raw.unlink();raw.symlink_to(outside)
+                return original_open(path,flags)
+            with patch('examples.fresh_frame_sentinel.os.open',swapped):
+                with self.assertRaises((OSError,ValueError)):_read(raw,4608,owner=owner)
+            raw.unlink();raw.write_bytes(b'original')
+            def replaced(path,flags):
+                descriptor=original_open(path,flags)
+                raw.unlink();raw.write_bytes(b'different inode')
+                return descriptor
+            with patch('examples.fresh_frame_sentinel.os.open',replaced):
+                with self.assertRaisesRegex(ValueError,'identity changed'):_read(raw,4608,owner=owner)
+            self.assertEqual(_read(raw,4608,owner=owner),b'different inode')
 
 
 if __name__=='__main__':unittest.main()

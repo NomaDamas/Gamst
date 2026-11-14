@@ -34,6 +34,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_orbslam_context.py -v
       - run: python -m unittest discover -s tests -p test_orbslam_rotation.py -v
       - run: python -m unittest discover -s tests -p test_orbslam_replay.py -v
+      - run: python -m unittest discover -s tests -p 'test_record*.py' -v
       - run: python -m unittest discover -s tests -p test_motion_provider.py -v
       - run: python -m unittest discover -s tests -p test_openeb.py -v
       - run: python -m unittest discover -s tests -p test_openeb_process.py -v
@@ -93,5 +94,6 @@ jobs:
       - run: python -m unittest discover -s tests -p test_smolvlm_native.py -v
       - run: python -m unittest discover -s tests -p test_smolvlm_context.py -v
       - run: python -m unittest discover -s tests -p test_smolvlm_call.py -v
+      - run: python -m unittest discover -s tests -p test_frame_sentinel.py -v
       - run: python -m unittest discover -s tests -p test_visual_context_call.py -v
       - run: python -m unittest discover -s tests -p test_controller_attempts.py -v
