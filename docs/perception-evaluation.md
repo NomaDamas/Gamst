@@ -50,3 +50,8 @@ The evaluator conservatively requires both point estimates and interval bounds t
 
 The [frozen A/B/C numerical wrapper](three-arm-comparison.md) reuses these
 unchanged paired gates while keeping B diagnostic and actual acceptance incomplete.
+
+The [observed stream cost ledger](stream-cost-ledger.md) separately validates
+elapsed-time availability, capture counters, startup/idle components and exact
+invoice arithmetic. Its declared completeness does not certify whole-pipeline
+truth or change these task-level gates; shared allocation remains separate work.
