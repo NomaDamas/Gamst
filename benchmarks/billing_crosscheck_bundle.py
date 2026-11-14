@@ -11,6 +11,7 @@ from .billing_transport_crosscheck import crosscheck_transport
 def persist_crosscheck(manifest, asset_directory, transport_directory, *,
                        expected_inventory_sha256, native_index, expected_binding, output_directory):
     """Recompute original-derived output before reuse; never modify source bundles."""
+    _reject_source_output(output_directory, (native_index.directory, transport_directory))
     report=crosscheck_transport(manifest,asset_directory,transport_directory,
         expected_inventory_sha256=expected_inventory_sha256,native_index=native_index,expected_binding=expected_binding)
     return _persist_report(report, output_directory)
@@ -43,6 +44,14 @@ def _persist_report(report, output_directory):
     finally:
         if directory is not None:os.close(directory)
         os.close(parent)
+
+
+def _reject_source_output(output_directory, original_directories):
+    output=Path(output_directory).resolve()
+    for directory in original_directories:
+        original=Path(directory).resolve()
+        if output==original or original in output.parents:
+            raise ValueError('crosscheck output must be outside original evidence directories')
 
 
 def _load_declaration(path, limit):

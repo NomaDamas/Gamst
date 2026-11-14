@@ -1,6 +1,7 @@
 """Original collector-native3 structural index, never a channel/billing attestation."""
 from dataclasses import dataclass
 import json
+from pathlib import Path
 
 from .native3_files import DECLARATIONS, OriginalNativeFiles
 from .paired_replay import _encoded, _keys
@@ -44,9 +45,11 @@ def _same(actual, expected, reason):
 class ValidatedNative3Index:
     """Reader-issued immutable structural evidence, not an unforgeable capability."""
     _data: bytes
-    def __init__(self, value, *, _reader=None):
+    directory: Path
+    def __init__(self, value, *, directory=None, _reader=None):
         if _reader is not _READER: raise TypeError('read original collector files to construct an index')
         object.__setattr__(self, '_data', _encoded(value))
+        object.__setattr__(self, 'directory', Path(directory).absolute())
     def snapshot(self): return json.loads(self._data)
     def entries(self): return self.snapshot()['entries']
     def lookup(self, operation_id):
@@ -191,4 +194,4 @@ def read_native3_evidence(directory, *, expected_files, sidecar_ordinal):
             producer_reported_collection_complete=complete['instrumentation_complete'],
             receipt_authenticity_verified=False,instrumentation_coverage_verified=False,actual_acceptance='incomplete')
         if files.verified!=set(files.inventory): raise ValueError('incomplete original file verification')
-        return ValidatedNative3Index(index,_reader=_READER)
+        return ValidatedNative3Index(index,directory=directory,_reader=_READER)
