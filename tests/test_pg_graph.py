@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from humansense.pg_artifact import manifest_digest
 from humansense.pg_graph import (FILES,project_sources,inspect_graph,_tokenizer_dir,_inventory,
-                                _execute_projection,_unavailable,_verify_runtime_lock)
+                                _execute_projection,_unavailable,_verify_runtime_lock,_check_defaults)
 from test_pg_artifact import declaration
 
 
@@ -83,12 +83,45 @@ assert not any(x in sys.modules for x in ('torch','transformers','accelerate','t
             root=Path(directory).resolve();folder=root/'tokenizer';folder.mkdir()
             raw=b'ordinary tokenizer fixture';(folder/'vocab.txt').write_bytes(raw)
             value=dict(files=[dict(path='tokenizer/vocab.txt',size=len(raw),sha256=hashlib.sha256(raw).hexdigest())])
-            self.assertEqual(_tokenizer_dir(root,value),folder)
+            self.assertEqual(_tokenizer_dir(root,value,kind='bert'),(folder,{'vocab_file':str(folder/'vocab.txt'),'tokenizer_file':None}))
             (folder/'tokenizer_config.json').write_text('{}')
-            with self.assertRaisesRegex(ValueError,'undeclared'):_tokenizer_dir(root,value)
+            with self.assertRaisesRegex(ValueError,'undeclared'):_tokenizer_dir(root,value,kind='bert')
             # No deletion needed: independent supplied role with wrong digest.
             value['files'].append(dict(path='tokenizer/tokenizer_config.json',size=2,sha256='0'*64))
-            with self.assertRaises(ValueError):_tokenizer_dir(root,value)
+            with self.assertRaises(ValueError):_tokenizer_dir(root,value,kind='bert')
+
+    def test_tokenizer_config_cannot_redirect_to_unhashed_files(self):
+        for kind,vocab in [('bert','vocab.txt'),('t5','spiece.model')]:
+            for field in ('vocab_file','tokenizer_file','merges_file'):
+                for target in ('/outside/unhashed-vocab.txt','../unhashed-vocab.txt'):
+                    with self.subTest(kind=kind,field=field,target=target), tempfile.TemporaryDirectory(dir='.') as directory:
+                        root=Path(directory).resolve();folder=root/'tokenizer';folder.mkdir()
+                        (folder/vocab).write_bytes(b'vocab fixture')
+                        config=json.dumps({field:target}).encode()
+                        (folder/'tokenizer_config.json').write_bytes(config)
+                        files=[]
+                        for path in folder.iterdir():
+                            raw=path.read_bytes();files.append(dict(path='tokenizer/'+path.name,size=len(raw),sha256=hashlib.sha256(raw).hexdigest()))
+                        with self.assertRaisesRegex(ValueError,'redirect'):
+                            _tokenizer_dir(root,dict(files=files),kind=kind)
+        # Ordinary special token contents are not interpreted as paths.
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();folder=root/'tokenizer';folder.mkdir()
+            data={'tokenizer.json':b'{}','tokenizer_config.json':b'{"eos_token":"</s>"}'}
+            files=[]
+            for name,raw in data.items():
+                (folder/name).write_bytes(raw);files.append(dict(path='tokenizer/'+name,size=len(raw),sha256=hashlib.sha256(raw).hexdigest()))
+            _,paths=_tokenizer_dir(root,dict(files=files),kind='t5')
+            self.assertEqual(paths,{'vocab_file':None,'tokenizer_file':str(folder/'tokenizer.json')})
+
+    def test_fixed_default_dtype_and_device_guard(self):
+        fake=SimpleNamespace(float32='float32',get_default_dtype=lambda:'float32',
+                             get_default_device=lambda:'cpu',device=lambda value:value)
+        _check_defaults(fake)
+        fake.get_default_dtype=lambda:'float64'
+        with self.assertRaises(ValueError):_check_defaults(fake)
+        fake.get_default_dtype=lambda:'float32';fake.get_default_device=lambda:'meta'
+        with self.assertRaises(ValueError):_check_defaults(fake)
 
     @unittest.skipUnless(importlib.util.find_spec('torch'),'existing torch required for machinery-only inventory')
     def test_duplicate_alias_buffer_and_precision_inventory(self):

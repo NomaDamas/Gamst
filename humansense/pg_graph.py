@@ -190,18 +190,49 @@ def _read_entry(root,item,limit):
     return raw
 
 
-def _tokenizer_dir(root,artifact):
-    """Only explicitly declared, checked, immutable local tokenizer directories."""
+def _tokenizer_dir(root,artifact,*,kind):
+    """Only explicitly declared immutable local tokenizer files and no redirects."""
+    if kind not in ('bert','t5'):raise ValueError('unknown fixed tokenizer role')
     files=artifact['files']
     parents={str(Path(item['path']).parent) for item in files}
     if len(parents)!=1:raise ValueError('tokenizer files must share one directory')
     directory=root/next(iter(parents))
     declared={Path(item['path']).name for item in files}
-    # No hidden config/tokenizer file outside the declared role can be consulted.
+    allowed={'tokenizer_config.json','special_tokens_map.json','added_tokens.json','tokenizer.json','config.json'}
+    allowed.add('vocab.txt' if kind=='bert' else 'spiece.model')
+    if not declared<=allowed:raise ValueError('unsupported tokenizer file name')
+    if kind=='bert' and 'vocab.txt' not in declared:raise ValueError('BERT vocab.txt required')
+    if kind=='t5' and not declared&{'spiece.model','tokenizer.json'}:
+        raise ValueError('T5 local vocabulary or fast tokenizer required')
     if {p.name for p in directory.iterdir()} != declared:
         raise ValueError('tokenizer directory contains undeclared files')
-    for item in files:_read_entry(root,item,32*1024**2)
-    return directory
+    def reject_redirects(node):
+        if type(node) is dict:
+            for key,value in node.items():
+                # These are loader options, not ordinary special-token text.
+                if key.endswith('_file') or key in ('sp_model_kwargs','auto_map'):
+                    raise ValueError('tokenizer configuration file redirect/custom loader forbidden')
+                reject_redirects(value)
+        elif type(node) is list:
+            for value in node:reject_redirects(value)
+    for item in files:
+        is_config=Path(item['path']).name in ('tokenizer_config.json','config.json')
+        raw=_read_entry(root,item,65536 if is_config else 32*1024**2)
+        if is_config:
+            config=_json(raw,65536)
+            if type(config) is not dict:raise ValueError('tokenizer configuration object required')
+            reject_redirects(config)
+    # Explicit kwargs take precedence over tokenizer_config init_kwargs in the
+    # pinned HF loader. None also overwrites any absent fast-tokenizer path.
+    overrides={'vocab_file':str(directory/('vocab.txt' if kind=='bert' else 'spiece.model'))
+               if ('vocab.txt' if kind=='bert' else 'spiece.model') in declared else None,
+               'tokenizer_file':str(directory/'tokenizer.json') if kind=='t5' and 'tokenizer.json' in declared else None}
+    return directory,overrides
+
+
+def _check_defaults(torch):
+    if torch.get_default_dtype()!=torch.float32 or torch.get_default_device()!=torch.device('cpu'):
+        raise ValueError('fixed PG schema requires default float32 on CPU')
 
 
 def _execute_projection(trees, bindings):
@@ -287,13 +318,14 @@ def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_
         if asset['revision']!=revision or len(asset['files'])!=1 or asset['files'][0]['sha256']!=digest:
             raise ValueError('unsupported fixed architecture config identity: '+role)
         configs[role]=_json(_read_entry(root,asset['files'][0],16384),16384)
-    bert_dir=_tokenizer_dir(root,value['artifacts']['bert_tokenizer'])
-    t5_dir=_tokenizer_dir(root,value['artifacts']['t5_tokenizer'])
+    bert_dir,bert_paths=_tokenizer_dir(root,value['artifacts']['bert_tokenizer'],kind='bert')
+    t5_dir,t5_paths=_tokenizer_dir(root,value['artifacts']['t5_tokenizer'],kind='t5')
     # Exact dependency metadata gate above occurs before all heavyweight imports.
     import torch
     from accelerate import init_empty_weights
     from transformers import BertConfig,BertTokenizer,T5TokenizerFast
     from transformers.models.t5.configuration_t5 import T5Config
+    _check_defaults(torch)
 
     def config_factory(cls,role,identifier):
         class LocalConfig:
@@ -302,12 +334,12 @@ def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_
                 if name!=identifier:raise ValueError('unexpected pretrained config name')
                 return cls.from_dict(copy.deepcopy(configs[role]))
         return LocalConfig
-    def tokenizer_factory(cls,directory,identifier):
+    def tokenizer_factory(cls,directory,paths,identifier):
         class LocalTokenizer:
             @staticmethod
             def from_pretrained(name,**kwargs):
                 if name!=identifier:raise ValueError('unexpected pretrained tokenizer name')
-                return cls.from_pretrained(str(directory),local_files_only=True,**kwargs)
+                return cls.from_pretrained(str(directory),local_files_only=True,**kwargs,**paths)
         return LocalTokenizer
     def factory(symbol,identifier):
         def bind(namespace):
@@ -320,8 +352,8 @@ def inspect_graph(manifest, *, expected_sha256, runtime_lock=None, runtime_lock_
         return bind
     bindings=dict(bert_config=config_factory(BertConfig,'bert_config','bert-base-uncased'),
         t5_config=config_factory(T5Config,'t5_config','google/flan-t5-xxl'),
-        bert_tokenizer=tokenizer_factory(BertTokenizer,bert_dir,'bert-base-uncased'),
-        t5_tokenizer=tokenizer_factory(T5TokenizerFast,t5_dir,'google/flan-t5-xxl'),
+        bert_tokenizer=tokenizer_factory(BertTokenizer,bert_dir,bert_paths,'bert-base-uncased'),
+        t5_tokenizer=tokenizer_factory(T5TokenizerFast,t5_dir,t5_paths,'google/flan-t5-xxl'),
         qformer_factory=factory('BertLMHeadModel','bert-base-uncased'),
         t5_factory=factory('T5ForConditionalGeneration','google/flan-t5-xxl'))
     namespaces=_execute_projection(trees,bindings)
