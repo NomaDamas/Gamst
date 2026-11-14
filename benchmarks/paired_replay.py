@@ -150,19 +150,24 @@ async def _finish_owned(task):
             if task.done(): return task.result()
 
 
-async def _execute(command, request, timeout_ms):
+async def _execute(command, request, timeout_ms, *, runtime_channel=None):
     started=time.perf_counter_ns()
     proc=None; spawn=None; collection=None; jobs=[]; output=b''; error=b''; response=None
     status='error'; diagnostic=None; answer_ready_ms=None
     try:
+        options={'env':command['environment']}
+        if runtime_channel is not None:
+            options=runtime_channel.prepare(command['environment'],
+                max(0.,timeout_ms/1000-(time.perf_counter_ns()-started)/1e9))
         spawn=asyncio.create_task(asyncio.create_subprocess_exec(*command['argv'],cwd=command['cwd'],
-            env=command['environment'],stdin=asyncio.subprocess.PIPE,
+            **options,stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True))
         # Preserve caller cancellation when completion occurs in the same loop
         # turn (wait_for can lose it on Python3.10). Spawn remains owned.
         done,_=await asyncio.wait({spawn},timeout=timeout_ms/1000)
         if not done: raise asyncio.TimeoutError()
         proc=spawn.result()
+        if runtime_channel is not None: runtime_channel.spawned()
         async def send():
             proc.stdin.write(_encoded(request)+b'\n')
             await proc.stdin.drain(); proc.stdin.close()
@@ -195,6 +200,7 @@ async def _execute(command, request, timeout_ms):
             raise ValueError('pipeline did not emit a complete JSON response line')
         jobs=[asyncio.create_task(send()),asyncio.create_task(read_response()),
               asyncio.create_task(_drain(proc.stderr,MAX_STDERR_BYTES)),asyncio.create_task(proc.wait())]
+        if runtime_channel is not None: jobs.append(asyncio.create_task(runtime_channel.collect()))
         async def collect(): return await asyncio.gather(*jobs)
         remaining=max(0.,timeout_ms/1000-(time.perf_counter_ns()-started)/1e9)
         if remaining<=0: raise asyncio.TimeoutError()
@@ -221,6 +227,7 @@ async def _execute(command, request, timeout_ms):
                 except Exception: pass
             try:
                 if proc is not None:
+                    if runtime_channel is not None: runtime_channel.spawned()
                     # Every invocation owns its group, including descendants with
                     # detached stdio after a successful direct-child exit.
                     await _stop_owned(proc)
@@ -231,6 +238,7 @@ async def _execute(command, request, timeout_ms):
                     if not job.done(): job.cancel()
                 owned=jobs+([collection] if collection is not None else [])
                 if owned: await asyncio.gather(*owned,return_exceptions=True)
+                if runtime_channel is not None: runtime_channel.close()
         cleanup_task=asyncio.create_task(cleanup())
         try:
             await asyncio.shield(cleanup_task)

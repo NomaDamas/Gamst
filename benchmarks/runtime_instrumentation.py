@@ -188,7 +188,7 @@ class EvaluationSession:
                 raise ValueError('bounded worker metadata required')
         if 'configuration_sha256' in metadata:_digest(metadata['configuration_sha256'])
         parent=metadata.get('parent_operation_id')
-        if parent is not None and parent not in self._tickets:
+        if parent is not None and not isinstance(self._tickets.get(parent),_Call):
             raise ValueError('worker operation parent must be an original observed call')
         if kind=='worker_lifecycle':
             if metadata['worker_id'] in self._workers or len(self._workers)>=MAX_WORKERS:

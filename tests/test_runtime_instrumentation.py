@@ -233,6 +233,8 @@ class Text(unittest.IsolatedAsyncioTestCase):
     async def test_private_text_cannot_be_used_as_structural_terminal_reason(self):
         observer=session(self.root)
         worker=observer.reserve_work('worker_lifecycle',dict(worker_id='worker'))
+        with self.assertRaises(ValueError):
+            observer.reserve_work('worker_operation',dict(worker_id='worker',operation='process',parent_operation_id=worker.id))
         with self.assertRaises(ValueError):worker.finish('PRIVATE EXCEPTION')
         worker.finish('closed')
         request,record=await self.queued()

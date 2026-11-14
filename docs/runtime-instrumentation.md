@@ -69,6 +69,10 @@ union of observed transport-operation intervals and its residency gaps are repor
 separately; overlapping intervals are not summed. These are host elapsed proxies,
 not CPU/GPU utilization, power, billed money or the task's critical-path latency.
 Missing endpoints remain null. EOF and close acknowledgements do not prove death.
+Native3 callback clocks retain their existing relative `perf_counter_ns` origin;
+the journal uses absolute host monotonic readings. The parent compares callback
+duration against its enclosing observed entry/finish duration, not timestamps from
+these distinct clock representations, and does not invent an origin mapping.
 
 The measurement bundle enumerates every frozen required resource lane with unknown
 quantity/billing until a supported measurement adapter supplies it. Physical capture
@@ -90,7 +94,9 @@ Close stops admission, waits a bounded time for observed invocation owners and
 freezes a detached terminal bundle. Unfinished work/reap or journal failures remain
 explicit incomplete reasons. SDK adapters retain cancellation and worker ownership;
 close them before closing the evaluation session. Session close drains its owned
-writer and resists repeated caller cancellation. It never waits indefinitely for
+writer and resists repeated caller cancellation. The channel writer drains for at
+most five seconds, bounded further by the original task deadline, before cancelling
+and joining its owned writer and closing its socket. It never waits indefinitely for
 future invoices. Billing after terminal cannot mutate the original report, journal
 or source; a future amendment requires a separate versioned exclusive artifact.
 
