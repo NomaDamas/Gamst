@@ -1,6 +1,6 @@
 # Private separation media ownership
 
-This is the software transport/ownership slice of [#221](https://github.com/NomaDamas/Gamst/issues/221), under [#201](https://github.com/NomaDamas/Gamst/issues/201). It does not implement or install SAM Audio. The reserved `sam_audio.text_temporal.local` worker profile fails construction until the separately reviewed native adapter exists. Its discovery schema/configuration hash describes a transport contract, not a supported trained checkpoint. Fixture-engine tests are not model inference or quality evidence.
+This is the software transport/ownership slice of [#221](https://github.com/NomaDamas/Gamst/issues/221), under [#201](https://github.com/NomaDamas/Gamst/issues/201). It does not install SAM Audio. The `sam_audio.text_temporal.local` worker profile now routes to the [strict local native adapter](sam-audio-native.md) only with an explicit verified artifact manifest and bounded text/manual-temporal configuration. Its discovery schema/configuration hash is not evidence of trained-checkpoint compatibility. Fixture-engine tests are not model inference or quality evidence.
 
 ## Explicit local ownership
 
