@@ -214,4 +214,3 @@ STATE_SHAPES = [{'blocks.0.attn.proj.bias': [768],
   'probe.2.weight': [2, 192]}]
 
 LICENSE_SHA256 = '3711f963c05d0be80d53e5923308a6dee31b203da23435c9cfb7c7b6e4dd5e19'
-
