@@ -80,3 +80,7 @@ The next stages are native three-arm collection/source joining/attempt binding
 [#204](https://github.com/NomaDamas/Gamst/issues/204) does not close
 [#135](https://github.com/NomaDamas/Gamst/issues/135) or the existing real acceptance
 [#57](https://github.com/NomaDamas/Gamst/issues/57).
+
+Original A/B/C command traces can now be collected with the
+[separately frozen collector](three-arm-replay.md). It remains unscored and does
+not supply the pending evidence join, receipt reconciliation or real acceptance.
