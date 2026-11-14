@@ -59,7 +59,8 @@ Provide the fields in the upstream monocular example, with integer syntax for
 width/height/fps/RGB and extractor integer fields, and explicit decimal syntax for
 real fields. The wrapper rejects missing/duplicate/unknown fields, atlas filenames,
 YAML extensions, incomplete distortion coefficients, nonfinite values and invalid
-bounds. Optional distortion is k1/k2/p1/p2, optionally k3. Input is uint8 grayscale
+bounds, including focal lengths whose native float32 value or reciprocal would
+underflow to zero or overflow. Optional distortion is k1/k2/p1/p2, optionally k3. Input is uint8 grayscale
 matching the calibration dimensions exactly: height32..1080, width32..1920.
 The smallest pyramid level must retain at least80pixels on each axis. At every
 level, the usable width after feature borders must exceed half the usable height;

@@ -93,6 +93,10 @@ class ORBSLAMNative:
                 or not 0<=float(values['Camera1.cx'])<width or not 0<=float(values['Camera1.cy'])<height
                 or not 0<float(values['Camera.fps'])<=240):
             raise ValueError('invalid bounded pinhole calibration')
+        for key in ('Camera1.fx','Camera1.fy'):
+            focal=ctypes.c_float(float(values[key])).value
+            if focal<=0 or not math.isfinite(ctypes.c_float(1.0/focal).value):
+                raise ValueError('focal length and reciprocal must be finite positive float32')
         # Upstream divides the usable pyramid extent into 35px cells after
         # 16px borders, and initializes an octree from rounded width/height.
         # Keep conservative margins rather than passing degenerate grids.

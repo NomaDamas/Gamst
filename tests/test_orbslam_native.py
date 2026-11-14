@@ -98,6 +98,8 @@ class Native(unittest.TestCase):
     def test_required_types_ranges_and_distortion_are_checked_before_native_open(self):
         replacements=(('Camera.RGB: 0\n',''),('Camera.fps: 30','Camera.fps: 30.0'),
                       ('Camera1.fx: 100.0','Camera1.fx: 100'),
+                      ('Camera1.fx: 100.0','Camera1.fx: 1.0e-300'),
+                      ('Camera1.fy: 100.0','Camera1.fy: 1.0e-40'),
                       ('Camera.width: 96','Camera.width: 096'),
                       ('Camera.width: 96','Camera.width: 32'),
                       ('Camera.height: 96','Camera.height: 400'),
