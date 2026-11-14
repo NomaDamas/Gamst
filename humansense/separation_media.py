@@ -25,20 +25,26 @@ MEDIA_HEADER_LIMIT = 16384
 _FIELDS = ('separation', 'window', 'prompt', 'model', 'media')
 
 
+class SeparationCapability(CapabilitySpec):
+    def validate(self, value):
+        from .separation_metadata import validate_metadata
+        return validate_metadata(super().validate(value))
+
+
 def capability(config):
     """Transport identity only; #201 must validate native assets before loading."""
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('SAM separation configuration must be an object')
     digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return CapabilitySpec(CAPABILITY, 'audio.source_separation', 'audio', PROFILE,
+    return SeparationCapability(CAPABILITY, 'audio.source_separation', 'audio', PROFILE,
         'transport1.' + digest, tuple(OutputField(k, 'object') for k in _FIELDS),
         'window', window_ms=4000, freshness_ms=5000, stateful=True,
         reset_on_gap=True, interpretation='estimate',
         sensor_requirements=('mono-float32-48000hz-whole-window',), license='SAM-License')
 
 
-def frame_binding(header, payload, *, generation, config_id):
+def frame_binding(header, payload, *, generation, config_id, owner_revision=0):
     """Bind media to the actual copied request, never child-supplied ownership."""
     metadata, layout = header['metadata'], header['layout']
     sensor = metadata['sensor']
@@ -59,7 +65,7 @@ def frame_binding(header, payload, *, generation, config_id):
         raise ValueError('separation PCM must be finite and normalized')
     return bounded_json(dict(subject_id=metadata['subject_id'], sensor=sensor,
         capture_end_ms=end, capture_start_ms=end-shape[0]/48, sample_rate=48000,
-        sample_count=shape[0], generation=generation, capability_id=CAPABILITY,
+        sample_count=shape[0], generation=generation, owner_revision=owner_revision, capability_id=CAPABILITY,
         config_id=config_id, input_sha256=hashlib.sha256(payload).hexdigest()))
 
 
@@ -196,6 +202,7 @@ class SeparationMediaOwner:
         self.subject_id, self.source_id, self.sensor_id = subject, source, sensor
         self.generation, self.epoch = store.human._generation, None
         self.closed, self.claimed = False, False
+        self.revision, self.reset_pending = 0, False
 
     def _check(self):
         store = self._store
@@ -212,6 +219,8 @@ class SeparationMediaOwner:
 
     def _bind(self, binding):
         self._check()
+        if self.reset_pending or binding['owner_revision'] != self.revision:
+            raise PermissionError('separation request invalidated by provider reset')
         sensor = binding['sensor']
         if (binding['subject_id'], sensor['source_id'], sensor['sensor_id'], binding['generation']) != (
                 self.subject_id, self.source_id, self.sensor_id, self.generation):
@@ -289,11 +298,21 @@ class SeparationMediaOwner:
 
     def _reset(self):
         self._check()
+        if self.reset_pending:
+            raise RuntimeError('separation reset is already pending')
+        # Intent is synchronous: an old response cannot restore cleared bytes
+        # while reset waits behind its in-flight pipe exchange.
+        self.revision += 1
+        self.reset_pending = True
         for ref, entry in list(self._store.entries.items()):
             if entry['owner'] is self:
                 self._store._drop(ref)
         self.epoch = None
         self._store._schedule()
+
+    def _reset_complete(self):
+        self._check()
+        self.reset_pending = False
 
     def close(self):
         self._store._loop()

@@ -167,7 +167,8 @@ class ProcessProvider:
                     from .separation_media import frame_binding
                     owner = self._separation_owner
                     fields['separation_binding'] = frame_binding(fields['frame'], payload,
-                        generation=owner.generation, config_id=self.spec.version)
+                        generation=owner.generation, config_id=self.spec.version,
+                        owner_revision=owner.revision)
                     owner._bind(fields['separation_binding'])
                     owner._reserve(fields['separation_binding']['sample_count'])
             exchange = asyncio.create_task(self._exchange(operation, payload, fields))
@@ -180,6 +181,8 @@ class ProcessProvider:
                 result = exchange.result()
                 if self._separation_owner is not None and operation == 'process':
                     pair, binding = result
+                    if binding['owner_revision'] != self._separation_owner.revision:
+                        return None  # Reset intent superseded this complete window.
                     observation = self.spec.validate(pair.observation)
                     observation['window'].update(capture_start_ms=binding['capture_start_ms'],
                         capture_end_ms=binding['capture_end_ms'], sample_rate=48000,
@@ -215,7 +218,14 @@ class ProcessProvider:
     async def reset(self):
         if self._separation_owner is not None:
             self._separation_owner._reset()
-        await self._request('reset')
+            try:
+                await self._request('reset')
+                self._separation_owner._reset_complete()
+            except BaseException:
+                await _finish(asyncio.create_task(self._stop()))
+                raise
+        else:
+            await self._request('reset')
 
     def revoke_separation_media(self):
         """Synchronous lifecycle intent, before waiting for a stalled worker."""

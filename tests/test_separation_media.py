@@ -102,6 +102,19 @@ class PairWire(unittest.TestCase):
         head, pcm = request(); head['metadata']['sensor']['stream_epoch'] = None
         with self.assertRaises(ValueError): frame_binding(head, pcm, generation=0, config_id='test')
 
+    def test_closed_metadata_rejects_raw_arrays_and_unknown_nested_fields(self):
+        variants = []
+        for field in ('separation', 'window', 'prompt', 'model', 'media'):
+            value = observation(); value[field]['target_pcm'] = [.25]*100; variants.append(value)
+        value = observation(); value['prompt']['token_count_after'] = [.25]*100; variants.append(value)
+        value = observation(); value['model']['fixture_engine'] = {'nested': [.25]*100}; variants.append(value)
+        for value in variants:
+            with self.subTest(value=value), self.assertRaises(ValueError): self.spec.validate(value)
+            with self.assertRaises(ValueError): pack_pair(replace(self.pair, observation=value), self.binding, self.spec)
+        obs, header, binary = pack_pair(self.pair, self.binding, self.spec)
+        obs['separation']['target_pcm'] = [.25]*100
+        with self.assertRaises(ValueError): unpack_pair(obs, header, binary, self.binding, self.spec)
+
 
 class Retention(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -190,7 +203,8 @@ class Retention(unittest.IsolatedAsyncioTestCase):
     async def test_reset_and_owner_close_revoke_prior_references(self):
         meta = self.admit(); self.owner._reset()
         with self.assertRaises(PermissionError): self.owner.retrieve(meta['reference'], 'target', stream_epoch='epoch')
-        changed = deepcopy(self.binding); changed['sensor']['stream_epoch'] = 'new'
+        self.owner._reset_complete()
+        changed = deepcopy(self.binding); changed['sensor']['stream_epoch'] = 'new'; changed['owner_revision'] = 1
         meta = self.owner._admit(self.pair, changed)
         self.assertEqual(self.owner.retrieve(meta['reference'], 'target', stream_epoch='new'), self.pair.target)
         self.owner.close()
@@ -311,6 +325,46 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
             await streams.clear()
             with self.assertRaises(PermissionError): owner.retrieve(ref, 'target', stream_epoch=epoch)
 
+    async def test_native_and_malicious_pipe_pcm_metadata_never_reaches_context_or_mcp(self):
+        from humansense.mcp import MCPServer
+        code_paths = [FIXTURE.replace("window=dict(sample_count=n)",
+            "window=dict(sample_count=n,target_pcm=frame.data[:100].tolist())"),
+            FIXTURE.replace('w.main()', '''
+original=w.envelope
+def corrupt(h,p=b''):
+    if 'separation' in h: h['result']['separation']['target_pcm']=[.25]*100
+    return original(h,p)
+w.envelope=corrupt
+w.main()
+''')]
+        for code in code_paths:
+            with self.fixture(code):
+                provider, owner = await self.open()
+                streams = SensorStreams(self.human)
+                # Prior iteration registered the same canonical contract. Use a
+                # new manager; its factory never starts native inference itself.
+                streams.register(provider.spec, lambda: provider)
+                await streams.open('mic','device',[provider.spec.id],subject_id='alice')
+                await streams.submit(self.frame(epoch=None)); await streams.drain()
+                self.assertEqual((await self.human.get_context(subject_id='alice'))['observations'], {})
+                self.assertEqual(owner._store.bytes, 0)
+                response = await MCPServer(self.human).handle({'jsonrpc':'2.0','id':1,'method':'tools/call',
+                    'params': {'name':'get_context','arguments':{'subject_id':'alice'}}})
+                self.assertNotIn('target_pcm', json.dumps(response))
+                await streams.close()
+
+    async def test_direct_registered_observation_cannot_bypass_closed_metadata(self):
+        from humansense.mcp import MCPServer
+        spec = capability({})
+        self.human.register_capability(spec)
+        value = observation(); value['separation']['target_pcm'] = self.frame().data[:100].tolist()
+        with self.assertRaises(ValueError):
+            await self.human.push_observation(spec.id, value, sensor=self.frame().sensor, subject_id='alice')
+        self.assertEqual((await self.human.get_context(subject_id='alice'))['observations'], {})
+        response = await MCPServer(self.human).handle({'jsonrpc':'2.0','id':1,'method':'tools/call',
+            'params': {'name':'get_observations','arguments':{'subject_id':'alice'}}})
+        self.assertNotIn('target_pcm', json.dumps(response))
+
     async def test_network_context_subscription_is_metadata_only(self):
         from humansense.mcp import MCPServer
         from humansense.server import handle_connection
@@ -413,6 +467,49 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(provider.close(), 3)
             with self.assertRaises((RuntimeError, asyncio.IncompleteReadError, ConnectionError)):
                 await task
+            self.assertIsNotNone(self.children[-1].returncode)
+            self.assertEqual((owner._store.bytes, owner._store.reservations), (0, {}))
+
+    async def test_reset_intent_suppresses_old_response_and_allows_new_epoch(self):
+        with self.fixture():
+            provider, owner = await self.open({'delay': .05})
+            process = asyncio.create_task(provider.process(self.frame()))
+            while provider._sequence < 2: await asyncio.sleep(0)
+            reset = asyncio.create_task(provider.reset())
+            while not owner.reset_pending: await asyncio.sleep(0)
+            self.assertIsNone(await process)
+            await reset
+            self.assertEqual((owner._store.bytes, len(owner._store.entries)), (0, 0))
+            fresh = await provider.process(self.frame(1, 'new'))
+            self.assertEqual(owner.lookup(fresh['media']['reference'], stream_epoch='new')['sample_count'], 48000)
+
+    async def test_process_queued_before_reset_intent_cannot_rebind_old_epoch(self):
+        with self.fixture():
+            provider, owner = await self.open({'delay': .05})
+            active = asyncio.create_task(provider.process(self.frame()))
+            while provider._sequence < 2: await asyncio.sleep(0)
+            queued = asyncio.create_task(provider.process(self.frame(1)))
+            await asyncio.sleep(0)
+            reset = asyncio.create_task(provider.reset())
+            while not owner.reset_pending: await asyncio.sleep(0)
+            self.assertIsNone(await active)
+            with self.assertRaises(PermissionError): await queued
+            await reset
+            self.assertEqual(owner._store.bytes, 0)
+            fresh = await provider.process(self.frame(2, 'new'))
+            self.assertEqual(len(owner.retrieve(fresh['media']['reference'], 'target', stream_epoch='new')), 192000)
+
+    async def test_cancel_reset_while_waiting_reaps_inflight_worker(self):
+        with self.fixture():
+            provider, owner = await self.open({'delay': 60}, inference_timeout=600)
+            process = asyncio.create_task(provider.process(self.frame()))
+            while provider._sequence < 2: await asyncio.sleep(0)
+            reset = asyncio.create_task(provider.reset())
+            while not owner.reset_pending: await asyncio.sleep(0)
+            reset.cancel()
+            with self.assertRaises(asyncio.CancelledError): await reset
+            with self.assertRaises((RuntimeError, asyncio.IncompleteReadError, ConnectionError)): await process
+            self.assertTrue(provider.closed)
             self.assertIsNotNone(self.children[-1].returncode)
             self.assertEqual((owner._store.bytes, owner._store.reservations), (0, {}))
 

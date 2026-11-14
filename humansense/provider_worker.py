@@ -164,7 +164,8 @@ def main():
                         from .separation_media import frame_binding, pack_pair
                         binding = request['separation_binding']
                         expected = frame_binding(request['frame'], payload,
-                            generation=binding['generation'], config_id=spec.version)
+                            generation=binding['generation'], config_id=spec.version,
+                            owner_revision=binding['owner_revision'])
                         if binding != expected:
                             raise ValueError('invalid separation request binding')
                         pair = provider.process(decode_frame(request['frame'], payload))
