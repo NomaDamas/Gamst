@@ -121,6 +121,11 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         inventory=(self.sink.directory/'inventory.json').read_bytes();sha=hashlib.sha256(inventory).hexdigest()
         evidence=read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
         row=next(evidence.entries());self.assertEqual(json.loads(row['raw_response'])['id'],'resp_fixture_one')
+        self.assertEqual(row['ordinal'],0)
+        self.assertEqual(row['original_manifest_sha256'],hashlib.sha256((self.sink.directory/'call-0000.json').read_bytes()).hexdigest())
+        self.assertEqual(evidence.owner_declaration()['entry_count'],1)
+        detached=evidence.owner_declaration();detached['owner_kind']='changed'
+        self.assertEqual(evidence.owner_declaration()['owner_kind'],'task_native3')
         self.assertFalse(row['native_binding_verified']);self.assertFalse(row['receipt_authenticity_verified'])
         (self.sink.directory/'raw-0000.bin').write_bytes(b'{}')
         with self.assertRaises(ValueError):read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
@@ -153,6 +158,19 @@ class Transport(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(TimeoutError):await p.invoke(b)
         await p.release();self.assertEqual(len(self.calls),1);self.assertIsNone(p.writer)
         self.assertEqual(self.manifest()['terminal'],'timeout')
+
+
+    async def test_cancel_before_owned_transport_task_first_step_preserves_native_entry(self):
+        p,b=self.prepare();real_create=asyncio.create_task
+        def cancelled_before_start(coro,*args,**kwargs):
+            task=real_create(coro,*args,**kwargs)
+            if coro.__name__=='_run':task.cancel()
+            return task
+        with patch('humansense.openai_responses.asyncio.create_task',side_effect=cancelled_before_start):
+            with self.assertRaises(asyncio.CancelledError):await p.invoke(b)
+        await p.release();m=self.manifest()
+        self.assertEqual(m['terminal'],'cancelled');self.assertIsNotNone(m['entry_binding'])
+        self.assertNotIn('possible_send',[x['event'] for x in m['milestones']]);self.assertEqual(self.calls,[])
 
 
 

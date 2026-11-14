@@ -50,12 +50,16 @@ class ValidatedTransportEvidence:
     """Immutable inspected bytes; no native ownership or receipt authenticity claim."""
     inventory_sha256: str
     _rows: tuple
-    def __init__(self,inventory_sha256,rows,*,_reader=None):
+    _owner_declaration: bytes
+    def __init__(self,inventory_sha256,rows,owner_declaration,*,_reader=None):
         if _reader is not _READER:raise TypeError('use the bounded original evidence reader')
         object.__setattr__(self,'inventory_sha256',inventory_sha256);object.__setattr__(self,'_rows',rows)
+        object.__setattr__(self,'_owner_declaration',encoded(owner_declaration))
+    def owner_declaration(self):return json.loads(self._owner_declaration)
     def entries(self):
-        for manifest,raw in self._rows:
-            yield dict(manifest=json.loads(manifest),raw_response=raw,
+        for ordinal,manifest,raw in self._rows:
+            yield dict(ordinal=ordinal,original_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+                manifest=json.loads(manifest),raw_response=raw,
                 original_bytes_verified=True,native_binding_verified=False,receipt_authenticity_verified=False,
                 count_bucket_verified=False,actual_acceptance='incomplete')
 
@@ -103,8 +107,9 @@ def read_responses_evidence(directory,*,expected_inventory_sha256):
                     identity=(m['provider'],m['declared_account_scope'],key,m[key])
                     if identity in provider_ids:raise ValueError('provider request identity reused')
                     provider_ids.add(identity)
-            rows.append((manifest_raw,raw))
-        return ValidatedTransportEvidence(expected_inventory_sha256,tuple(rows),_reader=_READER)
+            rows.append((ordinal,manifest_raw,raw))
+        return ValidatedTransportEvidence(expected_inventory_sha256,tuple(rows),
+            dict(owner_kind=inventory['owner_kind'],owner_sha256=inventory['owner_sha256'],entry_count=len(refs)),_reader=_READER)
     finally:os.close(fd)
 
 
@@ -122,7 +127,7 @@ def _validate_manifest(m,raw):
     if type(headers) is not dict or set(headers)-_SELECTED or len(encoded(headers))>8192:raise ValueError('selected headers exceed projection')
     for value in headers.values():
         if type(value) is not str or len(value)>1024 or any(ord(c)<32 or ord(c)>126 for c in value):raise ValueError('bounded printable selected header required')
-    if headers.get('x-request-id')!=m['server_request_id']:raise ValueError('server identity differs from original selected header')
+    if m['server_request_id'] is not None and headers.get('x-request-id')!=m['server_request_id']:raise ValueError('server identity differs from original selected header')
     if m['terminal'] not in ('not_entered','completed','cancelled','timeout','error') or m['failure_category'] not in (None,'cancelled','timeout','error'):raise ValueError('known transport outcome required')
     if m['remote_acceptance'] not in ('unknown','response_observed') or m['consumption_basis'] not in ('unknown','response_reported'):raise ValueError('known evidence strength required')
     if m['billing_time_assignment']!='ambiguous_unverified_host_clock' or type(m['clock_jump_detected']) is not bool:raise ValueError('host time uncertainty required')

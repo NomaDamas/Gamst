@@ -20,14 +20,25 @@ _SELECTED={'x-request-id','openai-organization','openai-processing-ms','openai-v
 
 class OpenAIResponsesClient(BoundCompletion):
     def __init__(self,*,api_key,model_revision,account_scope,project_id,evidence_session,max_output_tokens=1024,timeout=30):
-        for v in (model_revision,account_scope,project_id):_id(v)
+        for v in (model_revision,account_scope,project_id):
+            _id(v)
+            if len(v)>128:raise ValueError('configuration identifiers exceed128 characters')
         if type(api_key) is not str or not 1<=len(api_key)<=4096 or not api_key.isascii() or any(ord(c)<33 or ord(c)>126 for c in api_key):raise ValueError('explicit bounded transport credential required')
         if type(max_output_tokens) is not int or not 1<=max_output_tokens<=4096:raise ValueError('output token bound1..4096 required')
         if type(timeout) not in (int,float) or not .01<=timeout<=300:raise ValueError('timeout0.01..300 required')
-        self.provider='openai';self.model_revision=model_revision;self.account_scope=account_scope;self.project_id=project_id
+        self._provider='openai';self._model_revision=model_revision;self._account_scope=account_scope;self._project_id=project_id
         self._key=api_key;self._sink=evidence_session;self._tokens=max_output_tokens;self._timeout=timeout
         self._host='api.openai.com';self._port=443;self._fixture=False
         self._lease=None;self._closed=False;self._close_task=None
+
+    @property
+    def provider(self):return self._provider
+    @property
+    def model_revision(self):return self._model_revision
+    @property
+    def account_scope(self):return self._account_scope
+    @property
+    def project_id(self):return self._project_id
 
     @classmethod
     def _loopback_fixture(cls,*,port,**kwargs):
@@ -151,6 +162,7 @@ class _Prepared(PreparedCall):
             self.writer.write(headers)
             for offset in range(0,len(self.body),65536):self.writer.write(self.body[offset:offset+65536]);await self.writer.drain()
             await self.writer.drain()
+            self.body=b''  # No retained prompt/media after the owned write completes.
             await self._read(reader)
             value,metadata=response_projection(bytes(self.raw),client.model_revision);self.manifest.update(metadata)
             if self.manifest['http_status']!=200:raise ValueError('HTTP status not supported')
@@ -228,7 +240,9 @@ class _Prepared(PreparedCall):
         self.invalidate()
         if self._task is not None:await asyncio.gather(self._task,return_exceptions=True)
         if not self._terminal:
-            self.manifest['terminal']='not_entered';self.mark('terminal');self.body=b'';self._terminal=True
+            self.manifest['terminal']='cancelled' if self._started else 'not_entered'
+            self.manifest['failure_category']='cancelled' if self._started else None
+            self.mark('terminal');self.body=b'';self._terminal=True
             self.client._sink.finish(self,self.manifest,b'')
         if self.client._lease is self:self.client._lease=None
 
