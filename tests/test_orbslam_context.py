@@ -79,7 +79,7 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None or shutil.which('c++') is None,'requires numpy/OpenCV/compiler')
 class Owned(unittest.IsolatedAsyncioTestCase):
     async def test_concrete_worker_sensorstreams_mcp_and_reap(self):
-        config=assets(self)
+        config=dict(assets(self),sequence_step=2)
         worker=await ProcessProvider.open(sys.executable,'orbslam3.monocular',config)
         child=worker._process
         try:
@@ -89,12 +89,21 @@ class Owned(unittest.IsolatedAsyncioTestCase):
                 try:
                     f=frame(0,start);f=replace(f,sensor=replace(f.sensor,stream_epoch=None))
                     await streams.submit(f);await streams.drain()
+                    f2=frame(2,start+200);f2=replace(f2,sensor=replace(f2.sensor,stream_epoch=None))
+                    await streams.submit(f2);await streams.drain()
                     reply=await MCPServer(human).call_tool('get_observations',{'capability_id':worker.spec.id})
-                    item=reply['items'][0]['observation'];value=item['value']
-                    self.assertEqual(value['provenance']['capture_ms'],start)
+                    item=next(row['observation'] for row in reply['items'] if row['observation']['value']['provenance']['capture_ms']==start+200);value=item['value']
+                    self.assertEqual(value['provenance']['capture_ms'],start+200)
+                    self.assertEqual(value['provenance']['reset_count'],0)
+                    self.assertAlmostEqual(value['pose']['world_to_camera'][0][3],.2)
                     self.assertEqual(value['provenance']['calibration_id'],'cal1')
                     self.assertTrue(value['pose']['tracked']);self.assertFalse(value['pose']['metric'])
-                    self.assertEqual(item['sensor']['capture_sequence'],0)
+                    self.assertEqual(item['sensor']['capture_sequence'],2)
+                    f6=frame(6,start+600);f6=replace(f6,sensor=replace(f6.sensor,stream_epoch=None))
+                    await streams.submit(f6);await streams.drain()
+                    reply=await MCPServer(human).call_tool('get_observations',{'capability_id':worker.spec.id})
+                    latest=next(row['observation']['value'] for row in reply['items'] if row['observation']['value']['provenance']['capture_ms']==start+600)
+                    self.assertEqual(latest['provenance']['reset_count'],1)
                 finally:await streams.clear()
         finally:await worker.close()
         self.assertIsNotNone(child.returncode)

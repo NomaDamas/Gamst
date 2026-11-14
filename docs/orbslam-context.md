@@ -38,6 +38,9 @@ Original capture milliseconds and capture sequence are preserved, including thro
 SensorStreams observations and MCP `get_observations`. Native time is relative to
 the first capture after reset, so epoch-sized timestamps do not lose precision.
 
+The provider owns gap detection (`reset_on_gap=False`), preserving an explicitly
+selected capture stride through SensorStreams instead of resetting on every
+skipped source index. Actual omissions beyond that stride still reset state.
 Ownership changes, sequence gaps (relative to declared sequence_step), time gaps
 over max_gap_ms, explicit reset and recovery after rejected input reset native
 state before another frame is tracked. Same-owner reordered/duplicate captures

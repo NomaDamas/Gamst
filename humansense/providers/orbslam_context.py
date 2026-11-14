@@ -44,7 +44,7 @@ class ORBSLAMContext:
         return CapabilitySpec('vision.orbslam3.monocular','vision.camera_pose','video',
             'orbslam3.monocular','1.'+digest,
             (OutputField('pose','object'),OutputField('provenance','object')),
-            'native',freshness_ms=1000,stateful=True,reset_on_gap=True,
+            'native',freshness_ms=1000,stateful=True,reset_on_gap=False,
             interpretation='estimate',devices=('cpu',),
             sensor_requirements=('calibrated-uint8-bgr-camera','capture-clock','owned-native-worker'),
             license='adapter:Apache-2.0;ORB-SLAM3:GPL-3.0;dependencies:verify-separately')
