@@ -211,3 +211,65 @@ class RecordedSourceReplay:
 
 async def _drain(task):
     await asyncio.gather(task,return_exceptions=True)
+
+
+async def run_source_context_recording(manifest, tasks, profiles, output, *,
+        asset_directory, retain_evaluation_artifacts=False,
+        max_lateness_ns=50_000_000, max_drift_ns=50_000_000):
+    """Record one owned source runtime; no semantic client or model is implicit.
+
+    Artifacts retain source paths, original task inputs and sensory Context under
+    a separate explicit owner. SDK deletion does not erase this evaluation copy.
+    """
+    if retain_evaluation_artifacts is not True:
+        raise PermissionError('explicit separate evaluation artifact retention required')
+    from .recording_artifacts import RecordingArtifacts
+    import json
+    profiles=json.loads(encoded(profiles))
+    replay=RecordedSourceReplay(manifest,tasks,profiles,asset_directory,None,
+        max_lateness_ns=max_lateness_ns,max_drift_ns=max_drift_ns)
+    # Bound declarations + maximum detached snapshot envelopes before activating
+    # any source/provider. These artifacts are not the old16MiB collector format.
+    declarations={'source-manifest.json':replay.manifest,'tasks.json':replay.tasks,
+        'profiles.json':profiles,'execution.json':dict(schema_version=1,
+            asset_directory=str(asset_directory),max_lateness_ns=max_lateness_ns,
+            max_wall_monotonic_drift_ns=max_drift_ns,source_schema='recorded-source-v1',
+            retain_evaluation_artifacts=True, sdk_deletion_erases_artifacts=False)}
+    predicted=2*len(replay.manifest['records'])+2*len(replay.tasks)+2*len(replay.manifest['sources'])+16
+    if sum(len(encoded(v))+1 for v in declarations.values())+len(replay.tasks)*128*1024+1024*1024>80*1024**2:
+        raise ValueError('joint declarations and snapshot artifact admission exceeds80MiB')
+    artifacts=await RecordingArtifacts.open(output,declarations=declarations,predicted_events=predicted)
+    replay.journal=artifacts; failure=None
+    try:
+        await replay.run()
+    except BaseException as error:
+        failure=error
+    try:
+        # run() joins every owned source/read/provider on all exits. Do not turn
+        # an interrupted recording into success merely because cleanup completed.
+        await replay.close()
+        if replay.clock is not None:
+            await artifacts.write_json('mapping.json',replay.clock.mapping,max_bytes=65536)
+        for index, result in enumerate(replay.snapshots.values()):
+            await artifacts.write_json(f'context-{index:04d}.json',result,max_bytes=128*1024)
+        counters={sid:dict(value,uninspected_suffix=value['declared']-value['attempted'])
+                  for sid,value in replay.counters.items()}
+        summary=dict(schema_version=1,state='failed' if failure else 'replayed_unscored',
+            failure_category=None if failure is None else type(failure).__name__,
+            source_manifest_sha256=replay.manifest_sha256,tasks_sha256=digest(replay.tasks),
+            mapping_sha256=None if replay.clock is None else replay.clock.sha256,
+            observed_start_ns=replay.started_ns,observed_end_ns=replay.ended_ns,
+            observed_elapsed_ns=replay.ended_ns-replay.started_ns,
+            sources=counters,provider_outcomes=replay.provider_outcomes,
+            snapshots=len(replay.snapshots),requested_snapshots=len(replay.tasks),
+            source_availability_truth_verified=False,physical_device_losses=None,
+            actual_acceptance='incomplete',quality_verified=False,monetary_cost=None,
+            whole_pipeline_cost_verified=False,isolation_verified=False,
+            cleanup_finished=True,execution_kind='source_context_replay_not_abc')
+        await artifacts.close(summary,cleanup_finished=True)
+    except BaseException as cleanup:
+        await artifacts.abort()
+        if failure is not None:raise failure from cleanup
+        raise
+    if failure is not None:raise failure
+    return summary
