@@ -14,20 +14,7 @@ ENTRY=struct.Struct('<IIIIQQQQ32s32s16x')
 _INDEX_TOKEN=object()
 
 
-class _FrozenDict(dict):
-    def _deny(self,*args,**kwargs):raise TypeError('validated original inventory is immutable')
-    __setitem__=__delitem__=clear=pop=popitem=setdefault=update=__ior__=_deny
-
-
-class _FrozenList(list):
-    def _deny(self,*args,**kwargs):raise TypeError('validated original inventory is immutable')
-    __setitem__=__delitem__=append=extend=insert=pop=remove=clear=reverse=sort=__iadd__=__imul__=_deny
-
-
-def _freeze(value):
-    if isinstance(value,dict):return _FrozenDict({k:_freeze(v) for k,v in value.items()})
-    if isinstance(value,list):return _FrozenList(_freeze(v) for v in value)
-    return value
+from .recording_native_schema import _FrozenDict, _FrozenList, _freeze
 
 
 class ValidatedRecordingIndex:
@@ -231,7 +218,8 @@ def validate_recording_native_inventory(declarations,index,terminal=None,*,sourc
             if ref.get('kind')=='capture':
                 keys(ref,('kind','source_index','capture_ordinal','record_sha256','mapping_sha256'))
                 source=d['source_manifest'];si=integer(ref['source_index'],0,len(source['sources'])-1);ri=integer(ref['capture_ordinal'],0,len(source['records'])-1)
-                if (ref['mapping_sha256']!=mapping or ref['record_sha256']!=digest(source['records'][ri]) or source['records'][ri]['source_id']!=source['sources'][si]['source_id']):
+                if (ref['mapping_sha256']!=mapping or ref['record_sha256']!=digest(source['records'][ri]) or source['records'][ri]['source_id']!=source['sources'][si]['source_id']
+                        or source['records'][ri]['source_id'] not in bindings[pending[t]['binding']]['source_ids']):
                     raise ValueError('original capture evidence differs')
             elif ref.get('kind')=='result':
                 keys(ref,('kind','entry_ordinal','result_sha256'));ei=integer(ref['entry_ordinal'],0,entered-1)
@@ -242,6 +230,11 @@ def validate_recording_native_inventory(declarations,index,terminal=None,*,sourc
         elif kind=='dispatched':
             keys(f,('ticket',));t=integer(f['ticket'],0,reservation-1)
             if ticket_state[t]!=1:raise ValueError('reservation dispatched twice or after release')
+            p=pending[t]
+            if p['operation_kind']!='semantic':
+                if not p['refs'] or any(r['kind']!='capture' for r in p['refs']) or p['request_sha256']!=digest(dict(binding=p['binding'],operation_kind=p['operation_kind'],capture_refs=p['refs'])):
+                    raise ValueError('original source request descriptor differs')
+            counters[p['scope'],p['binding'],'dispatched']+=1
             ticket_state[t]=2
         elif kind=='entered':
             keys(f,('ticket','entry_ordinal','instance','worker_ordinal'));t=integer(f['ticket'],0,reservation-1)
@@ -260,6 +253,7 @@ def validate_recording_native_inventory(declarations,index,terminal=None,*,sourc
             if ticket_state[t] not in (1,2) or f['reason'] not in ('admission_refused','cancelled_before_entry','observer_failed_before_entry','revoked_before_entry'):
                 raise ValueError('unique no-entry release required')
             p=pending[t];counters[p['scope'],p['binding'],'released']+=1
+            counters[p['scope'],p['binding'],'released_dispatched' if ticket_state[t]==2 else 'released_undispatched']+=1
             ticket_state[t]=4;pending.pop(t);released+=1
         elif kind=='finished':
             keys(f,('entry_ordinal','outcome','result_sha256'));ei=integer(f['entry_ordinal'],0,entered-1)
@@ -273,6 +267,8 @@ def validate_recording_native_inventory(declarations,index,terminal=None,*,sourc
         elif kind=='worker_registered':
             keys(f,('worker_ordinal','binding','kind'));wi=integer(f['worker_ordinal'],0,1023);bi=integer(f['binding'],0,len(bindings)-1)
             if wi!=len(workers) or f['kind'] not in ('process','in_process','callback'):raise ValueError('unique bounded actual worker lifetime required')
+            if f['kind']!={'async_client_callback':'callback','in_process_backend':'in_process','process_adapter':'process'}[bindings[bi]['entry_boundary']]:
+                raise ValueError('registered worker kind differs from frozen entry boundary')
             workers[wi]=dict(binding=bi,kind=f['kind'],ready=False,closed=False,marks=set())
         elif kind=='worker_milestone':
             keys(f,('worker_ordinal','milestone'));w=workers.get(integer(f['worker_ordinal'],0,1023));m=f['milestone']
@@ -342,9 +338,12 @@ def validate_recording_native_inventory(declarations,index,terminal=None,*,sourc
                 if item.name.startswith(('receipt-','receipt-source-','claims-')):names.add(item.name)
         if names!=financial['files']:raise ValueError('orphan or omitted financial artifacts')
     result=ValidatedRecordingIndex(directory,d,term,refs,entries,flags,entered,hashes,settlements,_token=_INDEX_TOKEN)
-    for p in pending.values():counters[p['scope'],p['binding'],'outstanding_tickets']+=1
+    for ticket,p in pending.items():
+        counters[p['scope'],p['binding'],'outstanding_tickets']+=1
+        counters[p['scope'],p['binding'],'pending_dispatched' if ticket_state[ticket]==2 else 'pending_undispatched']+=1
     result._lane_counts=_freeze(dict(counters))
     result.claim_keys=b''.join(bytes.fromhex(v) for v in sorted(financial['claims']))
+    result.financial_documents=tuple(financial['documents'].items())
     result.financial_bytes=financial['source_bytes']+financial['receipt_bytes']
     result.source_bytes=financial['source_bytes'];result.receipt_bytes=financial['receipt_bytes']
     result.evidence_ref_count=evidence_refs;result.receipt_count=len(financial['receipts'])
@@ -446,11 +445,12 @@ def canonical_lane_inventory(index,scope_index,binding_index):
     bindings=next(a['provider_bindings'] for a in index.declarations['collection']['arms'] if a['arm']==inv['arm'])
     scopes=[s for s in index.declarations['scope_protocol']['scopes'] if s['invocation_ordinal']==ctx['invocation_ordinal']]
     si=integer(scope_index,0,len(scopes)-1);bi=integer(binding_index,0,len(bindings)-1)
-    counts={key:index._lane_counts.get((si,bi,key),0) for key in ('reserved','released','outstanding_tickets','entered','finished','published')}
+    counts={key:index._lane_counts.get((si,bi,key),0) for key in ('reserved','dispatched','released','released_dispatched','released_undispatched','outstanding_tickets','pending_dispatched','pending_undispatched','entered','finished','published')}
     return dict(owner_kind='recording_native4',owner=dict(context=dict(ctx),scope_index=si,binding_index=bi),
         provider=bindings[bi]['provider'],model_revision=bindings[bi]['model_revision'],role=bindings[bi]['role'],
         counts=counts,outstanding_entries=counts['entered']-counts['finished'],
-        unknown_liability_count=counts['entered'],unobserved_entry_inventory_possible=index.terminal['state']!='closed',
+        unknown_liability_count=counts['entered'],unknown_dispatch_liability_count=counts['dispatched']-counts['entered'],
+        unobserved_entry_inventory_possible=index.terminal['state']!='closed',
         source_inventory_locator=dict(recording_id=index.declarations['source_manifest']['recording_id'],
             source_manifest_sha256=index.declarations['collection']['recordings'][inv['recording_index']]['source_manifest_sha256']),actual_acceptance='incomplete')
 
@@ -546,7 +546,7 @@ def validate_recording_native_collection(runs):
     `runs` contains exact declarations/directory/terminal_sha256/source_inventory.
     """
     if type(runs) is not list or not 3<=len(runs)<=96:raise ValueError('bounded original ABC run inventory required')
-    identity=None;nonce_set=set();seen=set();claims=bytearray();entries=chunks=bytes_used=evidence_refs=source_bytes=receipt_bytes=receipts=0;items=[];cap=None
+    identity=None;nonce_set=set();seen=set();claims=bytearray();entries=chunks=bytes_used=evidence_refs=source_bytes=receipt_bytes=receipts=0;items=[];cap=None;documents={}
     for run in runs:
         keys(run,('declarations','directory','terminal_sha256','source_inventory'))
         sha(run['terminal_sha256'])
@@ -563,6 +563,11 @@ def validate_recording_native_collection(runs):
         if (evidence_refs>cap['max_collection_evidence_refs'] or source_bytes>64*1024**2 or receipt_bytes>64*1024**2
                 or receipts>cap['max_late_settlements'] or receipts*1024**2>cap['max_late_lookup_bytes']):
             raise ValueError('joint original reference/financial/lookup inventory exceeded')
+        for document,identity_value in index.financial_documents:
+            if document in documents and documents[document]!=identity_value:
+                raise ValueError('same original invoice changed revision/document across runs')
+            documents[document]=identity_value
+            if len(documents)>cap['max_late_settlements']:raise ValueError('global original invoice inventory exceeded')
         claims.extend(index.claim_keys)
         if len(claims)//32>cap['max_collection_claims']:raise ValueError('joint original claim inventory exceeded')
         # Exact regular artifact bytes, including all metadata and failed prefixes.

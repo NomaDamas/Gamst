@@ -189,13 +189,19 @@ def _read_owned(directory,name,maximum):
     finally:os.close(dfd)
 
 
+_RUN_INVENTORY_TOKEN=object()
+
+
 class NativeRunInventory(_FrozenDict):
     """Detached immutable snapshot of the parent's own transport/reap state."""
+    def __init__(self,value,*,_token=None):
+        if _token is not _RUN_INVENTORY_TOKEN:raise TypeError('only the owning parent issues run inventory')
+        dict.__init__(self,_freeze(value))
 
 
 class ParentNativeChannel:
     def __init__(self,context,declarations,*,paths,output,deadline_ns,budget=None,retain_financial_documents=False,collection_declarations=None):
-        self.declarations=validate_recording_scope_protocol(declarations)
+        self.declarations=_freeze(validate_recording_scope_protocol(declarations))
         from .recording_native_schema import preflight_recording_collection
         bundles=[self.declarations] if collection_declarations is None else collection_declarations
         self.preflight=preflight_recording_collection(bundles)
@@ -205,7 +211,7 @@ class ParentNativeChannel:
             raise PermissionError('explicit financial retention must equal frozen policy')
         if context!=run_context(self.declarations,context['nonce'],context['invocation_ordinal']):
             raise ValueError('exact original run context required')
-        self.context=dict(context);self.output=Path(output).absolute()
+        self.context=_freeze(dict(context));self.output=Path(output).absolute()
         self.bootstrap=dict(schema_version=2,type='bootstrap',nonce=context['nonce'],invocation_ordinal=context['invocation_ordinal'],
             collection_sha256=context['collection_sha256'],scope_protocol_sha256=context['scope_protocol_sha256'],
             instrumentation_protocol_sha256=context['instrumentation_protocol_sha256'],deadline_ns=deadline_ns,
@@ -537,7 +543,7 @@ class ParentNativeChannel:
         return NativeRunInventory(_freeze(dict(context=dict(self.context),terminal_sha256=self._terminal_digest,
             validated_prefix=dict(chunks=len(self._chunks),events=self._native_sequence,partial=prefix),
             parent_reaped=self.parent_reaped,returncode=self.returncode,failure_category=self.reason,
-            hello_verified=self.hello,eof=self.eof,actual_acceptance='incomplete')))
+            hello_verified=self.hello,eof=self.eof,actual_acceptance='incomplete')),_token=_RUN_INVENTORY_TOKEN)
 
 
 class ChildNativeChannel:

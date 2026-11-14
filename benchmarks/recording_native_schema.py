@@ -19,6 +19,23 @@ REASONS = ('journal_failed','capacity_exhausted','unobserved_boundary',
     'cleanup_incomplete','source_incomplete','financial_admission_refused','settlement_unknown')
 
 
+class _FrozenDict(dict):
+    def _deny(self,*args,**kwargs):raise TypeError('validated original inventory is immutable')
+    __setitem__=__delitem__=clear=pop=popitem=setdefault=update=__ior__=_deny
+
+
+class _FrozenList(list):
+    def _deny(self,*args,**kwargs):raise TypeError('validated original inventory is immutable')
+    __setitem__=__delitem__=append=extend=insert=pop=remove=clear=reverse=sort=__iadd__=__imul__=_deny
+
+
+def _freeze(value):
+    if isinstance(value,dict):return _FrozenDict({k:_freeze(v) for k,v in value.items()})
+    if isinstance(value,list):return _FrozenList(_freeze(v) for v in value)
+    return value
+
+
+
 def encoded(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=True,
         allow_nan=False, separators=(',', ':')).encode('utf-8')
@@ -81,10 +98,10 @@ def snapshot(value, maximum=MAX_DECLARATIONS):
     while stack:
         item, depth=stack.pop(); count+=1
         if count>1048576 or depth>32: raise ValueError('bounded JSON tree required')
-        if type(item) is dict:
+        if type(item) in (dict,_FrozenDict):
             if any(type(k) is not str for k in item): raise ValueError('string JSON keys required')
             stack.extend((v,depth+1) for v in item.values())
-        elif type(item) is list: stack.extend((v,depth+1) for v in item)
+        elif type(item) in (list,_FrozenList): stack.extend((v,depth+1) for v in item)
         elif type(item) not in (str,int,float,bool,type(None)):
             raise ValueError('plain JSON values required')
     data=encoded(value)
