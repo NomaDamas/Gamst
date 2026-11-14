@@ -12,6 +12,9 @@ def _construct(profile, config):
         # Reserved transport contract. The separately reviewed native loader is
         # #201; never substitute an unrelated provider or download a model here.
         raise RuntimeError('SAM Audio native adapter is not implemented (#201)')
+    elif profile == 'opencv.rfdetr.stereo':
+        from .providers.stereo_context import StereoMetricContext
+        provider = StereoMetricContext.from_local(**config)
     elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)
