@@ -144,3 +144,23 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         self.assertIn('125.0',str(result));self.assertGreaterEqual(len(calls),5)
         count=len(calls);await asyncio.sleep(.05);self.assertEqual(count,len(calls))
         self.assertFalse([t for t in asyncio.all_tasks()-before if not t.done()])
+
+    async def test_owned_profile_timeout_and_cancel_reap_only_child(self):
+        from unittest.mock import patch
+        real_spawn=asyncio.create_subprocess_exec;children=[]
+        code="import time;from humansense.providers.visual_microphone_context import VisualMicrophoneContext;VisualMicrophoneContext.process=lambda *a:time.sleep(60);from humansense.provider_worker import main;main()"
+        async def spawn(*args,**kwargs):
+            if 'humansense.provider_worker' in args:
+                value=await real_spawn(sys.executable,'-u','-c',code,**kwargs)
+            else:value=await real_spawn(*args,**kwargs)
+            children.append(value);return value
+        with patch('asyncio.create_subprocess_exec',spawn):
+            worker=await ProcessProvider.open(sys.executable,'visual_microphone.phase',CONFIG,inference_timeout=.1)
+            with self.assertRaises(asyncio.TimeoutError):await worker.process(frame())
+            self.assertTrue(worker.closed);self.assertIsNotNone(children[-1].returncode)
+            await worker.close()
+            worker=await ProcessProvider.open(sys.executable,'visual_microphone.phase',CONFIG)
+            task=asyncio.create_task(worker.process(frame()));await asyncio.sleep(.05);task.cancel()
+            with self.assertRaises(asyncio.CancelledError):await task
+            await worker.close();self.assertIsNotNone(children[-1].returncode)
+        self.assertEqual(len(children),2)
