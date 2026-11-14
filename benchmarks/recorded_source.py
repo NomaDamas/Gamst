@@ -161,6 +161,16 @@ def validate_manifest(value):
             while record['offset_ns'] >= intervals[index]['end_ns']: index += 1
             if intervals[index]['state'] == 'unavailable':
                 raise ValueError('capture inside declared unavailable interval')
+            if record['format'] == 'pcm_s16le_mono':
+                # PCM describes a half-open interval, not just its first sample.
+                # Compare rational endpoints without rounding away a boundary.
+                rate = record['sample_rate']
+                audio_end = record['offset_ns'] * rate + record['sample_count'] * 10**9
+                scan = index
+                while scan < len(intervals) and intervals[scan]['start_ns'] * rate < audio_end:
+                    if intervals[scan]['state'] == 'unavailable':
+                        raise ValueError('audio overlaps declared unavailable interval')
+                    scan += 1
     data = encoded(value)
     if len(data) > MAX_MANIFEST_BYTES:
         raise ValueError('joint recording manifest bound exceeded')

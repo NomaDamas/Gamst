@@ -5,6 +5,9 @@ import tempfile
 import unittest
 import importlib.util
 import json
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from benchmarks.recorded_source import digest
 from benchmarks.recorded_replay import RecordedSourceReplay, run_source_context_recording
@@ -153,3 +156,31 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(terminal['summary']['failure_category'],'CancelledError')
             self.assertGreater(terminal['summary']['sources']['mic']['uninspected_suffix'],0)
             self.assertTrue(terminal['cleanup_finished'])
+
+    async def test_wall_jump_aborts_without_reanchoring_or_relabeling_capture(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve(); manifest,tasks,profiles=self.inputs(root)
+            offset=[0]
+            clock=SimpleNamespace(time_ns=lambda:time.time_ns()+offset[0],monotonic_ns=time.monotonic_ns)
+            replay=RecordedSourceReplay(manifest,tasks,profiles,root,JournalFixture(),max_lateness_ns=1000000000)
+            with patch('benchmarks.replay_clock.time',clock):
+                running=asyncio.create_task(replay.run())
+                await asyncio.sleep(.07)
+                original_mapping=replay.clock.sha256
+                offset[0]=60_000_000
+                with self.assertRaisesRegex(RuntimeError,'discontinuity'):await running
+            self.assertEqual(replay.clock.sha256,original_mapping)
+            self.assertTrue(replay.human.closed)
+            self.assertLess(replay.counters['mic']['attempted'],5)
+
+    async def test_late_opportunities_are_drops_not_burst_submission(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve(); manifest,tasks,profiles=self.inputs(root)
+            replay=RecordedSourceReplay(manifest,tasks,profiles,root,JournalFixture(),max_lateness_ns=1)
+            await replay.run()
+            counts=replay.counters['mic']
+            self.assertEqual(counts['attempted'],5)
+            self.assertEqual(counts['dropped'],5)
+            self.assertEqual(counts['captured'],0)
+            self.assertEqual(counts['submitted'],0)
+            self.assertTrue(all(p['accepted']==0 for p in replay.provider_outcomes))

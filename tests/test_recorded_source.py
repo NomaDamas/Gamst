@@ -77,6 +77,21 @@ class RecordedCaptureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_manifest(value)
 
+    def test_pcm_span_cannot_cross_unavailable_partition(self):
+        value = self.manifest
+        value['sources'][0].update(format='pcm_s16le_mono', modality='audio')
+        record = value['records'][0]
+        record.pop('shape')
+        record.update(format='pcm_s16le_mono',sample_rate=8000,sample_count=384)
+        value['availability'][0]['intervals'] = [
+            dict(start_ns=0,end_ns=48000000,state='available'),
+            dict(start_ns=48000000,end_ns=100000000,state='unavailable')]
+        validate_manifest(value)  # Exact exclusive endpoint is permitted.
+        value['availability'][0]['intervals'][0]['end_ns'] -= 1
+        value['availability'][0]['intervals'][1]['start_ns'] -= 1
+        with self.assertRaisesRegex(ValueError, 'audio overlaps'):
+            validate_manifest(value)
+
     def test_reversible_clock_preserves_old_capture_and_rounding(self):
         wall = [1700000000123456789]; mono = [987654321]
         fake = SimpleNamespace(time_ns=lambda:wall[0], monotonic_ns=lambda:mono[0])
