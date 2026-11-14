@@ -67,10 +67,12 @@ class Owned(unittest.IsolatedAsyncioTestCase):
         for p in leaked:p.kill();await p.wait()
         self.assertEqual(leaked,[],'capture/context child leaked')
 
-    def fixture(self,code=FAKE):
+    def fixture(self,code=FAKE,context_code=None):
         async def spawn(*args,**kwargs):
             if 'humansense.openeb_capture_worker' in args:
                 child=await self.real_spawn(sys.executable,'-u','-c',code,**kwargs)
+            elif context_code is not None and 'humansense.provider_worker' in args:
+                child=await self.real_spawn(sys.executable,'-u','-c',context_code,**kwargs)
             else:child=await self.real_spawn(*args,**kwargs)
             self.children.append(child);return child
         return patch('asyncio.create_subprocess_exec',spawn)
@@ -252,4 +254,25 @@ w.envelope=corrupt
         self.assertTrue(all(p.returncode is not None for p in self.children))
         count=len(calls);await asyncio.sleep(.05)
         self.assertEqual(len(calls),count)
+        self.assertFalse([t for t in asyncio.all_tasks()-before if not t.done()])
+
+    async def test_example_context_child_failure_propagates_and_reaps(self):
+        import argparse
+        import contextlib
+        import io
+        import json
+        from examples.openeb_stream import run
+        from humansense.schema import timestamp
+        args=argparse.Namespace(**dict(CONFIG,capture_origin_ms=timestamp()-100,
+            capture_python=sys.executable,context_python=sys.executable,
+            read_timeout=5,pacing='none',max_frames=3,context_interval_ms=20))
+        code="import os;from humansense.providers.openeb import OpenEBContext;OpenEBContext.process=lambda *a:os._exit(17);from humansense.provider_worker import main;main()"
+        output=io.StringIO();before=set(asyncio.all_tasks())
+        with self.fixture(context_code=code),contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError,'OpenEB context worker failed'):
+                await run(args)
+        records=[json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertFalse(any('final_context' in record for record in records))
+        self.assertEqual(records[-1]['capture_diagnostics']['frames_received'],1)
+        self.assertEqual([p.returncode for p in self.children],[0,17])
         self.assertFalse([t for t in asyncio.all_tasks()-before if not t.done()])

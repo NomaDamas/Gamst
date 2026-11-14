@@ -46,6 +46,14 @@ async def run(args):
                             await asyncio.sleep(max(0, due - loop.time()))
                         await streams.submit(frame)
                         await streams.drain()
+                        # SensorStreams isolates lane failures; this single-lane
+                        # example must explicitly surface its owned worker error.
+                        status = streams.status()
+                        lanes = [lane for stream in status['streams']
+                                 if stream['source_id'] == args.source_id and stream['sensor_id'] == args.sensor_id
+                                 for lane in stream['providers'] if lane['capability_id'] == spec.id]
+                        if len(lanes) != 1 or lanes[0]['errors']:
+                            raise RuntimeError('OpenEB context worker failed; check selected runtime/configuration')
 
                 async def publish():
                     interval = args.context_interval_ms / 1000

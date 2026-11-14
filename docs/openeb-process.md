@@ -100,7 +100,9 @@ replay late; frames are not silently dropped by the example. Slow camera consume
 can still overflow native buffers: actual drop/queue behavior requires #140.
 The context output runs in a separately owned async task, so polling continues
 while capture waits or replay is paced. Both tasks are cancelled/joined before
-stream cleanup on completion, timeout, failure or cancellation. Polling is
+stream cleanup on completion, timeout, failure or cancellation. The example
+checks its owned context lane after each drain and fails explicitly if the
+context worker errors; generic SensorStreams multi-lane isolation is unchanged. Polling is
 best-effort on the host event loop: missed ticks are skipped without bursts;
 blocked stdout or a stalled event loop can still delay delivery. The context
 output interval is independent of packet inference frequency.
