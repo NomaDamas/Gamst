@@ -119,14 +119,6 @@ class FillConflictRuntime:
     async def inspect(self,frame):
         self.human._check()
         if self.closed:raise RuntimeError('inspection driver closed')
-        if self._operation is not None:
-            if (isinstance(frame,InputFrame) and isinstance(frame.sensor,SensorMetadata) and
-                type(frame.timestamp_ms) is int and type(frame.sensor.capture_sequence) is int and self._last is not None):
-                newer=(frame.timestamp_ms,frame.sensor.capture_sequence)
-                previous=self._superseded_order or self._last
-                if newer[0]>previous[0] and newer[1]>previous[1]:
-                    self._generation+=1;self._case=None;self._superseded_order=newer;self._operation.cancel()
-            raise RuntimeError('one active case; newer capture invalidates it but is not queued')
         import numpy as np
         c=self.config
         if (not isinstance(frame,InputFrame) or frame.modality!='video' or frame.sample_rate is not None or
@@ -137,23 +129,41 @@ class FillConflictRuntime:
         if (frame.sensor.calibration_id,frame.sensor.coordinate_frame)!=(c['calibration_id'],c['coordinate_frame']):raise ValueError('calibration/coordinate mismatch')
         identifier(frame.subject_id)
         if type(frame.timestamp_ms) is not int or not 0<=frame.timestamp_ms<=2**53-1:raise ValueError('bounded capture timestamp required')
-        pixels=frame.data.copy();pixels.setflags(write=False);frame=replace(frame,data=pixels)
+        if frame.timestamp_ms>timestamp():raise ValueError('future capture is not admissible')
         owner=(frame.subject_id,frame.sensor.source_id,frame.sensor.sensor_id,frame.sensor.stream_epoch,c['calibration_id'],c['container_id'],c['coordinate_frame'])
         order=(frame.timestamp_ms,frame.sensor.capture_sequence)
         if self._owner is not None and owner!=self._owner:
-            self.invalidate('source_configuration_changed');raise RuntimeError('source/configuration changed; explicit new driver required')
+            raise ValueError('source/configuration differs; explicit new driver required')
+        if self._operation is not None:
+            previous=self._superseded_order or self._last
+            if self._fresh(frame) and previous is not None and order[0]>previous[0] and order[1]>previous[1]:
+                self._generation+=1;self._case=None;self._superseded_order=order;self._operation.cancel()
+            raise RuntimeError('one active case; newer capture invalidates it but is not queued')
         if self._last is not None and (order[0]<=self._last[0] or order[1]<=self._last[1]):raise ValueError('new case requires newer original capture')
         if self._superseded_order is not None and (order[0]<self._superseded_order[0] or order[1]<self._superseded_order[1]):
             raise ValueError('capture predates observed superseding capture')
+        pixels=frame.data.copy();pixels.setflags(write=False);frame=replace(frame,data=pixels)
         self._superseded_order=None;self._owner=owner;self._last=order
         generation=(self._generation,self.human._generation)
-        task=asyncio.create_task(self._inspect(frame,generation));self._operation=task
+        task=asyncio.create_task(self._run_case(frame,generation));self._operation=task
         try:return await asyncio.shield(task)
         except asyncio.CancelledError:
             task.cancel();await _finish(asyncio.gather(task,return_exceptions=True));raise
         finally:
             if self._operation is task:self._operation=None
             self._case=None
+
+    async def _run_case(self,frame,generation):
+        requests=[]
+        try:return await self._inspect(frame,generation,requests)
+        finally:
+            # Release only this case's never-dispatched work. Dispatched unknown
+            # bills retain their controller-owned liability and receipt identity.
+            pending={row['id']:row for row in self.controller.snapshot()['requests']}
+            for request_id in requests:
+                row=pending.get(request_id)
+                if row is not None and row['state']!='dispatched':
+                    self.controller.cancel(request_id,now_ms=timestamp())
 
     async def _execute_stage(self,adapter,args,kwargs,deadline):
         # One absolute case deadline; cancellation joins the real adapter's
@@ -169,7 +179,7 @@ class FillConflictRuntime:
             if not task.done():
                 task.cancel();await _finish(asyncio.gather(task,return_exceptions=True))
 
-    async def _inspect(self,frame,generation):
+    async def _inspect(self,frame,generation,requests):
         self._check(generation);case_id=uuid.uuid4().hex;started=asyncio.get_running_loop().time()
         image_sha=smolvlm_frame_sha256(frame.data)
         case=dict(id=case_id,capture_ms=frame.timestamp_ms,source_sha256=image_sha,stage='measurement',attempts=[],rule_sha256=RULE_SHA,
@@ -215,7 +225,7 @@ class FillConflictRuntime:
                     allowed_route=decision.get('decision',{}).get('recommended_route'),dispatched_route=None,rule_sha256=RULE_SHA,evidence_sha256=_digest(dict(case=case_id,measurement=case['measurement_sha256'],descriptor=case['descriptor_sha256'],pixels=image_sha)))
                 case['attempts'].append(entry)
                 if decision['status']!='queued':outcome='blocked_admission';entry['blockers']=decision.get('decision',{}).get('blockers',[]);break
-                rid=decision['request_id'];entry['request_id']=rid
+                rid=decision['request_id'];requests.append(rid);entry['request_id']=rid
                 adapter=self.strong if stage=='strong' else self.small
                 question=prompt(stage,width=c['width'],height=c['height'],roi=c['roi'],container_id=c['container_id'],coordinate_frame=c['coordinate_frame'])
                 try:

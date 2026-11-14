@@ -29,3 +29,5 @@ The shared owned call-driver registry (total8/per-kind4 including unreaped clean
 ## Acceptance boundary
 
 Synthetic image + real OpenCV/controller/VisualContextCalls/Context/MCP tests establish software behavior. Async model fixtures do not prove semantic accuracy, calibration, cheap/faster inference or preserved quality. Actual container/negative calibration remains #109/#37, trained model semantics #40/#150/#133, and complete heldout cost/quality/p95 #57/#135/#161. Other predicates, cross-modal alignment and unseen-scene discovery remain separate required work.
+
+Before any capture watermark changes, the runtime validates geometry, modality, calibration, source ownership and nonfuture capture time. Invalid or unrelated busy notifications cannot supersede a legitimate operation. A terminal case cancels only its own never-dispatched pending/reserved requests; dispatched unknown bills keep their liabilities and receipt identities.

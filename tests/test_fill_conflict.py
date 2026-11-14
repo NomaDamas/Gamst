@@ -1,6 +1,7 @@
 """Actual OpenCV + owned controller/visual calls; model responses are fixtures."""
 import asyncio
 from copy import deepcopy
+from contextlib import ExitStack
 from dataclasses import replace
 import json
 import unittest
@@ -44,9 +45,9 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         for driver in self.drivers:await driver.close()
         await self.h.close()
 
-    def create(self,responses,*,strong=True,settle=True,cooldown=0,max_inflight=4,ceilings=None,callback=None):
+    def create(self,responses,*,strong=True,settle=True,cooldown=0,max_inflight=4,max_requests=128,ceilings=None,callback=None):
         controller=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=cooldown,max_age_ms=1000),
-            budget=CallBudget(unit='USD.micro',pricing_revision='v1',ceiling=100,max_inflight=max_inflight))
+            budget=CallBudget(unit='USD.micro',pricing_revision='v1',ceiling=100,max_inflight=max_inflight),max_requests=max_requests)
         self.h.register_call_controller('fill',controller);requests=[];holder={}
         async def completion(request):
             requests.append(deepcopy(request))
@@ -83,9 +84,9 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
 
     async def test_consistent_unknown_and_unknown_fill_do_not_escalate(self):
         driver,c,requests=self.create([[.48,.52]])
-        first=await driver.inspect(frame());self.assertEqual(first['observation']['value']['comparison']['outcome'],'consistent_under_rule')
+        first=await driver.inspect(frame(ts=timestamp()-10));self.assertEqual(first['observation']['value']['comparison']['outcome'],'consistent_under_rule')
         self.assertEqual(len(requests),1)
-        original=frame(2,timestamp()+1);original.data[:]=0
+        original=frame(2,timestamp());original.data[:]=0
         result=await driver.inspect(original);self.assertEqual(result['observation']['value']['comparison']['outcome'],'indeterminate_fill')
         self.assertEqual(len(requests),1)
 
@@ -240,3 +241,50 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(driver.small._active);self.assertIsNone(driver.small._backend_task)
         self.assertEqual(c.snapshot()['budget']['reserved_liability'],5)
         self.assertEqual(len(requests),1)
+
+    async def test_invalid_busy_capture_cannot_cancel_or_poison_owner(self):
+        entered=asyncio.Event();release=asyncio.Event()
+        async def callback(request):entered.set();await release.wait();return answer([.48,.52])
+        driver,c,requests=self.create([],callback=callback)
+        first=frame(ts=timestamp()-10);task=asyncio.create_task(driver.inspect(first))
+        await asyncio.wait_for(entered.wait(),5)
+        valid=frame(2)
+        invalid=(replace(valid,modality='audio'),replace(valid,timestamp_ms=2**60),
+            replace(valid,timestamp_ms=2**53-1),replace(valid,timestamp_ms=timestamp()+500),
+            replace(valid,sensor=replace(valid.sensor,source_id='unrelated')),
+            replace(valid,data=np.zeros((32,32,3),np.uint8)))
+        for candidate in invalid:
+            with self.assertRaises(ValueError):await driver.inspect(candidate)
+            self.assertFalse(task.done());self.assertEqual(driver._last,(first.timestamp_ms,1))
+            self.assertIsNone(driver._superseded_order);self.assertFalse(driver.closed)
+        release.set();await task
+        result=await driver.inspect(frame(2))
+        self.assertEqual(result['observation']['value']['comparison']['outcome'],'consistent_under_rule')
+
+    async def test_invalid_idle_future_does_not_advance_capture_order(self):
+        driver,c,requests=self.create([[.48,.52]])
+        for future in (2**53-1,timestamp()+500):
+            with self.assertRaises(ValueError):await driver.inspect(frame(ts=future))
+            self.assertIsNone(driver._last);self.assertIsNone(driver._owner)
+        await driver.inspect(frame())
+        self.assertEqual(len(requests),1)
+
+    async def test_blocked_followups_release_capacity_across_fresh_cases(self):
+        now=[timestamp()]
+        # Advance the SDK/controller/client capture clocks together, not sleep or
+        # silently relax production cooldown/freshness/queue capacity.
+        with ExitStack() as stack:
+            for name in ('humansense.fill_conflict.timestamp','humansense.engine.timestamp',
+                         'humansense.text_context_call.timestamp','test_fill_conflict.timestamp'):
+                stack.enter_context(patch(name,side_effect=lambda value=None:now[0] if value is None else value))
+            driver,c,requests=self.create([[.1,.2]]*4,cooldown=1000,max_requests=2)
+            for sequence in range(1,5):
+                result=await driver.inspect(frame(sequence,now[0]))
+                value=result['observation']['value']['comparison']
+                self.assertEqual(value['outcome'],'blocked_stage')
+                self.assertIn('cooldown',value['attempts'][-1]['blockers'])
+                self.assertEqual(c.snapshot()['requests'],[])
+                self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+                now[0]+=1001
+        self.assertEqual(len(requests),4)
+        self.assertEqual(c.snapshot()['overflow_rejections'],0)
