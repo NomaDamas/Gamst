@@ -44,7 +44,11 @@ worker = await ProcessProvider.open(sys.executable, 'food.segformer_b0', config)
 ```
 
 Input is a plain uint8 BGR H×W×3 array, each axis 32..2160 and at most
-1920×1080 pixels. Preprocessing owns the input, converts BGR→RGB, uses Pillow
+1920×1080 pixels. A full 1080p BGR frame uses 6,220,800 bytes, above the
+default SensorStreams 4 MiB packet budget. Select
+`SensorStreams(human, max_packet_bytes=8*1024*1024)` for that input size,
+or use a smaller capture resolution. This increases the stream admission
+budget, not the provider's pixel limit. Preprocessing owns the input, converts BGR→RGB, uses Pillow
 bilinear square resize to the explicitly configured 256 or 512, rescales by
 255 and applies ImageNet RGB mean/std. This must match the selected training
 pipeline. Output is the **native 64×64 or 128×128 logit grid**, not official
