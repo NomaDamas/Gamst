@@ -17,6 +17,9 @@ class ProcessProvider:
     the validated response is ordinary bounded sensory context.
     """
     capability = staticmethod(capability)
+    # Legacy transports can initialize their process fields directly instead
+    # of calling open(). Only the explicit SAM open path installs an owner.
+    _separation_owner = None
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
