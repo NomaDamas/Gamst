@@ -151,6 +151,35 @@ class RuntimeTests(unittest.TestCase):
         runtime.close();runtime.close()
         with self.assertRaises(RuntimeError):runtime.predict(data)
 
+    def test_concurrent_caller_mutation_cannot_bypass_owned_validation(self):
+        import numpy as np
+        runtime=self.runtime();caller=np.zeros((1,6,320,240),dtype=np.float32)
+        validation=threading.Event();mutated=threading.Event();seen=[]
+        original_finite=np.isfinite
+        def mutate():
+            if validation.wait(5):
+                caller.fill(float('nan'))
+                mutated.set()
+        def finite(values):
+            result=original_finite(values)
+            validation.set()
+            if not mutated.wait(5):raise AssertionError('fixture mutation watchdog')
+            return result
+        def encoder(data):
+            seen.append(data.numpy().copy())
+            return data
+        runtime._encoder=encoder
+        worker=threading.Thread(target=mutate);worker.start()
+        try:
+            with patch('numpy.isfinite',side_effect=finite):runtime.predict(caller)
+        finally:
+            validation.set();worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(np.isnan(caller).all())
+        self.assertEqual(len(seen),1)
+        self.assertTrue(original_finite(seen[0]).all())
+        np.testing.assert_array_equal(seen[0],0)
+
     def test_close_waits_for_inflight_owned_inference(self):
         import numpy as np
         runtime=self.runtime();entered=threading.Event();release=threading.Event()

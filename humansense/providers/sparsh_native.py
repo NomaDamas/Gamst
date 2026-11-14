@@ -197,10 +197,16 @@ class SparshSlipNative:
         with self._lock:
             if self._encoder is None:
                 raise RuntimeError('Sparsh runtime closed')
-            if type(pair) is not np.ndarray or pair.dtype != np.dtype('float32') or pair.shape != (1,6,320,240) or not np.isfinite(pair).all() or pair.min() < 0 or pair.max() > 1:
-                raise ValueError('finite float32 B1x6x320x240 input in [0,1] required')
+            if type(pair) is not np.ndarray or pair.dtype != np.dtype('float32') or pair.shape != (1,6,320,240):
+                raise ValueError('float32 B1x6x320x240 input required')
+            # Own a fixed-size destination before inspecting values. Checking the
+            # caller buffer first permits a later mutation to bypass validation.
+            owned = np.empty((1,6,320,240), dtype=np.float32)
+            np.copyto(owned, pair, casting='no')
+            if not np.isfinite(owned).all() or owned.min() < 0 or owned.max() > 1:
+                raise ValueError('finite input in [0,1] required')
             with torch.inference_mode():
-                output = self._head({'latent': self._encoder(torch.from_numpy(pair.copy()))})
+                output = self._head({'latent': self._encoder(torch.from_numpy(owned))})
             if type(output) is not dict or set(output) != {'slip', 'force'}:
                 raise ValueError('invalid native output')
             for name, shape in (('slip', (1,2)), ('force', (1,3))):
