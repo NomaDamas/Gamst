@@ -234,7 +234,9 @@ def visual_request_binding(outer_header, payload, *, policy, generation,
     binding.update(input_sha256=_digest(payload),audio_input_sha256=_digest(pcm),
         visual_inventory_sha256=_digest(inventory),
         original_audio_epoch=original_sensor['stream_epoch'],
-        original_visual_epoch=header['visual_sensor']['stream_epoch'])
+        original_visual_epoch=header['visual_sensor']['stream_epoch'],
+        visual_source_id=header['visual_sensor']['source_id'],
+        visual_sensor_id=header['visual_sensor']['sensor_id'])
     return bounded_json(binding)
 
 

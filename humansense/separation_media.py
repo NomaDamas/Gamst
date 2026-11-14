@@ -162,14 +162,19 @@ class SeparationMediaStore:
         if asyncio.get_running_loop() is not self.loop:
             raise RuntimeError('separation ownership is bound to its runtime event loop')
 
-    def grant(self, subject_id, source_id, sensor_id):
+    def grant(self, subject_id, source_id, sensor_id, *, visual_source=None):
         self._loop()
         self.human._check()
         for value in (subject_id, source_id, sensor_id):
             identifier(value)
         if len(self.owners) >= 32:
             raise ValueError('separation owner limit reached')
-        owner = SeparationMediaOwner(self, subject_id, source_id, sensor_id)
+        if visual_source is not None:
+            if type(visual_source) is not dict or set(visual_source)!={'source_id','sensor_id'}:
+                raise ValueError('explicit visual source and sensor IDs required')
+            for v in visual_source.values(): identifier(v)
+            visual_source=(visual_source['source_id'],visual_source['sensor_id'])
+        owner = SeparationMediaOwner(self, subject_id, source_id, sensor_id, visual_source=visual_source)
         self.owners.add(owner)
         return owner
 
@@ -206,9 +211,10 @@ class SeparationMediaStore:
 
 class SeparationMediaOwner:
     """Application-only authorization. Never serialize this object or expose it remotely."""
-    def __init__(self, store, subject, source, sensor):
+    def __init__(self, store, subject, source, sensor, *, visual_source=None):
         self._store = store
         self.subject_id, self.source_id, self.sensor_id = subject, source, sensor
+        self._visual_source = visual_source
         self.generation, self.epoch = store.human._generation, None
         self.closed, self.claimed = False, False
         self.revision, self.reset_pending = 0, False
@@ -219,6 +225,13 @@ class SeparationMediaOwner:
         store.human._check()
         if self.closed or self not in store.owners or self.generation != store.human._generation:
             raise PermissionError('separation owner has been revoked')
+
+    def _authorize_configuration(self, config):
+        self._check()
+        visual=config.get('visual_policy')
+        requested=None if visual is None else (visual['visual_sensor']['source_id'],visual['visual_sensor']['sensor_id'])
+        if requested!=self._visual_source:
+            raise PermissionError('visual source differs from explicit media grant')
 
     def _claim(self):
         self._check()
@@ -234,6 +247,9 @@ class SeparationMediaOwner:
         if (binding['subject_id'], sensor['source_id'], sensor['sensor_id'], binding['generation']) != (
                 self.subject_id, self.source_id, self.sensor_id, self.generation):
             raise PermissionError('separation request differs from authorized owner')
+        visual=None if 'visual_source_id' not in binding else (binding['visual_source_id'],binding['visual_sensor_id'])
+        if visual!=self._visual_source:
+            raise PermissionError('visual request differs from explicit media grant')
         epoch = sensor['stream_epoch']
         if self.epoch is not None and self.epoch != epoch:
             raise PermissionError('reopen separation ownership after an epoch change')
@@ -266,14 +282,16 @@ class SeparationMediaOwner:
         store._schedule()
         return deepcopy(metadata)
 
-    def _reserve(self, samples):
+    def _reserve(self, samples, *, request_bytes=0):
         self._check()
         store = self._store
         store._prune()
         # Conservative parent pipe working-set reservation: copied request,
         # response, decoded components and validation concatenation. SensorStreams
         # queue snapshots and child/model memory have separate explicit budgets.
-        size = samples * 32
+        if type(request_bytes) is not int or not 0<=request_bytes<=16*1024*1024:
+            raise ValueError('invalid visual request reservation')
+        size = samples * 32 + request_bytes*2
         if self in store.reservations or sum(store.reservations.values())+size > store.max_bytes:
             raise ValueError('separation in-flight byte budget exhausted')
         while store.entries and store.bytes+sum(store.reservations.values())+size > store.max_bytes:

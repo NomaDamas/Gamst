@@ -49,6 +49,7 @@ class ProcessProvider:
         self._sequence, self.closed = 0, False
         self._separation_owner = separation_owner
         if separation_owner is not None:
+            separation_owner._authorize_configuration(self.config)
             separation_owner._claim()
         worker_environment = os.environ.copy()
         if separation_owner is not None:
@@ -188,13 +189,14 @@ class ProcessProvider:
             if input_frame is not None:
                 fields['frame'], payload = encode_frame(input_frame)
                 if self._separation_owner is not None:
-                    from .separation_media import frame_binding
+                    from .separation_media import request_binding
                     owner = self._separation_owner
-                    fields['separation_binding'] = frame_binding(fields['frame'], payload,
+                    fields['separation_binding'] = request_binding(fields['frame'], payload, config=self.config,
                         generation=owner.generation, config_id=self.spec.version,
                         owner_revision=owner.revision)
                     owner._bind(fields['separation_binding'])
-                    owner._reserve(fields['separation_binding']['sample_count'])
+                    owner._reserve(fields['separation_binding']['sample_count'],
+                        request_bytes=len(payload) if 'visual_policy' in self.config else 0)
             exchange = asyncio.create_task(self._exchange(operation, payload, fields))
             try:
                 # Explicit ownership preserves caller cancellation even when the

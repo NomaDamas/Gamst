@@ -53,7 +53,8 @@ def _binding(value):
         input_sha256=_hash)
     required=set(fields)
     visual=dict(audio_input_sha256=_hash,visual_inventory_sha256=_hash,
-                original_audio_epoch=identity,original_visual_epoch=identity)
+                original_audio_epoch=identity,original_visual_epoch=identity,
+                visual_source_id=identity,visual_sensor_id=identity)
     if type(value) is dict and set(value)&set(visual):
         required.update(visual)
     fields.update(visual)
