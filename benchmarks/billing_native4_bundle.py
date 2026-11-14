@@ -1,13 +1,14 @@
 """Offline native4 crosscheck persistence; original artifacts remain untouched."""
 from pathlib import Path
 
-from .billing_crosscheck_bundle import _persist_report, _load_declaration
+from .billing_crosscheck_bundle import _persist_report, _load_declaration, _reject_source_output
 from .billing_native4_crosscheck import crosscheck_recording_transport
 
 
 def persist_recording_crosscheck(manifest, asset_directory, transport_directory, *,
         expected_inventory_sha256, native_index, expected_binding, declarations_path,
         declarations_sha256, terminal_sha256, output_directory):
+    _reject_source_output(output_directory, (native_index.directory, transport_directory))
     report = crosscheck_recording_transport(manifest, asset_directory, transport_directory,
         expected_inventory_sha256=expected_inventory_sha256, native_index=native_index,
         expected_binding=expected_binding, declarations_path=declarations_path,

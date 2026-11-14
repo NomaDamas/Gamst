@@ -145,3 +145,11 @@ class RecordingCrosscheck(unittest.IsolatedAsyncioTestCase):
         result=await asyncio.to_thread(subprocess.run,command,capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(json.loads((output/'crosscheck.json').read_bytes()),self.check())
+
+    async def test_nested_original_output_rejected_without_changing_sources(self):
+        await self.collect()
+        for original in (self.index.directory,self.transport):
+            before={p.relative_to(original).as_posix() for p in original.rglob('*')}
+            for output in (original,original/'nested-crosscheck'):
+                with self.assertRaisesRegex(ValueError,'outside original'): self.persist(output)
+                self.assertEqual(before,{p.relative_to(original).as_posix() for p in original.rglob('*')})
