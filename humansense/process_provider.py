@@ -50,6 +50,9 @@ class ProcessProvider:
         self = cls()
         self.spec = capability(profile, config)
         self.config = bounded_json(config)
+        from .recording_scope import validate_evaluation_worker_configuration
+        validate_evaluation_worker_configuration(evaluation_observer,
+            self.spec.provider, self.spec.version, self.config)
         self.profile, self.timeout = profile, inference_timeout
         self._lock = asyncio.Lock()
         self._process = None

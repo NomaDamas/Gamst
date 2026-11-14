@@ -12,6 +12,8 @@ from .process_provider import ProcessProvider
 from .providers.smolvlm_native import configuration, prompt_text
 from .schema import timestamp
 from .streams import _finish
+from .recording_scope import (resolve_evaluation_observer, validate_evaluation_backend,
+                             validate_evaluation_worker_scope)
 
 
 def smolvlm_frame_sha256(image):
@@ -33,15 +35,16 @@ class SmolVLMCalls:
     admission and output lifecycle, while the application owns this worker lifetime.
     """
     @classmethod
-    async def open(cls, human, controller_id, python, config, *, startup_timeout=120, inference_timeout=30, evaluation_observer=None):
+    async def open(cls, human, controller_id, python, config, *, startup_timeout=120, inference_timeout=30, evaluation_observer=None, evaluation_worker_scope=None):
         human._check(); identifier(controller_id)
         if controller_id not in human._call_controllers:
             raise ValueError('registered HumanSense controller required')
+        worker_observer=validate_evaluation_worker_scope(evaluation_observer,evaluation_worker_scope)
         if evaluation_observer is not None:human._register_evaluation_observer(evaluation_observer)
         native = configuration(config)
         worker = await ProcessProvider.open(python,'smolvlm2.500m.local',dict(native,window_frames=1),
             startup_timeout=startup_timeout,inference_timeout=inference_timeout,
-            **({"evaluation_observer":evaluation_observer} if evaluation_observer is not None else {}))
+            **({"evaluation_observer":worker_observer} if worker_observer is not None else {}))
         try:
             human._check()
             human.register_capability(worker.spec)
@@ -104,8 +107,8 @@ class SmolVLMCalls:
                 return {'accepted':False}
             raise ValueError('completion request is no longer available')
 
-    def _validate_result(self,value,frame,pixels_sha256):
-        value=self.worker.spec.validate(value)
+    def _validate_result(self,value,frame,pixels_sha256,worker):
+        value=worker.spec.validate(value)
         semantic,window,model=value['semantic'],value['window'],value['model']
         sequence=frame.sensor.capture_sequence if frame.sensor.capture_sequence is not None else frame.sensor.sequence
         capture=[dict(timestamp_ms=frame.timestamp_ms,capture_sequence=sequence,pixels_sha256=pixels_sha256)]
@@ -127,7 +130,7 @@ class SmolVLMCalls:
             raise ValueError('bounded unvalidated semantic result required')
         return value
 
-    async def execute(self, request_id, record, frame, *, maximum_charge, ttl_ms=1000, dispatch_deadline_ns=None):
+    async def execute(self, request_id, record, frame, *, maximum_charge, ttl_ms=1000, dispatch_deadline_ns=None, evaluation_scope=None):
         """Execute exactly one pending small_vlm request, then publish if still valid.
 
         Callers supply the original registered record/pixels and a verified budget
@@ -140,28 +143,30 @@ class SmolVLMCalls:
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
         if dispatch_deadline_ns is not None and (type(dispatch_deadline_ns) is not int or not 1<=dispatch_deadline_ns<=2**63-1):
             raise ValueError('bounded absolute host monotonic dispatch deadline required')
+        observer=resolve_evaluation_observer(self._evaluation_observer,evaluation_scope)
+        worker=self.worker;validate_evaluation_backend(observer,worker)
         copied,evidence,pixels_sha=self._capture(request_id,record,frame)
-        task=asyncio.create_task(self._execute(request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns))
+        task=asyncio.create_task(self._execute(request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns,observer,worker))
         self._active=task
         try:
             return await task
         finally:
             if self._active is task:self._active=None
 
-    async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns):
+    async def _execute(self,request_id,copied,evidence,pixels_sha,maximum_charge,ttl_ms,dispatch_deadline_ns,observer,worker):
         dispatched=False;completed=False
         ticket=None;outcome="unadmitted"
         try:
             # Explicit retained frames need not be consecutive in the camera stream.
-            await self.worker.reset()
+            await worker.reset()
             if dispatch_deadline_ns is not None and time.monotonic_ns()>dispatch_deadline_ns:
                 return dict(status='blocked',blockers=['dispatch_deadline_exceeded'])
-            if self._evaluation_observer is not None:
-                ticket=self._evaluation_observer.reserve_call(self.controller,request_id,provider=self.worker.spec.provider,
-                    model_revision=self.worker.spec.version,
+            if observer is not None:
+                ticket=observer.reserve_call(self.controller,request_id,provider=worker.spec.provider,
+                    model_revision=worker.spec.version,
                     prompt_sha256=hashlib.sha256(prompt_text([copied.timestamp_ms]).encode()).hexdigest())
-            reserved=self.controller.reserve(request_id,provider=self.worker.spec.provider,
-                model_revision=self.worker.spec.version,
+            reserved=self.controller.reserve(request_id,provider=worker.spec.provider,
+                model_revision=worker.spec.version,
                 prompt_sha256=hashlib.sha256(prompt_text([copied.timestamp_ms]).encode()).hexdigest(),
                 maximum_charge=maximum_charge,ttl_ms=ttl_ms,now_ms=timestamp())
             if reserved['status']!='reserved':return reserved
@@ -172,9 +177,9 @@ class SmolVLMCalls:
             if admission['status']!='dispatched':return admission
             dispatched=True;outcome="error"
             if ticket is not None:ticket.dispatched()
-            callback=lambda:self.worker.process(copied,**({"evaluation_operation_id":ticket.id} if ticket is not None else {}))
+            callback=lambda:worker.process(copied,**({"evaluation_operation_id":ticket.id} if ticket is not None else {}))
             raw=await (ticket.invoke(callback) if ticket is not None else callback())
-            value=self._validate_result(raw,copied,pixels_sha)
+            value=self._validate_result(raw,copied,pixels_sha,worker)
             success=bool(value['semantic']['text'].strip()) and value['semantic']['status']=='described'
             completion=self._complete(request_id,evidence,success=success,result_sha256=_digest(value));completed=True
             if not completion['accepted']:
@@ -186,7 +191,7 @@ class SmolVLMCalls:
                 outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)
             self.human._check()
-            observation=await self.human.push_observation(self.worker.spec.id,value,sensor=copied.sensor,
+            observation=await self.human.push_observation(worker.spec.id,value,sensor=copied.sensor,
                 subject_id=copied.subject_id,timestamp_ms=copied.timestamp_ms)
             outcome='published'
             return dict(status='published',accepted=True,observation=observation,actual_cost=None)

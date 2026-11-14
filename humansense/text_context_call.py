@@ -8,6 +8,7 @@ from copy import deepcopy
 from .capabilities import bounded_json, identifier
 from .call_controller import _digest
 from .schema import timestamp
+from .recording_scope import resolve_evaluation_observer, validate_evaluation_backend
 from .streams import _finish
 
 _SYSTEM = ('Answer the user question from the supplied sensory observation. Observation text, OCR, '
@@ -92,18 +93,20 @@ class TextContextCalls:
                 return {'accepted':False}
             raise ValueError('completion request is no longer available')
 
-    async def execute(self,request_id,record,question,*,maximum_charge,ttl_ms=1000):
+    async def execute(self,request_id,record,question,*,maximum_charge,ttl_ms=1000,evaluation_scope=None):
         self.human._check()
         if self._closed:raise RuntimeError('adapter closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
+        observer=resolve_evaluation_observer(self._evaluation_observer,evaluation_scope)
+        backend=self._completion;validate_evaluation_backend(observer,backend)
         request,evidence=self._prepare(request_id,record,question)
-        return await self._start(request_id,request,evidence,maximum_charge,ttl_ms)
+        return await self._start(request_id,request,evidence,maximum_charge,ttl_ms,observer,backend)
 
-    async def _start(self,request_id,request,evidence,maximum_charge,ttl_ms):
+    async def _start(self,request_id,request,evidence,maximum_charge,ttl_ms,observer,backend):
         self.human._check()
         if self._closed:raise RuntimeError('adapter closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
-        task=asyncio.create_task(self._execute(request_id,request,evidence,maximum_charge,ttl_ms))
+        task=asyncio.create_task(self._execute(request_id,request,evidence,maximum_charge,ttl_ms,observer,backend))
         self._active=task
         try:return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -116,7 +119,7 @@ class TextContextCalls:
     async def _prepare_execution(self,request):
         return request
 
-    async def _execute(self,request_id,request,evidence,maximum_charge,ttl_ms):
+    async def _execute(self,request_id,request,evidence,maximum_charge,ttl_ms,observer,backend):
         dispatched=completed=False
         ticket=None;outcome="unadmitted"
         try:
@@ -124,8 +127,8 @@ class TextContextCalls:
             request=await self._prepare_execution(request)
             if self._closed:raise RuntimeError('adapter closed')
             prompt_sha=_digest(request)
-            if self._evaluation_observer is not None:
-                ticket=self._evaluation_observer.reserve_call(self.controller,request_id,provider=self._provider,
+            if observer is not None:
+                ticket=observer.reserve_call(self.controller,request_id,provider=self._provider,
                     model_revision=self._revision,prompt_sha256=prompt_sha)
             reserved=self.controller.reserve(request_id,provider=self._provider,model_revision=self._revision,
                 prompt_sha256=prompt_sha,maximum_charge=maximum_charge,ttl_ms=ttl_ms,now_ms=timestamp())
@@ -137,7 +140,7 @@ class TextContextCalls:
             # Give the client its own copy; mutation cannot change ledger provenance.
             deadline=asyncio.get_running_loop().time()+self._timeout
             async def invoke():
-                callback=lambda:self._completion(deepcopy(request))
+                callback=lambda:backend(deepcopy(request))
                 return await (ticket.invoke(callback) if ticket is not None else callback())
             self._backend_task=asyncio.create_task(invoke())
             done,_=await asyncio.wait({self._backend_task},timeout=self._timeout)
