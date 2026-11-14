@@ -5,7 +5,13 @@ import unittest
 from humansense.call_controller import CallController
 from humansense.call_policy import CallPolicy
 from humansense.call_budget import CallBudget
-from test_call_policy import record, visual
+from test_call_policy import record as _record, visual
+
+
+def record(ts=1000):
+    r=_record(ts)
+    r["models"]=[{"id":"test.provider","version":"1","backend":"plugin"}]
+    return r
 
 
 def controller(**kwargs):
@@ -116,6 +122,33 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(c.snapshot()['sources'][h]['last_semantic'])
         t=d['request_id'];reserve(c,t);c.dispatch(t,now_ms=1000)
         with self.assertRaises(ValueError):c.finish(t,success=True,evidence_sha256='f'*64,result_sha256='d'*64,now_ms=1001)
+
+    def test_expiry_sweep_releases_reservation_without_erasing_event(self):
+        c=controller();h=c.open_source(record(),now_ms=1000);d=submit(c,h,1);t=d['request_id']
+        reserve(c,t,ttl=10)
+        self.assertEqual(c.expire(now_ms=1010),1)
+        self.assertEqual(c.snapshot()['requests'][0]['state'],'pending')
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+        self.assertEqual(reserve(c,t,1011)['status'],'reserved')
+
+    def test_retry_while_failed_attempt_has_unknown_bill(self):
+        c=controller();h=c.open_source(record(),now_ms=1000);d=submit(c,h,1);t=d['request_id']
+        reserve(c,t);c.dispatch(t,now_ms=1000);finish(c,t,d,1001,False)
+        c.settle(t,components=None,now_ms=1001)
+        retry=c.submit(h,record(),sequence=2,now_ms=1100,visual_reference=visual())
+        self.assertEqual(retry['status'],'queued');self.assertNotEqual(retry['request_id'],t)
+        reserve(c,retry['request_id'],1100);c.dispatch(retry['request_id'],now_ms=1100)
+        self.assertEqual(c.snapshot()['budget']['reserved_liability'],40)
+
+    def test_provider_version_and_channel_change_require_new_source(self):
+        c=controller();h=c.open_source(record(),now_ms=1000)
+        for mutate in ('model','channels'):
+            r=record()
+            if mutate=='model':r['models'][0]['version']='2'
+            else:r['observation']['sensor']['channels']=['other']
+            with self.assertRaises(ValueError):c.submit(h,r,sequence=1,now_ms=1000,visual_reference=visual())
+        r=record();r.pop('models')
+        with self.assertRaises(ValueError):c.open_source(r,now_ms=1000)
 
     def test_dispatched_observation_copy_is_not_retained_for_billing(self):
         c=controller();r=record();r['observation']['value']={'text':'private-lived-context'}

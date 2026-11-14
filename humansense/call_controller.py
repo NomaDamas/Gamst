@@ -16,8 +16,15 @@ def _digest(value):
 
 def _owner(record, decision):
     e = decision['evidence']
+    models = record.get('models')
+    if type(models) is not list or not 1 <= len(models) <= 16:
+        raise ValueError('bounded registered model provenance required')
+    for model in models:
+        if type(model) is not dict:
+            raise ValueError('model provenance object required')
+        identifier(model.get('id')); identifier(model.get('version'))
     base = tuple(e[k] for k in ('subject_id', 'source_id', 'sensor_id', 'capability_id'))
-    signature = _digest(dict(base=base, stream_epoch=e['stream_epoch'],
+    signature = _digest(dict(base=base, models=sorted(models, key=_canonical), stream_epoch=e['stream_epoch'],
         processing_epoch=e['processing_epoch'], coordinate_frame=e['coordinate_frame'],
         calibration_id=e['calibration_id'], capability=record['observation']['capability'],
         modality=record['observation']['modality'],
@@ -109,7 +116,7 @@ class CallController:
             self._submission_seq = sequence
             fingerprint = _digest(dict(record=d['evidence']['record_sha256'], rules=rules))
             for r in self._requests.values():
-                if r['source'] == handle and r['fingerprint'] == fingerprint:
+                if r['source'] == handle and r['fingerprint'] == fingerprint and not r['finished'] and not r['discard']:
                     return dict(status='coalesced_exact', request_id=r['id'], decision=deepcopy(r['decision']))
             if any(b != 'cooldown' for b in d['blockers']):
                 return dict(status='rejected', reason='invalid_dispatch_evidence', decision=d)
@@ -251,14 +258,20 @@ class CallController:
     def expire(self, *, now_ms):
         with self._lock:
             now = self._time(now_ms)
-            tokens = [t for t, r in self._requests.items()
-                      if r['state'] != 'dispatched' and now >= r['expires_ms']]
-            for token in tokens:
-                r = self._requests[token]
-                if r['state'] == 'reserved':
+            changed = 0
+            for r in list(self._requests.values()):
+                if r['state'] == 'dispatched':
+                    continue
+                if now >= r['expires_ms']:
+                    if r['state'] == 'reserved':
+                        self._budget.release(r['reservation']['token'], now_ms=now)
+                    self._retire(r, 'expired_uninspected')
+                    changed += 1
+                elif r['state'] == 'reserved' and now >= r['reservation']['expires_ms']:
                     self._budget.release(r['reservation']['token'], now_ms=now)
-                self._retire(r, 'expired_uninspected')
-            return len(tokens)
+                    r.update(state='pending', reservation=None, execution=None)
+                    changed += 1
+            return changed
 
     def close_source(self, handle, *, now_ms):
         with self._lock:
