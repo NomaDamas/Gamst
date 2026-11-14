@@ -17,6 +17,13 @@ def _integer(value, maximum=10**18, minimum=0):
     return value
 
 
+class BudgetDenied(RuntimeError):
+    """Stable admission reason, distinct from malformed inputs or replay errors."""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class CallBudget:
     """One accounting scope; caller supplies verified prices/settlements.
 
@@ -87,12 +94,16 @@ class CallBudget:
                 raise ValueError('expiry exceeds clock range')
             if sequence <= self._last_sequence:
                 raise ValueError('request sequence replay or reordering')
-            if self._closed or self._overrun:
-                raise RuntimeError('ledger closed or reservation overrun')
-            if self._accepted >= self.max_calls or len(self._active) >= self.max_inflight:
-                raise RuntimeError('call or inflight limit')
+            if self._closed:
+                raise BudgetDenied('ledger_closed')
+            if self._overrun:
+                raise BudgetDenied('reservation_overrun')
+            if self._accepted >= self.max_calls:
+                raise BudgetDenied('call_limit')
+            if len(self._active) >= self.max_inflight:
+                raise BudgetDenied('inflight_limit')
             if self._spent + self._reserved + maximum_charge > self.ceiling:
-                raise RuntimeError('budget exhausted')
+                raise BudgetDenied('budget_exhausted')
             self._last_sequence = sequence
             self._accepted += 1
             self._reserved += maximum_charge
@@ -108,8 +119,10 @@ class CallBudget:
     def dispatch(self, token, *, now_ms):
         with self._lock:
             now = self._time(now_ms); r = self._get(token)
-            if self._closed or self._overrun:
-                raise RuntimeError('ledger closed or reservation overrun')
+            if self._closed:
+                raise BudgetDenied('ledger_closed')
+            if self._overrun:
+                raise BudgetDenied('reservation_overrun')
             if r['state'] != 'reserved':
                 raise ValueError('reservation already dispatched')
             if now >= r['expires_ms']:
