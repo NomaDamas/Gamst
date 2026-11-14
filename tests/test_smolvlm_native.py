@@ -94,3 +94,5 @@ class Native(unittest.TestCase):
             with self.assertRaises(ValueError):load_state(path,model,torch,safe_open,'float32')
             bad=model.state_dict();key=next(iter(bad));bad[key]=torch.full_like(bad[key],float('nan'));save_file(bad,str(path))
             with self.assertRaises(ValueError):load_state(path,model,torch,safe_open,'float32')
+            bad=model.state_dict();key=next(iter(bad));bad[key]=torch.full_like(bad[key],torch.finfo(torch.float32).max);save_file(bad,str(path))
+            with self.assertRaises(ValueError):load_state(path,model,torch,safe_open,'bfloat16')

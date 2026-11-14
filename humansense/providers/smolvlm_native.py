@@ -72,7 +72,7 @@ def verified_file(path,expected,limit):
 
 
 def build_processor(tokenizer,Processor,Images,Videos):
-    if len(tokenizer)!=49280 or any(tokenizer.convert_tokens_to_ids(t)!=i for t,i in SPECIAL.items()):raise ValueError('exact SmolVLM500M tokenizer vocabulary/special IDs required')
+    if len(tokenizer)!=49280 or set(tokenizer.get_vocab().values())!=set(range(49280)) or any(tokenizer.convert_tokens_to_ids(t)!=i for t,i in SPECIAL.items()):raise ValueError('exact SmolVLM500M tokenizer vocabulary/special IDs required')
     images=Images(do_resize=True,size={'longest_edge':512},max_image_size={'longest_edge':512},
         do_image_splitting=False,do_rescale=True,rescale_factor=1/255,do_normalize=True,
         image_mean=[.5,.5,.5],image_std=[.5,.5,.5],do_pad=True,do_convert_rgb=True)
@@ -106,7 +106,9 @@ def load_state(checkpoint,model,torch,safe_open,precision):
             if source.get_slice(key).get_shape()!=list(target.shape):raise ValueError('SmolVLM checkpoint shape mismatch')
             tensor=source.get_tensor(key)
             if tensor.dtype not in (torch.float32,torch.float16,torch.bfloat16) or not torch.isfinite(tensor).all():raise ValueError('finite floating SmolVLM weights required')
-            state[key]=tensor.to(dtype=getattr(torch,precision),copy=True)
+            owned=tensor.to(dtype=getattr(torch,precision),copy=True)
+            if not torch.isfinite(owned).all():raise ValueError('requested precision overflows checkpoint values')
+            state[key]=owned
     return state
 
 
