@@ -210,3 +210,63 @@ class RecordingCrosscheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['native_lane']['counts']['released_dispatched'],1)
         self.assertEqual(report['native_lane']['unknown_liability_count'],0)
         self.assertFalse(report['request_costs_verified'])
+
+    async def test_actual_chunk_sealing_failure_keeps_prefix_incomplete(self):
+        original_sdk=self.sdk
+        async def sdk(*args,**kwargs):
+            result=await original_sdk(*args,**kwargs)
+            def fail_seal():raise OSError('owned fixture chunk sealing failure')
+            self.writer._seal_chunk=fail_seal
+            original_close=self.observer.close
+            async def close(*args,**kwargs):
+                try:return await original_close(*args,**kwargs)
+                except RuntimeError as exc:
+                    if str(exc)!='journal_failed':raise
+            self.observer.close=close
+            return result
+        self.sdk=sdk
+        await self.collect();report=self.check()
+        self.assertIsNotNone(self.index.terminal['prefix'])
+        self.assertEqual(report['local_counts']['native_entries_matched'],1)
+        self.assertFalse(report['local_binding_complete'])
+        self.assertTrue(report['native_lane']['unobserved_entry_inventory_possible'])
+
+    async def test_second_real_http_preparation_cannot_reuse_one_native_entry(self):
+        original_sdk=self.sdk; original_originals=self.originals; captured={}
+        async def sdk(*args,**kwargs):
+            result=await original_sdk(*args,**kwargs);prepare=self.client.prepare
+            def capture(request):
+                captured['request']=deepcopy(request);prepared=prepare(request);invoke=prepared.invoke
+                async def bound(binding):
+                    captured['binding']=binding
+                    return await invoke(binding)
+                prepared.invoke=bound
+                return prepared
+            self.client.prepare=capture
+            return result
+        async def originals():
+            # Deliberately replay the actual immutable binding into a second
+            # physical send. Native evidence still records only the first call.
+            finished=asyncio.Event()
+            async def serve(reader,writer):
+                try:
+                    head=await reader.readuntil(b'\r\n\r\n')
+                    size=int(next(line.split(b':',1)[1] for line in head.split(b'\r\n') if line.lower().startswith(b'content-length:')))
+                    self.calls.append((head,await reader.readexactly(size)))
+                    raw=json.dumps(dict(self.reply,id='resp_fixture_second')).encode()
+                    writer.write(b'HTTP/1.1 200 OK\r\nX-Request-Id: req_fixture_second\r\nContent-Type: application/json\r\nContent-Length: '+str(len(raw)).encode()+b'\r\n\r\n'+raw)
+                    await writer.drain()
+                finally:
+                    writer.close();await writer.wait_closed();finished.set()
+            server=await asyncio.start_server(serve,'127.0.0.1',0)
+            self.client._port=server.sockets[0].getsockname()[1]
+            prepared=self.client.prepare(captured['request'])
+            try:await prepared.invoke(captured['binding'])
+            finally:
+                await prepared.release();await asyncio.wait_for(finished.wait(),3)
+                server.close();await server.wait_closed()
+            return await original_originals()
+        self.sdk=sdk;self.originals=originals
+        await self.collect()
+        self.assertEqual(len(self.calls),2);self.assertEqual(self.index.count,1)
+        with self.assertRaisesRegex(ValueError,'native entry reused'):self.check()
