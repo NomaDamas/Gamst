@@ -296,6 +296,36 @@ class CaptureLifecycleTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await session.stop()
 
+    async def test_cleanup_records_failure_before_delayed_done_callback(self):
+        camera = GateCamera(asyncio.get_running_loop(), fail_read=False)
+        camera.release_gate.set()
+        class Runtime:
+            async def push_video(self, *args, **kwargs):
+                await session.stop()
+        session = CaptureSession(Runtime(), video=0, consent=True)
+        deferred = []
+        original = session._task_done
+        # Hold callbacks until ownership has been cleared. This exercises the
+        # scheduler ordering deterministically on every supported Python version.
+        session._task_done = deferred.append
+        with patch.dict('sys.modules', {'cv2': SimpleNamespace(VideoCapture=lambda _: camera)}):
+            try:
+                await session.start()
+                with self.assertRaisesRegex(RuntimeError, 'cannot join its own cleanup'):
+                    await asyncio.wait_for(session.wait(), 2)
+                self.assertTrue(camera.released)
+                self.assertEqual(session._tasks, [])
+                self.assertEqual(len(deferred), 1)
+                before = session.status()['errors']
+                self.assertEqual(len(before), 1)
+                for task in deferred:
+                    original(task)
+                    original(task)
+                self.assertEqual(session.status()['errors'], before)
+                self.assertEqual(camera.releases, 1)
+            finally:
+                await session.stop()
+
     async def test_cleanup_callback_cannot_restart_or_join_itself(self):
         for operation in ('start', 'stop', 'wait'):
             class Runtime:

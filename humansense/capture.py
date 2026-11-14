@@ -27,6 +27,7 @@ class CaptureSession:
         self.subject_id = subject_id
         self._camera = self._mic = None
         self._tasks: list[asyncio.Task] = []
+        self._reported_tasks: set[asyncio.Task] = set()
         self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         self._running = self._paused = False
         self._errors: list[str] = []
@@ -79,6 +80,7 @@ class CaptureSession:
         if self.video is None and not self.audio:
             raise ValueError("Choose a camera and/or microphone")
         self._errors.clear()
+        self._reported_tasks.clear()
         self._capture_generation += 1
         self._accept_after_ms = time.time_ns() // 1_000_000
         try:
@@ -122,12 +124,18 @@ class CaptureSession:
             # this task, so startup must never join cleanup (a circular wait).
             raise
 
-    def _task_done(self, task):
-        if task not in self._tasks:
-            return
+    def _record_task_error(self, task):
+        if task not in self._tasks or task in self._reported_tasks or not task.done():
+            return False
+        self._reported_tasks.add(task)
         if not task.cancelled() and task.exception() is not None:
             self._errors.append(f"{task.get_name()}: {task.exception()}")
             self._errors[:] = self._errors[-20:]
+            return True
+        return False
+
+    def _task_done(self, task):
+        if self._record_task_error(task):
             self._begin_cleanup()
 
     def _begin_cleanup(self):
@@ -257,6 +265,11 @@ class CaptureSession:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Task completion callbacks can run after gather returns (including
+        # when all tasks were already done). Record errors before relinquishing
+        # ownership; callbacks and cleanup share deduplication for this generation.
+        for task in tasks:
+            self._record_task_error(task)
         self._tasks.clear()
         mic, self._mic = self._mic, None
         camera, self._camera = self._camera, None
