@@ -78,6 +78,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_efficientphys_context.py -v
       - run: python -m pip install 'transformers==4.57.6' 'huggingface-hub==0.36.0' 'safetensors==0.7.0'
       - run: python -m unittest discover -s tests -p test_sparsh_native.py -v
+      - run: python -m unittest discover -s tests -p test_sparsh_context.py -v
       - run: python -m unittest discover -s tests -p test_food.py -v
       - run: python -m pip install 'torchvision==0.23.0' --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install 'num2words==0.5.14'
