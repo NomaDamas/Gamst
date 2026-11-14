@@ -7,7 +7,7 @@ import uuid
 
 from .capabilities import bounded_json, identifier
 from .call_policy import CallPolicy, _canonical, _ms, _sha
-from .call_budget import CallBudget, _integer
+from .call_budget import CallBudget, BudgetDenied, _integer
 
 
 def _digest(value):
@@ -58,6 +58,7 @@ class CallController:
         self._closed = False
         self._runtime_guard = self._runtime_clock = self._record_guard = self._runtime_epoch = None
         self._detached = {}
+        self._denials = {}
 
     def bind_runtime(self, *, guard, clock, validate_record, epoch):
         """One-way binding of a fresh instance to an application-owned runtime."""
@@ -116,7 +117,7 @@ class CallController:
                 raise RuntimeError('source capacity')
             self._source_seq += 1
             handle = f'{self._scope}:source:{self._source_seq}'
-            self._sources[handle] = dict(base=base, owner=owner, active=False,
+            self._sources[handle] = dict(base=base, owner=owner, modality=record['observation']['modality'], active=False,
                 last_dispatch=None, last_semantic=None, last_capture=None)
             return handle
 
@@ -186,9 +187,9 @@ class CallController:
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
             self._requests[token] = dict(id=token, source=handle, fingerprint=fingerprint,
                 state='pending', order=self._request_seq, decision=d, record=record, rules=rules,
-                freshness_ms=record['observation']['capability']['freshness_ms'],
+                freshness_ms=record['observation']['capability']['freshness_ms'], modality=record['observation']['modality'],
                 submitted_ms=now, expires_ms=min(2**53-1, now+self._retention), priority=priority,
-                reservation=None, execution=None, finished=False, charged=False,
+                reservation=None, execution=None, last_admission=None, finished=False, charged=False,
                 discard=False, outcome=None)
             # The event is now retained even if cooldown or price blocks execution.
             if not retry:
@@ -209,26 +210,43 @@ class CallController:
             blockers.append('cooldown')
         return blockers
 
+    def _attempt(self, r, *, stage, status, reasons, now, candidate=None):
+        r['last_admission'] = dict(stage=stage, status=status, reasons=list(reasons),
+                                   evaluated_ms=now, candidate=deepcopy(candidate))
+        for reason in reasons:
+            self._denials[reason] = self._denials.get(reason, 0) + 1
+
     def reserve(self, token, *, provider, model_revision, prompt_sha256,
                 maximum_charge, now_ms, ttl_ms=1000):
         _sha(prompt_sha256); identifier(provider); identifier(model_revision)
+        if maximum_charge is not None:
+            _integer(maximum_charge)
+        _integer(ttl_ms, 3600000, 1)
         with self._lock:
             now = self._time(now_ms); r = self._request(token)
             self._admit(r.get('record'))
             if r['state'] != 'pending':
                 raise ValueError('request already reserved or dispatched')
-            blockers = self._blockers(r, now)
-            if blockers:
-                return dict(status='blocked', blockers=blockers)
             execution = dict(request_id=token, route=r['decision']['desired_route'],
                 decision_sha256=r['decision']['decision_sha256'], provider=provider,
                 model_revision=model_revision, prompt_sha256=prompt_sha256)
+            blockers = self._blockers(r, now)
+            if maximum_charge is None:
+                blockers.append('unknown_charge_ceiling')
+            if blockers:
+                self._attempt(r, stage='reserve', status='blocked', reasons=blockers, now=now, candidate=execution)
+                return dict(status='blocked', blockers=blockers)
             self._budget_seq += 1
-            reservation = self._budget.reserve(sequence=self._budget_seq,
-                decision_sha256=_digest(execution), evidence_sha256=r['decision']['evidence']['record_sha256'],
-                provider=provider, model_revision=model_revision, maximum_charge=maximum_charge,
-                now_ms=now, ttl_ms=ttl_ms)
+            try:
+                reservation = self._budget.reserve(sequence=self._budget_seq,
+                    decision_sha256=_digest(execution), evidence_sha256=r['decision']['evidence']['record_sha256'],
+                    provider=provider, model_revision=model_revision, maximum_charge=maximum_charge,
+                    now_ms=now, ttl_ms=ttl_ms)
+            except BudgetDenied as exc:
+                self._attempt(r, stage='reserve', status='blocked', reasons=[exc.reason], now=now, candidate=execution)
+                return dict(status='blocked', blockers=[exc.reason])
             r.update(state='reserved', reservation=reservation, execution=execution)
+            self._attempt(r, stage='reserve', status='reserved', reasons=[], now=now, candidate=execution)
             return dict(status='reserved', execution=deepcopy(execution), reservation=deepcopy(reservation))
 
     def dispatch(self, token, *, now_ms):
@@ -241,10 +259,16 @@ class CallController:
             if now >= r['reservation']['expires_ms']:
                 blockers.append('reservation_expired')
             if blockers:
+                self._attempt(r, stage='dispatch', status='blocked', reasons=blockers, now=now, candidate=r['execution'])
                 self._budget.release(r['reservation']['token'], now_ms=now)
                 r.update(state='pending', reservation=None, execution=None)
                 return dict(status='blocked', blockers=blockers)
-            self._budget.dispatch(r['reservation']['token'], now_ms=now)
+            try:
+                self._budget.dispatch(r['reservation']['token'], now_ms=now)
+            except BudgetDenied as exc:
+                self._attempt(r, stage='dispatch', status='blocked', reasons=[exc.reason], now=now, candidate=r['execution'])
+                return dict(status='blocked', blockers=[exc.reason])
+            self._attempt(r, stage='dispatch', status='dispatched', reasons=[], now=now, candidate=r['execution'])
             r['state'] = 'dispatched'
             observation = r.pop('record')
             self._sources[r['source']]['last_dispatch'] = now
@@ -308,6 +332,9 @@ class CallController:
         self._recent.append(dict(id=r['id'], source=r['source'], reason=reason,
             order=r['order'], fingerprint=r['fingerprint'], retryable=self._retryable(r),
             trigger_reason=r['decision']['reason'],
+            unknown_candidate_unresolved=r['decision']['unknown_candidate_unresolved'] and not (r['finished'] and r['outcome']['accepted']),
+            last_admission=deepcopy(r['last_admission']),
+            execution=deepcopy(r['execution']),
             evidence=deepcopy(r['decision']['evidence']), outcome=deepcopy(r['outcome'])))
         del self._requests[r['id']]
 
@@ -387,17 +414,51 @@ class CallController:
             self._closed = True
             self._budget.close(now_ms=now)
 
+    def _admission_view(self, r, budget):
+        blockers = self._blockers(r, self._clock)
+        if not self._runtime_active():
+            blockers.append('runtime_unavailable')
+        if self._runtime_epoch is not None and r['decision']['evidence']['processing_epoch'] != self._runtime_epoch():
+            blockers.append('processing_epoch_invalid')
+        if r['state'] == 'reserved':
+            if self._clock >= r['reservation']['expires_ms']:
+                blockers.append('reservation_expired')
+            if budget['closed']:
+                blockers.append('ledger_closed')
+            if budget['overrun']:
+                blockers.append('reservation_overrun')
+        elif r['state'] == 'pending':
+            blockers.append('reservation_required')
+        else:
+            blockers.append('already_dispatched')
+        if r['discard']:
+            blockers.append('output_discarded')
+        source = self._sources.get(r['source'])
+        last_semantic = None if source is None else source['last_semantic']
+        audit_due = r['modality'] == 'video' and (last_semantic is None or self._clock-last_semantic >= self._policy.semantic_interval_ms)
+        return dict(allowed_route=r['decision']['desired_route'] if not blockers else 'none',
+            admission_blockers=blockers, admission_advisory=True,
+            dispatched_route=r['decision']['desired_route'] if r['state'] == 'dispatched' else None,
+            last_admission=r['last_admission'], semantic_audit_due=audit_due,
+            last_semantic_capture_ms=last_semantic,
+            unknown_candidate_unresolved=r['decision']['unknown_candidate_unresolved'] and not (r['finished'] and r['outcome']['accepted']))
+
     def snapshot(self, *, now_ms=None):
         with self._lock:
             if now_ms is not None or self._runtime_clock is not None:
                 self._time(self._clock if now_ms is None else now_ms)
+            budget = self._budget.snapshot()
             requests = sorted(self._requests.values(), key=lambda r:(r['priority'], r['submitted_ms'], r['id']))
-            return deepcopy(dict(closed=self._closed, sources=self._sources,
+            sources = {h:dict(s, semantic_audit_due=s['modality']=='video' and
+                (s['last_semantic'] is None or self._clock-s['last_semantic'] >= self._policy.semantic_interval_ms))
+                for h,s in self._sources.items()}
+            return deepcopy(dict(closed=self._closed, sources=sources,
                 requests=[dict(id=r['id'], source=r['source'], state=r['state'], priority=r['priority'],
                     decision=r['decision'], blockers=self._blockers(r, self._clock),
                     expires_ms=r['expires_ms'], finished=r['finished'], charged=r['charged'],
-                    discard=r['discard'], execution=r['execution']) for r in requests],
+                    discard=r['discard'], execution=r['execution'],
+                    **self._admission_view(r, budget)) for r in requests],
                 detached_financial_requests=list(self._detached),
                 recent=list(self._recent), omitted_receipts=self._retired-len(self._recent),
-                overflow_rejections=self._overflow, budget=self._budget.snapshot(),
+                overflow_rejections=self._overflow, admission_denials=self._denials, budget=budget,
                 executes_model=False, changes_sensor_cadence=False, durable=False))

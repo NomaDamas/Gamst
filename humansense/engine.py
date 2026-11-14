@@ -602,24 +602,35 @@ class HumanSense:
                 source_count=len(state['sources']), request_count=len(state['requests']),
                 detached_financial_count=len(state['detached_financial_requests']),
                 overflow_rejections=state['overflow_rejections'], omitted_receipts=state['omitted_receipts'],
-                budget=budget, accounting_scope='whole_controller_all_subjects'))
+                budget=budget, admission_denials=state['admission_denials'],
+                cadence_scope='independent_sensor_and_context_delivery; see get_sensor_status/get_context',
+                accounting_scope='whole_controller_all_subjects'))
             for request in state['requests']:
                 decision = request['decision']
                 rows.append(dict(kind='request', controller_id=name, request_id=request['id'],
                     source=request['source'], state=request['state'], priority=request['priority'],
                     desired_route=decision['desired_route'], reason=decision['reason'], blockers=request['blockers'],
                     evidence=decision['evidence'], expires_ms=request['expires_ms'],
-                    finished=request['finished'], charged=request['charged'], discard=request['discard']))
+                    finished=request['finished'], charged=request['charged'], discard=request['discard'],
+                    allowed_route=request['allowed_route'], admission_blockers=request['admission_blockers'],
+                    admission_advisory=True, dispatched_route=request['dispatched_route'],
+                    last_admission=request['last_admission'], execution=request['execution'],
+                    semantic_audit_due=request['semantic_audit_due'],
+                    last_semantic_capture_ms=request['last_semantic_capture_ms'],
+                    unknown_candidate_unresolved=request['unknown_candidate_unresolved']))
             for token in state['detached_financial_requests']:
                 rows.append(dict(kind='detached_liability', controller_id=name, request_id=token,
                     meaning='sensory_associations_deleted_billing_unresolved'))
             for receipt in reversed(state['recent']):
                 rows.append(dict(kind='receipt', controller_id=name, request_id=receipt['id'],
-                    reason=receipt['reason'], evidence=receipt['evidence']))
+                    reason=receipt['reason'], trigger_reason=receipt['trigger_reason'],
+                    unknown_candidate_unresolved=receipt['unknown_candidate_unresolved'], evidence=receipt['evidence'],
+                    last_admission=receipt['last_admission'], execution=receipt['execution']))
             for handle, source in state['sources'].items():
                 rows.append(dict(kind='source', controller_id=name, source=handle,
                     identity=list(source['base']), owner_revision=source['owner'],
-                    last_dispatch_ms=source['last_dispatch'], last_semantic_capture_ms=source['last_semantic']))
+                    last_dispatch_ms=source['last_dispatch'], last_semantic_capture_ms=source['last_semantic'],
+                    modality=source['modality'], semantic_audit_due=source['semantic_audit_due']))
         page = self._bounded_query(rows, limit, max_bytes)
         return dict(entries=page['items'], total_count=len(rows), returned_count=page['returned_count'],
             omitted_count=len(rows)-page['returned_count'], truncated=page['truncated'], entry_byte_budget=max_bytes,

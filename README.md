@@ -483,3 +483,5 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; HumanSense/MCP lifecycle integration remains required.
 
 [HumanSense/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.
+
+[Call admission diagnostics](docs/call-admission.md): desired/reserved/dispatched routes, bounded denial outcomes, provider provenance and unresolved semantic coverage.
