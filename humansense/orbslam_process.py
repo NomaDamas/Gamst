@@ -82,7 +82,7 @@ class ORBSLAMProcess:
             sensor=frame.sensor
             seq=sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
             owner=(frame.subject_id,sensor.source_id,sensor.sensor_id,sensor.stream_epoch,
-                   sensor.calibration_id,sensor.coordinate_frame,sensor.capture_sequence is not None)
+                   sensor.calibration_id,sensor.coordinate_frame,sensor.channels,sensor.capture_sequence is not None)
             if self._last_owner==owner and self._last_capture is not None and (seq<=self._last_capture[0] or frame.timestamp_ms<=self._last_capture[1]):
                 raise ValueError('capture order must advance across session rotation')
             if self.attempts>=2**53-1:raise RuntimeError('request counter exhausted')
@@ -130,7 +130,7 @@ class ORBSLAMProcess:
             total_request_elapsed_ms=self.total_request_ms,
             completed_observations=self.completed,session_request_attempts=self.session_attempts,
             last_rotation_ms=self.rotation_ms,last_startup_ms=self.startup_ms,
-            pending_frames=int(self._active is not None),hidden_queue=0,
+            pending_operations=int(self._active is not None),hidden_queue=0,
             stop_reason=self.stop_reason,native_attempt_count_verified=False,
             continuous_coverage_verified=False,actual_cost=None)
 

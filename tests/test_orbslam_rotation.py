@@ -149,3 +149,17 @@ class Rotation(unittest.IsolatedAsyncioTestCase):
                     rows=human.store.latest_signals('local-user',0,timestamp())
                     self.assertFalse(any(r['timestamp_ms']==now+100 for r in rows))
                 finally:await streams.clear();await p.close()
+
+    async def test_channel_declaration_owner_change_inside_and_across_budget(self):
+        config=fixture.assets(self)
+        for budget in (1,3):
+            p=await ORBSLAMProcess.open(sys.executable,dict(config,max_frames=budget))
+            try:
+                await p.process(fixture.frame(10,2000))
+                f=fixture.frame(0,100);f=replace(f,sensor=replace(f.sensor,channels=('B','G','R')))
+                value=await p.process(f)
+                self.assertEqual(value['provenance']['capture_ms'],100)
+                self.assertEqual(value['provenance']['rotation']['request_attempt'],2)
+                self.assertEqual(value['provenance']['rotation']['session_number'],2 if budget==1 else 1)
+                self.assertEqual(value['provenance']['reset_count'],0 if budget==1 else 1)
+            finally:await p.close()
