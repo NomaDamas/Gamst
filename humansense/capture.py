@@ -32,6 +32,7 @@ class CaptureSession:
         self._errors: list[str] = []
         self._start_lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task | None = None
+        self._startup_task: asyncio.Task | None = None
         self._waiters = 0
         self._waiters_done = asyncio.Event()
         self._waiters_done.set()
@@ -56,7 +57,19 @@ class CaptureSession:
             if self._running:
                 return self
             self._cleanup_task = None
-            return await self._start()
+            # The session, not the caller, owns native startup. Cancelling a
+            # to_thread waiter cannot stop a constructor or recover its result.
+            self._startup_task = asyncio.create_task(self._start(), name="humansense-capture-startup")
+            try:
+                return await asyncio.shield(self._startup_task)
+            except BaseException:
+                cleanup = self._begin_cleanup()
+                try:
+                    await self._join_cleanup(cleanup)
+                except Exception:
+                    # Preserve the startup failure; cleanup errors remain in status.
+                    pass
+                raise
 
     async def _start(self):
         if not self.consent:
@@ -77,6 +90,8 @@ class CaptureSession:
                 self._camera = await asyncio.to_thread(cv2.VideoCapture, self.video)
                 if not self._camera.isOpened():
                     raise RuntimeError(f"Cannot open camera {self.video!r}")
+            if self._cleanup_task is not None:
+                raise RuntimeError("Capture startup interrupted by stop")
             if self.audio:
                 try:
                     import sounddevice as sd
@@ -85,10 +100,14 @@ class CaptureSession:
                 loop = asyncio.get_running_loop()
                 def callback(indata, frames, timing, status):
                     self._post_audio(loop, indata, str(status) if status else None)
-                self._mic = sd.InputStream(samplerate=self.sample_rate, channels=1,
+                self._mic = await asyncio.to_thread(sd.InputStream, samplerate=self.sample_rate, channels=1,
                                            dtype="float32", blocksize=int(self.sample_rate * .1),
                                            callback=callback)
+                if self._cleanup_task is not None:
+                    raise RuntimeError("Capture startup interrupted by stop")
                 await asyncio.to_thread(self._mic.start)
+            if self._cleanup_task is not None:
+                raise RuntimeError("Capture startup interrupted by stop")
             self._running = True
             self._paused = False
             if self._camera is not None:
@@ -99,8 +118,8 @@ class CaptureSession:
                 task.add_done_callback(self._task_done)
             return self
         except BaseException:
-            # Cancelled device startup must also release already-opened handles.
-            await self.stop()
+            # Public start owns failure cleanup. Cleanup may itself be awaiting
+            # this task, so startup must never join cleanup (a circular wait).
             raise
 
     def _task_done(self, task):
@@ -225,6 +244,14 @@ class CaptureSession:
         await self._join_cleanup(cleanup)
 
     async def _cleanup(self):
+        startup = self._startup_task
+        if startup is not None:
+            # Retain late constructor results and wait for native start before
+            # stop/close. The owned startup task is never cancelled by callers.
+            try:
+                await asyncio.shield(startup)
+            except BaseException:
+                pass
         tasks = tuple(self._tasks)
         for task in tasks:
             task.cancel()
