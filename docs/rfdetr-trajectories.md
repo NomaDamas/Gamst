@@ -21,7 +21,7 @@ worker = await ProcessProvider.open(existing_python, 'rfdetr.trajectories', {
     'device': 'cpu', 'camera_motion': 'stationary',
     'max_gap_ms': 1000, 'max_samples': 8,
 })
-streams = SensorStreams(human)
+streams = SensorStreams(human, max_packet_bytes=16*1024*1024)
 streams.register(worker.spec, lambda: worker)
 await streams.open('camera', 'rgb', [worker.spec.id])
 # Submit original InputFrame BGR pixels with capture timestamp, increasing
@@ -50,7 +50,10 @@ capability version. Fixed detector settings are threshold0.5, IoU0.3,
 ambiguity margin0.1 and max8objects. No association probability is calibrated.
 
 Every frame is copied before inference. Input is plain NumPy uint8 HWC BGR,
-16..4096 pixels per dimension, <=16MiB. Evidence SHA256 covers the domain tag
+16..4096 pixels per dimension, <=16MiB. The example explicitly raises the
+SensorStreams packet cap from its default4MiB to16MiB (1080p BGR is6,220,800B).
+Its default64MiB queue budget remains independently enforced; shared lanes and
+queue capacity consume that budget. Evidence SHA256 covers the domain tag
 `gamst.rfdetr.trajectory.uint8.HWC.BGR.v1` plus a NUL byte, three big-endian
 unsigned32-bit shape dimensions, and C-order BGR bytes. `evidence_verified=true`
 means this digest was computed on the copied inference input, not that model
@@ -58,8 +61,10 @@ labels or associations are correct. The application owns evidence retention and
 retrieval; the worker does not store images or expose them in Context.
 
 Outputs include current `detections`, observed path `objects`, and `geometry`.
-Each path retains original capture-time centroids/evidence references and adds
-current detector label/bbox/attributes. Detection score and association labels
+Each path retains original capture-time centroids/evidence references. Join its
+track_id to the current detections array for label/bbox/attributes; those fields
+are stored only once to keep worst-case escaped Unicode labels within the bounded
+Context payload. Detection score and association labels
 (new/matched/uncertain_new) are distinct from null association confidence.
 Positions and velocities remain normalized image units, not meters. See
 [trajectory semantics](image-trajectories.md) for observation/segment behavior.

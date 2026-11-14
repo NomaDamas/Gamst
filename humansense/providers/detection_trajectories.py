@@ -118,10 +118,6 @@ class RFDETRTrajectories:
         if not complete:
             self._paths.reset()
         paths = self._paths.process(replace(frame,data=structured))
-        by_id = {item['track_id']:item for item in detected['objects']}
-        for path in paths['objects']:
-            item = by_id[path['track_id']]
-            path.update(label=item['label'],location=item['location'],detection_attributes=item['attributes'])
         paths['geometry'].update(trajectory_status='observed' if complete else 'incomplete_detection_snapshot',
             detection_summary=detected['summary'],detector_version=self._detector.version,
             input_sha256=digest,evidence_verified=True,evidence_hash_format='gamst.rfdetr.trajectory.uint8.HWC.BGR.v1',

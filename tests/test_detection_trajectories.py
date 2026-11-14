@@ -45,8 +45,8 @@ class Pipeline(unittest.TestCase):
         self.assertAlmostEqual(obj['velocity_image_s'][0],1)
         self.assertEqual(obj['observations'][0]['evidence_sha256'],digest)
         self.assertIsNone(obj['observations'][1]['association_confidence'])
-        self.assertEqual(obj['detection_attributes']['score'],.9)
-        self.assertEqual(obj['detection_attributes']['association'],'matched')
+        self.assertEqual(second['detections'][0]['attributes']['score'],.9)
+        self.assertEqual(second['detections'][0]['attributes']['association'],'matched')
         self.assertEqual(obj['segment_id'],first['objects'][0]['segment_id'])
         self.assertEqual(b.received[0,0].tolist(),[30,20,10])
 
@@ -65,9 +65,23 @@ class Pipeline(unittest.TestCase):
         self.assertNotEqual(old,p.process(frame(4))['objects'][0]['segment_id'])
         p.reset();b.rows=((10,10,50,50,.9,1,'cup'),(30,10,70,50,.9,1,'cup'))
         p.process(frame());b.rows=((20,10,60,50,.9,1,'cup'),)
-        obj=p.process(frame(1))['objects'][0]
-        self.assertEqual(obj['detection_attributes']['association'],'uncertain_new')
+        result=p.process(frame(1));obj=result['objects'][0]
+        self.assertEqual(result['detections'][0]['attributes']['association'],'uncertain_new')
         self.assertIsNone(obj['velocity_image_s'])
+
+    def test_maximum_escaped_labels_and_full_history_stay_bounded(self):
+        b=detection.Backend();p=RFDETRTrajectories(b,version='v'*128,camera_motion='stationary')
+        b.rows=tuple((10.123+i,10.456,100.789+i,100.123,.987654321,i,chr(0x10000+i)*256) for i in range(8))
+        for i in range(8):
+            f=frame(i,2**53-8+i)
+            f=replace(f,data=np.zeros((511,1023,3),np.uint8),sensor=replace(f.sensor,
+                source_id='s'*128,sensor_id='i'*128,coordinate_frame='f'*128,
+                calibration_id='c'*128,stream_epoch='e'*128,channels=tuple('channel'+str(n) for n in range(64))))
+            result=p.process(f)
+            self.assertLessEqual(len(json.dumps(result,ensure_ascii=True).encode()),65536)
+        self.assertEqual([len(x['observations']) for x in result['objects']],[8]*8)
+        self.assertEqual(len(result['detections'][0]['label']),256)
+        self.assertNotIn('label',result['objects'][0])
 
     def test_unknown_motion_gap_owner_failure_and_copied_input(self):
         b=detection.Backend();p=RFDETRTrajectories(b,version='fixture')
