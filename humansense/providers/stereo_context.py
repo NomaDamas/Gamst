@@ -33,8 +33,10 @@ def configuration(config):
         if type(v) is not dict or set(v) != {'source_id','sensor_id','coordinate_frame'}:
             raise ValueError('exact source/sensor/optical-frame binding required')
         for value in v.values(): identifier(value)
-    if c['left_sensor'] == c['right_sensor']:
+    if tuple(c['left_sensor'][k] for k in ('source_id','sensor_id')) == tuple(c['right_sensor'][k] for k in ('source_id','sensor_id')):
         raise ValueError('distinct stereo sensors required')
+    if len({c['rectified_frame'],c['left_sensor']['coordinate_frame'],c['right_sensor']['coordinate_frame']}) != 3:
+        raise ValueError('distinct original-left, original-right and rectified coordinate names required')
     if type(c['max_skew_ms']) is not int or not 0 <= c['max_skew_ms'] <= 100:
         raise ValueError('explicit 0..100ms clock skew policy required')
     if type(c['calibration']) is not dict or 'calibration_id' not in c['calibration']:
@@ -192,6 +194,10 @@ class StereoMetricContext:
             tracker_version=self._detector.spec.version,objects=positions),
             sensor=replace(sensor,coordinate_frame=c['rectified_frame']))
         result = self._motion.process(metric_frame)
+        detections = {item['track_id']:item for item in detected['detections']}
+        for item in result['objects']:
+            observed = detections[item['track_id']]
+            item['detection'] = dict(label=observed['label'],**observed['attributes'])
         result['geometry'].update(complete_snapshot=complete and all(s['status']=='estimated' for s in support),
             detection_snapshot_complete=complete,physical_accuracy_verified=False,
             camera_stationarity_verified=False,object_center_of_mass=False)
@@ -200,6 +206,9 @@ class StereoMetricContext:
             calibration_sha256=self._geometry.calibration_sha256,opencv_version=self._geometry.runtime_version,
             detector_version=self._detector.spec.version,disparities=c['disparities'],block_size=c['block_size'],
             detector_input_sha256=detected['geometry']['input_sha256'],
+            rectification=dict(self._geometry.provenance(),
+                original_left_frame=c['left_sensor']['coordinate_frame'],
+                rectified_left_frame=c['rectified_frame']),
             support=support,rectified_coordinate_frame=c['rectified_frame'],
             evidence_storage='caller_owned',depth_units='m',calibration_verified=False)
         result = self.spec.validate(result)

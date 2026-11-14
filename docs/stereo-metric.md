@@ -48,6 +48,16 @@ pinhole convention. Moving rigs are unsupported: this profile has no ego-motion
 compensation. Updating calibration, image geometry or model requires a new
 provider/configuration identity.
 
+The original-left, original-right and rectified coordinate frame names must all
+be distinct. Results carry the actual `rectified_from_original_left_rotation`
+(OpenCV R1), left/right rectified projection matrices and rectified baseline in
+meters. R1 maps original-left 3D coordinates into the reported rectified-left
+frame; its transpose reverses that rotation. Projection matrices act on metric
+points in the common rectified coordinate system. MetricKinematics' identity
+transform is separately a rectified-left to rectified-left transform, not a
+claim that the original optical frame was unchanged. Detector labels/class
+scores remain explicitly separate from the depth/geometry estimates.
+
 The selected worker calls stereoRectify, initUndistortRectifyMap, remap,
 StereoSGBM.compute and reprojectImageTo3D. Fixed-point disparities are divided by
 16; invalid/zero disparity, invalid rectification ROIs, failed left/right

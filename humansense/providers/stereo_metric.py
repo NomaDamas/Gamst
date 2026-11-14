@@ -79,6 +79,7 @@ class StereoGeometry:
             c, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
         self.runtime_version = cv2.__version__
         self._q, self._r1 = q, r1
+        self._p1, self._p2 = p1, p2
         self._lock = threading.RLock()
         self._closed = False
 
@@ -130,6 +131,16 @@ class StereoGeometry:
                 raise RuntimeError('stereo geometry closed')
             return cv2.remap(self._image(mask), *self._maps[0], cv2.INTER_NEAREST,
                              borderMode=cv2.BORDER_CONSTANT) != 0
+
+    def provenance(self):
+        """Detached actual transforms; R1 maps original-left into rectified-left."""
+        with self._lock:
+            if self._closed:
+                raise RuntimeError('stereo geometry closed')
+            return dict(rectified_from_original_left_rotation=self._r1.tolist(),
+                        rectified_left_projection=self._p1.tolist(),
+                        rectified_right_projection=self._p2.tolist(),
+                        rectified_baseline_m=float(-self._p2[0,3]/self._p2[0,0]))
 
     def close(self):
         with self._lock:
