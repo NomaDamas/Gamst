@@ -6,6 +6,8 @@ from pathlib import Path
 import time
 import subprocess
 import sys
+import socket
+from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
@@ -24,14 +26,29 @@ class RecordingCrosscheck(unittest.IsolatedAsyncioTestCase):
     sdk = native4_tests.Native4Transport.sdk
     originals = native4_tests.Native4Transport.originals
 
-    async def collect(self, visual=False, denied=False, cancelled=False):
+    async def collect(self, visual=False, denied=False, cancelled=False, connect_failure=False, incomplete=False, cancel_before_entry=False):
         queued = await self.sdk(visual=visual)
+        if incomplete:
+            original_close=self.observer.close
+            async def incomplete_close(*args,**kwargs):
+                return await original_close(cleanup_finished=False)
+            self.observer.close=incomplete_close
+        unavailable=None
+        if connect_failure:
+            unavailable=socket.socket(); unavailable.bind(('127.0.0.1',0))
+            self.client._port=unavailable.getsockname()[1]; self.client._timeout=.05
         if cancelled: self.hold = asyncio.Event()
         task = asyncio.create_task(self.adapter.execute(*queued, 'original question',
             maximum_charge=None if denied else 5, evaluation_scope=self.scope))
         if cancelled:
             await asyncio.wait_for(self.entered.wait(), 3); task.cancel()
             with self.assertRaises(asyncio.CancelledError): await task
+        elif cancel_before_entry:
+            with self.assertRaises(asyncio.CancelledError): await task
+        elif connect_failure:
+            try:
+                with self.assertRaises((ValueError,TimeoutError)): await task
+            finally: unavailable.close()
         else: await task
         self.index, _ = await self.originals()
         self.root = Path(self.tmp.name).resolve(); self.transport = self.sink.directory
@@ -153,3 +170,43 @@ class RecordingCrosscheck(unittest.IsolatedAsyncioTestCase):
             for output in (original,original/'nested-crosscheck'):
                 with self.assertRaisesRegex(ValueError,'outside original'): self.persist(output)
                 self.assertEqual(before,{p.relative_to(original).as_posix() for p in original.rglob('*')})
+
+    async def test_original_owner_scope_binding_and_context_must_match(self):
+        await self.collect(); original=deepcopy(self.selection)
+        for change in ('scope','binding','context','model','role'):
+            self.selection=deepcopy(original)
+            if change=='scope':self.selection['owner']['scope_index']=0
+            elif change=='binding':self.selection['owner']['binding_index']=1
+            elif change=='context':self.selection['owner']['context']['nonce']='f'*64
+            elif change=='model':self.selection['model_revision']='other-model'
+            else:self.selection['role']='strong_vlm'
+            with self.assertRaises(ValueError):self.check()
+
+    async def test_actual_incomplete_close_cannot_certify_complete_lane(self):
+        await self.collect(incomplete=True); report=self.check()
+        self.assertEqual(self.index.terminal['state'],'incomplete')
+        self.assertFalse(report['local_binding_complete'])
+        self.assertTrue(report['native_lane']['unobserved_entry_inventory_possible'])
+        self.assertEqual(report['local_counts']['native_entries_matched'],1)
+
+    async def test_actual_connection_failure_has_entry_without_send(self):
+        await self.collect(connect_failure=True); report=self.check()
+        self.assertEqual(report['local_counts']['native_entries_matched'],1)
+        self.assertEqual(report['local_counts']['possible_sends'],0)
+        self.assertEqual(report['local_counts']['responses_observed'],0)
+        self.assertEqual(report['local_counts']['error']+report['local_counts']['timeout'],1)
+        self.assertEqual(report['native_lane']['unknown_liability_count'],1)
+
+    async def test_cancel_after_dispatch_before_entry_retains_dispatch_liability(self):
+        async def cancel_before_entry(ticket,callback):
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+        with patch('benchmarks.recording_evaluation._Call.invoke_bound',new=cancel_before_entry):
+            await self.collect(cancel_before_entry=True)
+        report=self.check()
+        self.assertEqual(report['local_counts']['native_entries_matched'],0)
+        self.assertEqual(report['local_counts']['possible_sends'],0)
+        self.assertEqual(report['native_lane']['unknown_dispatch_liability_count'],1)
+        self.assertEqual(report['native_lane']['counts']['released_dispatched'],1)
+        self.assertEqual(report['native_lane']['unknown_liability_count'],0)
+        self.assertFalse(report['request_costs_verified'])
