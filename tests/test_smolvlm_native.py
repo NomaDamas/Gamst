@@ -130,6 +130,38 @@ class Native(unittest.TestCase):
                 finally:await worker.close()
                 self.assertIsNotNone(children[0].returncode)
             asyncio.run(managed())
+            async def on_demand():
+                from humansense import SmolVLMCalls
+                from humansense.capabilities import CapabilitySpec,OutputField
+                from humansense.call_policy import CallPolicy
+                from humansense.call_controller import CallController
+                from humansense.call_budget import CallBudget
+                real_spawn=asyncio.create_subprocess_exec;children=[]
+                async def spawn(*args,**kwargs):
+                    child=await real_spawn(sys.executable,'-u','-c',code,**kwargs);children.append(child);return child
+                async with HumanSense(consent=True) as human:
+                    thin=CapabilitySpec('fixture.detect','fixture.objects','video','fixture','1',(OutputField('count','integer'),),'frame',freshness_ms=1000)
+                    human.register_capability(thin)
+                    controller=CallController(policy=CallPolicy(mode='sentinel'),budget=CallBudget(unit='fixture',pricing_revision='1',ceiling=2))
+                    human.register_call_controller('native',controller)
+                    with patch('asyncio.create_subprocess_exec',spawn):
+                        adapter=await SmolVLMCalls.open(human,'native',sys.executable,{k:v for k,v in worker_config.items() if k!='window_frames'},inference_timeout=60)
+                    async with adapter:
+                        ts=timestamp();sensor=SensorMetadata('camera','video',0,coordinate_frame='pixels',stream_epoch='native-1')
+                        record=await human.push_observation(thin.id,{'count':1},sensor=sensor,timestamp_ms=ts)
+                        source=controller.open_source(record,now_ms=timestamp())
+                        frame=InputFrame(images[0].copy(),'video',ts,sensor=sensor)
+                        ref=dict(source_id='camera',sensor_id='video',stream_epoch='native-1',capture_ms=ts,sha256=hashlib.sha256(frame.data.tobytes()).hexdigest())
+                        queued=controller.submit(source,record,sequence=0,now_ms=timestamp(),visual_reference=ref,unknown_candidate=True)
+                        result=await adapter.execute(queued['request_id'],record,frame,maximum_charge=1)
+                        self.assertIn(result['status'],('published','discarded'))
+                        self.assertEqual(controller.snapshot()['budget']['dispatched'],1)
+                        self.assertEqual(controller.snapshot()['budget']['reserved_liability'],1)
+                        if result['status']=='published':
+                            self.assertEqual(result['observation']['observation']['value']['model']['checkpoint_sha256'],worker_config['checkpoint_sha256'])
+                            self.assertFalse(result['observation']['observation']['value']['semantic']['quality_validated'])
+                self.assertIsNotNone(children[0].returncode)
+            asyncio.run(on_demand())
             # The same strict loader used for production rejects missing/nonfinite tensors.
             bad=model.state_dict();bad.pop(next(iter(bad)));save_file(bad,str(path))
             with self.assertRaises(ValueError):load_state(path,model,torch,safe_open,'float32')
