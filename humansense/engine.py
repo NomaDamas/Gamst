@@ -38,7 +38,7 @@ class HumanSense:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
                  capabilities=None, sensor_inference_interval_ms=0,
-                 max_records=5000, max_payload_bytes=32*1024*1024):
+                 max_records=5000, max_payload_bytes=32*1024*1024, evaluation_observer=None):
         if not isinstance(consent, bool):
             raise TypeError("consent must be an explicit boolean")
         if save_raw_media:
@@ -49,6 +49,8 @@ class HumanSense:
         if capabilities is not None and (isinstance(capabilities, str) or set(capabilities)-supported):
             raise ValueError("supported capabilities: conversation, behavior, consistency")
         self.capabilities = tuple(capabilities or ("conversation", "behavior", "consistency"))
+        self._evaluation_observers=[]
+        if evaluation_observer is not None:self._register_evaluation_observer(evaluation_observer)
         self.consent = bool(consent)
         self.paused = False
         self.closed = False
@@ -75,6 +77,20 @@ class HumanSense:
         self._sensor_refresh = {}
         self._call_controllers = {}
         self._separation_media = None
+
+    def _register_evaluation_observer(self, observer):
+        if not callable(getattr(observer,"invalidate",None)):
+            raise TypeError("evaluation observer requires callable invalidate")
+        if any(value is observer for value in self._evaluation_observers):return
+        if len(self._evaluation_observers)>=32:
+            raise ValueError("at most 32 distinct evaluation observers per runtime")
+        self._evaluation_observers.append(observer)
+
+    def _invalidate_evaluation(self, reason, subject_id=None):
+        # Privacy cleanup must run even when the external accounting sink fails.
+        for observer in self._evaluation_observers:
+            try:observer.invalidate(reason, subject_id=subject_id)
+            except BaseException:pass
 
     def enable_separation_media(self, *, subject_id='local-user', source_id, sensor_id,
                                 ttl_ms=30000, capacity=8, max_bytes=16*1024*1024):
@@ -110,6 +126,7 @@ class HumanSense:
         prior = getattr(self, '_consent', False)
         self._consent = value
         if prior and not value:
+            self._invalidate_evaluation("consent_revoked")
             self._generation += 1
             self._clear_separation_media()
             for controller in getattr(self, '_call_controllers', {}).values():
@@ -853,6 +870,7 @@ class HumanSense:
                 "records": await self.get_history(subject_id, start_ms=start_ms, end_ms=end_ms, limit=100_000)}
 
     async def pause(self):
+        self._invalidate_evaluation("pause")
         self.paused = True
         self._analysis_results.clear()
         self._generation += 1
@@ -869,6 +887,7 @@ class HumanSense:
         return {"paused": False}
 
     async def delete_data(self, subject_id=None):
+        self._invalidate_evaluation("delete", subject_id)
         from .streams import _finish
         cleanup = asyncio.create_task(self._delete_data(subject_id))
         try:
@@ -958,6 +977,7 @@ class HumanSense:
 
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
+        self._invalidate_evaluation("reset")
         self._generation += 1
         self._clear_separation_media()
         await self._reset_plugins()
@@ -967,6 +987,7 @@ class HumanSense:
         from .streams import _finish
         task = getattr(self, '_close_task', None)
         if task is None:
+            self._invalidate_evaluation("close")
             task = self._close_task = asyncio.create_task(self._close())
         try:
             await asyncio.shield(task)
