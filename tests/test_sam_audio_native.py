@@ -99,6 +99,10 @@ class TensorPolicies(unittest.TestCase):
                       {'x':t.ones(2,dtype=t.float64)},{'x':t.tensor([1,float('nan')])}):
             with self.assertRaises(ValueError): native._state(state,expected,t)
         with self.assertRaises(ValueError): native._plan(t.nn.Linear(100000,100000,device='meta'),t)
+        for rates in ([12,10,8,2],[1,1920]):
+            native._codec_bounds(types.SimpleNamespace(encoder_rates=[1920],decoder_rates=rates,sample_rate=48000),1920)
+        for rates in ([10]*16,[12,10,8,3],[],[True,1920],[-1,-1920]):
+            with self.assertRaises(ValueError): native._codec_bounds(types.SimpleNamespace(encoder_rates=[1920],decoder_rates=rates,sample_rate=48000),1920)
         for config in ({'num_layers':10000000},{'n_heads':1000000},{'dimension':10000001}):
             with self.assertRaises(ValueError): native._config_bounds(config)
 
@@ -303,7 +307,7 @@ class ConstructorFixture(unittest.TestCase):
         def tokenizer(root,**kwargs):
             calls.append((root,kwargs));self.assertEqual((Path(root)/'config.json').read_bytes(),b'{}');return FixtureTokenizer()
         transformer.AutoTokenizer=types.SimpleNamespace(from_pretrained=tokenizer)
-        configmod=types.ModuleType('sam_audio.model.config');configmod.SAMAudioConfig=lambda **config:config
+        configmod=types.ModuleType('sam_audio.model.config');configmod.SAMAudioConfig=lambda **config:types.SimpleNamespace(audio_codec=types.SimpleNamespace(encoder_rates=[2,8,10,12],decoder_rates=[12,10,8,2],sample_rate=48000))
         textmod=types.ModuleType('sam_audio.model.text_encoder');textmod.T5TextEncoder=EncoderBase
         processormod=types.ModuleType('sam_audio.processor');processormod.SAMAudioProcessor=lambda *args:FixtureProcessor()
         package=types.ModuleType('sam_audio');package.__path__=[]

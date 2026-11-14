@@ -109,6 +109,25 @@ def _config_bounds(value, depth=0):
         raise ValueError('configuration scalar exceeds allocation planning bound')
 
 
+def _codec_bounds(codec, hop):
+    # Graph bytes alone do not bound decoder activation length. Validate the
+    # actual pinned config values/defaults before creating either graph.
+    for name in ('encoder_rates','decoder_rates'):
+        rates=getattr(codec,name)
+        if type(rates) not in (list,tuple) or not 1 <= len(rates) <= 16:
+            raise ValueError('codec rate list exceeds SDK bound')
+        product=1
+        for rate in rates:
+            if type(rate) is not int or not 1 <= rate <= 48000:
+                raise ValueError('positive bounded codec rates required')
+            product *= rate
+            if product > 48000: raise ValueError('codec up/downsampling exceeds SDK bound')
+        if product != hop:
+            raise ValueError('codec encoder/decoder products must equal verified hop')
+    if codec.sample_rate != 48000:
+        raise ValueError('actual codec must use48kHz')
+
+
 def _plan(model, torch):
     state = model.state_dict()
     if not state or len(state) > MAX_TENSORS:
@@ -287,16 +306,20 @@ class SAMAudioNative:
                         self.pad_mode, self.max_length = cfg.pad_mode, cfg.max_length
                         self.tokenizer = None
                 effective = report['effective_config']
+                def graph():
+                    cfg=SAMAudioConfig(**deepcopy(effective))
+                    _codec_bounds(cfg.audio_codec,report['hop_length'])
+                    return upstream.SAMAudio(cfg)
                 with patch.object(upstream, 'T5TextEncoder', LocalT5):
                     with torch.device('meta'):
-                        planned = upstream.SAMAudio(SAMAudioConfig(**deepcopy(effective)))
+                        planned = graph()
                         expected = _plan(planned, torch)
                     del planned
                     # Reconstruct instead of to_empty: nonpersistent positional
                     # buffers must retain official initialized values.
                     with torch.device('cpu'), torch.random.fork_rng(devices=[]):
                         torch.random.default_generator.manual_seed(config['random_seed'])
-                        model = upstream.SAMAudio(SAMAudioConfig(**deepcopy(effective))).float().cpu().eval()
+                        model = graph().float().cpu().eval()
                 if _plan(model, torch) != expected or model.sample_rate != 48000 or model.audio_codec.hop_length != report['hop_length']:
                     raise ValueError('constructed graph differs from verified plan')
                 core = {k:v for k,v in expected.items() if not k.startswith('text_encoder.')}

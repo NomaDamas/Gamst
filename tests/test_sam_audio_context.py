@@ -181,11 +181,12 @@ class OwnedContext(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         import os
         code='''
-import os,time
+import os,time,signal
 from pathlib import Path
 from humansense import provider_worker as w
 from humansense.providers.sam_audio_native import SAMAudioNative
 def fixture_load(cls,config):
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
     (Path(os.environ['GAMST_SAM_TOKENIZER_DIR'])/'fixture-consumed').write_bytes(b'fixture tokenizer snapshot')
     time.sleep(30)
 SAMAudioNative.from_local=classmethod(fixture_load)
@@ -213,4 +214,5 @@ w.main()
                     with self.assertRaises(asyncio.CancelledError if cancel else asyncio.TimeoutError): await task
                 self.assertTrue(paths and all(not path.exists() for path in paths))
                 self.assertTrue(children and all(child.returncode is not None for child in children))
+                if cancel: self.assertEqual(children[0].returncode,-9)
                 self.assertEqual(owner._store.bytes,0)
