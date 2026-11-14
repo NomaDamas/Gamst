@@ -345,6 +345,54 @@ class StreamReconciliation(unittest.IsolatedAsyncioTestCase):
         self.changed_lines(before)
         with self.assertRaisesRegex(ValueError,'per-line billed/rate discrepancy'):self.joined()
 
+    async def test_shared_unit_conversion_cannot_be_disguised_by_component_price(self):
+        before=copy.deepcopy(self.ledger['entries'])
+        self.stream['rates']={
+            'request':dict(provider='remote',revision='frozen-v1',unit='subattempt',per_unit='0.001'),
+            'startup':dict(provider='remote',revision='frozen-v1',unit='subattempt',per_unit='0.01')}
+        for component in self.stream['components']:
+            component.update(unit='subattempt',source_unit='subattempt',
+                             rate_id='startup' if component['id']=='startup' else 'request')
+        for mapping in self.protocol['rate_map']:
+            mapping['atomic_quantity_per_comparison_unit']['numerator']=100 if mapping['component_id']=='startup' else 1000
+        for entry in self.ledger['entries']:
+            factor=100 if entry['component_id']=='startup' else 1000
+            entry['quantity']*=factor;entry['source_quantity']['numerator']*=factor
+        self.changed_lines(before)
+        # Every individual rate equation and billed line reconciles, but the
+        # shared physical unit pair cannot mean both 100 and 1000 atomic units.
+        for reverse in (False,True):
+            if reverse:self.protocol['rate_map'].reverse();self.refresh()
+            with self.subTest(reverse=reverse),self.assertRaisesRegex(ValueError,'identical unit endpoints'):
+                self.joined()
+        # A genuinely distinct frozen source unit can have its own scale.
+        self.stream['rates']['startup']['unit']='deci-subattempt'
+        next(c for c in self.stream['components'] if c['id']=='startup').update(
+            unit='deci-subattempt',source_unit='deci-subattempt')
+        self.refresh()
+        result=self.joined()
+        self.assertTrue(result['declared_reconciliation_complete'])
+        self.assertEqual(result['canonical_stream_costs']['A']['known_monetary_atomic'],7)
+        self.assertTrue(all(row['cost_quantities']=={'request':1} for row in result['rows']))
+
+    async def test_exact_quantity_and_currency_conversions_preserve_complete_join(self):
+        before=copy.deepcopy(self.ledger['entries'])
+        # 100 source quantity units per attempt and 100 currency atoms per USD.
+        self.stream['rates']['request'].update(unit='centiattempt',per_unit='1')
+        for component in self.stream['components']:
+            component.update(unit='centiattempt',source_unit='centiattempt')
+        for mapping in self.protocol['rate_map']:
+            mapping['atomic_quantity_per_comparison_unit']['numerator']=100
+        self.protocol['currency_atomic_per_comparison_unit']['numerator']=100
+        for entry in self.ledger['entries']:
+            entry['quantity']*=100;entry['source_quantity']['numerator']*=100;entry['billed_amount']*=100
+        self.changed_lines(before)
+        result=self.joined()
+        self.assertTrue(result['declared_reconciliation_complete'])
+        self.assertEqual(result['canonical_stream_costs']['A']['known_monetary_atomic'],700)
+        self.assertTrue(all(row['cost_quantities']=={'request':1} for row in result['rows']))
+        self.assertFalse(result['whole_pipeline_cost_verified'])
+
     async def test_rate_map_currency_proxy_and_frozen_lane_contracts(self):
         for mode in ('missing_rate','unknown_rate','wrong_conversion','wrong_currency','forbidden_nonattempt'):
             protocol=copy.deepcopy(self.protocol);stream=copy.deepcopy(self.stream)

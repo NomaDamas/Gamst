@@ -65,7 +65,7 @@ def _protocol(plan, spec, stream, allocation, protocol, bindings):
     mapping = _unique(protocol['rate_map'], ('component_id',), 'rate map')
     if set(k[0] for k in mapping) != {cid for cid,c in components.items() if c['kind'] == 'monetary'}:
         raise ValueError('exactly one mapping per monetary component required')
-    rates, covered = {}, set()
+    rates, covered, conversions = {}, set(), {}
     for (cid,), item in mapping.items():
         _keys(item, ('component_id','comparison_rate_id','atomic_quantity_per_comparison_unit'), 'rate mapping')
         rid = item['comparison_rate_id']
@@ -75,6 +75,11 @@ def _protocol(plan, spec, stream, allocation, protocol, bindings):
         source = stream['rates'][components[cid]['rate_id']]; target = card[rid]
         if (source['provider'], source['revision']) != (target['provider'], target['revision']):
             raise ValueError('source provider/revision must match comparison rate')
+        # A physical unit conversion cannot vary with component prices.
+        endpoint = (source['provider'], source['revision'], source['unit'], target['unit'])
+        if endpoint in conversions and conversions[endpoint] != q:
+            raise ValueError('conflicting quantity conversion for identical unit endpoints')
+        conversions[endpoint] = q
         # Both unit names are already frozen at the map endpoints; conversion is explicit.
         if source['unit'] == target['unit'] and q != 1:
             raise ValueError('identical units require identity conversion')

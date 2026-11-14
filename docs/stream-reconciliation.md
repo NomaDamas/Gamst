@@ -52,7 +52,9 @@ whole_stream_cost_policy: {
 Every monetary component maps once, and every comparison rate is covered.
 Currency names, provider and revision must match. Positive reduced quantity and
 currency conversion ratios relate the frozen unit names; identical unit names
-require identity conversion. Source atomic rate × quantity scale must equal
+require identity conversion. Reused provider/revision/source-unit/target-unit
+endpoints must share one quantity conversion, even when component prices differ.
+Distinct source unit names may have distinct explicitly frozen scales. Source atomic rate × quantity scale must equal
 comparison rate × currency scale exactly. Required proxy components refuse
 numeric reconciliation; a proxy cannot become a zero monetary cost.
 
