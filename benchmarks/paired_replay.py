@@ -43,6 +43,26 @@ def _artifact(path, digest):
     if h.hexdigest()!=digest: raise ValueError('execution artifact hash mismatch: '+path)
 
 
+def validate_command(command):
+    _keys(command,('argv','cwd','artifacts','environment'),'command')
+    argv=command['argv']
+    if (type(argv) is not list or not 1<=len(argv)<=64 or
+            any(type(a) is not str or not a or len(a)>4096 or '\0' in a for a in argv)):
+        raise ValueError('argv must contain 1..64 bounded strings')
+    if not Path(argv[0]).is_absolute(): raise ValueError('executable must be absolute')
+    if type(command['cwd']) is not str or not Path(command['cwd']).is_absolute() or not Path(command['cwd']).is_dir():
+        raise ValueError('cwd must be an absolute existing directory')
+    artifacts=command['artifacts']
+    if type(artifacts) is not dict or not 1<=len(artifacts)<=256 or argv[0] not in artifacts:
+        raise ValueError('hash all declared execution artifacts including executable')
+    for path,digest in artifacts.items(): _artifact(path,digest)
+    env=command['environment']
+    if (type(env) is not dict or len(env)>64 or
+            any(type(k) is not str or not k or len(k)>128 or '=' in k or '\0' in k or
+                type(v) is not str or len(v)>4096 or '\0' in v for k,v in env.items())):
+        raise ValueError('invalid explicit environment')
+
+
 def validate_collection(plan, inputs, expected_plan_sha256):
     _,tasks,_,_=validate_plan(plan,expected_plan_sha256=expected_plan_sha256)
     runner=plan.get('runner')
@@ -53,24 +73,7 @@ def validate_collection(plan, inputs, expected_plan_sha256):
         raise ValueError('runner timeout_ms must be 1..3600000')
     if runner['order']!='alternating': raise ValueError('runner order must be alternating')
     _keys(runner['commands'],('baseline','candidate'),'commands')
-    for command in runner['commands'].values():
-        _keys(command,('argv','cwd','artifacts','environment'),'command')
-        argv=command['argv']
-        if (type(argv) is not list or not 1<=len(argv)<=64 or
-                any(type(a) is not str or not a or len(a)>4096 or '\0' in a for a in argv)):
-            raise ValueError('argv must contain 1..64 bounded strings')
-        if not Path(argv[0]).is_absolute(): raise ValueError('executable must be absolute')
-        if type(command['cwd']) is not str or not Path(command['cwd']).is_absolute() or not Path(command['cwd']).is_dir():
-            raise ValueError('cwd must be an absolute existing directory')
-        artifacts=command['artifacts']
-        if type(artifacts) is not dict or not 1<=len(artifacts)<=256 or argv[0] not in artifacts:
-            raise ValueError('hash all declared execution artifacts including executable')
-        for path,digest in artifacts.items(): _artifact(path,digest)
-        env=command['environment']
-        if (type(env) is not dict or len(env)>64 or
-                any(type(k) is not str or not k or len(k)>128 or '=' in k or '\0' in k or
-                    type(v) is not str or len(v)>4096 or '\0' in v for k,v in env.items())):
-            raise ValueError('invalid explicit environment')
+    for command in runner['commands'].values(): validate_command(command)
     if type(inputs) is not list or len(inputs)!=len(tasks):
         raise ValueError('supply exactly one input per frozen task')
     if len(_encoded(inputs))>MAX_INPUT_BYTES: raise ValueError('recorded input package exceeds 16 MiB')
@@ -136,13 +139,17 @@ async def _finish_owned(task):
 
 async def _execute(command, request, timeout_ms):
     started=time.perf_counter_ns()
-    proc=None; spawn=None; jobs=[]; output=b''; error=b''; response=None
+    proc=None; spawn=None; collection=None; jobs=[]; output=b''; error=b''; response=None
     status='error'; diagnostic=None; answer_ready_ms=None
     try:
         spawn=asyncio.create_task(asyncio.create_subprocess_exec(*command['argv'],cwd=command['cwd'],
             env=command['environment'],stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True))
-        proc=await asyncio.wait_for(asyncio.shield(spawn),timeout_ms/1000)
+        # Preserve caller cancellation when completion occurs in the same loop
+        # turn (wait_for can lose it on Python3.10). Spawn remains owned.
+        done,_=await asyncio.wait({spawn},timeout=timeout_ms/1000)
+        if not done: raise asyncio.TimeoutError()
+        proc=spawn.result()
         async def send():
             proc.stdin.write(_encoded(request)+b'\n')
             await proc.stdin.drain(); proc.stdin.close()
@@ -177,7 +184,11 @@ async def _execute(command, request, timeout_ms):
               asyncio.create_task(_drain(proc.stderr,MAX_STDERR_BYTES)),asyncio.create_task(proc.wait())]
         async def collect(): return await asyncio.gather(*jobs)
         remaining=max(0.,timeout_ms/1000-(time.perf_counter_ns()-started)/1e9)
-        results=await asyncio.wait_for(collect(),remaining)
+        if remaining<=0: raise asyncio.TimeoutError()
+        collection=asyncio.create_task(collect())
+        done,_=await asyncio.wait({collection},timeout=remaining)
+        if not done: raise asyncio.TimeoutError()
+        results=collection.result()
         error=results[2]
         status=response['status'] if proc.returncode==0 else 'error'
         if proc.returncode!=0: diagnostic='nonzero_exit'
@@ -195,13 +206,18 @@ async def _execute(command, request, timeout_ms):
             if proc is None and spawn is not None:
                 try: proc=await spawn
                 except Exception: pass
-            if proc is not None:
-                # Every invocation owns its group, including descendants with
-                # detached stdio after a successful direct-child exit.
-                await _stop_owned(proc)
-            for job in jobs:
-                if not job.done(): job.cancel()
-            if jobs: await asyncio.gather(*jobs,return_exceptions=True)
+            try:
+                if proc is not None:
+                    # Every invocation owns its group, including descendants with
+                    # detached stdio after a successful direct-child exit.
+                    await _stop_owned(proc)
+            finally:
+                # Retrieve every owned task even if process-group cleanup fails.
+                if collection is not None and not collection.done(): collection.cancel()
+                for job in jobs:
+                    if not job.done(): job.cancel()
+                owned=jobs+([collection] if collection is not None else [])
+                if owned: await asyncio.gather(*owned,return_exceptions=True)
         cleanup_task=asyncio.create_task(cleanup())
         try:
             await asyncio.shield(cleanup_task)
