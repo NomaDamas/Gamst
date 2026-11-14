@@ -45,7 +45,8 @@ The selected environment must already have the existing validated RF-DETR
 does not introduce a new model, checkpoint format or quality validation.
 Configuration is exact: path/hash required; device cpu/cuda/mps, camera_motion
 unknown/stationary, max_gap_ms1..10000 and max_samples2..8 are optional. Defaults
-are cpu, unknown,1000,8. Configuration and checkpoint/runtime version bind the
+are cpu, unknown,1000,8. Optional `event_rules` enables [bounded image event candidates](image-events.md).
+Configuration and checkpoint/runtime version bind the
 capability version. Fixed detector settings are threshold0.5, IoU0.3,
 ambiguity margin0.1 and max8objects. No association probability is calibrated.
 

@@ -13,7 +13,7 @@ from .trajectories import ImageTrajectories
 
 
 def configuration(config):
-    keys = {'path','sha256','device','camera_motion','max_gap_ms','max_samples'}
+    keys = {'path','sha256','device','camera_motion','max_gap_ms','max_samples','event_rules'}
     if (type(config) is not dict or not {'path','sha256'} <= set(config) or set(config)-keys
             or type(config['path']) is not str or not config['path']
             or type(config['sha256']) is not str or re.fullmatch('[0-9a-f]{64}',config['sha256']) is None):
@@ -28,22 +28,25 @@ def configuration(config):
 class RFDETRTrajectories:
     """One serialized pixel stream; owns detector and trajectory lifecycle."""
     @staticmethod
-    def capability(version, *, device='cpu', camera_motion='unknown', max_gap_ms=1000, max_samples=8):
+    def capability(version, *, device='cpu', camera_motion='unknown', max_gap_ms=1000, max_samples=8, event_rules=None):
         identifier(version)
         if device not in ('cpu','cuda','mps') or camera_motion not in ('unknown','stationary'):
             raise ValueError('declare supported device and unknown/stationary camera motion')
-        ImageTrajectories(max_gap_ms=max_gap_ms,max_samples=max_samples)
-        digest = hashlib.sha256(json.dumps([version,device,camera_motion,max_gap_ms,max_samples]).encode()).hexdigest()
+        paths = ImageTrajectories(max_gap_ms=max_gap_ms,max_samples=max_samples,event_rules=event_rules)
+        options = [version,device,camera_motion,max_gap_ms,max_samples]
+        if paths._rules is not None: options.append(paths._rules.describe())
+        digest = hashlib.sha256(json.dumps(options).encode()).hexdigest()
         return CapabilitySpec('vision.rfdetr.trajectories','vision.trajectories','video',
             'gamst.rfdetr.trajectories','1.'+digest,
-            (OutputField('objects','array'),OutputField('geometry','object'),OutputField('detections','array')),
+            (OutputField('objects','array'),OutputField('geometry','object'),OutputField('detections','array')) +
+            (() if event_rules is None else (OutputField('events','array'),OutputField('event_summary','object'))),
             'frame',stateful=True,reset_on_gap=True,freshness_ms=max_gap_ms,interpretation='estimate',
             devices=('cpu','cuda','mps'),sensor_requirements=('uint8-bgr-camera','declared-camera-motion'),license='Apache-2.0')
 
-    def __init__(self, predictor, *, version, device='cpu', camera_motion='unknown', max_gap_ms=1000, max_samples=8):
-        self.spec = self.capability(version,device=device,camera_motion=camera_motion,max_gap_ms=max_gap_ms,max_samples=max_samples)
+    def __init__(self, predictor, *, version, device='cpu', camera_motion='unknown', max_gap_ms=1000, max_samples=8, event_rules=None):
+        self.spec = self.capability(version,device=device,camera_motion=camera_motion,max_gap_ms=max_gap_ms,max_samples=max_samples,event_rules=event_rules)
         self._detector = RFDETRObjects(predictor,version=version,max_objects=8,max_age_ms=max_gap_ms)
-        self._paths = ImageTrajectories(max_gap_ms=max_gap_ms,max_samples=max_samples)
+        self._paths = ImageTrajectories(max_gap_ms=max_gap_ms,max_samples=max_samples,event_rules=event_rules)
         self._motion,self._gap = camera_motion,max_gap_ms
         self._lock = threading.RLock()
         self._closed = False
@@ -126,6 +129,8 @@ class RFDETRTrajectories:
             sequence_kind='capture_sequence' if sensor.capture_sequence is not None else 'sequence')
         # The empty fallback is not a claim of complete scene coverage.
         paths['geometry']['complete_snapshot'] = complete
+        if 'event_summary' in paths:
+            paths['event_summary']['input_snapshot_complete'] = complete
         result = self.spec.validate(dict(paths,detections=detected['objects']))
         if not complete:
             self.reset()
