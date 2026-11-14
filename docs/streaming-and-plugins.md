@@ -235,10 +235,18 @@ camera I/O lock keeps release serialized with an already-running read.
 A restart joins previous cleanup and lets existing completion waiters report
 their errors before acquiring new handles or clearing old errors. Successful cleanup permits restart; failed release/reset prevents reuse
 of the same session and its error remains observable. Construct a new session
-only after the application has resolved the underlying device failure. Do not
-race fresh device startup against stop/pause; in-flight native startup handle
-ownership is tracked separately in [#213](https://github.com/NomaDamas/Gamst/issues/213). No physical capture
-quality or platform driver guarantee follows from the fake-device tests.
+only after the application has resolved the underlying device failure.
+
+Startup retains ownership of threaded camera/microphone constructors and native
+microphone start until they finish. Cancelling `start()` drains startup and
+release before raising `CancelledError`, including repeated cancellation. A
+concurrent `stop()` prevents that startup from activating capture, joins late
+handles, and causes its `start()` caller to receive a startup-interrupted error.
+A caller cancelled while queued behind another `start()` does not stop that
+other caller's generation. Native startup has no guaranteed completion deadline.
+Await `start()` before using `wait()`, `pause()`, or `resume()`; only concurrent
+startup cancellation/stop is supported. No physical capture quality or platform
+driver guarantee follows from the fake-device tests.
 
 Call lifecycle methods from the application owner, not inside capture delivery
 or cleanup/reset callbacks. Restart from either owned task is rejected. An owned task cannot join itself: `wait()` rejects that use, and

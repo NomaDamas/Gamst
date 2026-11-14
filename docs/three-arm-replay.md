@@ -96,3 +96,7 @@ The full join/attempt/receipt requirements remain in
 in[#206](https://github.com/NomaDamas/Gamst/issues/206), real held-out evidence in
 [#207](https://github.com/NomaDamas/Gamst/issues/207). This collector slice is
 [#211](https://github.com/NomaDamas/Gamst/issues/211).
+
+The original artifacts can now be joined to externally frozen assessments with
+[the three-arm evidence join](three-arm-evidence.md). This preserves A/B/C source
+lineage and retains incomplete actual acceptance.
