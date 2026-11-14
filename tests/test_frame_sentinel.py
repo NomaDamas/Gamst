@@ -37,7 +37,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
         return replace(f,sensor=replace(f.sensor,stream_epoch='camera-epoch',capture_sequence=index),**changes)
     async def open(self,h,**options):
         f=self.frame()
-        settings=dict(maximum_charge=2,interval_ms=30,deadline_tolerance_ms=29);settings.update(options)
+        settings=dict(maximum_charge=2,interval_ms=100,deadline_tolerance_ms=99);settings.update(options)
         return await FreshFrameSentinel.open(h,'audit','main',sys.executable,CONFIG,sensor=f.sensor,
             frame_shape=f.data.shape,**settings)
     async def until(self,predicate,timeout=5):
@@ -215,6 +215,67 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(s.close(),s.close())
             self.assertTrue(all(child.returncode is not None for child in self.children))
             self.assertFalse(h._call_drivers);self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
+
+    async def test_dispatch_deadline_after_real_worker_reset_prevents_backend_entry(self):
+        code=WORKER.replace('DELAY','0').replace('w._construct=',
+            'original_reset=SmolVLMContext.reset\ndef reset(self):\n    time.sleep(.08)\n    return original_reset(self)\nSmolVLMContext.reset=reset\nw._construct=')
+        with self.fixture(code=code):
+            h,c=self.human();s=await self.open(h,interval_ms=100,deadline_tolerance_ms=20)
+            s.offer(self.frame());await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(s.snapshot()['counters']['dispatch_deadline_missed'],1)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+            self.assertFalse(c.snapshot()['requests']);self.assertIsNone(s.snapshot()['last_accepted_capture_point'])
+            # Expired, unadmitted work does not consume the next valid call's capacity.
+            await s.close();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(self.frame(1));await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+
+    async def test_expiry_after_reservation_returns_capacity_without_native_attempt(self):
+        import time
+        with self.fixture():
+            h,c=self.human();s=await self.open(h,interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(self.frame());reserve=c.reserve
+            def expire(*args,**kwargs):
+                result=reserve(*args,**kwargs)
+                # Simulate host scheduling delay during synchronous admission.
+                s._active_meta['due_monotonic_ns']=1
+                clock.return_value=time.perf_counter_ns()+2000000000
+                return result
+            with patch('humansense.smolvlm_call.time.monotonic_ns',return_value=time.perf_counter_ns()) as clock,patch.object(c,'reserve',expire):
+                await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+            self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
+            self.assertFalse(c.snapshot()['requests'])
+            self.assertEqual(s.snapshot()['counters']['dispatch_deadline_missed'],1)
+            s.offer(self.frame(1));await self.tick(s);await self.until(lambda:s._active_task is None)
+            self.assertEqual(c.snapshot()['budget']['dispatched'],1)
+
+    async def test_cancelled_open_and_host_revoke_during_startup_reap_and_retire(self):
+        code=WORKER.replace('DELAY','0').replace('w.main()','time.sleep(.15)\nw.main()')
+        for reason in ('cancel','revoke'):
+            with self.subTest(reason=reason),self.fixture(code=code):
+                h,c=self.human();opened=asyncio.create_task(self.open(h))
+                await self.until(lambda:bool(h._call_drivers) and bool(self.children))
+                if reason=='cancel':opened.cancel()
+                else:h.consent=False
+                with self.assertRaises((asyncio.CancelledError,RuntimeError)):await opened
+                self.assertTrue(all(child.returncode is not None for child in self.children))
+                self.assertFalse(h._call_drivers);self.assertFalse(h._call_driver_cleanup)
+
+    async def test_owned_pixel_bound_and_bounded_readonly_history(self):
+        with self.fixture(delay=.1):
+            h,c=self.human();f=self.frame();s=await self.open(h,max_owned_bytes=f.data.nbytes,history_limit=3,
+                interval_ms=1000,deadline_tolerance_ms=999)
+            s.offer(f);await self.tick(s);await self.until(lambda:c.snapshot()['budget']['dispatched']==1)
+            self.assertFalse(s.offer(self.frame(1))['accepted'])
+            self.assertEqual(s.snapshot()['owned_pixel_bytes'],f.data.nbytes)
+            await self.until(lambda:s._active_task is None)
+            for index in range(1,8):s.offer(self.frame(index))
+            before=s.snapshot();self.assertEqual(len(before['events']),3);self.assertGreater(before['omitted_events'],0)
+            copy=await h.get_sentinel_status();copy['items'][0]['configuration']['interval_ms']=1
+            s.config['interval_ms']=1
+            self.assertEqual(s.snapshot(),before)
 
 
 class OwnedDrivers(unittest.IsolatedAsyncioTestCase):

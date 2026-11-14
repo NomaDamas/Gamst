@@ -59,7 +59,7 @@ class FreshFrameSentinel:
         self=cls();self.human=human;self.id=sentinel_id;self.controller_id=controller_id
         self.controller=human._call_controllers[controller_id];self.subject=subject_id;self.sensor=sensor
         self.shape=frame_shape;self.frame_bytes=frame_bytes;self.maximum_charge=maximum_charge;self.ttl_ms=ttl_ms
-        self.config=dict(interval_ms=interval_ms,phase_ms=phase_ms,deadline_tolerance_ms=deadline_tolerance_ms,
+        self._config=dict(interval_ms=interval_ms,phase_ms=phase_ms,deadline_tolerance_ms=deadline_tolerance_ms,
             max_age_ms=max_age_ms,max_owned_bytes=max_owned_bytes,history_limit=history_limit,
             capture_clock=capture_clock,scheduler_clock='host_monotonic_ns',
             selection='latest_received_unique_capture_at_due_tick',skipped_ticks='skip_without_catchup')
@@ -88,6 +88,11 @@ class FreshFrameSentinel:
             self.invalidate('startup_failed')
             await _finish(self._close_task)
             raise
+
+    @property
+    def config(self):
+        """Detached frozen-declaration view; changes require a new explicit open."""
+        return dict(self._config)
 
     def _check(self):
         if asyncio.get_running_loop() is not self._loop:raise RuntimeError('sentinel belongs to its original event loop')
@@ -237,8 +242,11 @@ class FreshFrameSentinel:
             pending=next(r for r in self.controller.snapshot()['requests'] if r['id']==rid)
             if pending['decision']['evidence']['record_sha256']!=_digest(record) or pending['decision']['visual_reference']!=reference:
                 raise ValueError('sentinel request/evidence join changed')
-            result=await self.adapter.execute(rid,record,frame,maximum_charge=self.maximum_charge,ttl_ms=self.ttl_ms)
+            result=await self.adapter.execute(rid,record,frame,maximum_charge=self.maximum_charge,ttl_ms=self.ttl_ms,
+                dispatch_deadline_ns=meta['due_monotonic_ns']+self.config['deadline_tolerance_ms']*1000000)
             self._refresh_dispatch()
+            if 'dispatch_deadline_exceeded' in result.get('blockers',[]):
+                self._event('dispatch_deadline_missed',capture_ms=meta['capture_ms'],capture_index=meta['capture_index'],meaning='uninspected')
             self._event('completed',request_id=rid,status=result['status'],capture_ms=meta['capture_ms'],
                 capture_index=meta['capture_index'],actual_cost=None)
             if result.get('accepted') is True and result['status']=='published' and not self._invalidated:
@@ -296,6 +304,7 @@ class FreshFrameSentinel:
         self._closed=True
         owned=[t for t in (self._startup_task,self._scheduler,self._active_task) if t is not None and t is not asyncio.current_task()]
         if owned:await asyncio.gather(*owned,return_exceptions=True)
+        self._active_task=None;self._scheduler=None
         adapter=self.adapter
         if adapter is None and self._startup_task is not None and not self._startup_task.cancelled():
             try:adapter=self._startup_task.result()
