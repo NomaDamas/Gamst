@@ -96,6 +96,35 @@ class Context(unittest.TestCase):
         self.assertLess(len(json.dumps(value,ensure_ascii=True).encode()),65536)
 
 
+@unittest.skipIf(np is None,'optional NumPy/Pillow absent')
+class Managed(unittest.IsolatedAsyncioTestCase):
+    async def test_observation_replacement_and_original_capture_time(self):
+        from humansense.schema import timestamp
+        from humansense.mcp import MCPServer
+        backend=Backend();backend.value[1]=20
+        provider=FoodContext(backend,**CONFIG)
+        async with HumanSense(consent=True) as human:
+            streams=SensorStreams(human)
+            streams.register(provider.spec,lambda:provider)
+            await streams.open('food-camera','fixture-camera',[provider.spec.id])
+            try:
+                captured=timestamp()-100
+                frame=InputFrame(np.zeros((32,32,3),np.uint8),'video',captured,
+                    sensor=SensorMetadata('food-camera','fixture-camera',0))
+                await streams.submit(frame);await streams.drain()
+                records=human.store.latest_signals('local-user',0,timestamp())
+                self.assertEqual(records[0]['timestamp_ms'],captured)
+                self.assertEqual(records[0]['observation']['value']['regions'][0]['label'],'rice')
+                backend.value[:]=0
+                await streams.submit(replace(frame,timestamp_ms=captured+1,sensor=replace(frame.sensor,sequence=1)))
+                await streams.drain()
+                self.assertEqual(human.store.latest_signals('local-user',0,timestamp())[0]['observation']['value']['regions'],[])
+                reply=await MCPServer(human).call_tool('get_observations',{'capability_id':provider.spec.id})
+                self.assertIn('no_accepted_food_labels',str(reply))
+            finally:await streams.clear()
+        self.assertTrue(backend.closed)
+
+
 @unittest.skipUnless(runtime_available() and np is not None,'dedicated pinned food runtime absent; no automatic install')
 class Native(unittest.TestCase):
     def test_generated_untrained_graph_strict_loader_and_reference(self):
@@ -130,7 +159,7 @@ class Native(unittest.TestCase):
                     async with HumanSense(consent=True) as human:
                         streams=SensorStreams(human)
                         streams.register(worker.spec,lambda:worker)
-                        await streams.open('food-camera','video',[worker.spec.id])
+                        await streams.open('food-camera','fixture-camera',[worker.spec.id])
                         try:
                             captured=timestamp()-100
                             frame=InputFrame(image,'video',captured,sensor=SensorMetadata(source_id='food-camera',sensor_id='fixture-camera',sequence=0))
