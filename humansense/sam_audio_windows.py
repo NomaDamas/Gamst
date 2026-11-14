@@ -82,6 +82,9 @@ def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None):
         anchors = []
     if type(anchors) not in (list, tuple) or len(anchors) > MAX_ANCHORS:
         raise ValueError('at most32 explicit manual anchors required')
+    anchors = tuple(anchors)
+    if len(anchors) > MAX_ANCHORS:
+        raise ValueError('manual anchor list changed beyond its bound')
     spans, originals = [], []
     duration = count / SAMPLE_RATE
     for anchor in anchors:
