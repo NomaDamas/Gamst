@@ -23,7 +23,7 @@ class Clients(unittest.IsolatedAsyncioTestCase):
         return plan,AttemptRecorder(plan,expected_plan_sha256=plan_digest(plan),task_id='0',system='candidate',**kwargs)
 
     def adapter(self,callback,provider='text',kind=TextContextCalls,**kwargs):
-        a=kind(self.h,'main',callback,provider=provider,model_revision='frozen-v1',**kwargs)
+        a=kind(self.h,getattr(self,'controller_id','main'),callback,provider=provider,model_revision='frozen-v1',**kwargs)
         self.adapters.append(a);return a
 
     def reduce(self,plan,recorder):
@@ -116,3 +116,44 @@ class Clients(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('data_base64',str(rec.snapshot()))
         rec.report(wrapped.attempt_id,quantities={'strong.input':1,'cache.read':0,'cache.write':0},receipt_sha256='d'*64)
         rec.close();self.assertEqual(self.reduce(plan,rec)['strong.input'],1)
+
+    async def test_default_and_long_cooldown_allow_current_text_dispatch(self):
+        from humansense.call_controller import CallController
+        from humansense.call_policy import CallPolicy
+        from humansense.call_budget import CallBudget
+        for cooldown in (1000,600000):
+            self.controller_id='cooldown'+str(cooldown)
+            self.c=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=cooldown,max_age_ms=60000),
+                budget=CallBudget(unit='USD.micro',pricing_revision='v1',ceiling=100))
+            self.h.register_call_controller(self.controller_id,self.c)
+            plan,rec=self.recorder();rid,r=await self.queued();calls=[]
+            async def complete(request):calls.append(1);return dict(text='ok',usage=None)
+            wrapped=RecordedContextClient(self.c,rid,rec,complete,phase='cold')
+            result=await self.adapter(wrapped).execute(rid,r,'q',maximum_charge=10)
+            self.assertTrue(result['accepted']);self.assertEqual(calls,[1])
+            self.assertIn('cooldown',self.c.snapshot()['requests'][0]['blockers'])
+            self.assertEqual(len(rec.snapshot()['attempts']),1)
+
+    @unittest.skipIf(visual_tests.np is None,'optional vision dependencies absent')
+    async def test_default_cooldown_visual_dispatch_and_runtime_invalidation(self):
+        from humansense.call_controller import CallController
+        from humansense.call_policy import CallPolicy
+        from humansense.call_budget import CallBudget
+        self.controller_id='default.visual'
+        self.c=CallController(policy=CallPolicy(mode='escalation',max_age_ms=60000),
+            budget=CallBudget(unit='USD.micro',pricing_revision='v1',ceiling=100))
+        self.h.register_call_controller(self.controller_id,self.c)
+        plan,rec=self.recorder();calls=[]
+        async def complete(request):calls.append(1);return dict(text='ok',usage=None)
+        rid,r,f=await visual_tests.Calls.queued(self,'strong')
+        wrapped=RecordedContextClient(self.c,rid,rec,complete,phase='cold')
+        result=await self.adapter(wrapped,provider='strong',kind=VisualContextCalls).execute(rid,r,f,'q',maximum_charge=10)
+        self.assertTrue(result['accepted']);self.assertEqual(calls,[1])
+        rid,r,f=await visual_tests.Calls.queued(self,'strong')
+        wrapped=RecordedContextClient(self.c,rid,rec,complete,phase='warm')
+        async def invalidate(request):
+            await self.h.pause()
+            return await wrapped(request)
+        with self.assertRaises(ValueError):
+            await self.adapter(invalidate,provider='strong',kind=VisualContextCalls).execute(rid,r,f,'q',maximum_charge=10)
+        self.assertEqual(calls,[1]);self.assertIsNone(wrapped.attempt_id)

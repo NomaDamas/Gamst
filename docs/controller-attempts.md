@@ -38,7 +38,9 @@ live dispatched controller request, exact outgoing request hash, provider/model
 aliases and visual/text route. It records evidence, prompt and execution hashes
 from that actual ledger entry. A changed request, wrong ID, finished/invalidated
 request or reused wrapper fails before invoking the application client. The
-wrapper itself does not authorize a model call or hold the controller lock across
+wrapper permits the current dispatched request during its next-admission cooldown,
+while still rejecting runtime/epoch/source/freshness invalidation. The wrapper
+itself does not authorize a model call or hold the controller lock across
 asynchronous client work. Like the SDK adapters, use one event loop for runtime
 lifecycle operations.
 

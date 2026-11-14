@@ -37,8 +37,11 @@ class RecordedContextClient:
         state=self._controller.snapshot()
         pending=next((r for r in state['requests'] if r['id']==self._request_id),None)
         if (state['closed'] or pending is None or pending['state']!='dispatched' or pending['finished']
-                or pending['discard'] or pending['blockers']):
+                or pending['discard'] or any(b not in ('already_dispatched','cooldown')
+                    for b in pending['admission_blockers'])):
             raise ValueError('live dispatched controller request required')
+        # Dispatch starts the next-admission cooldown. It must not veto itself.
+        # Other lifecycle, epoch, source and freshness blockers still invalidate use.
         execution=pending['execution'];evidence=pending['decision']['evidence']
         if (type(request) is not dict or execution is None or
                 execution['route'] not in ('text_llm','small_vlm','strong_vlm') or
