@@ -184,3 +184,68 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(counts['captured'],0)
             self.assertEqual(counts['submitted'],0)
             self.assertTrue(all(p['accepted']==0 for p in replay.provider_outcomes))
+
+    async def test_cleanup_clock_jump_fails_and_keeps_independent_epoch_bridge(self):
+        from humansense import HumanSense
+        original_close=HumanSense.close
+        offset=[0]
+        async def jumping_close(human):
+            await original_close(human)
+            offset[0]=1000000000
+        fake=SimpleNamespace(time_ns=lambda:time.time_ns()+offset[0],monotonic_ns=time.monotonic_ns)
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();manifest,tasks,profiles=self.inputs(root)
+            with patch('benchmarks.replay_clock.time',fake), patch.object(HumanSense,'close',jumping_close):
+                with self.assertRaisesRegex(RuntimeError,'discontinuity'):
+                    await run_source_context_recording(manifest,tasks,profiles,root/'output',
+                        asset_directory=root,retain_evaluation_artifacts=True,max_lateness_ns=1000000000)
+            terminal=json.loads((root/'output'/'terminal.json').read_text())
+            bridges=json.loads((root/'output'/'source-mappings.json').read_text())
+            self.assertEqual(bridges[0]['original_source']['stream_epoch'],'old-epoch')
+            self.assertTrue(bridges[0]['provider_epochs'][0]['stream_epoch'])
+            self.assertEqual(terminal['summary']['source_mappings_sha256'],digest(bridges))
+            self.assertEqual(terminal['summary']['failure_category'],'RuntimeError')
+            self.assertEqual(terminal['summary']['state'],'failed')
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'optional BGR array runtime unavailable')
+    async def test_cancelled_provider_work_retains_unknown_disposition_and_epoch_bridge(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve(); manifest,tasks,_=self.inputs(root)
+            pixels=bytes([20,40,80])*(16*16);(root/'bgr.bin').write_bytes(pixels)
+            manifest['sources'][0].update(format='bgr8_hwc',modality='video')
+            manifest['records']=[]
+            for i in range(3):
+                manifest['records'].append(dict(source_id='mic',sensor_id='mic-1',stream_epoch='old-epoch',
+                    sequence=i,capture_ns=1000000000+i*20000000,offset_ns=i*20000000,
+                    format='bgr8_hwc',shape=[16,16,3],payload_path='bgr.bin',payload_bytes=len(pixels),
+                    payload_sha256=hashlib.sha256(pixels).hexdigest()))
+            from humansense.streams import SensorStreams
+            original_submit=SensorStreams.submit
+            admitted=asyncio.Event(); count=[0]
+            async def observed_submit(streams,frame):
+                result=await original_submit(streams,frame)
+                count[0]+=1
+                if count[0]==3:admitted.set()
+                return result
+            with patch.object(SensorStreams,'submit',observed_submit):
+                running=asyncio.create_task(run_source_context_recording(manifest,tasks,
+                    {'mic':dict(profile='fixture_bgr',delay_ms=500)},root/'output',asset_directory=root,
+                    retain_evaluation_artifacts=True,max_lateness_ns=1000000000))
+                try:await asyncio.wait_for(admitted.wait(),2)
+                finally:
+                    running.cancel()
+                    with self.assertRaises(asyncio.CancelledError):await running
+            terminal=json.loads((root/'output'/'terminal.json').read_text())
+            summary=terminal['summary'];lane=summary['provider_outcomes'][0]
+            self.assertEqual(lane['accepted'],3)
+            self.assertEqual(lane['unresolved_delivery'],3)
+            self.assertEqual(lane['preclose_work'],dict(queued=2,unfinished=3,active=1))
+            self.assertEqual(lane['final_unfinished'],0)
+            self.assertTrue(lane['provider_task_done'])
+            self.assertTrue(lane['provider_task_cancelled'])
+            self.assertFalse(lane['disposition_truth_verified'])
+            self.assertEqual(summary['sources']['mic']['dropped'],0)
+            self.assertEqual(summary['snapshots'],0)
+            bridges=json.loads((root/'output'/'source-mappings.json').read_text())
+            self.assertEqual(summary['source_mappings_sha256'],digest(bridges))
+            self.assertEqual(bridges[0]['provider_epochs'][0]['stream_epoch'],lane['stream_epoch'])

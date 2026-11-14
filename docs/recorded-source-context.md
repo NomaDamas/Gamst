@@ -113,3 +113,5 @@ They do not prove trained perception, physical sensing, billing authenticity,
 whole-pipeline savings or matched-recording isolation.
 
 PCM availability is checked over the entire half-open sample interval using exact rational endpoints; a chunk cannot overlap a declared unavailable interval. Asset access uses POSIX directory descriptors and no-follow opens; Windows asset replay is not supported by this implementation.
+
+The independent `source-mappings.json` inventory preserves original source identities and initial provider epochs even if no Context snapshot succeeds. Terminal metadata hashes that inventory separately from the immutable clock mapping. Cleanup records pre-close queued/unfinished/active work and final provider counters. Residual accepted work is labeled `unresolved_delivery` (unknown discarded or cancelled), never acquisition loss or proof of exact backend cancellation. A final clock check after SDK cleanup prevents cleanup-time wall-clock changes from producing an unfailed replay.

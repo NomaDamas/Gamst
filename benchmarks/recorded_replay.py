@@ -28,7 +28,7 @@ class RecordedSourceReplay:
         self.max_drift = _integer(max_drift_ns, 1, 1_000_000_000)
         self.human = self.streams = self.clock = None
         self.jobs = set(); self.reads = set(); self.closed = False
-        self.lane_refs = []; self.provider_outcomes = []
+        self.lane_refs = []; self.provider_outcomes = []; self.source_mappings = []
         self.close_task = self.cleanup_task = self.run_task = None; self.snapshots = {}; self.snapshot_bytes = 0
         self.counters = {s['source_id']:dict(declared=sum(r['source_id']==s['source_id'] for r in self.manifest['records']),
             attempted=0,captured=0,dropped=0,verified_reads=0,submitted=0,submit_refused=0,
@@ -153,14 +153,19 @@ class RecordedSourceReplay:
             self.lane_refs = [(key,lane) for key,stream in self.streams.streams.items() for lane in stream['lanes']]
             self.human.register_capability(MAPPING)
             self.clock = ReplayClock(self.manifest,max_drift_ns=self.max_drift)
+            # Freeze provenance before publication can await or fail.
             for source in self.manifest['sources']:
                 lanes=next(s['providers'] for s in self.streams.status()['streams'] if s['source_id']==source['source_id'])
                 value=dict(**self.clock.mapping,mapping_sha256=self.clock.sha256,
                     original_source=source,provider_epochs=[dict(capability_id=l['capability_id'],stream_epoch=l['stream_epoch']) for l in lanes])
+                self.source_mappings.append(value)
+            for value in self.source_mappings:
+                source=value['original_source']
                 await self.human.push_observation(MAPPING.id,dict(mapping=value),
                     sensor=SensorMetadata(source['source_id'],source['sensor_id'],0,stream_epoch=source['stream_epoch']),
                     timestamp_ms=self.clock.mapping['sdk_anchor_ms'])
-                self.journal.emit('mapping_published',dict(source_id=source['source_id'],mapping_sha256=self.clock.sha256))
+                self.journal.emit('mapping_published',dict(source_id=source['source_id'],mapping_sha256=self.clock.sha256,
+                    source_mapping_sha256=digest(value)))
             self.jobs={asyncio.create_task(self._source(s)) for s in self.manifest['sources']}
             self.jobs.update(asyncio.create_task(self._snapshot(t)) for t in self.tasks)
             await asyncio.gather(*self.jobs)
@@ -201,12 +206,28 @@ class RecordedSourceReplay:
             if not task.done():task.cancel()
         if self.jobs:await asyncio.gather(*self.jobs,return_exceptions=True)
         for task in tuple(self.reads):await _finish(task)
-        if self.human is not None:await self.human.close()
-        self.provider_outcomes=[dict(source_id=key[0],sensor_id=key[1],capability_id=lane['spec'].id,
-            stream_epoch=lane['epoch'],**{k:lane[k] for k in ('accepted','processed','dropped','errors','resets')})
-            for key,lane in self.lane_refs]
-        self.lane_refs.clear()
-        self.ended_ns=time.monotonic_ns()
+        before = {id(lane):dict(queued=lane['queue'].qsize(),
+            unfinished=lane['queue']._unfinished_tasks,
+            active=lane['queue']._unfinished_tasks-lane['queue'].qsize())
+            for _,lane in self.lane_refs}
+        try:
+            if self.human is not None:await self.human.close()
+        finally:
+            self.provider_outcomes=[]
+            for key,lane in self.lane_refs:
+                counts={k:lane[k] for k in ('accepted','processed','dropped','errors','resets')}
+                unresolved=counts['accepted']-counts['processed']-counts['dropped']-counts['errors']
+                task=lane['task']
+                self.provider_outcomes.append(dict(source_id=key[0],sensor_id=key[1],
+                    capability_id=lane['spec'].id,stream_epoch=lane['epoch'],**counts,
+                    preclose_work=before[id(lane)],final_queued=lane['queue'].qsize(),
+                    final_unfinished=lane['queue']._unfinished_tasks,
+                    provider_task_done=task is None or task.done(),
+                    provider_task_cancelled=False if task is None else task.cancelled(),
+                    unresolved_delivery=unresolved,disposition_truth_verified=False,
+                    unresolved_semantics='unknown_discarded_or_cancelled_not_source_loss'))
+            self.lane_refs.clear()
+            self.ended_ns=time.monotonic_ns()
 
 
 async def _drain(task):
@@ -249,7 +270,12 @@ async def run_source_context_recording(manifest, tasks, profiles, output, *,
         # an interrupted recording into success merely because cleanup completed.
         await replay.close()
         if replay.clock is not None:
+            try:replay.clock.check()
+            except RuntimeError as clock_error:
+                if failure is None:failure=clock_error
+        if replay.clock is not None:
             await artifacts.write_json('mapping.json',replay.clock.mapping,max_bytes=65536)
+            await artifacts.write_json('source-mappings.json',replay.source_mappings,max_bytes=65536)
         for index, result in enumerate(replay.snapshots.values()):
             await artifacts.write_json(f'context-{index:04d}.json',result,max_bytes=128*1024)
         counters={sid:dict(value,uninspected_suffix=value['declared']-value['attempted'])
@@ -258,6 +284,7 @@ async def run_source_context_recording(manifest, tasks, profiles, output, *,
             failure_category=None if failure is None else type(failure).__name__,
             source_manifest_sha256=replay.manifest_sha256,tasks_sha256=digest(replay.tasks),
             mapping_sha256=None if replay.clock is None else replay.clock.sha256,
+            source_mappings_sha256=digest(replay.source_mappings),
             observed_start_ns=replay.started_ns,observed_end_ns=replay.ended_ns,
             observed_elapsed_ns=replay.ended_ns-replay.started_ns,
             sources=counters,provider_outcomes=replay.provider_outcomes,
