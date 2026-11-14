@@ -81,6 +81,14 @@ class RFDETRObjects:
         self.closed = True
 
     def process(self, frame):
+        return self._associate_rows(*self._predict_rows(frame))
+
+    def _predict_rows(self, frame):
+        """Validate actual inference without committing association state.
+
+        Internal split for the owned moving-camera pipeline: current raw boxes
+        must be available before background fitting and prior-box projection.
+        """
         if self.closed:
             raise RuntimeError('object provider is closed')
         import numpy as np
@@ -123,15 +131,41 @@ class RFDETRObjects:
         rows.sort(key=lambda row: -row['score'])
         count = len(rows)
         rows = rows[:self.max_objects]
+        return rows, count, (h, w), ts, owner
+
+    def _associate_rows(self, rows, count, shape, ts, owner, *, association_boxes=None,
+                        visible_only=False):
+        """Associate validated raw rows using optional temporary projected boxes.
+
+        Projected boxes are never written as observations. The compensated
+        pipeline retires missing tracks; the default path preserves its bounded
+        historical association policy unchanged.
+        """
+        from ..tracking import normalize_bbox
+        if self.closed:
+            raise RuntimeError('object provider is closed')
+        if type(visible_only) is not bool:
+            raise ValueError('explicit association retention policy required')
+        if association_boxes is not None:
+            if type(association_boxes) is not dict or len(association_boxes)>self.max_objects:
+                raise ValueError('bounded projected association boxes required')
+            association_boxes={key:normalize_bbox(box) for key,box in association_boxes.items()}
+        h,w=shape
         # Inference/validation precede state mutation. Image resizing is a break
         # in camera geometry, so existing associations cannot cross it.
         old = {} if self.shape != (h, w) else {key: value for key, value in self.tracks.items()
                                               if ts-value['last_seen_ms'] <= self.max_age_ms}
+        if visible_only:
+            old={key:value for key,value in old.items() if value['last_seen_ms']==self.last_ts}
+        if association_boxes is not None:
+            if set(association_boxes)-set(old):
+                raise ValueError('projected box has no eligible prior observation')
+            old={key:value for key,value in old.items() if key in association_boxes}
         candidates = []
         for index, row in enumerate(rows):
             for track_id, track in old.items():
                 if row['class_id'] == track['class_id'] and row['label'] == track['label']:
-                    iou = intersection_over_union(row['bbox'], track['bbox'])
+                    iou = intersection_over_union(row['bbox'], track['bbox'] if association_boxes is None else association_boxes[track_id])
                     if iou >= self.iou_threshold:
                         candidates.append((iou, index, track_id))
         ambiguous_rows, ambiguous_tracks = set(), set()
@@ -152,7 +186,7 @@ class RFDETRObjects:
                 used.add(track_id)
         objects = []
         # Retire ambiguous histories instead of later reconnecting through them.
-        updated = {key: value for key, value in old.items() if key not in ambiguous_tracks}
+        updated = {} if visible_only else {key: value for key, value in old.items() if key not in ambiguous_tracks}
         for index, row in enumerate(rows):
             track_id = matched.get(index)
             quality = 'matched' if track_id else 'uncertain_new' if index in ambiguous_rows else 'new'
