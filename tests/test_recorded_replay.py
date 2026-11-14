@@ -4,9 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 import importlib.util
+import json
 
 from benchmarks.recorded_source import digest
-from benchmarks.recorded_replay import RecordedSourceReplay
+from benchmarks.recorded_replay import RecordedSourceReplay, run_source_context_recording
 
 
 class JournalFixture:
@@ -113,3 +114,42 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(replay.human is None or replay.human.closed)
             self.assertTrue(all(t.done() for t in replay.jobs))
             self.assertFalse(replay.reads)
+
+    async def test_artifact_wrapper_retains_original_mapping_context_and_terminal(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve(); manifest,tasks,profiles=self.inputs(root)
+            output=root/'result'
+            with self.assertRaises(PermissionError):
+                await run_source_context_recording(manifest,tasks,profiles,output,asset_directory=root)
+            self.assertFalse(output.exists())
+            result=await run_source_context_recording(manifest,tasks,profiles,output,
+                asset_directory=root,retain_evaluation_artifacts=True,max_lateness_ns=1000000000)
+            terminal=json.loads((output/'terminal.json').read_text())
+            self.assertEqual(terminal['state'],'replayed_unscored')
+            self.assertEqual(terminal['summary'],result)
+            self.assertFalse(terminal['whole_pipeline_cost_verified'])
+            self.assertIsNone(result['monetary_cost'])
+            self.assertEqual(json.loads((output/'source-manifest.json').read_text()),manifest)
+            snapshot=json.loads((output/'context-0000.json').read_text())
+            self.assertEqual(snapshot['context_sha256'],digest(snapshot['context']))
+            self.assertEqual(snapshot['mapping_sha256'],result['mapping_sha256'])
+            rows=[json.loads(line) for line in (output/'journal.jsonl').read_text().splitlines()]
+            self.assertTrue(rows)
+            with self.assertRaises(FileExistsError):
+                await run_source_context_recording(manifest,tasks,profiles,output,
+                    asset_directory=root,retain_evaluation_artifacts=True)
+
+    async def test_cancelled_wrapper_keeps_failed_terminal_and_uninspected_suffix(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();manifest,tasks,profiles=self.inputs(root)
+            output=root/'cancelled'
+            job=asyncio.create_task(run_source_context_recording(manifest,tasks,profiles,output,
+                asset_directory=root,retain_evaluation_artifacts=True,max_lateness_ns=1000000000))
+            await asyncio.sleep(.08)
+            job.cancel()
+            with self.assertRaises(asyncio.CancelledError):await job
+            terminal=json.loads((output/'terminal.json').read_text())
+            self.assertEqual(terminal['state'],'failed')
+            self.assertEqual(terminal['summary']['failure_category'],'CancelledError')
+            self.assertGreater(terminal['summary']['sources']['mic']['uninspected_suffix'],0)
+            self.assertTrue(terminal['cleanup_finished'])

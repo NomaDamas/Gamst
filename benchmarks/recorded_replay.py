@@ -273,3 +273,44 @@ async def run_source_context_recording(manifest, tasks, profiles, output, *,
         raise
     if failure is not None:raise failure
     return summary
+
+
+def main():
+    import argparse
+    import json
+    import os
+    import stat
+    from .recorded_source import _pairs, MAX_MANIFEST_BYTES
+    parser=argparse.ArgumentParser(description=__doc__)
+    for name in ('manifest','tasks','profiles','assets','output'):
+        parser.add_argument('--'+name,required=True)
+    parser.add_argument('--retain-evaluation-artifacts',action='store_true',
+        help='Explicitly retain original inputs, source paths and sensory Context outside SDK deletion')
+    parser.add_argument('--max-lateness-ms',type=int,default=50)
+    parser.add_argument('--max-clock-drift-ms',type=int,default=50)
+    args=parser.parse_args()
+
+    def load(path,limit):
+        fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+        try:
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or not 0<info.st_size<=limit:
+                raise ValueError('bounded regular declaration file required')
+            chunks=[];remaining=info.st_size
+            while remaining:
+                chunk=os.read(fd,min(65536,remaining))
+                if not chunk:raise ValueError('declaration truncated during read')
+                chunks.append(chunk);remaining-=len(chunk)
+            if os.read(fd,1):raise ValueError('declaration grew during read')
+            def invalid(_):raise ValueError('nonfinite declaration JSON')
+            return json.loads(b''.join(chunks),object_pairs_hook=_pairs,parse_constant=invalid)
+        finally:os.close(fd)
+
+    summary=asyncio.run(run_source_context_recording(load(args.manifest,MAX_MANIFEST_BYTES),
+        load(args.tasks,4*1024**2),load(args.profiles,65536),args.output,
+        asset_directory=args.assets,retain_evaluation_artifacts=args.retain_evaluation_artifacts,
+        max_lateness_ns=args.max_lateness_ms*1_000_000,max_drift_ns=args.max_clock_drift_ms*1_000_000))
+    print(json.dumps(summary,indent=2,allow_nan=False))
+
+
+if __name__=='__main__':main()
