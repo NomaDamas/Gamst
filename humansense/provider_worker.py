@@ -101,6 +101,9 @@ def _construct(profile, config):
     elif profile == 'qwen3.asr':
         from .providers.qwen_asr import QwenStreamingASR
         provider = QwenStreamingASR.from_local(**config)
+    elif profile == 'rfdetr.compensated_trajectories':
+        from .providers.compensated_trajectories import CompensatedTrajectories
+        provider = CompensatedTrajectories.from_local(config)
     elif profile == 'rfdetr.trajectories':
         from .providers.detection_trajectories import RFDETRTrajectories
         provider = RFDETRTrajectories.from_local(**config)

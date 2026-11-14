@@ -150,6 +150,9 @@ def capability(profile, config):
         if set(config) != {'path', 'files'} or type(config['path']) is not str:
             raise ValueError('qwen3.asr requires only local path and file hashes')
         return QwenStreamingASR.capability(artifact_version(config['files']))
+    if profile == 'rfdetr.compensated_trajectories':
+        from .providers.compensated_trajectories import CompensatedTrajectories
+        return CompensatedTrajectories.capability(config)
     if profile == 'rfdetr.trajectories':
         from .providers.detection_trajectories import RFDETRTrajectories, configuration
         args = configuration(config)
