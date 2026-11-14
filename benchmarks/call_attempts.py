@@ -25,11 +25,15 @@ class AttemptRecorder:
             raise ValueError('known frozen task/system and itemized costs required')
         if type(max_attempts) is not int or not 1 <= max_attempts <= 1024:
             raise ValueError('1..1024 attempts required')
-        self._card = deepcopy(plan['cost']['rate_card'])
-        self._header = dict(schema_version=1, plan_sha256=digest, cost_sha256=plan_digest(plan['cost']),
+        header = dict(schema_version=1, plan_sha256=digest, cost_sha256=plan_digest(plan['cost']),
             task_id=task_id, system=system, input_sha256=tasks[task_id]['input_sha256'],
             configuration_sha256=plan_digest(plan['systems'][system]), evidence=plan['evidence'],
             scope=uuid.uuid4().hex, max_attempts=max_attempts)
+        self._initialize(plan['cost']['rate_card'], header)
+
+    def _initialize(self, card, header):
+        self._card = deepcopy(card)
+        self._header = deepcopy(header)
         self._rows = {}
         self._closed = False
         self._rejected = 0
@@ -148,6 +152,11 @@ def cost_quantities(plan, report, *, expected_plan_sha256, expected_report_sha25
             report['input_sha256'] != task['input_sha256'] or report['evidence'] != plan['evidence'] or
             report['configuration_sha256'] != plan_digest(plan['systems'][system])):
         raise ValueError('attempt report differs from frozen task/configuration')
+    return _reduce_attempts(plan['cost']['rate_card'], report)
+
+
+def _reduce_attempts(card, report):
+    """Shared attempt-body validation; callers validate their native frozen header."""
     if report['closed'] is not True or type(report['rejected']) is not int or report['rejected'] != 0:
         raise ValueError('closed scope without rejected admissions required')
     if report['clock'] != 'monotonic_callback_duration_not_task_latency':
@@ -158,7 +167,7 @@ def cost_quantities(plan, report, *, expected_plan_sha256, expected_report_sha25
     limit = report['max_attempts']; rows = report['attempts']
     if type(limit) is not int or not 1 <= limit <= 1024 or type(rows) is not list or len(rows) > limit:
         raise ValueError('invalid attempt bounds')
-    card = plan['cost']['rate_card']; totals = {key:0 for key in card}; seen = {}; last_started = -1
+    totals = {key:0 for key in card}; seen = {}; last_started = -1
     fields = {'attempt_id','provider','revision','role','phase','evidence_sha256','prompt_sha256',
               'execution_sha256','predecessor','relationship','started_ns','ended_ns','status',
               'cost_quantities','receipt_sha256'}

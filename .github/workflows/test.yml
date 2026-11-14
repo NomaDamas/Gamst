@@ -27,6 +27,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install '.[vision,websocket]'
       - run: python -c "import cv2, numpy; print(cv2.__version__, numpy.__version__)"
+      - run: python -m unittest discover -s tests -p test_sam_audio_windows.py -v
       - run: c++ --version
       - run: python -m unittest discover -s tests -p test_orbslam_native.py -v
       - run: python -m unittest discover -s tests -p test_orbslam_context.py -v

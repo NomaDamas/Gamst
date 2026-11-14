@@ -195,22 +195,48 @@ class Collection(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_failure_still_joins_all_collection_tasks(self):
         with tempfile.TemporaryDirectory(dir='.') as directory:
             root=Path(directory).resolve();plan,inputs=setup(root,('timeout',))
-            groups=[];processes=[];original_gather=asyncio.gather;original_spawn=asyncio.create_subprocess_exec
+            groups=[];processes=[];waits=[];collection_entered=asyncio.Event()
+            original_gather=asyncio.gather;original_spawn=asyncio.create_subprocess_exec
+            original_wait=asyncio.wait
             def gather(*args,**kwargs):
                 future=original_gather(*args,**kwargs)
-                if len(args)==4 and not kwargs:groups.append((args,future))
+                if len(args)==4 and not kwargs:
+                    groups.append((args,future))
+                    collection_entered.set()
                 return future
             async def spawn(*args,**kwargs):
                 child=await original_spawn(*args,**kwargs);processes.append(child);return child
+            async def wait(tasks,*,timeout):
+                waits.append(timeout)
+                if len(waits)==1:
+                    # Await real spawn independent of host load. The enclosing
+                    # watchdog bounds the fixture, not the production deadline.
+                    return await original_wait(tasks)
+                self.assertEqual(len(waits),2)
+                await collection_entered.wait()
+                # Scheduler probe: inject timeout only after all four real
+                # collection jobs and their gather exist. This is not a timing
+                # benchmark; the exhausted shared deadline has separate coverage.
+                return set(),set(tasks)
             try:
                 with patch('asyncio.gather',gather),patch('asyncio.create_subprocess_exec',spawn), \
+                        patch('asyncio.wait',wait), \
+                        patch('benchmarks.paired_replay.time.perf_counter_ns',return_value=0), \
                         patch('benchmarks.paired_replay._stop_owned',side_effect=PermissionError('fixture')):
-                    with self.assertRaises(PermissionError):
-                        await _execute(plan['runner']['commands']['baseline'],{'input':inputs[0]['input']},100)
+                    with self.assertRaisesRegex(PermissionError,'fixture'):
+                        await asyncio.wait_for(_execute(plan['runner']['commands']['baseline'],
+                            {'input':inputs[0]['input']},100),5)
+                self.assertEqual(waits,[.1,.1])
+                self.assertTrue(collection_entered.is_set())
                 self.assertEqual(len(groups),1)
+                self.assertEqual(len(groups[0][0]),4)
                 self.assertTrue(all(f.done() and all(t.done() for t in tasks) for tasks,f in groups))
+                self.assertEqual(len(processes),1)
             finally:
-                for child in processes:await _stop_owned(child)
+                for child in processes:
+                    await _stop_owned(child)
+                    self.assertIsNotNone(child.returncode)
+                    self.assertTrue(child._transport.is_closing())
 
     async def test_group_permission_error_is_retried_but_not_silently_ignored(self):
         proc=await asyncio.create_subprocess_exec(sys.executable,'-c','import time; time.sleep(60)',

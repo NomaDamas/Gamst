@@ -23,3 +23,7 @@ The exclusively created output directory contains `rows.json`, `lineage.json`, a
 Declarations/assessments are limited to 16 MiB; source lines to 512 KiB and 3,000 records. Duplicate JSON keys, nonfinite numbers and incomplete source lines are rejected. Public in-memory arguments are detached and bounded as well.
 
 `source_hash_integrity_verified=true` means only that the supplied frozen declarations and source chain match. `source_verified`, `live_assets_verified`, `receipts_verified`, `independent_scoring_verified`, and `measurement_truth_verified` remain false. The unchanged numerical report also retains its false verification flags. `actual_acceptance` is always `incomplete`, even if numeric gates pass. This join does not certify real inference, sampling execution, assessment independence, measurement truth, receipt authenticity, attempt coverage, shared-resource allocation or recording-cluster uncertainty. #205, #206, #207, #57 and overall acceptance remain open.
+
+For additive native A/B/C attempt reports and exact itemized receipt-total binding,
+see [three-arm attempts](three-arm-attempts.md). The source-only join remains
+available and does not claim attempt or receipt verification.
