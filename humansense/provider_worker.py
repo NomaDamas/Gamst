@@ -11,6 +11,9 @@ def _construct(profile, config):
     if profile == 'sam_audio.text_temporal.local':
         from .providers.sam_audio_context import SAMAudioContext
         provider = SAMAudioContext.from_local(config)
+    elif profile == 'opencv.rfdetr.stereo':
+        from .providers.stereo_context import StereoMetricContext
+        provider = StereoMetricContext.from_local(**config)
     elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)

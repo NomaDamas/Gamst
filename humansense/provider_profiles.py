@@ -3,6 +3,9 @@ from .capabilities import bounded_json
 
 
 def capability(profile, config):
+    if profile == 'opencv.rfdetr.stereo':
+        from .providers.stereo_context import StereoMetricContext
+        return StereoMetricContext.capability(**config)
     if profile == 'sam_audio.text_temporal.local':
         from .providers.sam_audio_context import SAMAudioContext
         return SAMAudioContext.capability(config)
