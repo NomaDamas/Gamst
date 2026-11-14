@@ -81,6 +81,8 @@ class HumanSense:
         self._separation_media = None
 
     def _register_evaluation_observer(self, observer):
+        from .recording_scope import evaluation_owner
+        observer=evaluation_owner(observer)
         if not callable(getattr(observer,"invalidate",None)):
             raise TypeError("evaluation observer requires callable invalidate")
         if any(value is observer for value in self._evaluation_observers):return

@@ -10,15 +10,18 @@ from .plugins import InputFrame
 from .smolvlm_call import smolvlm_frame_sha256
 from .text_context_call import TextContextCalls
 from .streams import _finish
+from .recording_scope import resolve_evaluation_observer, validate_evaluation_backend
 
 
 class VisualContextCalls(TextContextCalls):
     """Evidence-bound small/strong VLM calls; no model or network owned here."""
 
-    async def execute(self,request_id,record,frame,question,*,maximum_charge,ttl_ms=1000):
+    async def execute(self,request_id,record,frame,question,*,maximum_charge,ttl_ms=1000,evaluation_scope=None):
         self.human._check()
         if self._closed:raise RuntimeError('adapter closed')
         if self._active is not None:raise RuntimeError('adapter busy; no hidden queue')
+        observer=resolve_evaluation_observer(self._evaluation_observer,evaluation_scope)
+        backend=self._completion;validate_evaluation_backend(observer,backend)
         request,evidence=self._prepare(request_id,record,question,routes=('small_vlm','strong_vlm'))
         if (not isinstance(frame,InputFrame) or frame.modality!='video' or frame.sample_rate is not None
                 or not isinstance(frame.sensor,SensorMetadata)):
@@ -38,7 +41,7 @@ class VisualContextCalls(TextContextCalls):
         request['_pixels']=pixels
         request['_capture_ms']=frame.timestamp_ms
         request['_source_sha']=source_sha
-        result=await self._start(request_id,request,evidence,maximum_charge,ttl_ms)
+        result=await self._start(request_id,request,evidence,maximum_charge,ttl_ms,observer,backend)
         if result.get('accepted'):
             result.update(interpretation='untrusted_visual_response',source_frame_sha256=source_sha,
                           image_sha256=request['images'][0]['sha256'],capture_ms=frame.timestamp_ms)
