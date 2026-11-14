@@ -98,7 +98,12 @@ may therefore be stale/absent from MCP's current-state query; use historical
 queries for their original capture interval. Processing backpressure can make
 replay late; frames are not silently dropped by the example. Slow camera consumers
 can still overflow native buffers: actual drop/queue behavior requires #140.
-The context output interval is independent of packet inference frequency.
+The context output runs in a separately owned async task, so polling continues
+while capture waits or replay is paced. Both tasks are cancelled/joined before
+stream cleanup on completion, timeout, failure or cancellation. Polling is
+best-effort on the host event loop: missed ticks are skipped without bursts;
+blocked stdout or a stalled event loop can still delay delivery. The context
+output interval is independent of packet inference frequency.
 
 ## Verification boundary
 

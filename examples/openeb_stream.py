@@ -9,6 +9,7 @@ import json
 
 from humansense import HumanSense, OpenEBProcess, ProcessProvider, SensorStreams
 from humansense.mcp import MCPServer
+from humansense.streams import _finish
 
 
 async def run(args):
@@ -33,22 +34,42 @@ async def run(args):
                 server = MCPServer(human)
                 loop = asyncio.get_running_loop()
                 anchor = loop.time()
-                next_emit = anchor
-                for _ in range(args.max_frames):
-                    try:
-                        frame = await source.next_frame(managed=True)
-                    except StopAsyncIteration:
-                        break
-                    if args.pacing == 'capture-relative':
-                        # Pace playback from the declared origin, never rewrite capture time.
-                        due = anchor + (frame.timestamp_ms - args.capture_origin_ms) / 1000
-                        await asyncio.sleep(max(0, due - loop.time()))
-                    await streams.submit(frame)
-                    await streams.drain()
-                    if loop.time() >= next_emit:
+                async def capture():
+                    for _ in range(args.max_frames):
+                        try:
+                            frame = await source.next_frame(managed=True)
+                        except StopAsyncIteration:
+                            break
+                        if args.pacing == 'capture-relative':
+                            # Preserve capture time while pacing on the host clock.
+                            due = anchor + (frame.timestamp_ms - args.capture_origin_ms) / 1000
+                            await asyncio.sleep(max(0, due - loop.time()))
+                        await streams.submit(frame)
+                        await streams.drain()
+
+                async def publish():
+                    interval = args.context_interval_ms / 1000
+                    deadline = loop.time()
+                    while True:
                         context = await server.call_tool('get_observations', {'capability_id': spec.id})
                         print(json.dumps({'context': context}))
-                        next_emit = loop.time() + args.context_interval_ms / 1000
+                        deadline += interval
+                        # Skip missed ticks rather than producing a catch-up burst.
+                        if deadline <= loop.time():
+                            deadline = loop.time() + interval
+                        await asyncio.sleep(max(0, deadline - loop.time()))
+
+                tasks = [asyncio.create_task(capture()), asyncio.create_task(publish())]
+                try:
+                    done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()  # Surface capture or publisher failures.
+                    context = await server.call_tool('get_observations', {'capability_id': spec.id})
+                    print(json.dumps({'final_context': context}))
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await _finish(asyncio.gather(*tasks, return_exceptions=True))
             finally:
                 await streams.clear()
     finally:

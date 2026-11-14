@@ -228,3 +228,28 @@ w.envelope=corrupt
         self.assertTrue(any('context' in value for value in records))
         self.assertTrue(records[-1]['capture_diagnostics']['reaped'])
         self.assertEqual(len(self.children),2)
+
+    async def test_example_cadence_continues_during_stalled_read_and_stops(self):
+        import argparse
+        import contextlib
+        import io
+        from examples.openeb_stream import run
+        from humansense.schema import timestamp
+        from humansense.mcp import MCPServer
+        args=argparse.Namespace(**dict(CONFIG,capture_origin_ms=timestamp()-100,
+            capture_python=sys.executable,context_python=sys.executable,
+            read_timeout=.3,pacing='none',max_frames=3,context_interval_ms=20))
+        calls=[];original=MCPServer.call_tool
+        async def observe(server,*a,**kw):
+            calls.append(asyncio.get_running_loop().time())
+            return await original(server,*a,**kw)
+        before=set(asyncio.all_tasks())
+        with self.fixture(FAKE.replace('# READ_HOOK','time.sleep(60)')), \
+                patch.object(MCPServer,'call_tool',observe),contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(asyncio.TimeoutError):await run(args)
+        self.assertGreaterEqual(len(calls),5)
+        self.assertGreater(calls[-1]-calls[0],.15)
+        self.assertTrue(all(p.returncode is not None for p in self.children))
+        count=len(calls);await asyncio.sleep(.05)
+        self.assertEqual(len(calls),count)
+        self.assertFalse([t for t in asyncio.all_tasks()-before if not t.done()])
