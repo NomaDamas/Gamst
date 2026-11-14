@@ -63,6 +63,11 @@ def prepare_window(pcm, *, sample_rate, prompt, hop_length, anchors=None):
             pcm.ndim != 1):
         raise ValueError('plain mono one-dimensional float32 ndarray required')
     count = _samples(len(pcm))
+    # Validation and hashing must examine the same owned snapshot, not a
+    # caller buffer that can change between a finite check and serialization.
+    pcm = pcm.copy(order='C')
+    if pcm.ndim != 1 or len(pcm) != count or pcm.dtype != np.dtype('float32'):
+        raise ValueError('input layout changed while copying')
     if not np.isfinite(pcm).all() or (np.abs(pcm) > 1).any():
         raise ValueError('input PCM must be finite and normalized within[-1,1]')
     if type(prompt) is not str or not prompt.strip() or len(prompt) > MAX_PROMPT_BYTES:
@@ -126,6 +131,9 @@ def validate_outputs(target, residual, *, sample_count, hop_length):
         if (type(waveform) is not np.ndarray or waveform.dtype != np.dtype('float32') or
                 waveform.ndim != 1 or len(waveform) != padded):
             raise ValueError('native output must be float32 with exact codec-aligned length')
+        waveform = waveform.copy(order='C')
+        if waveform.ndim != 1 or len(waveform) != padded or waveform.dtype != np.dtype('float32'):
+            raise ValueError('native output layout changed while copying')
         if not np.isfinite(waveform).all() or (np.abs(waveform) > 16).any():
             raise ValueError('native output exceeds finite SDK amplitude bound16')
         results.append(waveform[:count].astype('<f4', copy=True))

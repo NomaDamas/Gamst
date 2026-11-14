@@ -1,5 +1,6 @@
 import hashlib
 import unittest
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -39,6 +40,23 @@ class WindowContract(unittest.TestCase):
             self.assertTrue(result.array().flags.c_contiguous)
         for count in (0, 47999, 192001):
             with self.assertRaises(ValueError): self.prepare(np.zeros(count, np.float32))
+
+    def test_validation_uses_owned_snapshot_before_finite_check(self):
+        original_isfinite = np.isfinite
+        for output in (False, True):
+            source = np.zeros(48000,np.float32)
+            def mutate_caller(value):
+                result = original_isfinite(value)
+                source[-1] = np.nan
+                return result
+            with patch('numpy.isfinite', side_effect=mutate_caller):
+                if output:
+                    result = validate_outputs([source],[np.zeros(48000,np.float32)],
+                                              sample_count=48000,hop_length=1920)[0]
+                else:
+                    result = self.prepare(source).array()
+            self.assertTrue(np.isfinite(result).all())
+            self.assertTrue(np.isnan(source[-1]))
 
     def test_mono_rate_dtype_and_subclass_are_explicit(self):
         for source in (np.zeros((1,48000),np.float32), np.zeros(48000,np.float64),
