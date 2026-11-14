@@ -43,24 +43,37 @@ def _artifact(path, digest):
     if h.hexdigest()!=digest: raise ValueError('execution artifact hash mismatch: '+path)
 
 
-def validate_command(command):
+def validate_command_declaration(command):
+    """Validate portable command declarations without accessing historical assets."""
     _keys(command,('argv','cwd','artifacts','environment'),'command')
     argv=command['argv']
     if (type(argv) is not list or not 1<=len(argv)<=64 or
             any(type(a) is not str or not a or len(a)>4096 or '\0' in a for a in argv)):
         raise ValueError('argv must contain 1..64 bounded strings')
     if not Path(argv[0]).is_absolute(): raise ValueError('executable must be absolute')
-    if type(command['cwd']) is not str or not Path(command['cwd']).is_absolute() or not Path(command['cwd']).is_dir():
-        raise ValueError('cwd must be an absolute existing directory')
+    if (type(command['cwd']) is not str or '\0' in command['cwd'] or
+            not Path(command['cwd']).is_absolute()):
+        raise ValueError('cwd must be an absolute directory path')
     artifacts=command['artifacts']
     if type(artifacts) is not dict or not 1<=len(artifacts)<=256 or argv[0] not in artifacts:
         raise ValueError('hash all declared execution artifacts including executable')
-    for path,digest in artifacts.items(): _artifact(path,digest)
+    for path,digest in artifacts.items():
+        if type(path) is not str or not Path(path).is_absolute() or '\0' in path:
+            raise ValueError('artifact must be an absolute path')
+        _digest(digest)
     env=command['environment']
     if (type(env) is not dict or len(env)>64 or
             any(type(k) is not str or not k or len(k)>128 or '=' in k or '\0' in k or
                 type(v) is not str or len(v)>4096 or '\0' in v for k,v in env.items())):
         raise ValueError('invalid explicit environment')
+
+
+def validate_command(command):
+    validate_command_declaration(command)
+    if not Path(command['cwd']).is_dir():
+        raise ValueError('cwd must be an absolute existing directory')
+    for path, digest in command['artifacts'].items():
+        _artifact(path, digest)
 
 
 def validate_collection(plan, inputs, expected_plan_sha256):
