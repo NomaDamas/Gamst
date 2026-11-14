@@ -1,0 +1,289 @@
+"""Explicit, bounded recommendation lifecycle; never calls a model or controls sensors."""
+from collections import deque
+from copy import deepcopy
+import hashlib
+import threading
+import uuid
+
+from .capabilities import bounded_json, identifier
+from .call_policy import CallPolicy, _canonical, _ms, _sha
+from .call_budget import CallBudget, _integer
+
+
+def _digest(value):
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _owner(record, decision):
+    e = decision['evidence']
+    base = tuple(e[k] for k in ('subject_id', 'source_id', 'sensor_id', 'capability_id'))
+    signature = _digest(dict(base=base, stream_epoch=e['stream_epoch'],
+        processing_epoch=e['processing_epoch'], coordinate_frame=e['coordinate_frame'],
+        calibration_id=e['calibration_id'], capability=record['observation']['capability'],
+        modality=record['observation']['modality'],
+        channels=record['observation']['sensor'].get('channels', [])))
+    return base, signature
+
+
+class CallController:
+    """Owns source history, bounded requests and an exclusive fresh CallBudget.
+
+    Application must retain/verify media and explicitly perform authorized calls.
+    Lifecycle acknowledgements are trusted application inputs, not model claims.
+    """
+    def __init__(self, *, policy, budget, max_sources=32, max_requests=128,
+                 receipt_limit=128, retention_ms=60000):
+        if type(policy) is not CallPolicy or type(budget) is not CallBudget:
+            raise ValueError('explicit policy and fresh exclusive budget required')
+        if budget.snapshot()['accepted'] or budget.snapshot()['closed']:
+            raise ValueError('budget must be fresh and exclusively owned')
+        self._policy, self._budget = policy, budget
+        self._max_sources = _integer(max_sources, 128, 1)
+        self._max_requests = _integer(max_requests, 256, 1)
+        self._retention = _integer(retention_ms, 3600000, 1)
+        self._recent = deque(maxlen=_integer(receipt_limit, 256, 1))
+        self._lock = threading.RLock()
+        self._scope = uuid.uuid4().hex
+        self._sources, self._requests = {}, {}
+        self._source_seq = self._request_seq = self._budget_seq = 0
+        self._submission_seq = -1
+        self._clock = self._retired = self._overflow = 0
+        self._closed = False
+
+    def _time(self, now_ms):
+        now = _ms(now_ms)
+        if now < self._clock:
+            raise ValueError('controller clock regression')
+        self._clock = now
+        return now
+
+    def _source(self, handle):
+        if type(handle) is not str or handle not in self._sources:
+            raise ValueError('unknown or closed source handle')
+        return self._sources[handle]
+
+    def _request(self, token):
+        if type(token) is not str or token not in self._requests:
+            raise ValueError('unknown or retired request')
+        return self._requests[token]
+
+    def open_source(self, record, *, now_ms):
+        record = bounded_json(record, max_bytes=131072)
+        with self._lock:
+            now = self._time(now_ms)
+            if self._closed:
+                raise RuntimeError('controller closed')
+            decision = self._policy.recommend(record, now_ms=now)
+            base, owner = _owner(record, decision)
+            if any(s['base'] == base for s in self._sources.values()):
+                raise ValueError('close previous source before epoch/config replacement')
+            if len(self._sources) >= self._max_sources:
+                raise RuntimeError('source capacity')
+            self._source_seq += 1
+            handle = f'{self._scope}:source:{self._source_seq}'
+            self._sources[handle] = dict(base=base, owner=owner, active=False,
+                last_dispatch=None, last_semantic=None, last_capture=None)
+            return handle
+
+    def submit(self, handle, record, *, sequence, now_ms, **rules):
+        allowed = {'change_score', 'query', 'needs_visual', 'unknown_candidate',
+                   'conflict_rule', 'visual_reference'}
+        if not set(rules) <= allowed:
+            raise ValueError('caller cannot override owned lifecycle history')
+        rules = bounded_json(rules)
+        record = bounded_json(record, max_bytes=131072)
+        with self._lock:
+            now = self._time(now_ms); s = self._source(handle)
+            if self._closed:
+                raise RuntimeError('controller closed')
+            sequence = _integer(sequence, 2**53-1)
+            if sequence <= self._submission_seq:
+                raise ValueError('submission replay or reordering')
+            d = self._policy.recommend(record, now_ms=now, change_active=s['active'],
+                last_dispatch_ms=s['last_dispatch'], last_semantic_capture_ms=s['last_semantic'], **rules)
+            if _owner(record, d)[1] != s['owner']:
+                raise ValueError('source epoch/configuration mismatch')
+            capture = d['evidence']['capture_ms']
+            if s['last_capture'] is not None and capture < s['last_capture']:
+                raise ValueError('capture order regression')
+            self._submission_seq = sequence
+            fingerprint = _digest(dict(record=d['evidence']['record_sha256'], rules=rules))
+            for r in self._requests.values():
+                if r['source'] == handle and r['fingerprint'] == fingerprint:
+                    return dict(status='coalesced_exact', request_id=r['id'], decision=deepcopy(r['decision']))
+            if any(b != 'cooldown' for b in d['blockers']):
+                return dict(status='rejected', reason='invalid_dispatch_evidence', decision=d)
+            if d['desired_route'] == 'none':
+                # Never let future/expired records advance hysteresis/history.
+                age = now-capture
+                if record['quality']['status'] == 'sufficient' and 0 <= age <= min(self._policy.max_age_ms, record['observation']['capability']['freshness_ms']):
+                    s.update(active=d['proposed_change_active'], last_capture=capture)
+                return dict(status='context_only', decision=d)
+            priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
+            if len(self._requests) >= self._max_requests:
+                victims = [r for r in self._requests.values() if r['state'] == 'pending' and r['priority'] > priority]
+                if victims:
+                    victim = max(victims, key=lambda r:(r['priority'], r['submitted_ms']))
+                    self._retire(victim, 'preempted_uninspected')
+            if len(self._requests) >= self._max_requests:
+                self._overflow += 1
+                return dict(status='rejected', reason='request_capacity', decision=d)
+            self._request_seq += 1
+            token = f'{self._scope}:request:{self._request_seq}'
+            priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
+            self._requests[token] = dict(id=token, source=handle, fingerprint=fingerprint,
+                state='pending', decision=d, record=record, rules=rules,
+                submitted_ms=now, expires_ms=min(2**53-1, now+self._retention), priority=priority,
+                reservation=None, execution=None, finished=False, charged=False,
+                discard=False, outcome=None)
+            # The event is now retained even if cooldown or price blocks execution.
+            s.update(active=d['proposed_change_active'], last_capture=capture)
+            return dict(status='queued', request_id=token, decision=deepcopy(d))
+
+    def _blockers(self, r, now):
+        s = self._sources.get(r['source'])
+        if self._closed or s is None:
+            return ['source_closed']
+        capture = r['decision']['evidence']['capture_ms']
+        blockers = []
+        if now >= r['expires_ms']:
+            blockers.append('retention_expired')
+        if now-capture > min(self._policy.max_age_ms, r['record']['observation']['capability']['freshness_ms']):
+            blockers.append('stale_capture')
+        if s['last_dispatch'] is not None and now-s['last_dispatch'] < self._policy.cooldown_ms:
+            blockers.append('cooldown')
+        return blockers
+
+    def reserve(self, token, *, provider, model_revision, prompt_sha256,
+                maximum_charge, now_ms, ttl_ms=1000):
+        _sha(prompt_sha256); identifier(provider); identifier(model_revision)
+        with self._lock:
+            now = self._time(now_ms); r = self._request(token)
+            if r['state'] != 'pending':
+                raise ValueError('request already reserved or dispatched')
+            blockers = self._blockers(r, now)
+            if blockers:
+                return dict(status='blocked', blockers=blockers)
+            execution = dict(request_id=token, route=r['decision']['desired_route'],
+                decision_sha256=r['decision']['decision_sha256'], provider=provider,
+                model_revision=model_revision, prompt_sha256=prompt_sha256)
+            self._budget_seq += 1
+            reservation = self._budget.reserve(sequence=self._budget_seq,
+                decision_sha256=_digest(execution), evidence_sha256=r['decision']['evidence']['record_sha256'],
+                provider=provider, model_revision=model_revision, maximum_charge=maximum_charge,
+                now_ms=now, ttl_ms=ttl_ms)
+            r.update(state='reserved', reservation=reservation, execution=execution)
+            return dict(status='reserved', execution=deepcopy(execution), reservation=deepcopy(reservation))
+
+    def dispatch(self, token, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms); r = self._request(token)
+            if r['state'] != 'reserved':
+                raise ValueError('reserved request required')
+            blockers = self._blockers(r, now)
+            if now >= r['reservation']['expires_ms']:
+                blockers.append('reservation_expired')
+            if blockers:
+                self._budget.release(r['reservation']['token'], now_ms=now)
+                r.update(state='pending', reservation=None, execution=None)
+                return dict(status='blocked', blockers=blockers)
+            self._budget.dispatch(r['reservation']['token'], now_ms=now)
+            r['state'] = 'dispatched'
+            self._sources[r['source']]['last_dispatch'] = now
+            return dict(status='dispatched', execution=deepcopy(r['execution']),
+                evidence=deepcopy(r['decision']['evidence']), visual_reference=deepcopy(r['decision']['visual_reference']))
+
+    def finish(self, token, *, success, evidence_sha256, result_sha256, now_ms):
+        if type(success) is not bool:
+            raise ValueError('explicit success required')
+        _sha(evidence_sha256); _sha(result_sha256)
+        with self._lock:
+            now = self._time(now_ms); r = self._request(token)
+            if r['state'] != 'dispatched' or r['finished']:
+                raise ValueError('single dispatched completion required')
+            if evidence_sha256 != r['decision']['evidence']['record_sha256']:
+                raise ValueError('completion evidence mismatch')
+            s = self._sources.get(r['source'])
+            valid = success and not r['discard'] and not self._closed and s is not None
+            semantic = valid and r['decision']['desired_route'] in ('small_vlm', 'strong_vlm')
+            if semantic:
+                capture = r['decision']['evidence']['capture_ms']
+                s['last_semantic'] = max(capture, s['last_semantic'] or 0)
+            r.update(finished=True, outcome=dict(success=success, accepted=valid,
+                result_sha256=result_sha256, completed_ms=now,
+                semantic_capture_ms=r['decision']['evidence']['capture_ms'] if semantic else None))
+            result = deepcopy(r['outcome'])
+            if r['charged']:
+                self._retire(r, 'completed')
+            return result
+
+    def settle(self, token, *, components, now_ms):
+        with self._lock:
+            now = self._time(now_ms); r = self._request(token)
+            if r['state'] != 'dispatched' or r['charged']:
+                raise ValueError('single dispatched financial settlement required')
+            result = self._budget.settle(r['reservation']['token'], components=components, now_ms=now)
+            if result['state'] == 'settled':
+                r['charged'] = True
+                if r['finished']:
+                    self._retire(r, 'completed')
+            return result
+
+    def _retire(self, r, reason):
+        self._retired += 1
+        self._recent.append(dict(id=r['id'], source=r['source'], reason=reason,
+            evidence=deepcopy(r['decision']['evidence']), outcome=deepcopy(r['outcome'])))
+        del self._requests[r['id']]
+
+    def cancel(self, token, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms); r = self._request(token)
+            if r['state'] == 'dispatched':
+                r['discard'] = True
+                return dict(status='discard_output', liability_preserved=True)
+            if r['state'] == 'reserved':
+                self._budget.release(r['reservation']['token'], now_ms=now)
+            self._retire(r, 'cancelled_undispatched')
+            return dict(status='cancelled')
+
+    def expire(self, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms)
+            tokens = [t for t, r in self._requests.items()
+                      if r['state'] != 'dispatched' and now >= r['expires_ms']]
+            for token in tokens:
+                r = self._requests[token]
+                if r['state'] == 'reserved':
+                    self._budget.release(r['reservation']['token'], now_ms=now)
+                self._retire(r, 'expired_uninspected')
+            return len(tokens)
+
+    def close_source(self, handle, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms); self._source(handle)
+            for r in list(self._requests.values()):
+                if r['source'] == handle:
+                    self.cancel(r['id'], now_ms=now)
+            del self._sources[handle]
+
+    def close(self, *, now_ms):
+        with self._lock:
+            now = self._time(now_ms)
+            for handle in list(self._sources):
+                self.close_source(handle, now_ms=now)
+            self._closed = True
+            self._budget.close(now_ms=now)
+
+    def snapshot(self, *, now_ms=None):
+        with self._lock:
+            if now_ms is not None:
+                self._time(now_ms)
+            requests = sorted(self._requests.values(), key=lambda r:(r['priority'], r['submitted_ms'], r['id']))
+            return deepcopy(dict(closed=self._closed, sources=self._sources,
+                requests=[dict(id=r['id'], source=r['source'], state=r['state'], priority=r['priority'],
+                    decision=r['decision'], blockers=self._blockers(r, self._clock),
+                    expires_ms=r['expires_ms'], finished=r['finished'], charged=r['charged'],
+                    discard=r['discard'], execution=r['execution']) for r in requests],
+                recent=list(self._recent), omitted_receipts=self._retired-len(self._recent),
+                overflow_rejections=self._overflow, budget=self._budget.snapshot(),
+                executes_model=False, changes_sensor_cadence=False, durable=False))
