@@ -1,0 +1,209 @@
+"""Real loopback HTTP transport. All provider identities/results are synthetic."""
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from humansense.native_entry import _issue_entry_binding
+from humansense.openai_responses import OpenAIResponsesClient
+from humansense.openai_responses_codec import normalize,strict_json
+from humansense.responses_evidence import ResponsesEvidenceSession,RESERVATION
+from test_native_entry import owner,binding
+
+
+def request():return dict(provider='openai',model_revision='fixture-model',messages=[dict(role='system',content='fixture instructions'),dict(role='user',content='fixture question')])
+
+def response():return dict(id='resp_fixture_one',object='response',model='fixture-model',status='completed',created_at=1700000000,
+    output=[dict(type='message',role='assistant',status='completed',content=[dict(type='output_text',text='fixture answer')])],
+    usage=dict(input_tokens=10,output_tokens=2,input_tokens_details=dict(cached_tokens=3,cache_write_tokens=4),total_tokens=12))
+
+
+class Transport(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp=tempfile.TemporaryDirectory(dir='.');self.sink=ResponsesEvidenceSession(Path(self.tmp.name)/'evidence',owner_kind='task_native3',expected_owner=owner(),retain_response_bytes=True,retain_financial_hashes=True)
+        self.calls=[];self.connections=set();self.entered=asyncio.Event();self.hold=None;self.reply=response();self.status=200;self.raw_override=None;self.chunked=False
+        async def serve(reader,writer):
+            task=asyncio.current_task();self.connections.add(task)
+            try:
+                head=await reader.readuntil(b'\r\n\r\n');size=int(next(x.split(b':',1)[1] for x in head.split(b'\r\n') if x.lower().startswith(b'content-length:')))
+                body=await reader.readexactly(size);self.calls.append((head,body));self.entered.set()
+                if self.hold is not None:await self.hold.wait()
+                raw=self.raw_override if self.raw_override is not None else json.dumps(self.reply).encode()
+                framing=b'Transfer-Encoding: chunked' if self.chunked else f'Content-Length: {len(raw)}'.encode()
+                writer.write(f'HTTP/1.1 {self.status} fixture\r\n'.encode()+b'X-Request-Id: req_fixture_one\r\nContent-Type: application/json\r\n'+framing+b'\r\n\r\n')
+                if self.chunked:writer.write(f'{len(raw):x}\r\n'.encode()+raw+b'\r\n0\r\n\r\n')
+                else:writer.write(raw)
+                await writer.drain()
+            except (asyncio.CancelledError,ConnectionError):pass
+            finally:writer.close();await writer.wait_closed();self.connections.discard(task)
+        self.server=await asyncio.start_server(serve,'127.0.0.1',0)
+        self.client=OpenAIResponsesClient._loopback_fixture(port=self.server.sockets[0].getsockname()[1],api_key='fixture-key',model_revision='fixture-model',account_scope='fixture-account',project_id='fixture-project',evidence_session=self.sink)
+    async def asyncTearDown(self):
+        await self.client.close();await self.sink.close();self.server.close();await self.server.wait_closed()
+        for task in tuple(self.connections):task.cancel()
+        if self.connections:await asyncio.gather(*tuple(self.connections),return_exceptions=True)
+        self.tmp.cleanup()
+    def prepare(self):
+        prepared=self.client.prepare(request());return prepared,_issue_entry_binding(binding(prepared.sdk_hash))
+    def manifest(self):return json.loads((self.sink.directory/'call-0000.json').read_bytes())
+
+    async def test_actual_wire_single_send_raw_usage_and_ids(self):
+        prepared,entry=self.prepare();result=await prepared.invoke(entry);await prepared.release()
+        self.assertEqual(result,dict(text='fixture answer',usage=dict(input_tokens=10,output_tokens=2,cached_input_tokens=3)))
+        head,body=self.calls[0];wire=json.loads(body)
+        self.assertEqual(wire['model'],'fixture-model');self.assertEqual(wire['input'][0]['content'][0]['text'],'fixture question')
+        self.assertEqual((wire['stream'],wire['background'],wire['store']),(False,False,False))
+        m=self.manifest();self.assertEqual(m['wire_sha256'],hashlib.sha256(body).hexdigest());self.assertEqual(m['entry_binding'],entry.snapshot())
+        self.assertNotEqual(m['sdk_request_sha256'],m['wire_sha256']);self.assertEqual(m['server_request_id'],'req_fixture_one')
+        self.assertEqual(m['response_id'],'resp_fixture_one');self.assertFalse(m['count_bucket_verified']);self.assertIsNone(m['actual_cost'])
+        original=json.loads((self.sink.directory/m['raw_response']['path']).read_bytes())
+        self.assertEqual(original['usage']['input_tokens_details']['cache_write_tokens'],4)
+        self.assertNotIn('fixture-key',json.dumps(m));self.assertEqual(len(self.calls),1)
+        await self.sink.close()
+        with self.assertRaises(RuntimeError):self.client.prepare(request())
+
+    async def test_chunked_real_wire(self):
+        self.chunked=True;p,b=self.prepare();await p.invoke(b);await p.release();self.assertTrue(self.manifest()['raw_response']['complete'])
+
+    async def test_model_mismatch_is_accounted_failure_with_original_bytes(self):
+        self.reply['model']='fixture-wrong';p,b=self.prepare()
+        with self.assertRaises(ValueError):await p.invoke(b)
+        await p.release();m=self.manifest();self.assertEqual(m['returned_model'],'fixture-wrong');self.assertEqual(m['terminal'],'error')
+        self.assertEqual(len(self.calls),1);self.assertIsNone(m['actual_cost'])
+
+    async def test_http_error_keeps_request_id_and_body(self):
+        self.status=429;self.reply={'error':{'message':'fixture refusal'}};p,b=self.prepare()
+        with self.assertRaises(ValueError):await p.invoke(b)
+        await p.release();m=self.manifest();self.assertEqual(m['server_request_id'],'req_fixture_one');self.assertTrue(m['raw_response']['complete'])
+
+    async def test_oversize_and_malformed_remain_incomplete_or_failed(self):
+        self.raw_override=b'x'*(1048576+1);p,b=self.prepare()
+        with self.assertRaises(ValueError):await p.invoke(b)
+        await p.release();m=self.manifest();self.assertTrue(m['raw_response']['truncated']);self.assertFalse(m['raw_response']['complete'])
+        self.assertEqual(m['raw_response']['bytes'],1048576)
+
+    async def test_cancel_after_actual_send_and_concurrent_close_join(self):
+        self.hold=asyncio.Event();p,b=self.prepare();task=asyncio.create_task(p.invoke(b));await self.entered.wait()
+        await asyncio.gather(self.client.close(),self.client.close())
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertTrue(p._task.done());self.assertIsNone(p.writer);self.assertEqual(len(self.calls),1)
+        m=self.manifest();self.assertEqual(m['terminal'],'cancelled');self.assertIsNone(m['server_request_id'])
+        self.assertIn('possible_send',[x['event'] for x in m['milestones']])
+
+    async def test_session_closes_unused_lease_and_prevents_late_send(self):
+        p,b=self.prepare();inventory=await self.sink.close()
+        with self.assertRaises(RuntimeError):await p.invoke(b)
+        self.assertEqual(self.calls,[]);self.assertEqual(len(inventory['entries']),1);self.assertEqual(self.manifest()['terminal'],'not_entered')
+
+    async def test_binding_mismatch_never_sends(self):
+        p,b=self.prepare();row=b.snapshot();row['owner']['arm']='A'
+        with self.assertRaises(ValueError):await p.invoke(_issue_entry_binding(row))
+        await p.release();self.assertEqual(self.calls,[])
+
+    async def test_sink_capacity_failure_prevents_send(self):
+        self.sink._max=1024
+        with self.assertRaises(RuntimeError):self.client.prepare(request())
+        self.assertEqual(self.calls,[])
+
+    async def test_artifact_failure_after_send_marks_incomplete(self):
+        p,b=self.prepare()
+        with patch.object(self.sink,'_write',side_effect=OSError('fixture disk failure')):
+            with self.assertRaises(OSError):await p.invoke(b)
+        await p.release();self.assertTrue(self.sink._incomplete);self.assertEqual(len(self.calls),1)
+        with self.assertRaises(RuntimeError):self.client.prepare(request())
+
+    async def test_reader_verifies_exact_originals_without_certifying_native_money(self):
+        from humansense.responses_evidence_reader import read_responses_evidence
+        p,b=self.prepare();await p.invoke(b);await p.release();await self.sink.close()
+        inventory=(self.sink.directory/'inventory.json').read_bytes();sha=hashlib.sha256(inventory).hexdigest()
+        evidence=read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
+        row=next(evidence.entries());self.assertEqual(json.loads(row['raw_response'])['id'],'resp_fixture_one')
+        self.assertEqual(row['ordinal'],0)
+        self.assertEqual(row['original_manifest_sha256'],hashlib.sha256((self.sink.directory/'call-0000.json').read_bytes()).hexdigest())
+        self.assertEqual(evidence.owner_declaration()['entry_count'],1)
+        detached=evidence.owner_declaration();detached['owner_kind']='changed'
+        self.assertEqual(evidence.owner_declaration()['owner_kind'],'task_native3')
+        self.assertFalse(row['native_binding_verified']);self.assertFalse(row['receipt_authenticity_verified'])
+        (self.sink.directory/'raw-0000.bin').write_bytes(b'{}')
+        with self.assertRaises(ValueError):read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
+
+    async def test_explicit_retention_and_symlink_boundaries(self):
+        with self.assertRaises(PermissionError):ResponsesEvidenceSession(Path(self.tmp.name)/'no-consent',owner_kind='task_native3',expected_owner=owner())
+        self.assertFalse((Path(self.tmp.name)/'no-consent').exists())
+        target=Path(self.tmp.name)/'linked';target.symlink_to(self.sink.directory.resolve(),target_is_directory=True)
+        with self.assertRaises(OSError):ResponsesEvidenceSession(target/'child',owner_kind='task_native3',expected_owner=owner(),retain_response_bytes=True,retain_financial_hashes=True)
+
+    async def test_repeated_cancel_of_session_close_joins_live_send(self):
+        self.hold=asyncio.Event();p,b=self.prepare();task=asyncio.create_task(p.invoke(b));await self.entered.wait()
+        close=asyncio.create_task(self.sink.close());await asyncio.sleep(0);close.cancel();close.cancel()
+        try:await close
+        except asyncio.CancelledError:pass
+        with self.assertRaises(asyncio.CancelledError):await task
+        result=await self.sink.close();self.assertFalse(self.sink._leases);self.assertIsNone(p.writer)
+        self.assertEqual(len(result['entries']),1)
+
+
+    async def test_shared_deadline_after_actual_send_owns_socket_cleanup(self):
+        self.hold=asyncio.Event();p,b=self.prepare();real_wait=asyncio.wait
+        async def controlled_wait(tasks,**kwargs):
+            values=tuple(tasks)
+            if len(values)==1 and values[0].get_coro().__name__=='_exchange':
+                await self.entered.wait()
+                return set(),set(values)
+            return await real_wait(tasks,**kwargs)
+        with patch('humansense.openai_responses.asyncio.wait',side_effect=controlled_wait):
+            with self.assertRaises(TimeoutError):await p.invoke(b)
+        await p.release();self.assertEqual(len(self.calls),1);self.assertIsNone(p.writer)
+        self.assertEqual(self.manifest()['terminal'],'timeout')
+
+
+    async def test_cancel_before_owned_transport_task_first_step_preserves_native_entry(self):
+        p,b=self.prepare();real_create=asyncio.create_task
+        def cancelled_before_start(coro,*args,**kwargs):
+            task=real_create(coro,*args,**kwargs)
+            if coro.__name__=='_run':task.cancel()
+            return task
+        with patch('humansense.openai_responses.asyncio.create_task',side_effect=cancelled_before_start):
+            with self.assertRaises(asyncio.CancelledError):await p.invoke(b)
+        await p.release();m=self.manifest()
+        self.assertEqual(m['terminal'],'cancelled');self.assertIsNotNone(m['entry_binding'])
+        self.assertNotIn('possible_send',[x['event'] for x in m['milestones']]);self.assertEqual(self.calls,[])
+
+
+
+class Projection(unittest.TestCase):
+    def test_missing_details_are_unknown_not_cached_zero(self):
+        value=response();value['usage'].pop('input_tokens_details');self.assertIsNone(normalize(value,'fixture-model')['usage'])
+        value['usage']=None;self.assertIsNone(normalize(value,'fixture-model')['usage'])
+    def test_json_duplicate_nonfinite_and_depth(self):
+        for raw in (b'{"id":1,"id":2}',b'{"x":NaN}',b'['*33+b'0'+b']'*33,b'{"x":1e999}'):
+            with self.assertRaises(ValueError):strict_json(raw)
+
+class OriginalEntry(unittest.IsolatedAsyncioTestCase):
+    async def test_native3_bound_callback_has_one_original_attempt_and_owner(self):
+        from test_runtime_instrumentation import session
+        from test_text_context_call import Calls
+        from humansense.text_context_call import TextContextCalls
+        from humansense.call_controller import _digest
+        from humansense.schema import timestamp
+        harness=Calls();await harness.asyncSetUp()
+        with tempfile.TemporaryDirectory(dir='.') as tmp:
+            observer=session(Path(tmp).resolve(),provider='openai',revision='fixture-model')
+            async def unused(request):raise AssertionError('request-only callback must not run')
+            adapter=TextContextCalls(harness.h,'main',unused,provider='openai',model_revision='fixture-model')
+            rid,record=await harness.queued();request,_=adapter._prepare(rid,record,'fixture question')
+            ticket=observer.reserve_call(harness.c,rid,provider='openai',model_revision='fixture-model',prompt_sha256=_digest(request))
+            harness.c.reserve(rid,provider='openai',model_revision='fixture-model',prompt_sha256=_digest(request),maximum_charge=1,now_ms=timestamp())
+            harness.c.dispatch(rid,now_ms=timestamp());ticket.dispatched();seen=[]
+            async def callback(entry):seen.append(entry.snapshot());return dict(text='fixture result',usage=None)
+            await ticket.invoke_bound(callback);ticket.finish('completed');report=await observer.close()
+            attempt=report['reports'][0]['attempts'][0]
+            self.assertEqual(len(report['reports'][0]['attempts']),1)
+            self.assertEqual(seen[0]['entry']['attempt_id'],attempt['attempt_id'])
+            self.assertEqual(seen[0]['owner'],observer.binding_owner())
+            self.assertEqual(seen[0]['prompt_sha256'],_digest(request))
+            await adapter.close()
+        await harness.asyncTearDown()
