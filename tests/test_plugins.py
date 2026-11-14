@@ -122,12 +122,12 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict("sys.modules", {"cv2": CV}):
             session = CaptureSession(object(), video=0, consent=True)
             await session.start()
-            await asyncio.sleep(.02)
+            with self.assertRaisesRegex(RuntimeError, "Camera frame read failed"):
+                await session.wait()
             self.assertIn("Camera frame read failed", " ".join(session.status()["errors"]))
             self.assertFalse(session.status()["running"])
             self.assertTrue(camera.released)
-            with self.assertRaises(RuntimeError):
-                await session.wait()
+            self.assertFalse(session.status()["cleanup_pending"])
 
     async def test_pause_and_stop_reset_processing_without_pausing_text_runtime(self):
         class Runtime:
