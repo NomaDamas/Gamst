@@ -53,6 +53,14 @@ finish the same request while execute is running. Verified billing through
 controller.settle may arrive during execution. On each call the window
 state is reset, allowing nonconsecutive retained frames. After that async reset,
 actual controller reserve/dispatch rechecks host lifecycle, freshness and budget.
+An opt-in `dispatch_deadline_ns` additionally checks a bounded absolute reading of
+this host's `time.monotonic_ns()` after reset and immediately before dispatch.
+It is never a capture timestamp or remote clock. Expiry returns
+`blocked` / `dispatch_deadline_exceeded`; a pre-dispatch reservation is cancelled
+without entering the backend or erasing existing unknown financial liability.
+The default `None` preserves existing execution behavior. The
+[fresh-frame sentinel](frame-sentinel.md) uses this seam for its frozen due-point
+tolerance while retaining the existing evaluation observer hooks.
 Unknown or insufficient quotes block inference. Execution provenance binds the
 real profile/version and the native timestamped prompt hash (before image-token
 expansion). Prompt text is fixed by the existing native provider, not caller data.

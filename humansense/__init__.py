@@ -31,6 +31,9 @@ __all__ += ['OpenEBProcess']
 from .smolvlm_call import SmolVLMCalls, smolvlm_frame_sha256
 __all__ += ['SmolVLMCalls', 'smolvlm_frame_sha256']
 
+from .frame_sentinel import FreshFrameSentinel
+__all__ += ['FreshFrameSentinel']
+
 from .text_context_call import TextContextCalls
 __all__ += ['TextContextCalls']
 
