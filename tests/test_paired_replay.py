@@ -172,6 +172,26 @@ class Collection(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(digest,plan_digest(row));self.assertEqual(row['previous_trace_sha256'],previous)
                     previous=digest
 
+    async def test_exhausted_shared_deadline_does_not_start_collection(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            root=Path(directory).resolve();plan,inputs=setup(root,('timeout',))
+            original_gather=asyncio.gather;original_spawn=asyncio.create_subprocess_exec
+            collections=[];processes=[];ticks=iter((0,2_000_000_000))
+            def gather(*args,**kwargs):
+                if len(args)==4 and not kwargs:collections.append(args)
+                return original_gather(*args,**kwargs)
+            async def spawn(*args,**kwargs):
+                child=await original_spawn(*args,**kwargs);processes.append(child);return child
+            with patch('asyncio.gather',gather),patch('asyncio.create_subprocess_exec',spawn), \
+                    patch('benchmarks.paired_replay.time.perf_counter_ns',side_effect=lambda:next(ticks,3_000_000_000)):
+                result=await _execute(plan['runner']['commands']['baseline'],{'input':inputs[0]['input']},1000)
+            self.assertEqual(result['status'],'timeout')
+            self.assertEqual(result['diagnostic'],'deadline_exceeded')
+            self.assertEqual(collections,[])
+            self.assertEqual(len(processes),1)
+            self.assertIsNotNone(processes[0].returncode)
+            self.assertTrue(processes[0]._transport.is_closing())
+
     async def test_cleanup_failure_still_joins_all_collection_tasks(self):
         with tempfile.TemporaryDirectory(dir='.') as directory:
             root=Path(directory).resolve();plan,inputs=setup(root,('timeout',))

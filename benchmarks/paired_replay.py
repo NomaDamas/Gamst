@@ -181,6 +181,7 @@ async def _execute(command, request, timeout_ms):
               asyncio.create_task(_drain(proc.stderr,MAX_STDERR_BYTES)),asyncio.create_task(proc.wait())]
         async def collect(): return await asyncio.gather(*jobs)
         remaining=max(0.,timeout_ms/1000-(time.perf_counter_ns()-started)/1e9)
+        if remaining<=0: raise asyncio.TimeoutError()
         collection=asyncio.create_task(collect())
         done,_=await asyncio.wait({collection},timeout=remaining)
         if not done: raise asyncio.TimeoutError()
