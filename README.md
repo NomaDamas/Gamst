@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👁️ gamst
+# GAMST
 
 <img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
 
