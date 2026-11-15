@@ -954,6 +954,68 @@ class Gamst:
         return {"status": "available" if metrics else "insufficient", "metrics": metrics,
                 "window_ms": duration, "interpretation": "observed_patterns_only"}
 
+    async def build_temporal_context(self, subject_id="local-user", window="1h", *, query_cutoff_ms=None, max_bytes=131072, context_view=None):
+        """Return a bounded timestamped event packet for temporal consumers.
+
+        This is additive; ``get_context`` remains the stable legacy snapshot API.
+        Records after the query cutoff are never eligible.
+        """
+        from .evaluation_snapshot import context_exclusion
+        from .temporal import TemporalAligner, TemporalEvent
+        exclusion = context_exclusion(self, subject_id, context_view)
+        self._prune()
+        cutoff = timestamp(query_cutoff_ms)
+        start = cutoff - _window_ms(window)
+        records = [r for r in self.store.latest_signals(subject_id, start, cutoff, _exclude_capability=exclusion)
+                   if r.get("timestamp_ms", 0) <= cutoff]
+        aligner = TemporalAligner()
+        for record in records[:64]:
+            observation = record.get("observation", {})
+            ts = record.get("timestamp_ms")
+            if type(ts) is not int or not observation.get("name"):
+                continue
+            sensor = observation.get("sensor", {})
+            event = TemporalEvent(
+                event_id=record["id"], stream_id=str(sensor.get("source_id", "runtime")),
+                subject_id=subject_id, modality=str(observation.get("modality", "unknown")),
+                event_type=str(observation["name"]), source_clock="wall_ms",
+                capture_timestamp_ms=ts, start_ms=ts, end_ms=ts, sequence=record.get("sequence", 0),
+                provider=str(record.get("models", [{}])[0].get("id", "unknown")),
+                model_revision=str(record.get("models", [{}])[0].get("version", "unknown")),
+                value=observation.get("value"), evidence_ids=(record["id"],))
+            aligner.accept(event)
+        packet = aligner.packet(cutoff, now_ms=cutoff)
+        result = packet.as_dict()
+        if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > max_bytes:
+            raise ValueError("temporal context exceeds byte budget")
+        return result
+        from .evaluation_snapshot import context_exclusion
+        exclusion = context_exclusion(self, subject_id, context_view)
+        self._prune()
+        now = timestamp()
+        start = now-_window_ms(window)
+        counts, events = self.store.event_summary(subject_id, start, now, per_kind=8, _exclude_capability=exclusion)
+        total_events = sum(counts.values())
+        records = [r for r in self.store.latest_signals(subject_id, start, now, _exclude_capability=exclusion)+events
+                   if r.get("observation", {}).get("name") != TRANSCRIPT_OUTPUT]
+        result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
+            evidence=[{"record_id": r["id"]} for r in events])
+        result["models"] = self._models_for(records, result["models"])
+        from .context import observation_packet
+        result.update({"observations": observation_packet(records, now),
+                       "transcripts": self.transcript_memory.snapshot(subject_id, now_ms=now, start_ms=start),
+                       "context_policy": {"raw_media_included": False, "hypotheses_verified": False, "freshness_ms": 5000},
+                       "summary": {"event_counts": counts, "event_count": total_events,
+                                   "evidence_count": len(events), "max_evidence_per_event_type": 8,
+                                   "evidence_truncated": total_events > len(events),
+                                   "record_count": self.store.count(subject_id, start, now, _exclude_capability=exclusion), "method": "deterministic_aggregate"},
+                       "trends": await self.get_trends(subject_id, window, context_view=context_view),
+                       "include": include or ["speech", "movement", "interaction"]})
+        if context_view is not None:
+            result['context_policy'].update(view=context_view.name,
+                excluded_capability_sha256=context_view._publisher.capability_sha256)
+        return result
+
     async def get_context(self, subject_id="local-user", window="1h", include=None, *, context_view=None):
         from .evaluation_snapshot import context_exclusion
         exclusion = context_exclusion(self, subject_id, context_view)
