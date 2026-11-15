@@ -533,9 +533,9 @@ Defaults stay lightweight and local; higher-accuracy models are opt-in extras wi
 
 **How fusion works today.** Each specialist emits timestamped typed observations; GAMST selects fresh evidence and hands it to the LLM or decision provider. This is *decision-level late fusion mediated by language* ([Baltrušaitis et al., TPAMI 2019](https://ieeexplore.ieee.org/document/8269806)): modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry.
 
-**Future work** (tracked in GitHub issues with the `roadmap` label):
+**Future work** (milestone [Roadmap: fusion & streaming research](https://github.com/NomaDamas/Gamst/milestone/1), label `roadmap`):
 
-1. Calibrate the learned decision provider on GAMST traces (coverage-risk, abstention precision).
+1. Calibrate the learned decision provider on GAMST traces (coverage-risk, abstention precision) — [#285](https://github.com/NomaDamas/Gamst/issues/285).
 2. Event-gated hybrid streaming with heartbeat fallback ([StreamMind, ICCV 2025](https://openaccess.thecvf.com/content/ICCV2025/html/Ding_StreamMind_Unlocking_Full_Frame_Rate_Streaming_Video_Dialogue_through_Event-Gated_ICCV_2025_paper.html); [Dispider, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Qian_Dispider_Enabling_Video_LLMs_with_Active_Real-Time_Interaction_via_Disentangled_CVPR_2025_paper.html)).
 3. Shared retrieval embeddings without replacing typed evidence ([ImageBind, CVPR 2023](https://openaccess.thecvf.com/content/CVPR2023/html/Girdhar_ImageBind_One_Embedding_Space_To_Bind_Them_All_CVPR_2023_paper.html); [LanguageBind, ICLR 2024](https://proceedings.iclr.cc/paper_files/paper/2024/hash/2862ccf01e3843c81623b246895bcc45-Abstract-Conference.html)).
 4. Bounded intermediate-fusion AV specialists ([MBT, NeurIPS 2021](https://proceedings.neurips.cc/paper/2021/hash/76ba9f564ebbc35b1014ac498fafadd0-Abstract.html)) and latent compression ([Perceiver IO, ICLR 2022](https://iclr.cc/virtual/2022/poster/6269)).
@@ -543,7 +543,7 @@ Defaults stay lightweight and local; higher-accuracy models are opt-in extras wi
 6. Latent-prediction novelty gates ([V-JEPA, ICLR 2025](https://www.iclr.cc/virtual/2025/poster/31477)) and physics world models as labeled synthetic tests only ([Cosmos](https://arxiv.org/abs/2501.03575); [Genie, ICML 2024](https://proceedings.mlr.press/v235/bruce24a.html)).
 7. Goal-level handoff to embodied policies ([RT-2, Science Robotics 2023](https://www.science.org/doi/10.1126/scirobotics.adi9579); [OpenVLA, CoRL 2024](https://proceedings.mlr.press/v270/kim25c.html); [π0, RSS 2025](https://www.roboticsproceedings.org/rss21/p010.html)).
 
-None of these papers has been reproduced here; each issue states its acceptance test.
+Issues: event gating [#286](https://github.com/NomaDamas/Gamst/issues/286) · retrieval embeddings [#287](https://github.com/NomaDamas/Gamst/issues/287) · intermediate fusion [#288](https://github.com/NomaDamas/Gamst/issues/288) · streaming arm E [#289](https://github.com/NomaDamas/Gamst/issues/289) · physics/world models [#290](https://github.com/NomaDamas/Gamst/issues/290) · embodied handoff [#291](https://github.com/NomaDamas/Gamst/issues/291) · optional-provider acceptance [#292](https://github.com/NomaDamas/Gamst/issues/292). None of these papers has been reproduced here; each issue states its acceptance test.
 
 <a id="benchmarking"></a>
 ## 📊 Benchmarking with Gamst Bench
