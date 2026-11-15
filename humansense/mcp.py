@@ -36,6 +36,9 @@ def tool_definitions() -> list[dict]:
                     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144}}
     specs = [
         ("list_capabilities", "Registered sensory contracts; registration does not mean a model is installed or validated. Never activates sensors. Continue with next_offset and revision.", {"offset": {"type": "integer", "minimum": 0, "maximum": 256}, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"], "revision": {"type": "string", "minLength": 64, "maxLength": 64}}, ()),
+        ("list_decision_modules", "Internal multimodal perception decision modules. Discovery registers only a dependency-free contract; it never starts sensors or loads model weights.", {}, ()),
+        ("decide_multimodal", "Run an internal multimodal perception decision over already retained registered observations. The decision is published as decision.multimodal into Context and observation memory; no raw media is accepted or returned.", {"subject_id": SUBJECT, "window": WINDOW, "requested_capabilities": {"type": "array", "maxItems": 16, "items": identifier_field}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "timestamp_ms": TIME}, ()),
+        ("get_multimodal_decisions", "Read retained decision.multimodal observations produced by the internal perception module. No inference is run and no sensors are activated.", dict(query_bounds, window=WINDOW), ()),
         ("get_call_status", "Read-only bounded call-controller diagnostics. No model calls or cadence changes. Financial totals cover whole controller, not a selected subject. No raw observations, prompts or responses.",
          {"controller_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
         ("get_sentinel_status", "Read-only bounded fresh-frame scheduler diagnostics. Inspected capture points and unobserved gaps are not continuous scene coverage. Polling never starts capture or inference. No raw media.",
@@ -152,6 +155,14 @@ class MCPServer:
         if name == "get_stream_status":
             from .media import media_router
             return media_router(self.human).status()
+        if name == "list_decision_modules":
+            return await self.human.list_decision_modules()
+        if name == "decide_multimodal":
+            return await self.human.decide_multimodal(**args)
+        if name == "get_multimodal_decisions":
+            query = dict(args)
+            query["capability_id"] = "perception.multimodal_decision"
+            return await self.human.get_observations(**query)
         if name in ("get_features", "configure_feature"):
             from .settings import feature_status, configure_feature
             return feature_status(self.human) if name == "get_features" else await configure_feature(self.human, **args)

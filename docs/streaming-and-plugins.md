@@ -1,8 +1,9 @@
 # Streaming and plugin architecture
 
 gamst is a context runtime, not a fixed companion app or a single emotion
-model. Capture owns device I/O; model plugins own inference; the runtime owns
-bounded routing, provenance and context; the consuming app owns its decisions.
+model. Capture owns device I/O; single-modality and multimodal decision modules
+own perception inference; the runtime owns bounded routing, provenance and
+context; the consuming app or connected LLM owns the final response/action.
 
 ```mermaid
 flowchart LR
@@ -14,10 +15,20 @@ flowchart LR
     P --> C[Timestamped observations and context]
     P --> V[Temporal VLM: frames and measurements]
     V --> C
+    P --> M[Multimodal decision module]
+    M --> C
     C --> D[Charts and observability]
     C --> O[MCP / WebSocket / SDK contexts]
     O --> L[Ollama / existing LLM or VLM / application]
 ```
+
+The multimodal decision module is itself a perception module. It reads bounded
+registered observations from multiple modalities, selects or requests the next
+capability, and emits a registered `decision.multimodal` observation with
+evidence IDs, freshness, reason and an uncalibrated heuristic confidence. The
+decision is then part of the shared Context/Memory path. It never receives or
+returns raw media. `decide_multimodal` exposes the same provider through MCP;
+MCP is the invocation/transport layer, not the decision model.
 
 ## Design references
 

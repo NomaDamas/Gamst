@@ -13,6 +13,9 @@ __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetada
 __all__ += ['SensorStreams']
 __all__ += ['ProcessProvider']
 
+from .providers.multimodal_decision import MultimodalDecisionProvider
+__all__ += ['MultimodalDecisionProvider']
+
 from .transcripts import transcript_capability
 __all__ += ['transcript_capability']
 

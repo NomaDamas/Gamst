@@ -80,6 +80,10 @@ class HumanSense:
         self._call_drivers = {}
         self._call_driver_cleanup = {}
         self._separation_media = None
+        # The multimodal decision provider is an internal perception module.
+        # It is registered lazily so discovery of unrelated capabilities stays
+        # backward compatible and never loads a model or starts a sensor.
+        self._multimodal_decision = None
 
     def _register_evaluation_observer(self, observer):
         from .recording_scope import evaluation_owner
@@ -249,6 +253,52 @@ class HumanSense:
         if self.closed:
             raise RuntimeError('runtime is closed')
         self.perception_capabilities.register(spec)
+
+    def _ensure_multimodal_decision(self):
+        """Create/register the internal multimodal decision perception module."""
+        if self._multimodal_decision is None:
+            from .providers.multimodal_decision import MultimodalDecisionProvider
+            provider = MultimodalDecisionProvider()
+            self.register_capability(provider.spec)
+            self._multimodal_decision = provider
+        return self._multimodal_decision
+
+    async def list_decision_modules(self):
+        """Describe decision perception modules without activating sensors."""
+        provider = self._ensure_multimodal_decision()
+        return {"modules": [provider.descriptor], "activation": "explicit_decide_multimodal"}
+
+    async def decide_multimodal(self, subject_id='local-user', window='5s',
+                                requested_capabilities=None, limit=32,
+                                timestamp_ms=None):
+        """Run the internal multimodal perception decision over retained evidence.
+
+        The result is itself a registered ``decision.multimodal`` observation,
+        so it becomes part of Context/Memory and is available through MCP.
+        """
+        self._check()
+        identifier(subject_id)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit must be 1..100')
+        duration = _window_ms(window)
+        now = timestamp(timestamp_ms)
+        provider = self._ensure_multimodal_decision()
+        records = self.store.query(subject_id, max(0, now-duration), now,
+                                   'observation.signal', limit=limit * 4,
+                                   registered_only=True)
+        value = provider.decide(records, now_ms=now,
+                                requested_capabilities=requested_capabilities,
+                                input_window_ms=duration)
+        record = await self.push_observation(provider.spec.id, value,
+            sensor=provider.next_sensor(), subject_id=subject_id,
+            timestamp_ms=now)
+        record['decision_input'] = {
+            'window_ms': duration,
+            'requested_capabilities': list(requested_capabilities or []),
+            'evidence_count': len(value['evidence_ids']),
+            'raw_media_included': False,
+        }
+        return record
 
     async def push_observation(self, capability_id, value, *, sensor,
                                subject_id='local-user', timestamp_ms=None, quality=None):
