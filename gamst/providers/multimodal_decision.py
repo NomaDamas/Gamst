@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 
 from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, bounded_json, identifier
 from ..schema import timestamp
@@ -19,6 +18,82 @@ CAPABILITY_ID = "perception.multimodal_decision"
 OUTPUT_NAME = "decision.multimodal"
 PROVIDER_ID = "gamst.multimodal_decision.baseline"
 MODEL_VERSION = "0.1.0"
+
+
+def select_decision_evidence(records: list[dict], *, now_ms: int | None = None,
+                             requested_capabilities: list[str] | None = None,
+                             input_window_ms: int = 0, max_evidence: int = 16) -> dict:
+    """Select fresh, newest-per-capability evidence for any decision provider.
+
+    Selected tuples contain ``(timestamp, evidence_id, capability, modality,
+    record)``. The original record is retained for adapters, but evidence IDs
+    and all provenance remain host-owned. No observation value is copied here.
+    """
+    now = timestamp(now_ms)
+    if not isinstance(records, list):
+        raise TypeError("records must be a list")
+    if type(max_evidence) is not int or not 1 <= max_evidence <= 32:
+        raise ValueError("max_evidence must be an integer from 1 to 32")
+    requested = [] if requested_capabilities is None else list(requested_capabilities)
+    if type(input_window_ms) is not int or not 0 <= input_window_ms <= 86400000:
+        raise ValueError("input_window_ms must be a bounded integer")
+    if len(requested) > 16 or any(not isinstance(item, str) for item in requested):
+        raise ValueError("requested_capabilities must contain bounded strings")
+    for item in requested:
+        identifier(item, "requested_capability")
+
+    candidates = []
+    stale = False
+    requested_set = set(requested)
+    for record in records:
+        if not isinstance(record, dict) or record.get("type") != "observation.signal":
+            continue
+        observation = record.get("observation", {})
+        if not isinstance(observation, dict):
+            continue
+        capability = observation.get("capability", {})
+        capability_id = capability.get("id") if isinstance(capability, dict) else None
+        if not capability_id or capability_id == CAPABILITY_ID:
+            continue
+        if requested_set and capability_id not in requested_set:
+            continue
+        evidence_id = record.get("id")
+        ts = record.get("timestamp_ms")
+        modality = observation.get("modality")
+        if not isinstance(modality, str) and isinstance(capability, dict):
+            modality = capability.get("modality")
+        if not isinstance(evidence_id, str) or not isinstance(ts, int) or not isinstance(modality, str):
+            continue
+        age = max(0, now - ts)
+        freshness = capability.get("freshness_ms", 5000) if isinstance(capability, dict) else 5000
+        if not isinstance(freshness, int) or isinstance(freshness, bool) or freshness < 0:
+            continue
+        if age > freshness:
+            stale = True
+            continue
+        candidates.append((ts, evidence_id, capability_id, modality, record))
+
+    # One newest item per capability keeps decisions stable and bounded.
+    newest = {}
+    for item in sorted(candidates, key=lambda value: value[:4], reverse=True):
+        newest.setdefault(item[2], item)
+    selected = sorted(newest.values(), key=lambda value: value[:4], reverse=True)[:max_evidence]
+    watermark = hashlib.sha256(json.dumps(
+        [{"id": item[1], "timestamp_ms": item[0], "capability": item[2]} for item in selected],
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    return {
+        "now_ms": now,
+        "selected": selected,
+        "evidence_ids": [item[1] for item in selected],
+        "selected_capabilities": [item[2] for item in selected],
+        "modalities": sorted({item[3] for item in selected}),
+        "input_watermark": watermark,
+        "input_window_ms": input_window_ms,
+        "evidence_ages_ms": [max(0, now - item[0]) for item in selected],
+        "requested_capabilities": requested,
+        "stale_evidence": stale,
+    }
 
 
 class MultimodalDecisionProvider:
@@ -76,20 +151,6 @@ class MultimodalDecisionProvider:
             "max_evidence": self.max_evidence,
         }
 
-    @staticmethod
-    def _record_modality(record: dict) -> str | None:
-        observation = record.get("observation", {})
-        modality = observation.get("modality")
-        if isinstance(modality, str):
-            return modality
-        capability = observation.get("capability", {})
-        return capability.get("modality") if isinstance(capability, dict) else None
-
-    @staticmethod
-    def _capability_id(record: dict) -> str | None:
-        capability = record.get("observation", {}).get("capability", {})
-        return capability.get("id") if isinstance(capability, dict) else None
-
     def decide(self, records: list[dict], *, now_ms: int | None = None,
                requested_capabilities: list[str] | None = None,
                input_window_ms: int = 0) -> dict:
@@ -98,52 +159,16 @@ class MultimodalDecisionProvider:
         Records are evidence only. The returned confidence is an uncalibrated
         heuristic score and is deliberately not named ``probability``.
         """
-        now = timestamp(now_ms)
-        if not isinstance(records, list):
-            raise TypeError("records must be a list")
-        requested = [] if requested_capabilities is None else list(requested_capabilities)
-        if type(input_window_ms) is not int or not 0 <= input_window_ms <= 86400000:
-            raise ValueError("input_window_ms must be a bounded integer")
-        if len(requested) > 16 or any(not isinstance(item, str) for item in requested):
-            raise ValueError("requested_capabilities must contain bounded strings")
-        for item in requested:
-            identifier(item, "requested_capability")
-
-        candidates = []
-        requested_set = set(requested)
-        for record in records:
-            if not isinstance(record, dict) or record.get("type") != "observation.signal":
-                continue
-            observation = record.get("observation", {})
-            capability = self._capability_id(record)
-            if not capability or capability == CAPABILITY_ID:
-                continue
-            if requested_set and capability not in requested_set:
-                continue
-            evidence_id = record.get("id")
-            ts = record.get("timestamp_ms")
-            modality = self._record_modality(record)
-            if not isinstance(evidence_id, str) or not isinstance(ts, int) or not isinstance(modality, str):
-                continue
-            age = max(0, now - ts)
-            contract = observation.get("capability", {})
-            freshness = contract.get("freshness_ms", 5000) if isinstance(contract, dict) else 5000
-            if age > freshness:
-                continue
-            candidates.append((ts, evidence_id, capability, modality))
-
-        # One newest item per capability keeps decisions stable and bounded.
-        newest = {}
-        for item in sorted(candidates, reverse=True):
-            newest.setdefault(item[2], item)
-        selected = sorted(newest.values(), reverse=True)[: self.max_evidence]
-        evidence_ids = [item[1] for item in selected]
-        capabilities = [item[2] for item in selected]
-        modalities = sorted({item[3] for item in selected})
-        watermark = hashlib.sha256(json.dumps(
-            [{"id": item[1], "timestamp_ms": item[0], "capability": item[2]} for item in selected],
-            sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
+        selection = select_decision_evidence(
+            records, now_ms=now_ms, requested_capabilities=requested_capabilities,
+            input_window_ms=input_window_ms, max_evidence=self.max_evidence)
+        selected = selection["selected"]
+        evidence_ids = selection["evidence_ids"]
+        capabilities = selection["selected_capabilities"]
+        modalities = selection["modalities"]
+        watermark = selection["input_watermark"]
+        now = selection["now_ms"]
+        requested = selection["requested_capabilities"]
 
         if len(modalities) < self.min_modalities:
             if modalities == ["audio"]:
