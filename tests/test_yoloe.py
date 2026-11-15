@@ -18,10 +18,10 @@ try:
 except ImportError:
     np = None
 
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.yoloe import YOLOEContext, mask_context, prompt_labels, visual_examples
-from humansense.providers.yoloe_native import configuration, _read, NativeYOLOE
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.yoloe import YOLOEContext, mask_context, prompt_labels, visual_examples
+from gamst.providers.yoloe_native import configuration, _read, NativeYOLOE
 
 CONFIG = dict(labels=['cup','glass'],prompt_sha256='a'*64,checkpoint_sha256='b'*64,mode='text')
 NATIVE = dict(labels=['cup','glass'],checkpoint_path='/fixture.pt',checkpoint_sha256='b'*64,
@@ -58,7 +58,7 @@ class Labels(unittest.TestCase):
         self.assertNotEqual(a['prompt_sha256'],b['prompt_sha256'])
         for change in ({'imgsz':True},{'device':'mps'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
             with self.assertRaises(ValueError): configuration(dict(NATIVE,**change))
-        code = 'import sys;from humansense import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
+        code = 'import sys;from gamst import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
         result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -70,7 +70,7 @@ class Labels(unittest.TestCase):
             with self.assertRaises(ValueError): _read(path,digest,6)
             with self.assertRaises(ValueError): _read(path,'a'*64,7)
             code = '''import os,socket,sys
-from humansense.providers.yoloe_native import _bootstrap
+from gamst.providers.yoloe_native import _bootstrap
 os.environ['GAMST_PROVIDER_WORKER']='1'
 _bootstrap(sys.argv[1])
 assert os.environ['YOLO_AUTOINSTALL']=='False'
@@ -197,7 +197,7 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None,'NumPy optional runtime is unavailable')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_real_loader_missing_assets_fails_and_reaps_without_runtime_writes(self):
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         children=[];real_spawn=asyncio.create_subprocess_exec
         async def spawn(*args,**kw):
             child=await real_spawn(*args,**kw);children.append(child);return child
@@ -216,15 +216,15 @@ class Managed(unittest.IsolatedAsyncioTestCase):
                     if child.returncode is None:child.kill();await child.wait()
 
     async def test_owned_worker_context_to_mcp_with_explicit_test_backend(self):
-        from humansense import HumanSense,ProcessProvider,SensorStreams
-        from humansense.mcp import MCPServer
+        from gamst import Gamst,ProcessProvider,SensorStreams
+        from gamst.mcp import MCPServer
         children=[]; real_spawn=asyncio.create_subprocess_exec
         script='''import sys
 sys.path.insert(0,'tests')
 from test_yoloe import Backend
-from humansense.providers.yoloe import YOLOEContext
-from humansense.providers import yoloe_native
-from humansense.provider_worker import main
+from gamst.providers.yoloe import YOLOEContext
+from gamst.providers import yoloe_native
+from gamst.provider_worker import main
 yoloe_native.load_worker=lambda config:YOLOEContext(Backend(),**yoloe_native.configuration(config)[0])
 main()
 '''
@@ -232,7 +232,7 @@ main()
             child=await real_spawn(sys.executable,'-u','-c',script,**kw); children.append(child); return child
         try:
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human);spec=ProcessProvider.capability('yoloe.local',NATIVE)
                     async def create():return await ProcessProvider.open(sys.executable,'yoloe.local',NATIVE)
                     streams.register(spec,create);await streams.open('camera1','video',[spec.id])

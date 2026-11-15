@@ -9,10 +9,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.radar import HEADER, MAGIC, TIRadar, TIRadarPackets, parse_ti_radar
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.radar import HEADER, MAGIC, TIRadar, TIRadarPackets, parse_ti_radar
 
 VERSION = 0x03060000  # Synthetic declared version; no hardware run is claimed.
 CONFIG = dict(sdk_version=VERSION, coordinate_frame='radar_local', calibration_id='cal1')
@@ -127,7 +127,7 @@ class Radar(unittest.TestCase):
         self.assertTrue(p.process(frame(1,ts=2**53-1))['scene']['continuity'])
         for changes in ({'sdk_version':True},{'sdk_version':0x05050000},{'max_gap_ms':0},{'coordinate_frame':''}):
             with self.assertRaises(ValueError): TIRadar(**dict(CONFIG,**changes))
-        code = "import sys;from humansense import ProcessProvider;ProcessProvider.capability('ti.radar',"+repr(CONFIG)+");assert not {'numpy','torch','serial'} & sys.modules.keys()"
+        code = "import sys;from gamst import ProcessProvider;ProcessProvider.capability('ti.radar',"+repr(CONFIG)+");assert not {'numpy','torch','serial'} & sys.modules.keys()"
         result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -149,7 +149,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
             child = await real_spawn(*args,**kwargs); children.append(child); return child
         try:
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams = SensorStreams(human)
                     spec = ProcessProvider.capability('ti.radar',CONFIG)
                     async def create(): return await ProcessProvider.open(sys.executable,'ti.radar',CONFIG)

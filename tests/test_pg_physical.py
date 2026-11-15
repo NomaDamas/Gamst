@@ -12,13 +12,13 @@ import unittest
 from unittest.mock import patch
 
 from test_pg_canonical import basic
-from humansense.pg_artifact import manifest_digest
-from humansense.pg_generation import (PROMPT_SHA,TRANSPORT_ALLOWANCE,policy,pack_capture,unpack_capture,
+from gamst.pg_artifact import manifest_digest
+from gamst.pg_generation import (PROMPT_SHA,TRANSPORT_ALLOWANCE,policy,pack_capture,unpack_capture,
     validate_result,original_generate,preprocess,infer,HEADER_LIMIT)
-from humansense.pg_physical_process import PGPhysicalProcess,capability
-from humansense.process_provider import ProcessProvider
-from humansense.plugins import InputFrame
-from humansense.capabilities import SensorMetadata
+from gamst.pg_physical_process import PGPhysicalProcess,capability
+from gamst.process_provider import ProcessProvider
+from gamst.plugins import InputFrame
+from gamst.capabilities import SensorMetadata
 
 
 def config(root):
@@ -84,7 +84,7 @@ class Contract(unittest.TestCase):
     def test_mutating_caller_crop_after_snapshot_cannot_change_owned_packet(self):
         import threading
         import numpy as np
-        from humansense import pg_generation
+        from gamst import pg_generation
         crop=[0,0,8,8];arr=np.zeros((8,8,3),np.uint8)
         entered=threading.Event();mutated=threading.Event();original=pg_generation.layout
         def mutate():
@@ -94,7 +94,7 @@ class Contract(unittest.TestCase):
             self.assertIsNot(owned,crop);entered.set();self.assertTrue(mutated.wait(5))
             return original(shape,owned)
         try:
-            with patch('humansense.pg_generation.layout',side_effect=checked):
+            with patch('gamst.pg_generation.layout',side_effect=checked):
                 packet=pack_capture(arr,crop,'mass',track_provenance='caller')
         finally:entered.set();thread.join(5)
         self.assertFalse(thread.is_alive());head,payload=unpack_capture(packet)
@@ -108,7 +108,7 @@ class Owned(unittest.IsolatedAsyncioTestCase):
         async def spawn(*args,**kwargs):
             request=args[args.index('--request')+1];kwargs['stderr']=asyncio.subprocess.PIPE
             child=await real(sys.executable,'-u','-c',CHILD,request,mode,**kwargs);children.append(child);return child
-        with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
+        with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
             owner=await ProcessProvider.open(sys.executable,'pg.physical.local',cfg,inference_timeout=timeout)
         self.assertIsInstance(owner,PGPhysicalProcess)
         return owner,children[0]
@@ -165,7 +165,7 @@ class Owned(unittest.IsolatedAsyncioTestCase):
     async def test_evaluation_observer_is_not_silently_dropped_by_special_dispatch(self):
         with tempfile.TemporaryDirectory(dir='.') as temp:
             cfg=config(Path(temp).resolve())
-            with patch('humansense.pg_physical_process.PGPhysicalProcess.open') as opened:
+            with patch('gamst.pg_physical_process.PGPhysicalProcess.open') as opened:
                 with self.assertRaisesRegex(ValueError,'instrumentation is unavailable'):
                     await ProcessProvider.open(sys.executable,'pg.physical.local',cfg,evaluation_observer=object())
                 opened.assert_not_called()
@@ -217,7 +217,7 @@ class Owned(unittest.IsolatedAsyncioTestCase):
                 if task is owner._operation and not hooked:
                     hooked.append(True);task.cancel();asyncio.current_task().cancel()
                 return real(task)
-            with patch('humansense.pg_physical_process.asyncio.shield',side_effect=shield):
+            with patch('gamst.pg_physical_process.asyncio.shield',side_effect=shield):
                 caller=asyncio.create_task(owner.process(frame()))
                 with self.assertRaises(asyncio.CancelledError):await caller
             self.assertEqual(hooked,[True]);self.assertTrue(owner.closed);self.assertFalse(owner._busy)
@@ -245,12 +245,12 @@ class Owned(unittest.IsolatedAsyncioTestCase):
 
     async def test_sdk_stream_mcp_capture_time_and_explicit_packet_budget(self):
         from dataclasses import replace
-        from humansense import HumanSense,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst import Gamst,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         with tempfile.TemporaryDirectory(dir='.') as temp:
             cfg=config(Path(temp).resolve());owner,child=await self.opened(cfg)
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human,max_packet_bytes=32*1024**2,max_buffer_bytes=64*1024**2,capacity=1)
                 streams.register(owner.spec,lambda:owner)
                 await streams.open('camera','sensor',[owner.spec.id],subject_id='object1')
@@ -280,7 +280,7 @@ class OriginalSources(unittest.TestCase):
         from torchvision import transforms
         from torchvision.transforms.functional import InterpolationMode
         from PIL import Image
-        from humansense.pg_sources import SOURCE_HASHES
+        from gamst.pg_sources import SOURCE_HASHES
         from test_pg_artifact import declaration
         root=Path(os.environ['GAMST_PG_SOURCE_ROOT']);source=root/'pg-generate.py'
         manifest=declaration(root);manifest['sources']['pg']['files']['generate.py'].update(path='pg-generate.py',size=source.stat().st_size)

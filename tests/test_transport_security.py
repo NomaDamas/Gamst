@@ -8,12 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from humansense import HumanSense
-from humansense.media import decode_media, jpeg_dimensions
-from humansense.mcp import MCPServer
-from humansense.reasoning import context_message
-from humansense.server import handle_connection, serve_websocket
-from humansense.ws_auth import TOKEN_FILE_ENV, authorized, issue_token, load_token
+from gamst import Gamst
+from gamst.media import decode_media, jpeg_dimensions
+from gamst.mcp import MCPServer
+from gamst.reasoning import context_message
+from gamst.server import handle_connection, serve_websocket
+from gamst.ws_auth import TOKEN_FILE_ENV, authorized, issue_token, load_token
 
 try:
     from websockets.asyncio.client import connect
@@ -59,7 +59,7 @@ class TokenTests(unittest.TestCase):
             token = issue_token(path)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             with patch.dict(os.environ, {TOKEN_FILE_ENV: str(path)}, clear=False):
-                os.environ.pop('HUMANSENSE_WS_TOKEN', None)
+                os.environ.pop('GAMST_WS_TOKEN', None)
                 self.assertEqual(load_token(), token)
 
     def test_header_or_query_token_required(self):
@@ -72,7 +72,7 @@ class TokenTests(unittest.TestCase):
 @unittest.skipIf(connect is None, 'websocket extra not installed')
 class WebSocketAuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_unauthenticated_client_is_refused_and_token_client_connects(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             adapter = MCPServer(human)
             with tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / 'token'
@@ -116,11 +116,11 @@ class Socket:
 
 class CaptureOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_websocket_stream_does_not_leave_paused_runtime_observing(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.pause()  # The dashboard starts paused until its user consents.
             server, socket = MCPServer(human), Socket()
             task = asyncio.create_task(handle_connection(server, socket))
-            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/stream/start', 'params': {'consent': True}})
+            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'gamst/stream/start', 'params': {'consent': True}})
             while (await asyncio.wait_for(socket.outgoing.get(), 1)).get('id') != 1:
                 pass
             self.assertFalse(human.paused)
@@ -130,7 +130,7 @@ class CaptureOwnershipTests(unittest.IsolatedAsyncioTestCase):
             await server.close()
 
     async def test_last_owner_restores_state_and_other_owner_keeps_capture(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.pause()
             await human.acquire_capture('dashboard')
             await human.acquire_capture('ws-1')
@@ -140,7 +140,7 @@ class CaptureOwnershipTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(human.paused)
 
     async def test_unpaused_sdk_runtime_stays_usable_after_capture(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.acquire_capture('mcp')
             await human.release_capture('mcp')
             self.assertFalse(human.paused)
@@ -155,7 +155,7 @@ class PromptRoleTests(unittest.TestCase):
         self.assertNotIn('\x07', message)
 
     def test_companion_never_sends_sensor_context_as_system(self):
-        from humansense.companion import LocalChatBackend
+        from gamst.companion import LocalChatBackend
         captured = {}
 
         class Response:
@@ -178,7 +178,7 @@ class PromptRoleTests(unittest.TestCase):
 class DashboardHeaderTests(unittest.TestCase):
     def test_every_response_forbids_framing(self):
         from types import SimpleNamespace
-        from humansense.dashboard import handler_for
+        from gamst.dashboard import handler_for
         cls = handler_for(SimpleNamespace(token='secret'))
         handler = cls.__new__(cls)
         sent = []

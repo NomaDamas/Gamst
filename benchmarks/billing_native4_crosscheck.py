@@ -6,10 +6,10 @@ from .billing_transport_crosscheck import _query_relation, _BINDING_KEYS, _NATIV
 from .recording_native_schema import decode, MAX_DECLARATIONS, sha as checked_sha
 from .recording_native_validation import (ValidatedRecordingIndex, _read,
     validate_recording_native_inventory, canonical_lane_inventory, iter_canonical_operations)
-from humansense.native_entry import validate_owner
-from humansense.openai_responses import TRANSPORT
-from humansense.openai_responses_codec import PROJECTION
-from humansense.responses_evidence_reader import read_responses_evidence
+from gamst.native_entry import validate_owner
+from gamst.openai_responses import TRANSPORT
+from gamst.openai_responses_codec import PROJECTION
+from gamst.responses_evidence_reader import read_responses_evidence
 
 
 def _owned(value, depth=0):

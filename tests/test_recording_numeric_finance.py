@@ -13,8 +13,8 @@ import tempfile
 import time
 import unittest
 
-from humansense import TextContextCalls
-from humansense.recording_settlement import RecordingSettlementRecorder
+from gamst import TextContextCalls
+from gamst.recording_settlement import RecordingSettlementRecorder
 from benchmarks.recording_financial import FinancialArtifacts,_issue_financial_run_view,decode,digest,ratio
 from benchmarks.recording_native_schema import run_context,digest as upstream_digest
 from benchmarks.recording_evaluation import RecordingEvaluationSession

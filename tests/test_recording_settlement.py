@@ -3,8 +3,8 @@ import hashlib
 import time
 import unittest
 
-from humansense.native_entry import _issue_entry_binding
-from humansense.recording_settlement import FrozenRecordingReceipt,RecordingSettlementRecorder
+from gamst.native_entry import _issue_entry_binding
+from gamst.recording_settlement import FrozenRecordingReceipt,RecordingSettlementRecorder
 from benchmarks.recording_financial import claim_sha256,digest,encode
 from test_call_controller import controller,finish,record,reserve,submit
 from test_recording_financial import adapters,invoice

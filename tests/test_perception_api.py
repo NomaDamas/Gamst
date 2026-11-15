@@ -2,10 +2,10 @@ import asyncio
 import json
 import unittest
 
-from humansense import HumanSense, CapabilitySpec, OutputField, SensorMetadata, SensorStreams, transcript_capability
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.server import handle_connection
+from gamst import Gamst, CapabilitySpec, OutputField, SensorMetadata, SensorStreams, transcript_capability
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.server import handle_connection
 
 try:
     from websockets.asyncio.server import serve
@@ -16,7 +16,7 @@ except ImportError:
 
 class PerceptionAPI(unittest.IsolatedAsyncioTestCase):
     async def test_discovery_and_status_do_not_activate_provider(self):
-        async with HumanSense(consent=False) as human:
+        async with Gamst(consent=False) as human:
             server = MCPServer(human)
             spec = CapabilitySpec('sensor.test', 'sensor.test', 'imu', 'fixture', '1',
                 (OutputField('value', 'number'),), 'native')
@@ -36,7 +36,7 @@ class PerceptionAPI(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(hasattr(human, '_media_router'))
 
     async def test_capability_pages_are_bounded_and_revision_checked(self):
-        async with HumanSense(consent=False) as human:
+        async with Gamst(consent=False) as human:
             for name in ('z', 'a', 'm'):
                 human.register_capability(CapabilitySpec(name, name, 'imu', 'fixture', '1',
                     (OutputField('value', 'number'),), 'native'))
@@ -62,7 +62,7 @@ class PerceptionAPI(unittest.IsolatedAsyncioTestCase):
                 await server.call_tool('list_capabilities', {'offset': 1, 'revision': first['revision']})
 
     async def test_filtered_history_bounds_and_no_legacy_raw_payloads(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server = MCPServer(human)
             spec = CapabilitySpec('a', 'a', 'environment', 'fixture', '1',
                 (OutputField('value', 'string'),), 'frame')
@@ -86,7 +86,7 @@ class PerceptionAPI(unittest.IsolatedAsyncioTestCase):
                     await server.call_tool('get_observations', args)
 
     async def test_transcripts_and_object_evidence_match_python(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server = MCPServer(human)
             spec = transcript_capability('asr', 'fixture', '1', streaming_mode='native')
             human.register_capability(spec)
@@ -125,7 +125,7 @@ class Socket:
         return json.dumps(item)
     async def send(self, raw):
         message = json.loads(raw)
-        if message.get('method') == 'notifications/humansense/context':
+        if message.get('method') == 'notifications/gamst/context':
             self.context_sends += 1
             if self.block:
                 await self.release.wait()
@@ -140,11 +140,11 @@ class ContextSubscriptions(unittest.IsolatedAsyncioTestCase):
                 return message
 
     async def test_cadence_subject_reconfiguration_and_invalid_update(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server, socket = MCPServer(human), Socket()
             task = asyncio.create_task(handle_connection(server, socket))
             try:
-                await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/subscribe',
+                await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'gamst/subscribe',
                     'params': {'types': ['context'], 'subject_id': 'alice', 'window': '1m', 'interval_ms': 50}})
                 ack = await self.receive_id(socket, 1)
                 self.assertEqual(ack['result']['context'], {'subject_id': 'alice', 'window': '1m', 'interval_ms': 50})
@@ -153,12 +153,12 @@ class ContextSubscriptions(unittest.IsolatedAsyncioTestCase):
                 self.assertGreaterEqual(messages[1]['params']['timestamp_ms']-messages[0]['params']['timestamp_ms'], 45)
                 for ident, params in enumerate(({'interval_ms': 0}, {'interval_ms': True}, {'window': '2d'},
                         {'subject_id': ''}, {'unexpected': 1}), 10):
-                    await socket.incoming.put({'jsonrpc': '2.0', 'id': ident, 'method': 'humansense/subscribe',
+                    await socket.incoming.put({'jsonrpc': '2.0', 'id': ident, 'method': 'gamst/subscribe',
                         'params': dict(types=['context'], **params)})
                     self.assertEqual((await self.receive_id(socket, ident))['error']['code'], -32602)
                 # Failed reconfiguration leaves the old subscription running.
                 self.assertEqual((await asyncio.wait_for(socket.outgoing.get(), 2))['params']['subject_id'], 'alice')
-                await socket.incoming.put({'jsonrpc': '2.0', 'id': 30, 'method': 'humansense/subscribe',
+                await socket.incoming.put({'jsonrpc': '2.0', 'id': 30, 'method': 'gamst/subscribe',
                     'params': {'types': []}})
                 await self.receive_id(socket, 30)
                 self.assertEqual(human._subscribers, set())
@@ -167,11 +167,11 @@ class ContextSubscriptions(unittest.IsolatedAsyncioTestCase):
                 await task
 
     async def test_slow_context_consumer_has_one_snapshot_in_flight_and_disconnect_cleans(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server, socket = MCPServer(human), Socket()
             socket.block = True
             task = asyncio.create_task(handle_connection(server, socket))
-            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/subscribe',
+            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'gamst/subscribe',
                 'params': {'types': ['context'], 'interval_ms': 50}})
             await asyncio.sleep(.2)
             self.assertEqual(socket.context_sends, 1)
@@ -187,7 +187,7 @@ class ContextSubscriptions(unittest.IsolatedAsyncioTestCase):
 @unittest.skipIf(serve is None, 'optional websockets not installed')
 class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
     async def test_finish_existing_stream_over_actual_websocket(self):
-        from humansense.plugins import InputFrame
+        from gamst.plugins import InputFrame
         class Provider:
             def process(self, frame):
                 self.time=frame.timestamp_ms
@@ -195,7 +195,7 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
             def finish(self):
                 return dict(utterance_id='tail',revision=0,text='final tail',status='final',
                     start_ms=self.time,end_ms=self.time,language='en')
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human)
             spec=transcript_capability('tail.asr','fixture','1',streaming_mode='native')
             streams.register(spec,Provider)
@@ -219,8 +219,8 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
 
     async def test_nonterminal_endpoint_tool_over_actual_websocket(self):
         from test_managed_endpoints import Provider
-        from humansense.plugins import InputFrame
-        async with HumanSense(consent=True) as human:
+        from gamst.plugins import InputFrame
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human)
             spec=transcript_capability('manual.asr','fixture','1',streaming_mode='native')
             streams.register(spec,Provider)
@@ -249,7 +249,7 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(('source','mic'),streams.streams)
 
     async def test_actual_websocket_tool_context_and_reconnect(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             adapter = MCPServer(human)
             spec = transcript_capability('asr', 'fixture', '1', streaming_mode='native')
             human.register_capability(spec)
@@ -268,11 +268,11 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                         self.assertFalse(result['isError'])
                         self.assertEqual(json.loads(result['content'][0]['text'])['utterances'][0]['update']['text'], 'hello')
                         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 3,
-                            'method': 'humansense/context_profile'}))
+                            'method': 'gamst/context_profile'}))
                         initial = json.loads(await asyncio.wait_for(socket.recv(), 2))['result']
                         self.assertFalse(initial['configured'])
                         self.assertEqual(initial['completed'], 0)
-                        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'humansense/subscribe',
+                        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'gamst/subscribe',
                             'params': {'types': ['context'], 'interval_ms': 50, 'subject_id': 'alice'}}))
                         received = [json.loads(await asyncio.wait_for(socket.recv(), 2)) for _ in range(2)]
                         context = next(m['params'] for m in received if 'method' in m)
@@ -280,7 +280,7 @@ class LoopbackPerception(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(len(context['transcripts']['utterances']), 1)
                         self.assertEqual(context['transcripts']['utterances'][0]['update']['text'], 'hello')
                         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 4,
-                            'method': 'humansense/context_profile'}))
+                            'method': 'gamst/context_profile'}))
                         while True:
                             status = json.loads(await asyncio.wait_for(socket.recv(), 2))
                             if status.get('id') == 4:

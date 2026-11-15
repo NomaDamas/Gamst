@@ -18,7 +18,7 @@ analysis backend; this adapter does not claim that backend accepts arbitrary
 structured sensory observations.
 
 ```python
-from humansense import TextContextCalls
+from gamst import TextContextCalls
 
 # Implement completion(request) with your chosen async client.
 # It receives provider/model_revision aliases and two text messages.

@@ -10,9 +10,9 @@ import resource
 import sys
 import time
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 async def run(args):
@@ -33,7 +33,7 @@ async def run(args):
         replay='paced 20ms chunks, 1s generated silence before and after recording; not live capture',
         duration_ms=len(samples)/16, decisions=[])
     latencies, ages = [], []
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams = SensorStreams(human)
         streams.register(worker.spec, lambda: worker)
         await streams.open('recording', 'vad', [worker.spec.id])

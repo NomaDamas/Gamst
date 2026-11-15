@@ -3,8 +3,8 @@
 Run from the repository root with Python 3.10 or newer:
 
 ```bash
-python -m benchmarks.runtime --samples 200 --warmup 20 --json-output /tmp/humansense-run-200.json
-python -m benchmarks.runtime --samples 500 --warmup 20 --json-output /tmp/humansense-run-500.json
+python -m benchmarks.runtime --samples 200 --warmup 20 --json-output /tmp/gamst-run-200.json
+python -m benchmarks.runtime --samples 500 --warmup 20 --json-output /tmp/gamst-run-500.json
 ```
 
 Each measured cycle submits a unique synthetic clarification request, submits a
@@ -47,8 +47,8 @@ The 200-cycle run retained 1,080 records and dropped 191 stalled subscriber
 deliveries. Each 500-cycle run retained 2,580 records and dropped 491 deliveries.
 All queues reached their configured capacity of eight. These unpaced runs used
 approximately 100% of one CPU core. The JSON artifacts from this execution are
-`/tmp/humansense-runtime-200.json`, `/tmp/humansense-runtime-500.json`, and
-`/tmp/humansense-runtime-500-bounded-evidence.json` on the development host;
+`/tmp/gamst-runtime-200.json`, `/tmp/gamst-runtime-500.json`, and
+`/tmp/gamst-runtime-500-bounded-evidence.json` on the development host;
 these temporary files are not part of the repository.
 
 The initial increase exposed retained-history costs. Each inference copied all
@@ -74,7 +74,7 @@ this benchmark.
 Use a new database path for a disk-backed run:
 
 ```bash
-python -m benchmarks.runtime --samples 200 --store /tmp/humansense-benchmark-new.db
+python -m benchmarks.runtime --samples 200 --store /tmp/gamst-benchmark-new.db
 ```
 
 The harness refuses an existing database path so it cannot mix benchmark data
@@ -88,7 +88,7 @@ specified elapsed time. It yields to the event loop between cycles and limits
 its own timing-reservoir memory:
 
 ```bash
-python -m benchmarks.runtime --duration-seconds 60 --store /tmp/humansense-soak-new.db
+python -m benchmarks.runtime --duration-seconds 60 --store /tmp/gamst-soak-new.db
 ```
 
 An eight-hour test would use `--duration-seconds 28800`, but **that test has not

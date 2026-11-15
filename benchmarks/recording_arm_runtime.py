@@ -6,13 +6,13 @@ from pathlib import Path
 import sysconfig
 import time
 
-from humansense import HumanSense,SensorStreams,TextContextCalls,VisualContextCalls
-from humansense.call_controller import CallController
-from humansense.call_budget import CallBudget
-from humansense.call_policy import CallPolicy
-from humansense.evaluation_publication import AcceptedObservationSink
-from humansense.fill_conflict import FillConflictRuntime
-from humansense.streams import _finish
+from gamst import Gamst,SensorStreams,TextContextCalls,VisualContextCalls
+from gamst.call_controller import CallController
+from gamst.call_budget import CallBudget
+from gamst.call_policy import CallPolicy
+from gamst.evaluation_publication import AcceptedObservationSink
+from gamst.fill_conflict import FillConflictRuntime
+from gamst.streams import _finish
 from .owned_capture import OwnedCaptureSource,CaptureCapacity
 from .recorded_source import digest,encoded
 from .recording_native_validation import open_original_directory
@@ -127,7 +127,7 @@ class RecordingArmRuntime:
         source_lateness=50_000_000 if self.u['schema_version']==1 else self.docs['runtime/exposure.json']['source_policy']['max_acquisition_lateness_ns']
         try:self.source=await OwnedCaptureSource.preflight(self.manifest,fd,CaptureCapacity(source_bytes,max_lateness_ns=source_lateness),journal=self.journal)
         finally:os.close(fd)
-        self.human=HumanSense(consent=True)
+        self.human=Gamst(consent=True)
         from .recorded_replay import MAPPING
         self.human.register_capability(MAPPING)
         sink=_PublicationSink(self.artifacts);sink.owner=self.owner;self.publication_sink=sink
@@ -232,7 +232,7 @@ class RecordingArmRuntime:
         await self.journal.write_json('mapping.json',self.clock.mapping)
         await self.journal.write_json('source-mappings.json',self.source_mappings)
         from .recorded_replay import MAPPING
-        from humansense.capabilities import SensorMetadata
+        from gamst.capabilities import SensorMetadata
         mapping_records=[]
         for value in self.source_mappings:
             original=value['original_source']
@@ -252,7 +252,7 @@ class RecordingArmRuntime:
             fill_driver=self.fill_driver,fill_binding_index=self.fill_binding_index,receipt_router=self.receipt_router)
         from .recording_task_runtime import RecordingTaskRuntime
         publisher=self.human.create_evaluation_snapshot_publisher(self.recording['subject_id'],
-            implementation_sha256=__import__('humansense.evaluation_snapshot',fromlist=['evaluation_snapshot_implementation_sha256']).evaluation_snapshot_implementation_sha256())
+            implementation_sha256=__import__('gamst.evaluation_snapshot',fromlist=['evaluation_snapshot_implementation_sha256']).evaluation_snapshot_implementation_sha256())
         self.task_runtime=RecordingTaskRuntime(self.human,self.owner,self.clock,self.manifest,self.tasks,self.recording['subject_id'],publisher,
             {lid:{k:v for k,v in value.items() if k!='declaration'} for lid,value in self.lanes.items()},self.policy['text_lane_ids'],self.arm['task_queue']['capacity'],self.artifacts,answer_ready,self.router.watermarks,receipt_router=self.receipt_router)
         self.jobs.extend([asyncio.create_task(self.perception.run(self.recording['primary_visual_source_id'])),asyncio.create_task(self.task_runtime.run())])

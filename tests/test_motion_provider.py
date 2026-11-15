@@ -6,10 +6,10 @@ try:
 except ImportError:
     cv2 = np = None
 
-from humansense.providers.motion import OpenCVFlow
-from humansense.plugins import InputFrame
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.schema import timestamp
+from gamst.providers.motion import OpenCVFlow
+from gamst.plugins import InputFrame
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.schema import timestamp
 
 
 @unittest.skipIf(cv2 is None, 'optional OpenCV/numpy not installed')
@@ -90,7 +90,7 @@ class MotionRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_real_flow_reaches_public_context(self):
         image = Motion().image()
         moved = cv2.warpAffine(image, np.float32([[1, 0, 3], [0, 1, 2]]), (240, 160), borderMode=cv2.BORDER_REFLECT)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = OpenCVFlow.capability(version=cv2.__version__)
             streams.register(spec, OpenCVFlow)

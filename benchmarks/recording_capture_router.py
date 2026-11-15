@@ -9,9 +9,9 @@ from collections import deque
 from dataclasses import replace
 import time
 
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.streams import _finish
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.streams import _finish
 from .owned_capture import CapturePacket,CaptureSink,DeliveryAdmission
 from .recorded_source import digest,validate_manifest
 

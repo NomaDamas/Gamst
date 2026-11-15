@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider
+from gamst import Gamst, ProcessProvider
 import test_text_context_call as text_tests
 import test_process_provider as worker_tests
 import test_smolvlm_call as smol_tests
@@ -157,7 +157,7 @@ class Smol(unittest.IsolatedAsyncioTestCase):
 
 class Registry(unittest.TestCase):
     def test_bounded_deduplicated_callable_registry(self):
-        human=HumanSense(consent=True)
+        human=Gamst(consent=True)
         observers=[Observer() for _ in range(32)]
         for observer in observers:human._register_evaluation_observer(observer)
         for observer in observers:human._register_evaluation_observer(observer)

@@ -14,7 +14,7 @@ from benchmarks.controller_attempts import RecordedContextClient
 from benchmarks.perception_comparison import plan_digest
 from benchmarks.three_arm_attempts import ThreeArmAttemptRecorder, cost_quantities, join
 from benchmarks.three_arm_evidence import read_traces
-from humansense import TextContextCalls
+from gamst import TextContextCalls
 from test_itemized_costs import itemized
 from test_three_arm_replay import setup, collect
 import test_text_context_call as text_tests

@@ -5,8 +5,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import OpenEBProcess,HumanSense,SensorStreams,ProcessProvider
-from humansense.openeb_process import configuration,header,prefix
+from gamst import OpenEBProcess,Gamst,SensorStreams,ProcessProvider
+from gamst.openeb_process import configuration,header,prefix
 
 try:import numpy as np
 except ImportError:np=None
@@ -16,9 +16,9 @@ CONFIG=dict(kind='camera',source='FIXTURE_ONLY',source_id='cam',sensor_id='event
 
 FAKE='''
 import os,time,struct,zlib
-from humansense import openeb_capture_worker as w
-from humansense.plugins import InputFrame
-from humansense.capabilities import SensorMetadata
+from gamst import openeb_capture_worker as w
+from gamst.plugins import InputFrame
+from gamst.capabilities import SensorMetadata
 class Source:
     def __init__(self,config):
         self.selected=config;self.sequence=0
@@ -47,7 +47,7 @@ class Contracts(unittest.TestCase):
     def test_discovery_and_wire_limits(self):
         import subprocess
         result=subprocess.run([sys.executable,'-c',
-            'from humansense.openeb_process import configuration;import sys;configuration('+repr(CONFIG)+');assert not {"numpy","metavision_core","torch"}&sys.modules.keys()'],capture_output=True)
+            'from gamst.openeb_process import configuration;import sys;configuration('+repr(CONFIG)+');assert not {"numpy","metavision_core","torch"}&sys.modules.keys()'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for change in ({'source':''},{'kind':'auto'},{'sensor_origin_us':'1'},{'capture_origin_ms':True},{'extra':1}):
             with self.assertRaises(ValueError):configuration(dict(CONFIG,**change))
@@ -69,9 +69,9 @@ class Owned(unittest.IsolatedAsyncioTestCase):
 
     def fixture(self,code=FAKE,context_code=None):
         async def spawn(*args,**kwargs):
-            if 'humansense.openeb_capture_worker' in args:
+            if 'gamst.openeb_capture_worker' in args:
                 child=await self.real_spawn(sys.executable,'-u','-c',code,**kwargs)
-            elif context_code is not None and 'humansense.provider_worker' in args:
+            elif context_code is not None and 'gamst.provider_worker' in args:
                 child=await self.real_spawn(sys.executable,'-u','-c',context_code,**kwargs)
             else:child=await self.real_spawn(*args,**kwargs)
             self.children.append(child);return child
@@ -211,11 +211,11 @@ w.envelope=corrupt
             await source.close();self.assertEqual(source.diagnostics()['stderr_retained_bytes'],0)
 
     async def test_owned_source_to_owned_context_sensorstreams_mcp(self):
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
         with self.fixture():
             source=await OpenEBProcess.open(sys.executable,dict(CONFIG,capture_origin_ms=timestamp()-100))
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);spec=ProcessProvider.capability('openeb.eventcd',source.config)
                 async def factory():return await ProcessProvider.open(sys.executable,'openeb.eventcd',source.config)
                 streams.register(spec,factory);await streams.open('cam','events',[spec.id])
@@ -235,7 +235,7 @@ w.envelope=corrupt
         import io
         import json
         from examples.openeb_stream import run
-        from humansense.schema import timestamp
+        from gamst.schema import timestamp
         args=argparse.Namespace(**dict(CONFIG,capture_origin_ms=timestamp()-100,
             capture_python=sys.executable,context_python=sys.executable,
             read_timeout=5,pacing='none',max_frames=3,context_interval_ms=10))
@@ -253,8 +253,8 @@ w.envelope=corrupt
         import contextlib
         import io
         from examples.openeb_stream import run
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
         args=argparse.Namespace(**dict(CONFIG,capture_origin_ms=timestamp()-100,
             capture_python=sys.executable,context_python=sys.executable,
             read_timeout=.3,pacing='none',max_frames=3,context_interval_ms=20))
@@ -279,11 +279,11 @@ w.envelope=corrupt
         import io
         import json
         from examples.openeb_stream import run
-        from humansense.schema import timestamp
+        from gamst.schema import timestamp
         args=argparse.Namespace(**dict(CONFIG,capture_origin_ms=timestamp()-100,
             capture_python=sys.executable,context_python=sys.executable,
             read_timeout=5,pacing='none',max_frames=3,context_interval_ms=20))
-        code="import os;from humansense.providers.openeb import OpenEBContext;OpenEBContext.process=lambda *a:os._exit(17);from humansense.provider_worker import main;main()"
+        code="import os;from gamst.providers.openeb import OpenEBContext;OpenEBContext.process=lambda *a:os._exit(17);from gamst.provider_worker import main;main()"
         output=io.StringIO();before=set(asyncio.all_tasks())
         with self.fixture(context_code=code),contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(RuntimeError,'OpenEB context worker failed'):

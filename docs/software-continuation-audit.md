@@ -48,7 +48,7 @@ Reproduction from the integration checkout (already provisioned interpreter):
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/dashboard_ui_test.cjs
-python3 -m humansense demo
+python3 -m gamst demo
 git diff --check
 ```
 

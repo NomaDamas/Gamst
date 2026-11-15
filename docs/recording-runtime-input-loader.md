@@ -46,7 +46,7 @@ model quality, monetary acceptance, or cost/latency savings.
 ## Running the persistent collection
 
 Run from a repository checkout containing the integrated runtime and validator;
-the SDK wheel packages `humansense`, not the `benchmarks` modules. The fixed
+the SDK wheel packages `gamst`, not the `benchmarks` modules. The fixed
 parent entry point consumes a prepared input root; it does not construct a dataset, install
 models or choose an accounting policy. Actual evaluation and dataset acquisition
 must run on GCP under the repository policy. Local synthetic software tests do

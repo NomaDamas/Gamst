@@ -5,8 +5,8 @@ import json
 import re
 from urllib.parse import urlsplit
 
-from humansense.capabilities import identifier
-from humansense.call_policy import CallPolicy
+from gamst.capabilities import identifier
+from gamst.call_policy import CallPolicy
 from .recorded_source import _keys, _integer, digest, encoded, validate_manifest
 from .replay_clock import validate_tasks
 from .three_arm_comparison import validate_three_arm_plan
@@ -288,7 +288,7 @@ def _fill(value, lanes):
     identifier(value['source_id']); period = _integer(value['selection_period_ns'], 1, N)
     _integer(value['phase_ns'], 0, period-1); _integer(value['max_lateness_ns'], 0, period-1)
     sha(value['fill_config_sha256'])
-    from humansense.fill_conflict_rule import RULE_SHA
+    from gamst.fill_conflict_rule import RULE_SHA
     if value['rule_sha256'] != RULE_SHA: raise ValueError('unsupported fill predicate/rule')
     if value['small_lane_id'] not in lanes or lanes[value['small_lane_id']]['role'] != 'fill_small':
         raise ValueError('explicit fill-small lane required')

@@ -41,11 +41,11 @@ from the native-engine documentation. No model installation, Hub request or
 camera activation occurs through discovery or configuration.
 
 ```python
-from humansense import HumanSense, ProcessProvider, SensorStreams
+from gamst import Gamst, ProcessProvider, SensorStreams
 
 # config contains the native checkpoint/tokenizer paths/hashes and optional
 # device/precision/max_new_tokens, plus window_frames/max_gap_ms/sequence_step.
-async with HumanSense(consent=True) as human:
+async with Gamst(consent=True) as human:
     worker = await ProcessProvider.open(
         existing_python, 'smolvlm2.500m.local', config,
         startup_timeout=120, inference_timeout=30,

@@ -11,10 +11,10 @@ import resource
 import time
 import wave
 
-from humansense import HumanSense, SensorMetadata, SensorStreams, ProcessProvider
-from humansense.plugins import InputFrame
-from humansense.providers.environment_audio import YAMNetEvents, YAMNET_SHA256
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, SensorStreams, ProcessProvider
+from gamst.plugins import InputFrame
+from gamst.providers.environment_audio import YAMNetEvents, YAMNET_SHA256
+from gamst.schema import timestamp
 
 
 async def run(args):
@@ -36,7 +36,7 @@ async def run(args):
         parent_dependencies={name: version(name) for name in ('numpy', 'scipy')},
         replay=('paced' if args.pace else 'accelerated historical')+' prerecorded 20ms blocks; not live microphone capture', fixtures=[])
     timings, capture_ages = [], []
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams = SensorStreams(human)
         streams.register(spec, lambda: provider)
         await streams.open('ambient', 'replay', [spec.id])

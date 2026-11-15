@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-from humansense.providers.ollama import OllamaChat
+from gamst.providers.ollama import OllamaChat
 
 
 class OllamaTests(unittest.IsolatedAsyncioTestCase):

@@ -5,7 +5,7 @@ from benchmarks.recorded_source import digest
 from benchmarks.recording_runtime_contract import (LIMITS, VIEW, validate_runtime_policy,
     validate_latency_policy, validate_adapter, validate_endpoint, validate_fixture_responses,
     strict_json)
-from humansense.call_policy import CallPolicy
+from gamst.call_policy import CallPolicy
 from dataclasses import asdict
 from test_three_arm_comparison import fixture as plan_fixture
 

@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import FrozenInstanceError
 import unittest
 
-from humansense.recording_scope import (RecordingScope, RecordingScopeOwner,
+from gamst.recording_scope import (RecordingScope, RecordingScopeOwner,
     evaluation_owner, resolve_evaluation_observer)
 
 

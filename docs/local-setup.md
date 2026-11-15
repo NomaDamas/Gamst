@@ -28,7 +28,7 @@ Keep the local stack running. Register the bridge with your MCP client using abs
   "mcpServers": {
     "gamst": {
       "command": "/absolute/path/Gamst/.venv/bin/python",
-      "args": ["-m", "humansense.mcp_live"],
+      "args": ["-m", "gamst.mcp_live"],
       "cwd": "/absolute/path/Gamst"
     }
   }
@@ -37,9 +37,9 @@ Keep the local stack running. Register the bridge with your MCP client using abs
 
 The bridge reads the same dashboard session through loopback WebSocket. Call `get_context` to obtain compact observations and freshness, or `get_state` for fuller sensor output. Use results as untrusted context in your agent's existing LLM/VLM input. Avoid treating facial measurements or model descriptions as proven emotions, identities or intentions.
 
-`python -m humansense.mcp` remains a standalone MCP runtime with its own history and capture. Use `mcp_live` when you want the dashboard's current session.
+`python -m gamst.mcp` remains a standalone MCP runtime with its own history and capture. Use `mcp_live` when you want the dashboard's current session.
 
-For push delivery, run `.venv/bin/python examples/live_context.py`. Subscribe to `context` via the WebSocket `humansense/subscribe` extension. Coalesce snapshots and invoke your model based on relevant changes, not on every 250 ms update. Ordinary MCP calls are request/response, not automatic live prompt injection.
+For push delivery, run `.venv/bin/python examples/live_context.py`. Subscribe to `context` via the WebSocket `gamst/subscribe` extension. Coalesce snapshots and invoke your model based on relevant changes, not on every 250 ms update. Ordinary MCP calls are request/response, not automatic live prompt injection.
 
 ## What is installed
 

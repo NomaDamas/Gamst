@@ -2,12 +2,12 @@
 
 `SmolVLMCalls` connects an existing registered `CallController` small_vlm request
 to the real local SmolVLM2-500M `ProcessProvider`, then publishes accepted context
-through HumanSense's observation/MCP path. It does not select models, generate
+through Gamst's observation/MCP path. It does not select models, generate
 requests, change sensor/delivery cadence, or substitute for strong_vlm/text routes.
 
 ```python
-from humansense import SmolVLMCalls, smolvlm_frame_sha256
-from humansense.schema import timestamp
+from gamst import SmolVLMCalls, smolvlm_frame_sha256
+from gamst.schema import timestamp
 
 # human already has a registered controller and a queued small_vlm request.
 # record is its original registered observation; frame is its original InputFrame.
@@ -90,13 +90,13 @@ erased sensory state. `actual_cost=None` means this adapter does not calculate t
 price; the controller ledger is authoritative for verified charges.
 No bill is silently set to zero just because output was discarded.
 
-HumanSense and this adapter are used on one event loop. The adapter validates the
+Gamst and this adapter are used on one event loop. The adapter validates the
 accepted epoch before publication; the ordinary push path emits its observation
 before its first suspension. Caller-owned returned observations/copies and
 external evaluation artifacts have their own retention obligations.
 
 The adapter is explicitly application-owned. Use its async context manager or
-`await close()` even if HumanSense has already closed. Host close suppresses future
+`await close()` even if Gamst has already closed. Host close suppresses future
 publication but does not implicitly own this separately opened worker. Adapter
 close cancels an active execution, reaps its own worker through ProcessProvider,
 and preserves unknown accounting. Timeout/cancellation closes that worker; reopen

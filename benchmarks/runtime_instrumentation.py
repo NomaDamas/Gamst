@@ -449,7 +449,7 @@ class _Call(_Ticket):
         async def call(token):
             self.attempt_id=token;self._entered=True
             if bound:
-                from humansense.native_entry import _issue_entry_binding
+                from gamst.native_entry import _issue_entry_binding
                 binding=_issue_entry_binding(dict(schema_version=1,owner_kind='task_native3',
                     owner=self.session.binding_owner(),entry=dict(operation_id=self.id,attempt_id=token,
                         execution_instance_sha256=self.instance_id,execution_sha256=self._execution),

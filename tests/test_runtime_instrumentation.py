@@ -11,8 +11,8 @@ from test_stream_attempts import fixture
 import test_text_context_call as text_tests
 import test_smolvlm_call as smol_tests
 from test_smolvlm_native import CONFIG
-from humansense.provider_profiles import capability
-from humansense.providers.smolvlm_native import configuration
+from gamst.provider_profiles import capability
+from gamst.providers.smolvlm_native import configuration
 
 
 def session(root,provider='test.client',revision='v1',**options):
@@ -130,7 +130,7 @@ class Text(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report['receipt_authenticity_verified']);self.assertIsNone(report['monetary_cost'])
 
     async def test_actual_execution_binding_and_explicit_retained_evidence_retry(self):
-        from humansense.schema import timestamp
+        from gamst.schema import timestamp
         observer=session(self.root);executions=[];fail=[True]
         async def callback(request):
             current=next(r for r in self.c.snapshot()['requests'] if r['state']=='dispatched' and not r['finished'])

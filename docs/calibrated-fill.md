@@ -18,7 +18,7 @@ transparent water can be measured from color. Actual-scene validation remains
 
 ## Runtime and configuration
 
-Use existing optional `humansense-sdk[vision]` (OpenCV4.8..<5, NumPy>=1.24).
+Use existing optional `gamst-sdk[vision]` (OpenCV4.8..<5, NumPy>=1.24).
 No additional model, dependency install, camera activation or download occurs.
 Core/profile discovery remains standard-library-only. Native runtime versions
 are included in every output; development execution used OpenCV4.13.0 and
@@ -96,7 +96,7 @@ bounds on real accuracy, lighting effects, calibration error or false color matc
 ## SDK / worker usage
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 spec = ProcessProvider.capability('opencv.fill', config)
 async def create():
@@ -112,7 +112,7 @@ The explicit8MiB packet budget accommodates the full2Mi-pixel BGR limit
 (6MiB of pixels plus framing); the default4MiB budget only fits smaller frames.
 Choose budgets and queue capacity for the actual camera size.
 
-For direct calls, import `CalibratedColorFill` from `humansense.providers.fill`,
+For direct calls, import `CalibratedColorFill` from `gamst.providers.fill`,
 construct it with the same config, register its `spec` and publish `process(frame)`
 via `human.push_observation`. Preserve input subject, capture timestamp and sensor
 metadata. Existing MCP `get_observations` and context API expose the result.

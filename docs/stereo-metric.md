@@ -8,7 +8,7 @@ explicit calibration. No camera is opened and no model is downloaded by discover
 
 `stereo_frame(left, right, left_interval_ms=[start,end],
 right_interval_ms=[start,end], clock_id=..., alignment_id=...)` in
-`humansense.stereo_packet` packages two BGR uint8 InputFrames into immutable
+`gamst.stereo_packet` packages two BGR uint8 InputFrames into immutable
 bytes. Both metadata records need source/sensor IDs, capture sequence, source
 epoch, original optical coordinate frame and matching calibration ID. Frame
 timestamps equal capture interval ends. An interval can be a single timestamp;
@@ -104,7 +104,7 @@ before worker startup and rechecked when consumed. Replay never changes capture
 time to the wall clock.
 
 ```sh
-python -m humansense.stereo_replay --manifest /absolute/recording/manifest.json \
+python -m gamst.stereo_replay --manifest /absolute/recording/manifest.json \
   --sha256 FROZEN_MANIFEST_SHA256 --python /absolute/selected/python --consent
 ```
 

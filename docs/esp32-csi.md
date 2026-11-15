@@ -117,13 +117,13 @@ owned separately by the host and existing SensorStreams machinery.
 ## Explicit worker integration
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 config = {'transmitter_mac': '1a:00:00:00:00:00',
           'clock_calibration_id': 'receiver-clock-v1',
           'window_ms': 1000, 'max_gap_ms': 250, 'variation_threshold': 0.05}
 spec = ProcessProvider.capability('esp32.csi', config)
-streams = SensorStreams(human)  # Existing consented HumanSense instance.
+streams = SensorStreams(human)  # Existing consented Gamst instance.
 async def create():
     return await ProcessProvider.open('/explicit/env/bin/python', 'esp32.csi', config)
 streams.register(spec, create)

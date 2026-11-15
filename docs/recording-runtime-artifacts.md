@@ -82,7 +82,7 @@ frames remain available. `close` drains and closes only owned channel resources;
 `abort` closes before cancelling/joining tasks to handle Python3.10 cancellation
 races. Process-group cleanup and actual reap remain the fixed launcher's job.
 
-Validation includes actual HumanSense accepted records, an actual native4
+Validation includes actual Gamst accepted records, an actual native4
 callback joined to an accepted record, immutable artifact aliases and mutations,
 queue pressure, exclusive paths/FIFO/symlink rejection, write failure and repeated
 cancellation, and a real fixture subprocess using the fixed channel handshake.

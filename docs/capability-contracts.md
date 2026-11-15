@@ -3,7 +3,7 @@
 The capability registry describes a provider output without importing the provider, downloading weights or opening sensors. It complements the existing `PerceptionPlugin` API and does not change legacy `push_audio`, `push_video` or `push_signal` calls.
 
 ```python
-from humansense import HumanSense, CapabilitySpec, OutputField, SensorMetadata
+from gamst import Gamst, CapabilitySpec, OutputField, SensorMetadata
 
 spec = CapabilitySpec(
     id="thermal.roi", output_name="thermal.surface", modality="thermal",
@@ -15,7 +15,7 @@ spec = CapabilitySpec(
 )
 
 async def publish(measured_temperature, region, capture_time_ms):
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         human.register_capability(spec)
         # These values must come from the caller's actual calibrated sensor.
         record = await human.push_observation(

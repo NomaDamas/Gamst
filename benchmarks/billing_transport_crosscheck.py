@@ -1,10 +1,10 @@
 """Original native/transport linkage; account aggregates never become request bills."""
 from .billing_aggregate import build_report, encoded, sha, MAX_REPORT, Diagnostics, validate_manifest
 from .native3_evidence import ValidatedNative3Index
-from humansense.responses_evidence_reader import read_responses_evidence
-from humansense.openai_responses import TRANSPORT
-from humansense.openai_responses_codec import PROJECTION
-from humansense.native_entry import validate_owner
+from gamst.responses_evidence_reader import read_responses_evidence
+from gamst.openai_responses import TRANSPORT
+from gamst.openai_responses_codec import PROJECTION
+from gamst.native_entry import validate_owner
 
 _BINDING_KEYS = {'owner_kind','owner','provider','model_revision','role','projection_version','transport_version'}
 _NATIVE_KEYS = ('schema_version','owner_kind','owner','entry','provider','model_revision','role','prompt_sha256')

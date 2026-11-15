@@ -69,7 +69,7 @@ class Emotion2VecContext:
             if version('onnxruntime')!='1.23.2':raise RuntimeError('requires onnxruntime==1.23.2')
             import onnxruntime as ort
         except ImportError as exc:
-            raise RuntimeError('Install optional humansense-sdk[vocal-expression] in selected runtime') from exc
+            raise RuntimeError('Install optional gamst-sdk[vocal-expression] in selected runtime') from exc
         options=ort.SessionOptions();options.intra_op_num_threads=1;options.inter_op_num_threads=1
         session=ort.InferenceSession(model,sess_options=options,providers=['CPUExecutionProvider'])
         ins,outs=session.get_inputs(),session.get_outputs()

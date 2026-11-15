@@ -3,7 +3,7 @@
 `SensorStreams` adds an explicit typed-provider input path alongside the legacy media router. A source/sensor pair owns one modality and subject. Each selected capability receives its own provider instance, bounded queue and copied input. Synchronous inference runs on a worker thread; asynchronous providers must avoid blocking the event loop themselves.
 
 ```python
-from humansense import SensorStreams
+from gamst import SensorStreams
 
 # spec is a CapabilitySpec; Provider implements process(frame), reset and close.
 streams = SensorStreams(human, capacity=2)

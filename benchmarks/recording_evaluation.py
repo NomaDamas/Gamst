@@ -6,8 +6,8 @@ import struct
 import hashlib
 import time
 
-from humansense.recording_scope import RecordingScope, RecordingScopeOwner
-from humansense.streams import _finish
+from gamst.recording_scope import RecordingScope, RecordingScopeOwner
+from gamst.streams import _finish
 from .recording_native_schema import (validate_recording_scope_protocol, run_context,
     digest, sha, integer, keys, snapshot, REASONS, preflight_recording_collection, preflight_native_capacity, _freeze)
 
@@ -209,7 +209,7 @@ class RecordingEvaluationSession(RecordingScopeOwner):
             if relationship=='root':
                 if predecessor is not None:raise ValueError('root has no predecessor')
             else:
-                from humansense.native_entry import NativeEntryBinding
+                from gamst.native_entry import NativeEntryBinding
                 if type(predecessor) is not NativeEntryBinding:raise TypeError('original actual predecessor binding required')
                 original=predecessor.snapshot();ei=integer(original['entry']['entry_ordinal'],0,self._entries-1)
                 row=struct.unpack_from('<IIIIQII32s32s32s',self._entry_table,ei*128)
@@ -264,7 +264,7 @@ class RecordingEvaluationSession(RecordingScopeOwner):
 
     def semantic_entry_for_decision(self,binding_index,decision_sha256):
         """Resolve one exact actual semantic entry, never an ambient latest call."""
-        from humansense.native_entry import _issue_entry_binding
+        from gamst.native_entry import _issue_entry_binding
         integer(binding_index,0,len(self._bindings)-1);sha(decision_sha256)
         with self._lock:
             matches=[]
@@ -283,8 +283,8 @@ class RecordingEvaluationSession(RecordingScopeOwner):
 
     def operation_reference(self,entry_binding):
         """Resolve an original actual semantic binding without ambient last-call state."""
-        from humansense.native_entry import NativeEntryBinding
-        from humansense.native_operation import _issue_operation_reference
+        from gamst.native_entry import NativeEntryBinding
+        from gamst.native_operation import _issue_operation_reference
         if type(entry_binding) is not NativeEntryBinding:
             raise TypeError('actual immutable semantic entry binding required')
         value=entry_binding.snapshot()
@@ -311,7 +311,7 @@ class RecordingEvaluationSession(RecordingScopeOwner):
         evidence and a canonical descriptor as request. Both are checked here;
         semantic Context evidence cannot masquerade as a physical capture.
         """
-        from humansense.native_operation import NativeOperationRef
+        from gamst.native_operation import NativeOperationRef
         if type(operation_reference) is not NativeOperationRef:raise TypeError('actual operation reference required')
         value=operation_reference.snapshot()
         with self._lock:
@@ -334,7 +334,7 @@ class RecordingEvaluationSession(RecordingScopeOwner):
         raise ValueError('actual operation does not identify an original source capture')
 
     async def attach_declared_receipt(self,entry_binding,receipt,source_document):
-        from humansense.native_entry import NativeEntryBinding
+        from gamst.native_entry import NativeEntryBinding
         if type(entry_binding) is not NativeEntryBinding:raise TypeError('actual immutable native entry binding required')
         value=entry_binding.snapshot();receipt=snapshot(receipt,65536)
         if self.declarations['scope_protocol']['retain_financial_documents'] is not True:
@@ -572,7 +572,7 @@ class _Call:
 
     def entry_reference(self):
         """Return only this ticket's actual entry, including direct callbacks."""
-        from humansense.native_operation import _issue_operation_reference
+        from gamst.native_operation import _issue_operation_reference
         s=self.session
         with s._lock:
             if self.entry is None:return None
@@ -586,7 +586,7 @@ class _Call:
 
     def semantic_entry_binding(self):
         """Expose an immutable semantic binding after actual ordinary invoke."""
-        from humansense.native_entry import _issue_entry_binding
+        from gamst.native_entry import _issue_entry_binding
         ref=self.entry_reference()
         if ref is None:return None
         value=ref.snapshot()
@@ -645,7 +645,7 @@ class _Call:
         finally:self._terminal(outcome,result)
 
     async def invoke_bound(self,callback):
-        from humansense.native_entry import _issue_entry_binding
+        from gamst.native_entry import _issue_entry_binding
         if self.prompt_sha256 is None:raise ValueError('bound completion requires explicit semantic prompt identity')
         event=self._enter();outcome='error';result=None
         try:

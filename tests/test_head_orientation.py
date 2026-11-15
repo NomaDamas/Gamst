@@ -11,11 +11,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.head_orientation import HeadOrientationContext
-from humansense.providers.landmarker_video import MediaPipeVideoContext
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.head_orientation import HeadOrientationContext
+from gamst.providers.landmarker_video import MediaPipeVideoContext
+from gamst.schema import timestamp
 try:
     import cv2
     import numpy as np
@@ -78,7 +78,7 @@ def native_modules():
 
 class Configuration(unittest.TestCase):
     def test_pure_discovery_hash_binding_and_invalid_geometry(self):
-        code='from humansense import ProcessProvider; import sys; ProcessProvider.capability("mediapipe.head_orientation.video",'+repr(config())+'); assert not {"cv2","numpy","mediapipe"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider; import sys; ProcessProvider.capability("mediapipe.head_orientation.video",'+repr(config())+'); assert not {"cv2","numpy","mediapipe"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         spec=ProcessProvider.capability('mediapipe.head_orientation.video',config())
@@ -158,7 +158,7 @@ import sys,importlib.metadata
 from test_head_orientation import native_modules
 sys.modules.update(native_modules())
 importlib.metadata.version=lambda name:'0.10.35'
-from humansense.provider_worker import main
+from gamst.provider_worker import main
 main()
 '''
         code = 'import sys; sys.path.insert(0, '+repr(str(Path(__file__).resolve().parent))+')\n'+code
@@ -169,12 +169,12 @@ main()
             c=config(); path=Path(temporary).resolve()/'face.task'; payload=b'not-a-model'; path.write_bytes(payload)
             c.update(path=str(path),sha256=hashlib.sha256(payload).hexdigest())
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     spec=ProcessProvider.capability('mediapipe.head_orientation.video',c)
                     async def factory(): return await ProcessProvider.open(sys.executable,'mediapipe.head_orientation.video',c)
                     streams=SensorStreams(human); streams.register(spec,factory)
                     await streams.open('cam','sensor',[spec.id]); await streams.submit(frame(0,timestamp()-10)); await streams.drain()
-                    from humansense.mcp import MCPServer
+                    from gamst.mcp import MCPServer
                     answer=await MCPServer(human).call_tool('get_observations',{'capability_id':spec.id})
                     self.assertEqual(answer['returned_count'],1)
                     self.assertEqual(answer['items'][0]['observation']['value']['faces'][0]['orientation']['status'],'estimated')

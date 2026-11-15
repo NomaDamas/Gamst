@@ -8,11 +8,11 @@ import sys
 import unittest
 from unittest.mock import patch
 import test_orbslam_native as fixture
-from humansense import HumanSense,ProcessProvider,SensorStreams,SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.orbslam_context import ORBSLAMContext
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import Gamst,ProcessProvider,SensorStreams,SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.orbslam_context import ORBSLAMContext
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 try:
     import numpy as np
     import cv2
@@ -39,7 +39,7 @@ def assets(test,slow=False):
 
 class Discovery(unittest.TestCase):
     def test_no_optional_import_or_asset_io(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("orbslam3.monocular",'+repr(CONFIG)+');assert not {"numpy","cv2"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("orbslam3.monocular",'+repr(CONFIG)+');assert not {"numpy","cv2"}&sys.modules.keys()'
         p=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(p.returncode,0,p.stderr)
         for changes in ({'max_frames':True},{'max_gap_ms':0},{'sequence_step':1001},{'library_path':'relative'}):
@@ -85,7 +85,7 @@ class Owned(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(ValueError):
                 await worker.process(replace(frame(0),data=np.ma.array(frame(0).data,mask=True)))
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('cam','video',[worker.spec.id]);start=timestamp()-1000
                 try:

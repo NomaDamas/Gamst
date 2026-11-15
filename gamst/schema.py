@@ -6,7 +6,7 @@ import time
 import uuid
 
 SCHEMA_VERSION = "0.1"
-MODEL_ID = "humansense.observation-rules"
+MODEL_ID = "gamst.observation-rules"
 MODEL_VERSION = "0.1.0"
 
 

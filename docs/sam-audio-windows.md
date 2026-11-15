@@ -3,7 +3,7 @@
 This is the reusable input/output validation slice of [#201](https://github.com/NomaDamas/Gamst/issues/201), tracked in [#223](https://github.com/NomaDamas/Gamst/issues/223). It does not load a model or register an inference provider. Actual native integration, capture provenance, text-tokenizer truncation, media ownership and trained inference acceptance remain separate requirements.
 
 ```python
-from humansense.sam_audio_windows import prepare_window, validate_outputs
+from gamst.sam_audio_windows import prepare_window, validate_outputs
 
 window = prepare_window(
     pcm, sample_rate=48000, prompt="the ringing telephone",

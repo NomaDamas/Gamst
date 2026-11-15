@@ -5,7 +5,7 @@ from fractions import Fraction
 import hashlib
 import math
 import random
-from humansense.capabilities import identifier
+from gamst.capabilities import identifier
 
 from .recording_financial import digest,encode,fraction,integer,keys,ratio,sha
 from .recording_lifetime_ledger import ValidatedLifetimeLedger

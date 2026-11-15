@@ -9,7 +9,7 @@ import itertools
 import random
 import re
 
-from humansense.capabilities import identifier
+from gamst.capabilities import identifier
 from .recording_financial import (N63, array, digest, enum, fraction, integer, keys,
                                   nullable, ratio, rational, sha, snapshot)
 from .stream_cost_ledger import CATEGORIES

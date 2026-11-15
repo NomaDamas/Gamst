@@ -1,6 +1,6 @@
 import unittest
 from dataclasses import FrozenInstanceError
-from humansense.native_entry import _issue_entry_binding,NativeEntryBinding
+from gamst.native_entry import _issue_entry_binding,NativeEntryBinding
 
 
 def owner():

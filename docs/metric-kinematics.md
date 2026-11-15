@@ -15,7 +15,7 @@ It does not run a depth model, establish identity, infer contact/support, measur
 force, or turn relative monocular depth into meters. Required family #38 remains
 open for those integrations and real scene validation.
 
-Import from `humansense.providers.kinematics`. Python standard library only;
+Import from `gamst.providers.kinematics`. Python standard library only;
 no dependency installation, checkpoint, device activation or download occurs.
 The SDK implementation uses Apache-2.0. This is a **local structured-input**
 processor: do not select it as a pixel `ProcessProvider` or submit its dictionaries
@@ -79,13 +79,13 @@ state is not a claim of current location. `reset`, `process`, and idempotent
 ## SDK publication
 
 ```python
-from humansense import HumanSense
-from humansense.providers.kinematics import MetricKinematics
+from gamst import Gamst
+from gamst.providers.kinematics import MetricKinematics
 
 provider = MetricKinematics(calibration_id='cal1', input_frame='world', output_frame='world')
 # frame is the structured InputFrame described above, from your calibrated pipeline.
 value = provider.process(frame)
-async with HumanSense(consent=True) as human:
+async with Gamst(consent=True) as human:
     human.register_capability(provider.spec)
     await human.push_observation(provider.spec.id, value, sensor=frame.sensor,
                                  timestamp_ms=frame.timestamp_ms, subject_id=frame.subject_id)

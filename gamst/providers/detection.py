@@ -64,7 +64,7 @@ class RFDETRObjects:
                 raise RuntimeError('RF-DETR adapter requires validated rfdetr==1.12.1')
             from rfdetr import RFDETRNano
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[detection] in a dedicated runtime') from exc
+            raise RuntimeError('Install gamst-sdk[detection] in a dedicated runtime') from exc
         model = RFDETRNano(pretrain_weights=str(path), device=device)
         # An inference-only snapshot folds supported operations without compile
         # caches or CUDA graph side effects. Release the training/source model.

@@ -1,6 +1,6 @@
 # Call admission diagnostics
 
-Call recommendations, budget reservation and actual dispatch are separate events. Python `CallController.snapshot()` and HumanSense/MCP `get_call_status()` now expose:
+Call recommendations, budget reservation and actual dispatch are separate events. Python `CallController.snapshot()` and Gamst/MCP `get_call_status()` now expose:
 
 - `desired_route`: the retained policy demand for the original observation.
 - `allowed_route`: an advisory current dispatch route only for a valid, unexpired reservation without runtime/source/freshness/cooldown/ledger blockers. Pending requests always report `none` and `reservation_required`, even if no other blocker exists.

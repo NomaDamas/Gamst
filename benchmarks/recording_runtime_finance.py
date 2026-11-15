@@ -5,9 +5,9 @@ create an invoice, and only the complete runtime join may issue a financial view
 """
 from types import MappingProxyType
 
-from humansense.call_controller import CallController
-from humansense.native_entry import validate_owner
-from humansense.recording_settlement import RecordingSettlementRecorder,validate_synthetic_charge_scenario
+from gamst.call_controller import CallController
+from gamst.native_entry import validate_owner
+from gamst.recording_settlement import RecordingSettlementRecorder,validate_synthetic_charge_scenario
 from .recording_financial import (FinancialArtifacts,_issue_financial_run_view,decode,digest,
     encode,integer,keys,snapshot,validate_adapters)
 from .recording_fixture_receipts import FinancialFixtureReceiptRouter

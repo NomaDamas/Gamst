@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from humansense import TextContextCalls
+from gamst import TextContextCalls
 from benchmarks.recording_financial import decode,digest,encode
 from benchmarks.recording_native_schema import digest as original_digest,run_context
 from benchmarks.recording_native_writer import ArtifactBudget,RecordingNativeWriter

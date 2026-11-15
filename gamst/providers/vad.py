@@ -58,7 +58,7 @@ class SileroActivity:
         try:
             import torch
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[vad] in the selected runtime') from exc
+            raise RuntimeError('Install gamst-sdk[vad] in the selected runtime') from exc
         model = torch.jit.load(str(path), map_location='cpu').eval()
 
         def score(values):

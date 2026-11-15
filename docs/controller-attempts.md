@@ -8,7 +8,7 @@ providers or enable network calls on construction.
 
 ```python
 from benchmarks.controller_attempts import RecordedContextClient
-from humansense import TextContextCalls
+from gamst import TextContextCalls
 
 # controller is registered with human; recorder owns one frozen task/system.
 # request_id refers to the pending evidence-bound decision being executed.
@@ -57,7 +57,7 @@ remains available after failure, cancellation, host deletion or adapter close fo
 late receipts. The recorder never stores request/image/response bodies or error
 messages. These explicit evaluation artifacts belong to the application, retain
 hashes and identifiers, and have separate retention/deletion obligations; deleting
-HumanSense observations does not erase the caller's evaluation report.
+Gamst observations does not erase the caller's evaluation report.
 
 `status='success'` in the attempt report means the client coroutine returned.
 It does not mean the SDK accepted the answer, that response validation passed, or

@@ -1,7 +1,7 @@
 import json
 import unittest
 from fractions import Fraction
-from humansense.fill_conflict_rule import parse_claim,compare,PREDICATE,prompt
+from gamst.fill_conflict_rule import parse_claim,compare,PREDICATE,prompt
 
 
 def claim(interval,status='estimated'):

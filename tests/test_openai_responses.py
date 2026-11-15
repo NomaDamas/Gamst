@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense.native_entry import _issue_entry_binding
-from humansense.openai_responses import OpenAIResponsesClient
-from humansense.openai_responses_codec import normalize,strict_json
-from humansense.responses_evidence import ResponsesEvidenceSession,RESERVATION
+from gamst.native_entry import _issue_entry_binding
+from gamst.openai_responses import OpenAIResponsesClient
+from gamst.openai_responses_codec import normalize,strict_json
+from gamst.responses_evidence import ResponsesEvidenceSession,RESERVATION
 from test_native_entry import owner,binding
 
 
@@ -141,7 +141,7 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):self.client.prepare(request())
 
     async def test_reader_verifies_exact_originals_without_certifying_native_money(self):
-        from humansense.responses_evidence_reader import read_responses_evidence
+        from gamst.responses_evidence_reader import read_responses_evidence
         p,b=self.prepare();await p.invoke(b);await p.release();await self.sink.close()
         inventory=(self.sink.directory/'inventory.json').read_bytes();sha=hashlib.sha256(inventory).hexdigest()
         evidence=read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
@@ -156,7 +156,7 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):read_responses_evidence(self.sink.directory,expected_inventory_sha256=sha)
 
     async def test_reader_rejects_impossible_states_and_allows_late_cancel(self):
-        from humansense.responses_evidence_reader import read_responses_evidence
+        from gamst.responses_evidence_reader import read_responses_evidence
         p,b=self.prepare();await p.invoke(b);await p.release();await self.sink.close()
         directory=self.sink.directory
         original=json.loads((directory/'call-0000.json').read_bytes())
@@ -205,7 +205,7 @@ class Transport(unittest.IsolatedAsyncioTestCase):
                 await self.entered.wait()
                 return set(),set(values)
             return await real_wait(tasks,**kwargs)
-        with patch('humansense.openai_responses.asyncio.wait',side_effect=controlled_wait):
+        with patch('gamst.openai_responses.asyncio.wait',side_effect=controlled_wait):
             with self.assertRaises(TimeoutError):await p.invoke(b)
         await p.release();self.assertEqual(len(self.calls),1);self.assertIsNone(p.writer)
         self.assertEqual(self.manifest()['terminal'],'timeout')
@@ -217,7 +217,7 @@ class Transport(unittest.IsolatedAsyncioTestCase):
             task=real_create(coro,*args,**kwargs)
             if coro.__name__=='_run':task.cancel()
             return task
-        with patch('humansense.openai_responses.asyncio.create_task',side_effect=cancelled_before_start):
+        with patch('gamst.openai_responses.asyncio.create_task',side_effect=cancelled_before_start):
             with self.assertRaises(asyncio.CancelledError):await p.invoke(b)
         await p.release();m=self.manifest()
         self.assertEqual(m['terminal'],'cancelled');self.assertIsNotNone(m['entry_binding'])
@@ -242,7 +242,7 @@ class Transport(unittest.IsolatedAsyncioTestCase):
 
 class Projection(unittest.TestCase):
     def test_projection_owns_request_before_hash_and_wire(self):
-        from humansense import openai_responses_codec as codec
+        from gamst import openai_responses_codec as codec
         caller=request();original=json.loads(json.dumps(caller));encode=codec.encoded
         def mutate(value):
             result=encode(value)
@@ -259,7 +259,7 @@ class Projection(unittest.TestCase):
     def test_json_counts_primitive_nodes_before_decode(self):
         for scalar in (b'0',b'true',b'null'):
             raw=b'['+b','.join([scalar]*32768)+b']'
-            with patch('humansense.openai_responses_codec.json.loads',side_effect=AssertionError('must bound before allocation')):
+            with patch('gamst.openai_responses_codec.json.loads',side_effect=AssertionError('must bound before allocation')):
                 with self.assertRaises(ValueError):strict_json(raw)
         self.assertEqual(strict_json(b'[1,true,null,"a,0"]'),[1,True,None,'a,0'])
 
@@ -274,9 +274,9 @@ class OriginalEntry(unittest.IsolatedAsyncioTestCase):
     async def test_native3_bound_callback_has_one_original_attempt_and_owner(self):
         from test_runtime_instrumentation import session
         from test_text_context_call import Calls
-        from humansense.text_context_call import TextContextCalls
-        from humansense.call_controller import _digest
-        from humansense.schema import timestamp
+        from gamst.text_context_call import TextContextCalls
+        from gamst.call_controller import _digest
+        from gamst.schema import timestamp
         harness=Calls();await harness.asyncSetUp()
         with tempfile.TemporaryDirectory(dir='.') as tmp:
             observer=session(Path(tmp).resolve(),provider='openai',revision='fixture-model')
@@ -307,8 +307,8 @@ class SDKTransport(unittest.IsolatedAsyncioTestCase):
     async def sdk(self,visual=False,journal=None):
         from test_runtime_instrumentation import session
         from test_text_context_call import Calls
-        from humansense.text_context_call import TextContextCalls
-        from humansense.visual_context_call import VisualContextCalls
+        from gamst.text_context_call import TextContextCalls
+        from gamst.visual_context_call import VisualContextCalls
         self.harness=Calls();await self.harness.asyncSetUp()
         self.observer=session(Path(self.tmp.name).resolve(),provider='openai',revision='fixture-model',journal=journal)
         await self.client.close();await self.sink.close()

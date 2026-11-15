@@ -5,7 +5,7 @@ The opt-in `sam_audio.text_temporal.local` profile implements the software path 
 An application explicitly selects an existing Python **3.11 or later** environment and supplies an [artifact manifest](sam-audio-artifacts.md) with its frozen canonical SHA256. No package/model installation or device access is performed by this adapter. Discovery validates configuration and hashes its resolved identity without importing NumPy, Torch, Transformers or upstream SAM.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = {
     "manifest_path": "/absolute/local/sam-manifest.json",

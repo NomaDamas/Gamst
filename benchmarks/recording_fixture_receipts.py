@@ -1,9 +1,9 @@
 """Explicit frozen F1 scenarios joined to actual SDK settlement transitions."""
 from types import MappingProxyType
 
-from humansense.recording_settlement import RecordingSettlementRecorder,validate_synthetic_charge_scenario
-from humansense.native_entry import NativeEntryBinding
-from humansense.schema import timestamp
+from gamst.recording_settlement import RecordingSettlementRecorder,validate_synthetic_charge_scenario
+from gamst.native_entry import NativeEntryBinding
+from gamst.schema import timestamp
 from .recording_transports import FixtureReceiptRouter
 from .recording_financial import (FinancialArtifacts,decode,digest,encode,integer,keys,sha,snapshot,validate_adapters)
 

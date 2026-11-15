@@ -1,9 +1,9 @@
 # Optional call budget ledger
 
-`humansense.call_budget.CallBudget` is an opt-in in-memory accounting primitive for #154. It executes no model and does not attach itself to observation delivery. It is not a completed controller, pricing service, authenticated billing feed or durable financial store.
+`gamst.call_budget.CallBudget` is an opt-in in-memory accounting primitive for #154. It executes no model and does not attach itself to observation delivery. It is not a completed controller, pricing service, authenticated billing feed or durable financial store.
 
 ```python
-from humansense.call_budget import CallBudget
+from gamst.call_budget import CallBudget
 
 budget = CallBudget(unit='USD.micro', pricing_revision='provider-prices-v1',
                     ceiling=1000000, max_calls=100, max_inflight=2)

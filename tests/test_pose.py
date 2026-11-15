@@ -5,9 +5,9 @@ import threading
 from types import SimpleNamespace
 import unittest
 
-from humansense.plugins import InputFrame
-from humansense.providers.pose import MediaPipePosePlugin
-from humansense.tracking import PersonTracker
+from gamst.plugins import InputFrame
+from gamst.providers.pose import MediaPipePosePlugin
+from gamst.tracking import PersonTracker
 
 
 class ImageFixture:

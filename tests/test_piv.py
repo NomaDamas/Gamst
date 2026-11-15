@@ -13,11 +13,11 @@ try:
 except ImportError:
     np = None
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.piv import OpenPIVFlow
-from humansense.provider_profiles import capability
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.piv import OpenPIVFlow
+from gamst.provider_profiles import capability
 
 CONFIG = dict(meters_per_pixel=.001, calibration_id='fixture', coordinate_frame='image')
 
@@ -35,7 +35,7 @@ def backend(a,b,**options):
 
 class MetadataTests(unittest.TestCase):
     def test_discovery_stays_stdlib_and_config_validates(self):
-        code="from humansense.provider_profiles import capability; import sys; capability('openpiv.flow',"+repr(CONFIG)+"); assert 'numpy' not in sys.modules; assert 'openpiv' not in sys.modules"
+        code="from gamst.provider_profiles import capability; import sys; capability('openpiv.flow',"+repr(CONFIG)+"); assert 'numpy' not in sys.modules; assert 'openpiv' not in sys.modules"
         subprocess.run([sys.executable,'-S','-c',code],check=True)
         for change in ({'meters_per_pixel':True},{'meters_per_pixel':0},{'snr_threshold':float('nan')},{'max_gap_ms':0},{'max_speed_m_s':-1}):
             with self.assertRaises(ValueError):capability('openpiv.flow',dict(CONFIG,**change))
@@ -134,7 +134,7 @@ class PIVTests(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy absent')
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_managed_stream_and_mcp(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human)
             spec=capability('openpiv.flow',CONFIG)
             streams.register(spec,lambda:OpenPIVFlow(backend,**CONFIG))
@@ -152,12 +152,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_profile_dispatch_and_real_pipe(self):
         import asyncio
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         children=[];spawn_real=asyncio.create_subprocess_exec
         script='''
 import numpy as np
-from humansense.providers.piv import OpenPIVFlow
-from humansense.provider_worker import main
+from gamst.providers.piv import OpenPIVFlow
+from gamst.provider_worker import main
 
 def backend(a,b,**kw):
     shape=((a.shape[0]-64)//32+1,(a.shape[1]-64)//32+1)

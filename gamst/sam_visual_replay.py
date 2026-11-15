@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-from .engine import HumanSense
+from .engine import Gamst
 from .process_provider import ProcessProvider
 from .provider_wire import decode_frame,encode_frame
 from .providers.sam_audio_context import configuration
@@ -57,7 +57,7 @@ async def replay(manifest,sha256,*,python=sys.executable,consent=False):
     if consent is not True:raise PermissionError('explicit local replay consent required')
     config,entries,subject=recording(manifest,sha256)
     policy=config['visual_policy'];audio=policy['audio_sensor'];visual=policy['visual_sensor']
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         owner=human.enable_separation_media(subject_id=subject,source_id=audio['source_id'],sensor_id=audio['sensor_id'],
             visual_source={'source_id':visual['source_id'],'sensor_id':visual['sensor_id']},max_bytes=64*1024*1024)
         worker=await ProcessProvider.open(python,PROFILE,config,separation_owner=owner)

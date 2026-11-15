@@ -17,7 +17,7 @@ The returned mono frame keeps the acquisition interval, sequence and epoch, but 
 ## PCM stays in the processing lane
 
 ```python
-from humansense.providers.beamforming import DelaySumBeamformer
+from gamst.providers.beamforming import DelaySumBeamformer
 
 beam = DelaySumBeamformer(
     spacing_m=0.2, sound_speed_m_s=343, calibration_id='array-profile',

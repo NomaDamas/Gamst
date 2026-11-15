@@ -7,7 +7,7 @@ flowchart LR
   C --> D[Consumer LLM or MCP client]
 ```
 
-`HumanSense.get_observation_page` and the same-named MCP tool replay **whole
+`Gamst.get_observation_page` and the same-named MCP tool replay **whole
 retained registered observations**, oldest ingestion first. A consumer can keep
 its chosen delivery interval and later read intermediate event records even when
 the latest snapshot contains no event. The existing newest-first

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense.plugins import AudioLevelPlugin, InputFrame, MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
-from humansense.capture import CaptureSession
+from gamst.plugins import AudioLevelPlugin, InputFrame, MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
+from gamst.capture import CaptureSession
 
 
 class AudioTests(unittest.IsolatedAsyncioTestCase):
@@ -46,7 +46,7 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         # remains off the event loop in production CaptureSession.
         async def inline(function, *args, **kwargs):
             return function(*args, **kwargs)
-        self.worker = patch("humansense.capture.asyncio.to_thread", inline)
+        self.worker = patch("gamst.capture.asyncio.to_thread", inline)
         self.worker.start()
 
     async def asyncTearDown(self):
@@ -213,7 +213,7 @@ class WhisperTests(unittest.IsolatedAsyncioTestCase):
         fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
         with tempfile.TemporaryDirectory() as directory:
             plugin = self.make_plugin(directory)
-            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", inline):
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("gamst.plugins.asyncio.to_thread", inline):
                 output = await plugin.process(InputFrame([0.] * 1024, "audio", 1000, "alice", 16000))
                 transcripts = [p for p in output if p["name"] == "text.transcript"]
                 self.assertEqual([p["value"] for p in transcripts], ["utterance 1", "utterance 2"])
@@ -235,7 +235,7 @@ class WhisperTests(unittest.IsolatedAsyncioTestCase):
         fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
         with tempfile.TemporaryDirectory() as directory:
             plugin = self.make_plugin(directory)
-            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", delayed):
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("gamst.plugins.asyncio.to_thread", delayed):
                 task = asyncio.create_task(plugin.process(InputFrame([0.] * 512, "audio", 1000, "alice", 16000)))
                 await entered.wait()
                 plugin.reset()
@@ -245,13 +245,13 @@ class WhisperTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plugin.buffers, {})
 
     async def test_transcription_integrates_with_runtime_and_preserves_provenance(self):
-        from humansense import HumanSense
+        from gamst import Gamst
         async def inline(function, *args, **kwargs): return function(*args, **kwargs)
         fake_numpy = SimpleNamespace(float32="float32", asarray=lambda values, **kwargs: values)
         with tempfile.TemporaryDirectory() as directory:
             plugin = self.make_plugin(directory)
-            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("humansense.plugins.asyncio.to_thread", inline):
-                async with HumanSense(consent=True) as runtime:
+            with patch.dict("sys.modules", {"numpy": fake_numpy}), patch("gamst.plugins.asyncio.to_thread", inline):
+                async with Gamst(consent=True) as runtime:
                     runtime.register(plugin)
                     await runtime.push_audio([0.] * 512, subject_id="alice", sample_rate=16000)
                     records = await runtime.get_history(subject_id="alice")
@@ -265,7 +265,7 @@ class SileroTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         async def inline(function, *args, **kwargs):
             return function(*args, **kwargs)
-        self.worker = patch("humansense.plugins.asyncio.to_thread", inline)
+        self.worker = patch("gamst.plugins.asyncio.to_thread", inline)
         self.worker.start()
 
     async def asyncTearDown(self):

@@ -1,14 +1,14 @@
-"""HumanSense: local, evidence-grounded human interaction intelligence."""
-from .engine import HumanSense, PerceptionPlugin
+"""Gamst: local, evidence-grounded human interaction intelligence."""
+from .engine import Gamst, PerceptionPlugin
 from .schema import SCHEMA_VERSION, validate_output
 from .feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
 from .capabilities import CapabilitySpec, CapabilityRegistry, OutputField, SensorMetadata
 from .streams import SensorStreams
 from .process_provider import ProcessProvider
 
-Observer = HumanSense
+Observer = Gamst
 __version__ = "0.3.1"
-__all__ = ["HumanSense", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]
+__all__ = ["Gamst", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]
 __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetadata']
 __all__ += ['SensorStreams']
 __all__ += ['ProcessProvider']

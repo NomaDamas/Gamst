@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 import test_sam_audio_context as audio
 import test_sam_visual_window as fixtures
-from humansense import HumanSense,ProcessProvider,SensorStreams
-from humansense.sam_visual_packet import unpack_visual_packet,visual_policy
-from humansense.schema import timestamp
-from humansense.separation_media import PROFILE
+from gamst import Gamst,ProcessProvider,SensorStreams
+from gamst.sam_visual_packet import unpack_visual_packet,visual_policy
+from gamst.schema import timestamp
+from gamst.separation_media import PROFILE
 
 
 @unittest.skipIf(fixtures.fixtures.np is None,'optional numpy missing')
@@ -22,8 +22,8 @@ class Lifecycle(unittest.IsolatedAsyncioTestCase):
         code='''
 import os,time
 from pathlib import Path
-from humansense import provider_worker as w
-from humansense.providers.sam_audio_native import SAMAudioNative
+from gamst import provider_worker as w
+from gamst.providers.sam_audio_native import SAMAudioNative
 from test_sam_visual_context import Backend
 class Blocking(Backend):
     def predict(self,prepared,*,visual=None):
@@ -49,7 +49,7 @@ w.main()
                     env['GAMST_VISUAL_TEST_READY']=str(ready);kwargs['env']=env
                     child=await real_spawn(sys.executable,'-u','-c',code,**kwargs)
                     children.append(child);return child
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     owner=human.enable_separation_media(subject_id='subject',source_id='microphone',sensor_id='mic0',
                         visual_source={'source_id':'camera','sensor_id':'cam0'})
                     with patch('asyncio.create_subprocess_exec',spawn):

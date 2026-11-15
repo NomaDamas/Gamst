@@ -4,14 +4,14 @@ import hashlib
 import sys
 import unittest
 
-from humansense import HumanSense,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.smolvlm_call import SmolVLMCalls,smolvlm_frame_sha256
+from gamst import Gamst,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.smolvlm_call import SmolVLMCalls,smolvlm_frame_sha256
 import test_smolvlm_context as smol_tests
 from test_smolvlm_context import frame,np
 from test_smolvlm_native import CONFIG
@@ -24,7 +24,7 @@ class Calls(unittest.IsolatedAsyncioTestCase):
     fixture=smol_tests.Managed.fixture
 
     def setup_human(self):
-        human=HumanSense(consent=True)
+        human=Gamst(consent=True)
         spec=CapabilitySpec('thin.detect','thin.objects','video','thin.fixture','1',(OutputField('count','integer'),),'frame',freshness_ms=1000)
         human.register_capability(spec)
         controller=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=0),

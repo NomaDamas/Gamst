@@ -14,13 +14,13 @@ from pathlib import Path
 import stat
 import time
 
-from humansense import FreshFrameSentinel, HumanSense, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.schema import timestamp
-from humansense.smolvlm_call import smolvlm_frame_sha256
+from gamst import FreshFrameSentinel, Gamst, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.schema import timestamp
+from gamst.smolvlm_call import smolvlm_frame_sha256
 
 
 def _read(path, maximum, *, owner=None):
@@ -99,7 +99,7 @@ async def run(args):
     controller=CallController(policy=CallPolicy(mode='sentinel',semantic_interval_ms=args.interval_ms,cooldown_ms=0),
         budget=CallBudget(unit=args.unit,pricing_revision=args.pricing_revision,ceiling=args.ceiling,max_inflight=4))
     capture_results=[];polls=0
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         human.register_call_controller('recorded',controller)
         sentinel=await FreshFrameSentinel.open(human,'recorded','recorded',args.python,config,
             sensor=sensor,subject_id=manifest['subject_id'],frame_shape=tuple(manifest['shape']),

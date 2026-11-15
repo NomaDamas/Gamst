@@ -15,7 +15,7 @@ from .streams import _finish
 class ProcessProvider:
     """Async SensorStreams provider. No shell, network service or implicit restart.
 
-    A selected Python environment must already contain humansense-sdk and the
+    A selected Python environment must already contain gamst-sdk and the
     requested optional dependencies. Raw input travels only over owned pipes;
     the validated response is ordinary bounded sensory context.
     """
@@ -89,7 +89,7 @@ class ProcessProvider:
                 worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
             if self._lifecycle_ticket is not None:self._lifecycle_ticket.event('spawn_begin')
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
-                'humansense.provider_worker', stdin=asyncio.subprocess.PIPE,
+                'gamst.provider_worker', stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
             if self._lifecycle_ticket is not None:self._lifecycle_ticket.event("handle_acquired")

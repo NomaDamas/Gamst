@@ -9,7 +9,7 @@ The provider retains the model's recurrent state and consumes every contiguous 5
 This is native stateful streaming with a 32 ms analysis step and no future lookahead. Collection, capture delivery, queueing and inference still add latency. No partial frame is padded or flushed into a fabricated end-of-stream decision. A discontinuity greater than 1 ms resets both pending samples and neural state; rounding tolerance does not accumulate. Sequence gaps reset through SensorStreams. Invalid model output clears recurrent state; worker failure invalidates the process instance. Explicitly reopen after worker failure. Close discards retained model references. Long-running accuracy depends on the checkpoint and domain; this change does not establish indefinite-call robustness.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(path='/models/silero_vad.jit', sha256=CHECKPOINT_SHA256)
 spec = ProcessProvider.capability('silero.activity', config)
@@ -21,7 +21,7 @@ streams.register(spec, create_vad)
 await streams.open('microphone', 'mono', [spec.id])
 ```
 
-Install `humansense-sdk[vad]` in the selected environment. Core discovery imports no Torch and starts no process. Checkpoints are trusted application inputs, bounded to 32 MiB and verified against the supplied SHA256 before loading. Hash verification detects mismatch; it is not a sandbox for untrusted TorchScript. No weights download implicitly. The existing legacy SileroVADPlugin API remains available; this provider implements the new capability/stream contract.
+Install `gamst-sdk[vad]` in the selected environment. Core discovery imports no Torch and starts no process. Checkpoints are trusted application inputs, bounded to 32 MiB and verified against the supplied SHA256 before loading. Hash verification detects mismatch; it is not a sandbox for untrusted TorchScript. No weights download implicitly. The existing legacy SileroVADPlugin API remains available; this provider implements the new capability/stream contract.
 
 [Silero's official source](https://github.com/snakers4/silero-vad) and [pinned utilities](https://github.com/snakers4/silero-vad/blob/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/utils_vad.py) describe fixed-size inference and state reset. The model is MIT licensed; SDK adapter code is Apache-2.0. No checkpoint or audio recording is bundled.
 

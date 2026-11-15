@@ -8,13 +8,13 @@ import inspect
 import json
 import time
 
-from humansense.call_controller import CallController
-from humansense.capabilities import bounded_json
-from humansense.evaluation_snapshot import EvaluationSnapshotPublisher,evaluation_snapshot_implementation_sha256
-from humansense.native_entry import NativeEntryBinding
-from humansense.schema import timestamp
-from humansense.streams import _finish
-from humansense.text_context_call import TextContextCalls
+from gamst.call_controller import CallController
+from gamst.capabilities import bounded_json
+from gamst.evaluation_snapshot import EvaluationSnapshotPublisher,evaluation_snapshot_implementation_sha256
+from gamst.native_entry import NativeEntryBinding
+from gamst.schema import timestamp
+from gamst.streams import _finish
+from gamst.text_context_call import TextContextCalls
 from .recorded_source import digest,encoded,validate_manifest
 from .replay_clock import ReplayClock,validate_tasks
 from .recording_evaluation import RecordingEvaluationSession

@@ -25,7 +25,7 @@ class AudioProsody:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError('Install numpy or humansense-sdk[audio] for audio features') from exc
+            raise RuntimeError('Install numpy or gamst-sdk[audio] for audio features') from exc
         self.np = np
         self.window_ms, self.hop_ms = window_ms, hop_ms
         self.min_pitch_hz, self.max_pitch_hz = min_pitch_hz, max_pitch_hz
@@ -37,7 +37,7 @@ class AudioProsody:
     def capability(cls, *, window_ms=80):
         if type(window_ms) is not int or not 40 <= window_ms <= 250:
             raise ValueError('invalid feature window')
-        return CapabilitySpec('audio.prosody', 'audio.features', 'audio', 'humansense.audio_dsp', '2',
+        return CapabilitySpec('audio.prosody', 'audio.features', 'audio', 'gamst.audio_dsp', '2',
             (OutputField('features', 'object'),), 'window', window_ms=window_ms,
             stateful=True, reset_on_gap=True, freshness_ms=1000, interpretation='estimate',
             devices=('cpu',), sensor_requirements=('normalized-pcm',), license='Apache-2.0')

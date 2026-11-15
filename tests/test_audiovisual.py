@@ -5,10 +5,10 @@ import subprocess
 import sys
 import unittest
 
-from humansense.audiovisual import TalkNetWindows, decode_talknet_window
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_wire import encode_frame, decode_frame
+from gamst.audiovisual import TalkNetWindows, decode_talknet_window
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_wire import encode_frame, decode_frame
 
 try:
     import numpy as np
@@ -31,7 +31,7 @@ def video(seq, start, *, epoch='e1', clock=0):
 class Discovery(unittest.TestCase):
     def test_dependency_light_import(self):
         result = subprocess.run([sys.executable, '-c',
-            "import sys; import humansense.audiovisual; assert not {'numpy','torch','cv2'} & sys.modules.keys()"],
+            "import sys; import gamst.audiovisual; assert not {'numpy','torch','cv2'} & sys.modules.keys()"],
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         for packet in (None, b'', b'GTAV001\n'+struct.pack('!I', 1000000)):

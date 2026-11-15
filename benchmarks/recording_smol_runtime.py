@@ -11,10 +11,10 @@ from pathlib import Path
 import stat
 import sys
 
-from humansense.smolvlm_call import SmolVLMCalls
-from humansense.providers.smolvlm_native import MODEL_ID, RUNTIME, configuration, prompt_text
-from humansense.provider_profiles import capability
-from humansense.streams import _finish
+from gamst.smolvlm_call import SmolVLMCalls
+from gamst.providers.smolvlm_native import MODEL_ID, RUNTIME, configuration, prompt_text
+from gamst.provider_profiles import capability
+from gamst.streams import _finish
 from .recorded_source import digest, encoded
 from .recording_dependencies import VerifiedDependencyInventory
 from .recording_runtime_contract import validate_adapter, validate_assets

@@ -8,11 +8,11 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.sam_audio_context import SAMAudioContext, configuration
-from humansense.schema import timestamp
-from humansense.separation_media import PROFILE
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.sam_audio_context import SAMAudioContext, configuration
+from gamst.schema import timestamp
+from gamst.separation_media import PROFILE
 
 try:
     import numpy as np
@@ -26,7 +26,7 @@ CONFIG = dict(manifest_path='/fixture/not-a-model/manifest.json',manifest_sha256
 class Discovery(unittest.TestCase):
     def test_strict_config_and_dependency_light_discovery(self):
         result = subprocess.run([sys.executable,'-c',
-            'from humansense import ProcessProvider;import sys;ProcessProvider.capability('+repr(PROFILE)+','+repr(CONFIG)+');assert not {"numpy","torch","transformers","sam_audio"}&sys.modules.keys()'],capture_output=True)
+            'from gamst import ProcessProvider;import sys;ProcessProvider.capability('+repr(PROFILE)+','+repr(CONFIG)+');assert not {"numpy","torch","transformers","sam_audio"}&sys.modules.keys()'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         before = deepcopy(CONFIG)
         config = configuration(CONFIG)
@@ -109,8 +109,8 @@ class Context(unittest.TestCase):
 
 
 FIXTURE_CHILD = '''
-from humansense import provider_worker as w
-from humansense.providers.sam_audio_native import SAMAudioNative
+from gamst import provider_worker as w
+from gamst.providers.sam_audio_native import SAMAudioNative
 from test_sam_audio_context import FixtureBackend
 SAMAudioNative.from_local=classmethod(lambda cls,config:FixtureBackend())
 w.main()
@@ -120,7 +120,7 @@ w.main()
 @unittest.skipIf(np is None,'optional NumPy unavailable')
 class OwnedContext(unittest.IsolatedAsyncioTestCase):
     async def test_real_profile_context_owned_worker_and_metadata_only_mcp(self):
-        from humansense.mcp import MCPServer
+        from gamst.mcp import MCPServer
         children = [];stage_paths=[]
         real_spawn = asyncio.create_subprocess_exec
         async def spawn(*args,**kwargs):
@@ -134,7 +134,7 @@ class OwnedContext(unittest.IsolatedAsyncioTestCase):
             child = await real_spawn(sys.executable,'-u','-c',FIXTURE_CHILD,**kwargs)
             children.append(child)
             return child
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             owner = human.enable_separation_media(subject_id='alice',source_id='mic',sensor_id='device')
             with patch('asyncio.create_subprocess_exec',spawn):
                 provider = await ProcessProvider.open(sys.executable,PROFILE,CONFIG,separation_owner=owner)
@@ -183,8 +183,8 @@ class OwnedContext(unittest.IsolatedAsyncioTestCase):
         code='''
 import os,time,signal
 from pathlib import Path
-from humansense import provider_worker as w
-from humansense.providers.sam_audio_native import SAMAudioNative
+from gamst import provider_worker as w
+from gamst.providers.sam_audio_native import SAMAudioNative
 def fixture_load(cls,config):
     signal.signal(signal.SIGTERM,signal.SIG_IGN)
     (Path(os.environ['GAMST_SAM_TOKENIZER_DIR'])/'fixture-consumed').write_bytes(b'fixture tokenizer snapshot')
@@ -200,7 +200,7 @@ w.main()
                 self.assertEqual(path.stat().st_mode & 0o777,0o700)
                 child=await real_spawn(sys.executable,'-u','-c',code,**kwargs)
                 children.append(child);return child
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 owner=human.enable_separation_media(subject_id='alice',source_id='mic',sensor_id='device')
                 with patch('asyncio.create_subprocess_exec',spawn):
                     task=asyncio.create_task(ProcessProvider.open(sys.executable,PROFILE,CONFIG,separation_owner=owner,

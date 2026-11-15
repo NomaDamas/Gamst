@@ -14,11 +14,11 @@ from benchmarks.recording_native_validation import (validate_recording_native_in
     iter_canonical_operations, lookup_canonical_operation)
 from benchmarks.recording_native_writer import RecordingNativeWriter
 from benchmarks.replay_clock import ReplayClock
-from humansense import HumanSense, TextContextCalls, CapabilitySpec, OutputField, SensorMetadata
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.schema import timestamp
+from gamst import Gamst, TextContextCalls, CapabilitySpec, OutputField, SensorMetadata
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.schema import timestamp
 from recording_native_fixtures import declarations, rehash, session
 
 
@@ -92,7 +92,7 @@ class Capacity(unittest.IsolatedAsyncioTestCase):
             with self.subTest(maximum=maximum):
                 root=self.directory();observer,writer,clock=await session(root)
                 self.addAsyncCleanup(observer.close)
-                human=HumanSense(consent=True);self.addAsyncCleanup(human.close)
+                human=Gamst(consent=True);self.addAsyncCleanup(human.close)
                 budget=CallBudget(unit='fixture',pricing_revision='1',ceiling=10000,max_calls=3601,max_inflight=1024)
                 policy=CallPolicy(mode='escalation',cooldown_ms=0,max_age_ms=60000)
                 options={} if maximum is None else {'max_requests':maximum}

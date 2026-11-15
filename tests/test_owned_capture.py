@@ -12,7 +12,7 @@ from benchmarks.owned_capture import (OwnedCaptureSource, CaptureCapacity, Captu
                                       DeliveryAdmission, _read_owned)
 from benchmarks.recorded_source import digest
 from benchmarks.replay_clock import ReplayClock
-from humansense import HumanSense
+from gamst import Gamst
 
 
 class Journal:
@@ -57,7 +57,7 @@ class OwnedCaptureTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory(dir='.') as directory:
             root = Path(directory).resolve(); manifest = fixture(root)
             source = await self.prepare(root, manifest); sink = Sink()
-            human = HumanSense(consent=True)
+            human = Gamst(consent=True)
             try:
                 clock = ReplayClock(manifest)
                 await source.start(clock, sink)

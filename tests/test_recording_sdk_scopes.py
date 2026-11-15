@@ -13,10 +13,10 @@ import tempfile
 import unittest
 import uuid
 
-from humansense.recording_scope import RecordingScope,RecordingScopeOwner
-from humansense.call_controller import CallController
-from humansense.call_budget import CallBudget
-from humansense.call_policy import CallPolicy
+from gamst.recording_scope import RecordingScope,RecordingScopeOwner
+from gamst.call_controller import CallController
+from gamst.call_budget import CallBudget
+from gamst.call_policy import CallPolicy
 import test_text_context_call as text_tests
 import test_visual_context_call as visual_tests
 import test_smolvlm_call as smol_tests
@@ -331,8 +331,8 @@ class NativeSmolScopes(NativeFixture,unittest.IsolatedAsyncioTestCase):
     request=smol_tests.Calls.request
 
     async def test_real_owned_worker_stream_lifetime_and_distinct_task_execution_scope(self):
-        from humansense.provider_profiles import capability
-        from humansense.providers.smolvlm_native import configuration
+        from gamst.provider_profiles import capability
+        from gamst.providers.smolvlm_native import configuration
         config=dict(configuration(CONFIG),window_frames=1)
         spec=capability('smolvlm2.500m.local',config)
         observer,writer,clock=await self.recording(provider=spec.provider,revision=spec.version,

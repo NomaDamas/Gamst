@@ -8,12 +8,12 @@ import sys
 import uuid
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorMetadata
-from humansense.capabilities import CapabilitySpec, OutputField, bounded_json, identifier
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.mcp import MCPServer
+from gamst import Gamst, SensorMetadata
+from gamst.capabilities import CapabilitySpec, OutputField, bounded_json, identifier
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.mcp import MCPServer
 from .perception_comparison import plan_digest
 
 MAX_INPUT = 262144
@@ -96,8 +96,8 @@ async def _replay(scenario):
     def identity():
         serial[0]+=1
         return uuid.UUID(int=serial[0])
-    with patch('uuid.uuid4',side_effect=identity), patch('humansense.engine.timestamp',side_effect=clock):
-        async with HumanSense(consent=True) as human:
+    with patch('uuid.uuid4',side_effect=identity), patch('gamst.engine.timestamp',side_effect=clock):
+        async with Gamst(consent=True) as human:
             for modality in ('video','audio','text'):
                 spec=CapabilitySpec('replay.'+modality,'replay.'+modality,modality,'replay.fixture','1',
                     (OutputField('content','object'),),'frame',freshness_ms=1000)
@@ -176,7 +176,7 @@ def main():
     paired=type(package) is dict and set(package)=={'schema_version','task_id','system','plan_sha256','configuration','input'}
     scenario=package['input'] if paired else package
     if paired:
-        from humansense.call_policy import _sha
+        from gamst.call_policy import _sha
         if type(package['schema_version']) is not int or package['schema_version']!=1 or package['system'] not in ('baseline','candidate'):
             raise ValueError('invalid paired request')
         _sha(package['plan_sha256'])

@@ -49,7 +49,7 @@ class OpenPIVFlow:
         try:
             installed = importlib.metadata.version('openpiv')
         except importlib.metadata.PackageNotFoundError as exc:
-            raise RuntimeError('Install optional humansense-sdk[piv] in the selected runtime; OpenPIV is absent') from exc
+            raise RuntimeError('Install optional gamst-sdk[piv] in the selected runtime; OpenPIV is absent') from exc
         if installed != '0.26.1':
             raise RuntimeError('OpenPIV provider requires exactly openpiv==0.26.1')
         from openpiv import pyprocess

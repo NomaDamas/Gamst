@@ -6,10 +6,10 @@ import sys
 import unittest
 from unittest.mock import patch
 import test_orbslam_context as fixture
-from humansense.orbslam_process import ORBSLAMProcess
-from humansense import HumanSense,SensorStreams
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst.orbslam_process import ORBSLAMProcess
+from gamst import Gamst,SensorStreams
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 
 
 @unittest.skipIf(fixture.np is None or shutil.which('c++') is None,'requires numpy/OpenCV/compiler')
@@ -35,7 +35,7 @@ class Rotation(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(a['provenance']['session_id'],c['provenance']['session_id'])
             self.assertEqual(b['provenance']['rotation']['session_request_attempt'],2)
             self.assertEqual(c['provenance']['capture_ms'],1200)
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(p.spec,lambda:p)
                 await streams.open('cam','video',[p.spec.id]);now=timestamp()-1000
                 try:
@@ -62,7 +62,7 @@ class Rotation(unittest.IsolatedAsyncioTestCase):
         p=await ORBSLAMProcess.open(sys.executable,dict(fixture.assets(self),max_frames=1))
         try:
             await p.process(fixture.frame(0))
-            with patch('humansense.orbslam_process.ProcessProvider.open',side_effect=RuntimeError('startup failed')):
+            with patch('gamst.orbslam_process.ProcessProvider.open',side_effect=RuntimeError('startup failed')):
                 with self.assertRaisesRegex(RuntimeError,'startup failed'):await p.process(fixture.frame(1))
             self.assertTrue(p.closed);self.assertEqual(p.diagnostics()['request_attempts'],1)
         finally:await p.close()
@@ -127,7 +127,7 @@ class Rotation(unittest.IsolatedAsyncioTestCase):
         config=dict(fixture.assets(self),max_frames=1)
         for method in ('pause','delete_data'):
             p=await ORBSLAMProcess.open(sys.executable,config)
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(p.spec,lambda:p)
                 await streams.open('cam','video',[p.spec.id]);now=timestamp()-1000
                 def frame(i):

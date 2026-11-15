@@ -23,7 +23,7 @@ class SRPPHATDirection:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError('Install numpy or humansense-sdk[audio] for SRP-PHAT') from exc
+            raise RuntimeError('Install numpy or gamst-sdk[audio] for SRP-PHAT') from exc
         positions = np.array(positions_m, dtype=np.float64)
         singular = np.linalg.svd(positions-positions.mean(axis=0), compute_uv=False)
         if singular[1] < .01:

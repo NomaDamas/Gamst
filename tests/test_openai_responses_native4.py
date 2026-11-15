@@ -8,9 +8,9 @@ import unittest
 
 import test_openai_responses as transport_tests
 from recording_native_fixtures import session
-from humansense.openai_responses import OpenAIResponsesClient
-from humansense.responses_evidence import ResponsesEvidenceSession
-from humansense.responses_evidence_reader import read_responses_evidence
+from gamst.openai_responses import OpenAIResponsesClient
+from gamst.responses_evidence import ResponsesEvidenceSession
+from gamst.responses_evidence_reader import read_responses_evidence
 from benchmarks.recording_native_validation import validate_recording_native_inventory,lookup_canonical_operation
 
 
@@ -29,8 +29,8 @@ class Native4Transport(unittest.IsolatedAsyncioTestCase):
 
     async def sdk(self,visual=False):
         from test_text_context_call import Calls
-        from humansense.text_context_call import TextContextCalls
-        from humansense.visual_context_call import VisualContextCalls
+        from gamst.text_context_call import TextContextCalls
+        from gamst.visual_context_call import VisualContextCalls
         self.harness=Calls();await self.harness.asyncSetUp()
         self.observer,self.writer,clock=await session(Path(self.tmp.name).resolve(),
             provider='openai',revision='fixture-model',role='small_vlm' if visual else 'text_llm')

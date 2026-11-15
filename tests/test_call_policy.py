@@ -1,10 +1,10 @@
 from copy import deepcopy
 import unittest
 
-from humansense.call_policy import CallPolicy
-from humansense import HumanSense,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
-from humansense.schema import timestamp
+from gamst.call_policy import CallPolicy
+from gamst import Gamst,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
+from gamst.schema import timestamp
 
 
 def record(ts=1000):
@@ -87,7 +87,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
     async def test_real_registered_observation_has_evidence_bound_recommendation(self):
         spec=CapabilitySpec('test.measured','test.measured','video','test.provider','1',
             (OutputField('count','integer'),),'frame',freshness_ms=1000)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(spec)
             now=timestamp()
             await human.push_observation(spec.id,{'count':2},sensor=SensorMetadata('cam','video',0,coordinate_frame='pixels',stream_epoch='epoch'),timestamp_ms=now)

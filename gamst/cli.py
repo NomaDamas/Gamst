@@ -5,8 +5,8 @@ import json
 
 
 async def demo():
-    from . import HumanSense
-    async with HumanSense(consent=True) as human:
+    from . import Gamst
+    async with Gamst(consent=True) as human:
         await human.push_text("Could you explain that again?", subject_id="demo-user")
         result = await human.push_text("Could you explain that again?", subject_id="demo-user")
         await human.push_claim("preferred_language", "English", subject_id="demo-user", scope="demo")

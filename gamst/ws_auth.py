@@ -13,13 +13,13 @@ import secrets
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-TOKEN_ENV = "HUMANSENSE_WS_TOKEN"
-TOKEN_FILE_ENV = "HUMANSENSE_WS_TOKEN_FILE"
+TOKEN_ENV = "GAMST_WS_TOKEN"
+TOKEN_FILE_ENV = "GAMST_WS_TOKEN_FILE"
 
 
 def token_path() -> Path:
     configured = os.environ.get(TOKEN_FILE_ENV)
-    return Path(configured).expanduser() if configured else Path.home() / ".humansense" / "websocket-token"
+    return Path(configured).expanduser() if configured else Path.home() / ".gamst" / "websocket-token"
 
 
 def issue_token(path: Path | None = None) -> str:

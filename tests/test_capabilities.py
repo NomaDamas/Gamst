@@ -2,10 +2,10 @@ import dataclasses
 import json
 import unittest
 
-from humansense import HumanSense, CapabilitySpec, CapabilityRegistry, OutputField, SensorMetadata
-from humansense.capabilities import bounded_json
-from humansense.context import observation_packet
-from humansense.plugins import InputFrame
+from gamst import Gamst, CapabilitySpec, CapabilityRegistry, OutputField, SensorMetadata
+from gamst.capabilities import bounded_json
+from gamst.context import observation_packet
+from gamst.plugins import InputFrame
 
 
 def thermal(**changes):
@@ -88,7 +88,7 @@ class Contracts(unittest.TestCase):
 
 class RuntimeContracts(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.human.register_capability(thermal())
         self.sensor = SensorMetadata('camera1', 'lepton1', 1, calibration_id='cal-1')
 
@@ -150,7 +150,7 @@ class RuntimeContracts(unittest.IsolatedAsyncioTestCase):
         self.assertIn('audio.rms', observation_packet([record], 1000))
 
     async def test_discovery_without_consent_but_ingestion_requires_it(self):
-        async with HumanSense() as human:
+        async with Gamst() as human:
             human.register_capability(thermal())
             self.assertEqual(len(human.perception_capabilities.describe()), 1)
             with self.assertRaises(PermissionError):

@@ -7,11 +7,11 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense,ProcessProvider,SensorMetadata,SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.smolvlm_context import SmolVLMContext
-from humansense.schema import timestamp
-from humansense.mcp import MCPServer
+from gamst import Gamst,ProcessProvider,SensorMetadata,SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.smolvlm_context import SmolVLMContext
+from gamst.schema import timestamp
+from gamst.mcp import MCPServer
 from test_smolvlm_native import CONFIG
 try:
     import numpy as np
@@ -35,7 +35,7 @@ class Backend:
 
 class Discovery(unittest.TestCase):
     def test_optional_free_profile(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("smolvlm2.500m.local",'+repr(CONFIG)+');assert not {"torch","numpy","PIL","transformers"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("smolvlm2.500m.local",'+repr(CONFIG)+');assert not {"torch","numpy","PIL","transformers"}&sys.modules.keys()'
         p=subprocess.run([sys.executable,'-c',code],capture_output=True);self.assertEqual(p.returncode,0,p.stderr)
         for bad in ({'window_frames':0},{'window_frames':True},{'max_gap_ms':10001},{'sequence_step':0}):
             with self.assertRaises(ValueError):SmolVLMContext.capability(**dict(CONFIG,**bad))
@@ -52,7 +52,7 @@ class Window(unittest.TestCase):
         value=p.process(frame(3));self.assertEqual(value['semantic']['text'],'visible scene')
         self.assertEqual(value['window']['captures'][0]['pixels_sha256'],expected)
         self.assertEqual(b.calls[0][0][0][0,0].tolist(),[0,0,0]);self.assertEqual(b.calls[0][1],[1000,1500,2000,2500])
-        from humansense.providers.smolvlm_native import prompt_text
+        from gamst.providers.smolvlm_native import prompt_text
         self.assertEqual(value['model']['prompt_sha256'],hashlib.sha256(prompt_text([1000,1500,2000,2500]).encode()).hexdigest())
         self.assertEqual(value['window']['capture_end_ms'],2500);self.assertTrue(value['window']['complete'])
         self.assertEqual(p.images,[]);self.assertIsNone(p.process(frame(4)))
@@ -93,8 +93,8 @@ class Window(unittest.TestCase):
 
 
 WORKER='''
-from humansense import provider_worker as w
-from humansense.providers.smolvlm_context import SmolVLMContext
+from gamst import provider_worker as w
+from gamst.providers.smolvlm_context import SmolVLMContext
 import time
 class Backend:
     def predict(self,images,times):
@@ -122,7 +122,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_owned_worker_mcp_history_partial_and_original_timestamp(self):
         with self.fixture():
             worker=await ProcessProvider.open(sys.executable,'smolvlm2.500m.local',CONFIG)
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('cam','video',[worker.spec.id]);start=timestamp()-3000
                 try:
@@ -156,11 +156,11 @@ class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_keeps_polling_and_clear_suppresses_late_result(self):
         with self.fixture(delay=60):
             worker=await ProcessProvider.open(sys.executable,'smolvlm2.500m.local',dict(CONFIG,window_frames=1))
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker);await streams.open('cam','video',[worker.spec.id])
                 try:
                     await streams.submit(frame(0,timestamp()))
-                    from humansense.providers.prosody import AudioProsody
+                    from gamst.providers.prosody import AudioProsody
                     audio_spec=AudioProsody.capability();streams.register(audio_spec,AudioProsody)
                     await streams.open('mic','pcm',[audio_spec.id])
                     await streams.submit(InputFrame(np.zeros(1280,np.float32),'audio',timestamp(),sample_rate=16000,sensor=SensorMetadata('mic','pcm',0)))
@@ -178,7 +178,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
 
     async def test_managed_stride_fallback_and_overload_sequence_reset(self):
         b=Backend();p=SmolVLMContext(b,**dict(CONFIG,sequence_step=30))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human,capacity=1);streams.register(p.spec,lambda:p)
             await streams.open('cam','video',[p.spec.id]);start=timestamp()-2000
             try:

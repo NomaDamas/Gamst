@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from humansense.storage import Store
+from gamst.storage import Store
 
 
 def record(i, subject='user', value='측정'):

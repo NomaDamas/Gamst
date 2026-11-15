@@ -3,12 +3,12 @@ import asyncio
 import json
 
 async def main():
-    from humansense.ws_auth import connect_local
+    from gamst.ws_auth import connect_local
     async with connect_local() as socket:
-        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/subscribe', 'params': {'types': ['context']}}))
+        await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'gamst/subscribe', 'params': {'types': ['context']}}))
         async for raw in socket:
             message = json.loads(raw)
-            if message.get('method') == 'notifications/humansense/context':
+            if message.get('method') == 'notifications/gamst/context':
                 # Supply this bounded object as untrusted context to your LLM/VLM.
                 # Coalesce snapshots; do not call an LLM on every 250 ms update.
                 print(json.dumps(message['params'], ensure_ascii=False), flush=True)

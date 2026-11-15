@@ -2,7 +2,7 @@ import asyncio
 import time
 import unittest
 
-from humansense import HumanSense, validate_output
+from gamst import Gamst, validate_output
 
 
 def now():
@@ -11,7 +11,7 @@ def now():
 
 class CoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_evidence_references_bounded_while_window_counts_remain_complete(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             for i in range(40):
                 result = await human.push_text("please clarify this question")
             summary = result["event_summary"]
@@ -38,7 +38,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             closed = False
             async def process(self, frame): return []
             def close(self): self.closed = True
-        human = HumanSense(consent=True)
+        human = Gamst(consent=True)
         healthy = Healthy()
         human.register(Broken()).register(healthy)
         with self.assertRaisesRegex(RuntimeError, "plugin cleanup"):
@@ -49,7 +49,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             human.store.connection.execute("SELECT 1")
 
     async def test_future_input_rejected_before_mutating_state(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             with self.assertRaises(ValueError):
                 await human.push_text("future", timestamp_ms=now()+60_000)
             with self.assertRaises(ValueError):
@@ -57,10 +57,10 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await human.get_history(), [])
 
     async def test_high_rate_video_does_not_evict_text_modality(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             ts = now()
             await human.push_text("help me", timestamp_ms=ts)
-            from humansense.schema import envelope
+            from gamst.schema import envelope
             for i in range(1100):
                 record = envelope("observation.signal", "local-user", ts,
                     observation={"name": "scene.person_count", "value": 1, "modality": "video"})
@@ -74,7 +74,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(inference["recommended_action"])
 
     async def test_metric_change_is_transition_not_per_frame_event(self):
-        async with HumanSense(consent=True, window_ms=1000) as human:
+        async with Gamst(consent=True, window_ms=1000) as human:
             ts = now()
             for i in range(5):
                 await human.push_signal("speech.rate", 2, "audio", timestamp_ms=ts-2000+i)
@@ -86,7 +86,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             await human.push_signal("speech.rate", 0, "audio", timestamp_ms=ts-100)
             self.assertEqual(human._metric_directions, direction)
     async def test_explicit_clarification_is_grounded_and_uncalibrated(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             result = await human.push_text("다시 설명해 주세요")
             self.assertEqual(set(result["predictions"]), {"conversation", "behavior", "consistency"})
             prediction = result["predictions"]["conversation"]["needs_clarification"]
@@ -98,7 +98,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["recommended_action"]["type"], "ask_clarifying_question")
 
     async def test_subjects_do_not_share_repetition_claims_or_baselines(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.push_text("What?", subject_id="a")
             result = await human.push_text("What?", subject_id="b")
             self.assertEqual(result["predictions"]["conversation"]["repeated_utterance_count"], 0)
@@ -108,7 +108,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await human.get_trends("b"))["metrics"], {})
 
     async def test_scope_distinguishes_changes_from_conflicting_assertions(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.push_claim("location", "Seoul", scope="2026-11-11")
             result = await human.push_claim("location", "Busan", scope="2026-11-12")
             self.assertFalse(result["predictions"]["consistency"]["contradiction_detected"])
@@ -119,7 +119,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(consistency["conflicts"][0]["evidence"]), 2)
 
     async def test_out_of_order_data_does_not_override_current_state(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             ts = now()
             await human.push_signal("head.yaw", 20, "video", timestamp_ms=ts)
             old = await human.push_signal("head.yaw", 10, "video", timestamp_ms=ts-1000)
@@ -128,7 +128,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["signals"]["head.yaw"]["observation"]["value"], 20)
 
     async def test_baseline_requires_five_prior_samples(self):
-        async with HumanSense(consent=True, window_ms=1000) as human:
+        async with Gamst(consent=True, window_ms=1000) as human:
             ts = now()
             for i in range(5):
                 await human.push_signal("speech.rate", 2, "audio", timestamp_ms=ts-2000+i*10)
@@ -143,10 +143,10 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(metric["relative_change"])
 
     async def test_consent_pause_delete_and_retention(self):
-        async with HumanSense() as human:
+        async with Gamst() as human:
             with self.assertRaises(PermissionError):
                 await human.push_text("hello")
-        async with HumanSense(consent=True, retention_hours=1) as human:
+        async with Gamst(consent=True, retention_hours=1) as human:
             await human.push_text("old", timestamp_ms=now()-7_200_000)
             self.assertEqual(await human.get_history(hours=24), [])
             await human.pause()
@@ -159,7 +159,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await human.get_context())["summary"]["record_count"], 0)
 
     async def test_model_versions_and_low_quality_samples_do_not_mix_baselines(self):
-        async with HumanSense(consent=True, window_ms=1000) as human:
+        async with Gamst(consent=True, window_ms=1000) as human:
             ts = now()
             for i in range(5):
                 await human.push_signal("speech.rate", 2, "audio", timestamp_ms=ts-2000+i, model_version="old")
@@ -170,7 +170,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("head.yaw", (await human.get_trends())["metrics"])
 
     async def test_subscribers_are_independent_and_bounded(self):
-        async with HumanSense(consent=True, queue_size=1) as human:
+        async with Gamst(consent=True, queue_size=1) as human:
             one, two = human.observe(), human.observe()
             first = asyncio.create_task(anext(one))
             second = asyncio.create_task(anext(two))
@@ -184,7 +184,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             await two.aclose()
 
     async def test_response_delay_uses_explicit_turn_anchor(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             ts = now()
             await human.push_text("question", timestamp_ms=ts-1000, role="assistant")
             await human.push_text("answer", timestamp_ms=ts)
@@ -194,7 +194,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response[0]["observation"]["interpretation"], "timing_only")
 
     async def test_vad_transitions_emit_once_and_energy_is_not_speech(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             for value in (False, True, True, False, False):
                 await human.push_signal("speech.activity", value, "audio", model_id="test-vad", model_version="1")
             await human.push_signal("audio.energy_active", True, "audio")
@@ -206,7 +206,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             resets = 0
             async def process(self, frame): return []
             def reset(self): self.resets += 1
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             plugin = Buffered()
             human.register(plugin)
             await human.pause()
@@ -220,7 +220,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
             modalities = ("audio",)
             async def process(self, frame):
                 return [{"name": "speech.transcript", "value": "explain again", "model_id": "test-asr", "model_version": "1"}]
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register(Transcript())
             result = await human.push_audio([0])
             self.assertIsNotNone(result[-1]["recommended_action"])
@@ -235,7 +235,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await release.wait()
                 return [{"name": "speech.transcript", "value": "private", "model_id": "asr", "model_version": "1"}]
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register(Delayed())
             task = asyncio.create_task(human.push_audio([0]))
             await entered.wait()
@@ -248,7 +248,7 @@ class CoreTests(unittest.IsolatedAsyncioTestCase):
 class ContractTests(unittest.TestCase):
     def test_consent_does_not_accept_truthy_strings(self):
         with self.assertRaises(TypeError):
-            HumanSense(consent="false")
+            Gamst(consent="false")
 
     def test_rejects_unvalidated_probability(self):
         for record in ({"probability": .8, "calibrated": False}, {"probability": .8, "calibrated": True}, {"probability": None, "calibrated": True}):

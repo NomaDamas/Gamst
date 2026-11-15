@@ -35,7 +35,7 @@ Weights and source model use Apache2.0 according to the official model card;
 verify any substituted/fine-tuned checkpoint's terms separately.
 
 ```python
-from humansense.providers.smolvlm_native import SmolVLMNative
+from gamst.providers.smolvlm_native import SmolVLMNative
 
 model = SmolVLMNative.from_local(
     checkpoint_path='/absolute/model.safetensors',

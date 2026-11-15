@@ -1,9 +1,9 @@
 # Optional call recommendations
 
-`humansense.call_policy.CallPolicy` evaluates one registered observation without network calls, storage mutation, model execution, or changes to sensor/Context delivery cadence. Default `context_only` returns no call. This is the pure rules component of #133, not a completed model router or controller.
+`gamst.call_policy.CallPolicy` evaluates one registered observation without network calls, storage mutation, model execution, or changes to sensor/Context delivery cadence. Default `context_only` returns no call. This is the pure rules component of #133, not a completed model router or controller.
 
 ```python
-from humansense.call_policy import CallPolicy
+from gamst.call_policy import CallPolicy
 
 policy = CallPolicy(mode="sentinel", semantic_interval_ms=5000)
 decision = policy.recommend(

@@ -101,7 +101,7 @@ class OpenEBProcess:
         transport._sequence=0;transport._process=None;transport._close_task=None;transport._stop_task=None;transport.closed=False
         self._child=None
         loop=asyncio.get_running_loop();deadline=loop.time()+startup_timeout
-        spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','humansense.openeb_capture_worker',
+        spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','gamst.openeb_capture_worker',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,limit=32768))
         try:
             # wait_for can lose caller cancellation when its future completes in

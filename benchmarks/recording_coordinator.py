@@ -223,7 +223,7 @@ def _validate_result(directory,ref,task,task_ordinal,execution_sha256,source_man
             original=evidence[key]
             if original['path']!='tasks/task-%04d-%s.json'%(task_ordinal,kind):raise ValueError('snapshot artifact aliases another task')
             docs[kind]=read_ref(directory,original,maximum=limit);retained.append(original)
-        from humansense.call_controller import _digest
+        from gamst.call_controller import _digest
         context,envelope,record=docs['context'],docs['envelope'],docs['record']
         keys(envelope,('kind','task_id','input_sha256','task_sha256','source_manifest_sha256','mapping_sha256','context_sha256',
             'snapshot_timestamp_ms','scheduled_offset_ns','observed_begin_ns','observed_end_ns','watermarks','context'))

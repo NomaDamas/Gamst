@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.face_context import MediaPipeFaceContext
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.face_context import MediaPipeFaceContext
+from gamst.schema import timestamp
 def points():
     return [SimpleNamespace(x=.2+(i%20)*.02,y=.2+(i//20)*.02,z=0.) for i in range(478)]
 try:
@@ -115,7 +115,7 @@ class Geometry(unittest.TestCase):
         self.assertIsNone(provider([face]).process(frame())['faces'][0]['bbox'])
 
     def test_blendshape_association_scores_and_semantics(self):
-        from humansense.providers.face_context import BLENDSHAPES
+        from gamst.providers.face_context import BLENDSHAPES
         self.assertEqual(len(BLENDSHAPES),52)
         p=provider([points()])
         for categories in ([SimpleNamespace(category_name='happy',score=.5)],
@@ -153,8 +153,8 @@ class Geometry(unittest.TestCase):
 @unittest.skipIf(np is None,'numpy not installed')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_face_context_through_managed_lane_and_mcp(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider([points()]); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('camera','sensor',[p.spec.id])

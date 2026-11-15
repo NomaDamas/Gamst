@@ -2,8 +2,8 @@
 import time
 
 from .recorded_source import _integer, _keys, digest, encoded
-from humansense.capabilities import identifier
-from humansense.engine import _window_ms
+from gamst.capabilities import identifier
+from gamst.engine import _window_ms
 
 
 class ReplayClock:
@@ -50,7 +50,7 @@ def validate_tasks(tasks, duration_ns):
         deadline = _integer(task['deadline_ns'], 1, duration_ns)
         if not begin <= snapshot < deadline: raise ValueError('ordered task window required')
         # Reuse the SDK's bounded JSON contract for original question/context input.
-        from humansense.capabilities import bounded_json
+        from gamst.capabilities import bounded_json
         bounded_json(task['input'], max_bytes=65536)
         if type(task['input']) is not dict or digest(task['input']) != task['input_sha256']:
             raise ValueError('original task input digest mismatch')

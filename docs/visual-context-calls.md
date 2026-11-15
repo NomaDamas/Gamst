@@ -15,7 +15,7 @@ on-demand inference, not a claim of native stateful model streaming or full dupl
 Continuous input and context delivery remain independent SDK facilities.
 
 ```python
-from humansense import VisualContextCalls, smolvlm_frame_sha256
+from gamst import VisualContextCalls, smolvlm_frame_sha256
 
 # Use smolvlm_frame_sha256(frame.data) when submitting visual_reference.
 # The versioned shape-bound digest is shared with the local SmolVLM adapter.

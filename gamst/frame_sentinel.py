@@ -27,7 +27,7 @@ def _integer(value, low, high):
 class FreshFrameSentinel:
     """One source, one selected worker, one active and one latest candidate.
 
-    All calls and lifecycle changes belong to the HumanSense event loop. A
+    All calls and lifecycle changes belong to the Gamst event loop. A
     supplied capture is evidence of bytes, not evidence of camera authenticity,
     recognition quality or continuous coverage. Invalidated instances cannot
     restart; construct a new explicit binding using the existing controller.
@@ -166,7 +166,7 @@ class FreshFrameSentinel:
         """Explicit timer activation. First due point is start + frozen phase."""
         self._check()
         if self._scheduler is not None:raise RuntimeError('sentinel already started')
-        self._origin=time.monotonic_ns();self._scheduler=asyncio.create_task(self._run(),name='humansense-frame-sentinel')
+        self._origin=time.monotonic_ns();self._scheduler=asyncio.create_task(self._run(),name='gamst-frame-sentinel')
         return self
 
     async def _run(self):
@@ -203,7 +203,7 @@ class FreshFrameSentinel:
             frame_sha256=item['sha256'],tick=tick,due_monotonic_ns=due,selected_monotonic_ns=now,
             processing_epoch=f'{self._epoch[0]}:{self._epoch[1]}',request_id=None,dispatched=False)
         self._event('selected',**self._active_meta)
-        self._active_task=asyncio.create_task(self._execute(item,self._active_meta),name='humansense-frame-inspection')
+        self._active_task=asyncio.create_task(self._execute(item,self._active_meta),name='gamst-frame-inspection')
 
     def _refresh_dispatch(self):
         meta=self._active_meta

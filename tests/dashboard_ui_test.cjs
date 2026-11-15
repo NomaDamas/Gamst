@@ -6,11 +6,11 @@ class Element {
  append(...els){this.children.push(...els)} replaceChildren(...els){this.children=els} setAttribute(k,v){this[k]=v}
 }
 const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
-const html=fs.readFileSync('humansense/dashboard.html','utf8');
+const html=fs.readFileSync('gamst/dashboard.html','utf8');
 const context=vm.createContext({document:{body:new Element(),getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element()},window:{addEventListener(){}},AbortController,fetch:()=>new Promise(()=>{}),setTimeout,clearInterval});
-assert.equal(fs.readFileSync('humansense/observability.js','utf8'),fs.readFileSync('site/observability.js','utf8'));
-vm.runInContext(fs.readFileSync('humansense/i18n.js','utf8'),context);
-vm.runInContext(fs.readFileSync('humansense/observability.js','utf8'),context);
+assert.equal(fs.readFileSync('gamst/observability.js','utf8'),fs.readFileSync('site/observability.js','utf8'));
+vm.runInContext(fs.readFileSync('gamst/i18n.js','utf8'),context);
+vm.runInContext(fs.readFileSync('gamst/observability.js','utf8'),context);
 vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
 const d={context:{observations:{'audio.rms':{value:.2,fresh:true,age_ms:0,timestamp_ms:100},'scene.faces':{value:[{frame_face_index:0,blendshapes:{mouthSmileLeft:.7}}],fresh:true,age_ms:0,timestamp_ms:100},'scene.description':{value:'<script>untrusted</script>',fresh:true,age_ms:10,timestamp_ms:100}}},state:{signals:{'scene.faces':{observation:{value:[{blendshapes:{mouthSmileLeft:.7,mouthSmileRight:.5,eyeBlinkLeft:.1,eyeBlinkRight:.1,jawOpen:.4,browInnerUp:.2}}]}}}},vlm:{available:true,enabled:true,interval:3,window_seconds:4,sample_fps:2,effective_sample_fps:2,buffered_frames:8,max_frames:8},workers:[],adapter_errors:[]};
 context.fixture=d;vm.runInContext('render(fixture)',context);
@@ -44,7 +44,7 @@ get('faceGuide').checked=false;vm.runInContext('drawGuides(overlayFixture)',cont
 context.overlayFixture.state.paused=true;vm.runInContext('drawGuides(overlayFixture)',context);assert.equal(get('cameraOverlay').children.length,0);
 console.log('Friendly labels and camera overlay visibility/coordinates passed');
 
-assert.equal(context.CymI18n.text('설정','en'),'Settings');assert.equal(context.CymI18n.text('설정','zh'),'设置');assert.equal(context.CymI18n.text('VLM connection test','ko'),'VLM 연결 테스트');
+assert.equal(context.GamstI18n.text('설정','en'),'Settings');assert.equal(context.GamstI18n.text('설정','zh'),'设置');assert.equal(context.GamstI18n.text('VLM connection test','ko'),'VLM 연결 테스트');
 
 assert(!html.includes('id="liveDot"'));assert(!html.includes('id="tab-settings"'));assert(!html.includes('type="checkbox"'));
 get('openSettings').onclick();assert.equal(get('settingsDialog').open,true);get('closeSettings').onclick();assert.equal(get('settingsDialog').open,false);assert.equal(get('openSettings').focused,true);

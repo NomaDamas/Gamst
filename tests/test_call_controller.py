@@ -2,9 +2,9 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
 from test_call_policy import record as _record, visual
 
 
@@ -214,12 +214,12 @@ class ControllerTests(unittest.TestCase):
 
 class RegisteredIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_registered_store_context_remains_independent(self):
-        from humansense import HumanSense, SensorMetadata
-        from humansense.capabilities import CapabilitySpec, OutputField
-        from humansense.schema import timestamp
+        from gamst import Gamst, SensorMetadata
+        from gamst.capabilities import CapabilitySpec, OutputField
+        from gamst.schema import timestamp
         spec=CapabilitySpec('test.measured','test.measured','video','test.provider','1',
             (OutputField('count','integer'),),'frame',freshness_ms=1000)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(spec); now=timestamp()
             await human.push_observation(spec.id,{'count':2},sensor=SensorMetadata('cam','video',0,
                 coordinate_frame='pixels',stream_epoch='epoch'),timestamp_ms=now)

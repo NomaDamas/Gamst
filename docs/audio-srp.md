@@ -1,6 +1,6 @@
 # Planar SRP-PHAT direction context
 
-`humansense.providers.srp.SRPPHATDirection` scans a full-circle azimuth grid using the average PHAT-weighted cross-correlation of every microphone pair at its predicted far-field delay. This is executable NumPy DSP with no weights or automatic capture. It complements the two-microphone cone estimate and selected mono [beamforming bridge](audio-beamforming.md).
+`gamst.providers.srp.SRPPHATDirection` scans a full-circle azimuth grid using the average PHAT-weighted cross-correlation of every microphone pair at its predicted far-field delay. This is executable NumPy DSP with no weights or automatic capture. It complements the two-microphone cone estimate and selected mono [beamforming bridge](audio-beamforming.md).
 
 The method and coordinate conventions follow the standard [SRP-PHAT array-localization formulation](https://pyroomacoustics.readthedocs.io/en/stable/pyroomacoustics.doa.srp.html): source direction is defined relative to array axes. This implementation is independent and does not install or wrap pyroomacoustics.
 
@@ -21,7 +21,7 @@ Silence/weak channels and inadequate broadband pair support yield unavailable re
 Work is bounded by 28 pairs, 360 grid directions and 65,536-point FFTs at the supported maxima. Pair correlations are processed sequentially; no recordings or raw spectra enter context. Input arrays are copied and never modified. Windows are independent; reset is a no-op and closed instances reject work.
 
 ```python
-from humansense.providers.srp import SRPPHATDirection
+from gamst.providers.srp import SRPPHATDirection
 
 spec = SRPPHATDirection.capability(window_ms=80)
 streams.register(spec, lambda: SRPPHATDirection(

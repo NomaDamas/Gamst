@@ -106,7 +106,7 @@ from benchmarks.recording_arm_runtime import RecordingArmRuntime
 from benchmarks.recording_runtime_artifacts import RecordingRuntimeArtifacts
 from benchmarks.recording_artifacts import RecordingArtifacts
 from benchmarks.recording_control_channel import ChildCoordinatorChannel
-from humansense import HumanSense
+from gamst import Gamst
 phase=sys.argv.pop(1)
 def fail(): raise OSError('synthetic startup boundary '+phase)
 original_metadata=RecordingRuntimeArtifacts.write_metadata
@@ -126,11 +126,11 @@ def emit(self, name, value):
     if phase=='mapping-event' and name=='mapping_published': fail()
     return original_emit(self, name, value)
 RecordingArtifacts.emit=emit
-original_push=HumanSense.push_observation
+original_push=Gamst.push_observation
 async def push(self, capability_id, *args, **kw):
     if phase=='publication' and capability_id=='replay.mapping.v1': fail()
     return await original_push(self, capability_id, *args, **kw)
-HumanSense.push_observation=push
+Gamst.push_observation=push
 original_send=ChildCoordinatorChannel.send_wait
 async def send(self, kind, fields):
     if phase=='playback' and kind=='playback_started': fail()

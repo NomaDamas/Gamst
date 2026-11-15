@@ -4,7 +4,7 @@ No default network endpoint, model or camera is activated. Client dictionaries
 contain completion/provider/model_revision. The application verifies ceilings and
 receipts and retains its CallBudget/CallController; this helper never resets it.
 """
-from humansense.fill_conflict import FillConflictRuntime
+from gamst.fill_conflict import FillConflictRuntime
 
 
 async def inspect_recorded(human,controller_id,frame,*,fill_config,small_client,strong_client=None,

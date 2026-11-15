@@ -2,7 +2,7 @@ import subprocess
 import sys
 import unittest
 
-from humansense.providers.visual_microphone import recover, _filters, _bands
+from gamst.providers.visual_microphone import recover, _filters, _bands
 
 try:
     import numpy as np
@@ -14,7 +14,7 @@ except ImportError:
 class Discovery(unittest.TestCase):
     def test_import_is_dependency_light(self):
         p=subprocess.run([sys.executable,'-c',
-            'import humansense.providers.visual_microphone as m;import sys;assert not {"numpy","scipy","torch"}&sys.modules.keys();assert "Copyright (c) 2014 MIT" in m.__doc__;assert "Permission is hereby granted" in m.__doc__'],capture_output=True)
+            'import gamst.providers.visual_microphone as m;import sys;assert not {"numpy","scipy","torch"}&sys.modules.keys();assert "Copyright (c) 2014 MIT" in m.__doc__;assert "Permission is hereby granted" in m.__doc__'],capture_output=True)
         self.assertEqual(p.returncode,0,p.stderr)
 
 

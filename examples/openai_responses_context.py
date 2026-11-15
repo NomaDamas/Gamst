@@ -1,7 +1,7 @@
 """Explicit application composition; importing this example makes no requests."""
-from humansense.text_context_call import TextContextCalls
-from humansense.openai_responses import OpenAIResponsesClient
-from humansense.responses_evidence import ResponsesEvidenceSession
+from gamst.text_context_call import TextContextCalls
+from gamst.openai_responses import OpenAIResponsesClient
+from gamst.responses_evidence import ResponsesEvidenceSession
 
 
 async def ask_observed_context(human,controller_id,request_id,record,question,*,observer,

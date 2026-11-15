@@ -2,21 +2,21 @@ import json
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorMetadata
-from humansense.capabilities import CapabilitySpec, OutputField
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata
+from gamst.capabilities import CapabilitySpec, OutputField
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 
 
 class Integration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.now=timestamp()
-        self.clock=patch('humansense.engine.timestamp',side_effect=lambda value=None:self.now if value is None else value)
+        self.clock=patch('gamst.engine.timestamp',side_effect=lambda value=None:self.now if value is None else value)
         self.clock.start()
-        self.human=HumanSense(consent=True)
+        self.human=Gamst(consent=True)
         self.spec=CapabilitySpec('test.context','test.context','video','test.provider','1',
             (OutputField('text','string'),),'frame',freshness_ms=1000)
         self.human.register_capability(self.spec)
@@ -107,7 +107,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
     async def test_binding_limits_provenance_and_runtime_clock(self):
         with self.assertRaises(ValueError):self.human.register_call_controller('main',self.make())
         with self.assertRaises(ValueError):self.human.register_call_controller('other',self.c)
-        other=HumanSense(consent=False)
+        other=Gamst(consent=False)
         try:
             with self.assertRaises(PermissionError):other.register_call_controller('x',self.make())
         finally:await other.close()

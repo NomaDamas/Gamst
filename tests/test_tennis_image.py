@@ -7,11 +7,11 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.providers.tennis_image import TennisImageTask, configuration
-from humansense.providers.detection_trajectories import RFDETRTrajectories
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.providers.tennis_image import TennisImageTask, configuration
+from gamst.providers.detection_trajectories import RFDETRTrajectories
+from gamst.schema import timestamp
 import test_detection_provider as detection
 from test_detection_trajectories import frame, WORKER
 
@@ -24,7 +24,7 @@ CONFIG = dict(path='/explicit/local/checkpoint.pth', sha256='a'*64, reference=di
 
 class Discovery(unittest.TestCase):
     def test_exact_config_offline_discovery_and_detached_reference(self):
-        code = ('from humansense import ProcessProvider;import sys;'
+        code = ('from gamst import ProcessProvider;import sys;'
             'ProcessProvider.capability("rfdetr.tennis_image",'+repr(CONFIG)+');'
             'assert not {"numpy","torch","rfdetr"}&sys.modules.keys()')
         result = subprocess.run([sys.executable, '-c', code], capture_output=True)
@@ -131,7 +131,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with patch('asyncio.create_subprocess_exec',spawn):
             worker=await ProcessProvider.open(sys.executable,'rfdetr.tennis_image',CONFIG)
             try:
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                     await streams.open('cam','sensor',[worker.spec.id])
                     for i in range(2):

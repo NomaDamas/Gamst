@@ -18,12 +18,12 @@ try:
 except ImportError:
     torch = None
 
-from humansense import HumanSense, SensorStreams, ProcessProvider, MaskTrackingPipeline
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.efficienttam_context import EfficientTAMContext
-from humansense.providers.efficienttam_native import configuration, _read, _weights
-from humansense.providers.region_appearance import region_evidence
+from gamst import Gamst, SensorStreams, ProcessProvider, MaskTrackingPipeline
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.efficienttam_context import EfficientTAMContext
+from gamst.providers.efficienttam_native import configuration, _read, _weights
+from gamst.providers.region_appearance import region_evidence
 
 CONFIG = dict(source_dir='/source',checkpoint_path='/model.pt',checkpoint_sha256='a'*64,runtime_root='/runtime')
 
@@ -61,7 +61,7 @@ def context(**kw):
 
 class Discovery(unittest.TestCase):
     def test_dependency_light_profile_and_config(self):
-        code = 'import sys;from humansense import ProcessProvider;ProcessProvider.capability("efficienttam.tiny512",'+repr(CONFIG)+');assert not {"numpy","torch","hydra","efficient_track_anything"}&sys.modules.keys()'
+        code = 'import sys;from gamst import ProcessProvider;ProcessProvider.capability("efficienttam.tiny512",'+repr(CONFIG)+');assert not {"numpy","torch","hydra","efficient_track_anything"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for bad in ({'device':'mps'},{'max_frames':True},{'max_gap_ms':0},{'source_dir':'relative'}, {'checkpoint_sha256':'X'*64}):
@@ -139,7 +139,7 @@ class Context(unittest.TestCase):
         seed=evidence(frame(),4)
         for row in seed['objects']:row['label']='컵'*128
         result=p.process_regions(frame(),seed)
-        from humansense.capabilities import bounded_json
+        from gamst.capabilities import bounded_json
         for row in result['objects']:bounded_json(row,max_bytes=4096,forbid_raw=True)
         bad=evidence(frame(1));bad['objects'][0]['location']['bbox']['width']=float('nan')
         with self.assertRaises(ValueError):p.process_regions(frame(1),bad)
@@ -148,7 +148,7 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy unavailable')
 class Managed(unittest.IsolatedAsyncioTestCase):
     def build(self):
-        from humansense.providers.detection import RFDETRObjects
+        from gamst.providers.detection import RFDETRObjects
         class Detector:
             spec=RFDETRObjects.capability('test');calls=0;closed=False
             async def process(self,f):self.calls+=1;return dict(objects=rows(),summary=dict(complete_snapshot=True))
@@ -163,10 +163,10 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         d,t=Detector(),Tracker();return MaskTrackingPipeline(d,t),d,t
 
     async def test_sensorstreams_mcp_memory_and_gap_reseed(self):
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         p,d,t=self.build()
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);streams.register(p.spec,lambda:p)
             await streams.open('cam','video',[p.spec.id]);now=timestamp()-1000
             tracks=[]
@@ -198,7 +198,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):await task
         self.assertTrue(d.closed);self.assertTrue(t.closed)
         p,d,t=self.build()
-        with patch('humansense.mask_tracking.ProcessProvider.open',AsyncMock(side_effect=[d,RuntimeError('missing runtime')])):
+        with patch('gamst.mask_tracking.ProcessProvider.open',AsyncMock(side_effect=[d,RuntimeError('missing runtime')])):
             with self.assertRaises(RuntimeError):await MaskTrackingPipeline.open('/d',dict(path='/fixture',sha256='b'*64),'/t',CONFIG)
         self.assertTrue(d.closed);await t.close()
 
@@ -222,8 +222,8 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         children=[];real_spawn=asyncio.create_subprocess_exec
         code='''
 import numpy as np
-from humansense import provider_worker as w
-from humansense.providers.efficienttam_context import EfficientTAMContext
+from gamst import provider_worker as w
+from gamst.providers.efficienttam_context import EfficientTAMContext
 class Backend:
  def reset(self):pass
  def close(self):pass

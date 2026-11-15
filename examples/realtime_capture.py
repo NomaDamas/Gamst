@@ -4,13 +4,13 @@ python examples/realtime_capture.py --consent --camera 0 --audio
 """
 import argparse
 import asyncio
-from humansense import HumanSense
-from humansense.capture import CaptureSession
-from humansense.plugins import AudioLevelPlugin, OpenCVPersonPlugin, SileroVADPlugin, FasterWhisperPlugin, MediaPipeFacePlugin
+from gamst import Gamst
+from gamst.capture import CaptureSession
+from gamst.plugins import AudioLevelPlugin, OpenCVPersonPlugin, SileroVADPlugin, FasterWhisperPlugin, MediaPipeFacePlugin
 
 
 async def run(args):
-    async with HumanSense(consent=args.consent) as human:
+    async with Gamst(consent=args.consent) as human:
         if args.camera is not None:
             human.register(MediaPipeFacePlugin(args.face_model) if args.face_model else OpenCVPersonPlugin())
         if args.audio:

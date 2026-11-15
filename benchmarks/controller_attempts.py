@@ -2,7 +2,7 @@
 import inspect
 import threading
 
-from humansense.call_controller import CallController, _digest
+from gamst.call_controller import CallController, _digest
 from .call_attempts import AttemptRecorder
 
 

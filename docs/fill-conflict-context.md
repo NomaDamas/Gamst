@@ -2,7 +2,7 @@
 
 `FillConflictRuntime` compares the actual `CalibratedColorFill` image-grid boundary estimate with a strict, untrusted image-model interval from the **same owned BGR capture**. This is one supported predicate, `container_height_fraction_interval`, not a generic validator, physical truth, volume comparison or evidence the VLM is wrong. Calibration/liquid/empty-full verification flags stay false. The existing measurement record is retained separately and never overwritten with model output.
 
-The application explicitly supplies HumanSense, a registered escalation-mode CallController and its existing CallBudget, fixed-view fill configuration, async small/optional strong clients with provider/model revisions, stage charge ceilings, chain authorization, unit/pricing revision and strong opt-in. `examples/fill_conflict_context.py` demonstrates a recorded-frame composition without any default endpoint, camera or model. Keep one driver/source alive across cases to preserve cooldown/history; do not create a fresh ledger to evade previous liabilities.
+The application explicitly supplies Gamst, a registered escalation-mode CallController and its existing CallBudget, fixed-view fill configuration, async small/optional strong clients with provider/model revisions, stage charge ceilings, chain authorization, unit/pricing revision and strong opt-in. `examples/fill_conflict_context.py` demonstrates a recorded-frame composition without any default endpoint, camera or model. Keep one driver/source alive across cases to preserve cooldown/history; do not create a fresh ledger to evade previous liabilities.
 
 ## Evidence and supported rule
 

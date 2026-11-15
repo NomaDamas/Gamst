@@ -200,8 +200,8 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(p['accepted']==0 for p in replay.provider_outcomes))
 
     async def test_cleanup_clock_jump_fails_and_keeps_independent_epoch_bridge(self):
-        from humansense import HumanSense
-        original_close=HumanSense.close
+        from gamst import Gamst
+        original_close=Gamst.close
         offset=[0]
         async def jumping_close(human):
             await original_close(human)
@@ -209,7 +209,7 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
         fake=SimpleNamespace(time_ns=lambda:time.time_ns()+offset[0],monotonic_ns=time.monotonic_ns)
         with tempfile.TemporaryDirectory(dir='.') as directory:
             root=Path(directory).resolve();manifest,tasks,profiles=self.inputs(root)
-            with patch('benchmarks.replay_clock.time',fake), patch.object(HumanSense,'close',jumping_close):
+            with patch('benchmarks.replay_clock.time',fake), patch.object(Gamst,'close',jumping_close):
                 with self.assertRaisesRegex(RuntimeError,'discontinuity'):
                     await run_source_context_recording(manifest,tasks,profiles,root/'output',
                         asset_directory=root,retain_evaluation_artifacts=True,max_lateness_ns=1000000000)
@@ -233,7 +233,7 @@ class ReplaySDKTests(unittest.IsolatedAsyncioTestCase):
                     sequence=i,capture_ns=1000000000+i*20000000,offset_ns=i*20000000,
                     format='bgr8_hwc',shape=[16,16,3],payload_path='bgr.bin',payload_bytes=len(pixels),
                     payload_sha256=hashlib.sha256(pixels).hexdigest()))
-            from humansense.streams import SensorStreams
+            from gamst.streams import SensorStreams
             original_submit=SensorStreams.submit
             admitted=asyncio.Event(); count=[0]
             async def observed_submit(streams,frame):

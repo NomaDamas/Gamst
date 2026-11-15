@@ -43,12 +43,12 @@ class DINOv3Retrieval:
             import importlib.metadata
             for package,version in (('torch','2.8.0'),('torchvision','0.23.0'),('transformers','4.57.6')):
                 if importlib.metadata.version(package).split('+')[0]!=version:
-                    raise RuntimeError('select the pinned isolated humansense-sdk[retrieval] runtime')
+                    raise RuntimeError('select the pinned isolated gamst-sdk[retrieval] runtime')
             import torch
             from safetensors.torch import load
             from transformers import DINOv3ViTConfig, DINOv3ViTModel, DINOv3ViTImageProcessorFast
         except (ImportError,importlib.metadata.PackageNotFoundError) as exc:
-            raise RuntimeError('select a compatible isolated humansense-sdk[retrieval] runtime') from exc
+            raise RuntimeError('select a compatible isolated gamst-sdk[retrieval] runtime') from exc
         config=DINOv3ViTConfig(patch_size=16,hidden_size=384,intermediate_size=1536,
             num_hidden_layers=12,num_attention_heads=6,hidden_act='gelu',num_register_tokens=4,
             use_gated_mlp=False,proj_bias=True)

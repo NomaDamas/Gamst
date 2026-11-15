@@ -8,9 +8,9 @@ import sys
 import tempfile
 import unittest
 
-from humansense import ProcessProvider,HumanSense,SensorStreams,SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.food import FoodContext,SegFormerFoodNative,configuration,preprocess,model_config
+from gamst import ProcessProvider,Gamst,SensorStreams,SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.food import FoodContext,SegFormerFoodNative,configuration,preprocess,model_config
 
 CONFIG=dict(checkpoint_path='/explicit/food.safetensors',checkpoint_sha256='a'*64,labels=['background','rice','tofu','unknown'],
     background_id=0,unknown_id=3,training_dataset='fixture',target_cuisine='fixture-only',model_source='generated-test',
@@ -28,7 +28,7 @@ def runtime_available():
 
 class Discovery(unittest.TestCase):
     def test_discovery_no_ml_import_and_bad_config(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("food.segformer_b0",'+repr(CONFIG)+');assert not {"torch","transformers","numpy","PIL"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("food.segformer_b0",'+repr(CONFIG)+');assert not {"torch","transformers","numpy","PIL"}&sys.modules.keys()'
         p=subprocess.run([sys.executable,'-c',code],capture_output=True);self.assertEqual(p.returncode,0,p.stderr)
         for bad in ({'checkpoint_path':'relative'},{'labels':['same','same']},{'background_id':True},{'unknown_id':0},
                     {'input_size':1024},{'threshold':float('nan')},{'device':'auto'},{'extra':1}):
@@ -99,11 +99,11 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None,'optional NumPy/Pillow absent')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_observation_replacement_and_original_capture_time(self):
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
         backend=Backend();backend.value[1]=20
         provider=FoodContext(backend,**CONFIG)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human)
             streams.register(provider.spec,lambda:provider)
             await streams.open('food-camera','fixture-camera',[provider.spec.id])
@@ -150,13 +150,13 @@ class Native(unittest.TestCase):
             finally:native.close()
             # Exercise the real generated graph in the owned worker and MCP path.
             import asyncio
-            from humansense.schema import timestamp
-            from humansense.mcp import MCPServer
+            from gamst.schema import timestamp
+            from gamst.mcp import MCPServer
             async def managed():
                 worker=await ProcessProvider.open(sys.executable,'food.segformer_b0',config,inference_timeout=60)
                 child=worker._process
                 try:
-                    async with HumanSense(consent=True) as human:
+                    async with Gamst(consent=True) as human:
                         streams=SensorStreams(human)
                         streams.register(worker.spec,lambda:worker)
                         await streams.open('food-camera','fixture-camera',[worker.spec.id])

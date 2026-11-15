@@ -3,8 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from humansense import TextContextCalls
-from humansense.recording_settlement import RecordingSettlementRecorder
+from gamst import TextContextCalls
+from gamst.recording_settlement import RecordingSettlementRecorder
 from benchmarks.recording_financial import FinancialArtifacts,digest
 from benchmarks.recording_fixture_receipts import FinancialFixtureReceiptRouter
 from benchmarks.recording_transports import FixtureCompletion,TransportCapacity,TransportMemoryBudget

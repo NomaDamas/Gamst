@@ -1,6 +1,6 @@
 # Radiometric thermal context
 
-`humansense.providers.thermal.TLinearThermal` converts assembled, row-major uint16 TLinear image payloads to bounded ROI Celsius summaries. It uses Python's standard library, requires no weights or optional packages, and never opens a camera. The SDK implementation is Apache-2.0; camera firmware/drivers retain their own licenses. This is an executable decoder/statistics provider, not a VoSPI packet assembler, USB driver, RGB temperature estimator or radiometric JPEG decoder.
+`gamst.providers.thermal.TLinearThermal` converts assembled, row-major uint16 TLinear image payloads to bounded ROI Celsius summaries. It uses Python's standard library, requires no weights or optional packages, and never opens a camera. The SDK implementation is Apache-2.0; camera firmware/drivers retain their own licenses. This is an executable decoder/statistics provider, not a VoSPI packet assembler, USB driver, RGB temperature estimator or radiometric JPEG decoder.
 
 FLIR documents [TLinear temperature conversion](https://oem.flir.com/learn/thermal-integration-made-easy/radiometry-with-lepton/) and [radiometric spot-meter operation](https://www.oem.flir.com/en-150/developer/lepton-family/project-lepton-spot-meter-code/). Declare the sensor's actual resolution explicitly: 0.01 or 0.1 Kelvin/count. Celsius = count × resolution − 273.15. The SDK does not infer the resolution, byte order or radiometric mode from pixel values.
 
@@ -11,13 +11,13 @@ The capture adapter must verify radiometry and TLinear mode, disable AGC on this
 `emissivity` reports the sensor setting; this provider does not apply emissivity correction a second time. `physical_accuracy_verified=false` is always emitted because the decoder cannot certify absolute measurement accuracy. External validation must not silently turn this into a ground-truth temperature claim. RGB alignment is also explicitly unavailable.
 
 ```python
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.thermal import TLinearThermal
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.thermal import TLinearThermal
 
 # Inside an async application; capture supplies payload/captured_at_ms/sequence.
 async def observe(payload, captured_at_ms, sequence):
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams = SensorStreams(human)
         spec = TLinearThermal.capability()
         streams.register(spec, lambda: TLinearThermal(

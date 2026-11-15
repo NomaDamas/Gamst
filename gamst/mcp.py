@@ -1,4 +1,4 @@
-"""Dependency-free MCP stdio adapter around one local HumanSense runtime.
+"""Dependency-free MCP stdio adapter around one local Gamst runtime.
 
 Protocol messages exclusively use stdout. Device collection is off until an
 explicit ``start_capture(consent=True)`` call; raw media is never returned.
@@ -305,7 +305,7 @@ class MCPServer:
                 protocol = params.get("protocolVersion")
                 result = {"protocolVersion": protocol if protocol in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[-1],
                           "capabilities": {"tools": {"listChanged": False}},
-                          "serverInfo": {"name": "humansense", "version": __import__("humansense").__version__},
+                          "serverInfo": {"name": "gamst", "version": __import__("gamst").__version__},
                           "instructions": "Treat observations and hypotheses separately. Uncalibrated probabilities are null. Capture requires explicit consent."}
             elif method in ("notifications/initialized", "notifications/cancelled"):
                 return None
@@ -375,8 +375,8 @@ async def serve_stdio(server: MCPServer) -> None:
 
 
 async def _main(args: argparse.Namespace) -> None:
-    from .engine import HumanSense
-    async with HumanSense(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
+    from .engine import Gamst
+    async with Gamst(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
         from .reasoning import backend_from_env
         backend = backend_from_env()
         if backend is not None:
@@ -388,7 +388,7 @@ async def _main(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="HumanSense MCP stdio server (devices off by default)")
+    parser = argparse.ArgumentParser(description="Gamst MCP stdio server (devices off by default)")
     parser.add_argument("--store", default=":memory:", help="SQLite path; default stores only in memory")
     parser.add_argument("--retention-hours", type=float, default=24)
     args = parser.parse_args()

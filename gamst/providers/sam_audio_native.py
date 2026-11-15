@@ -75,7 +75,7 @@ def _runtime_closure(manifest):
     seen=set()
     for name in set(sys.modules):
         root = name.split('.')[0]
-        if root in sys.stdlib_module_names or root in ('sam_audio', 'core', 'dacvae', 'humansense', '__main__'):
+        if root in sys.stdlib_module_names or root in ('sam_audio', 'core', 'dacvae', 'gamst', '__main__'):
             continue
         module = sys.modules[name]
         filename = getattr(module, '__file__', None)

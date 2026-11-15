@@ -14,8 +14,8 @@ import re
 import stat
 import sys
 
-from humansense.capabilities import identifier
-from humansense.recording_settlement import (AUTHORITY,ADAPTER,INVOICE_FIELDS,LINE_FIELDS,
+from gamst.capabilities import identifier
+from gamst.recording_settlement import (AUTHORITY,ADAPTER,INVOICE_FIELDS,LINE_FIELDS,
     FINALITY_FIELDS,EVIDENCE_FIELDS,INPUT_GRAMMAR,OUTPUT_GRAMMAR,validate_synthetic_invoice)
 
 N63 = 2**63 - 1

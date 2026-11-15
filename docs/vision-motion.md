@@ -1,11 +1,11 @@
 # Image motion provider
 
-`humansense.providers.motion.OpenCVFlow` executes OpenCV Lucas-Kanade or Farneback optical flow locally. It keeps one bounded grayscale image and returns pixel displacement, median pixel speed, moving-sample fraction and the actual capture interval. It does not require a neural checkpoint or VLM call.
+`gamst.providers.motion.OpenCVFlow` executes OpenCV Lucas-Kanade or Farneback optical flow locally. It keeps one bounded grayscale image and returns pixel displacement, median pixel speed, moving-sample fraction and the actual capture interval. It does not require a neural checkpoint or VLM call.
 
 ```python
 import cv2
-from humansense import SensorStreams
-from humansense.providers.motion import OpenCVFlow
+from gamst import SensorStreams
+from gamst.providers.motion import OpenCVFlow
 
 streams = SensorStreams(human)
 spec = OpenCVFlow.capability("lucas_kanade", version=cv2.__version__)

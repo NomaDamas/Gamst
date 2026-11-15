@@ -3,8 +3,8 @@
 `AudioProsody` provides local windowed signal measurements without ASR, a neural checkpoint or a VLM call. It explicitly selects a microphone channel rather than silently mixing array input. Its bounded rolling buffer survives contiguous chunks and resets after stream gaps, sample-rate changes or incompatible capture timing.
 
 ```python
-from humansense import SensorStreams
-from humansense.providers.prosody import AudioProsody
+from gamst import SensorStreams
+from gamst.providers.prosody import AudioProsody
 
 streams = SensorStreams(human)
 streams.register(AudioProsody.capability(window_ms=80),

@@ -19,13 +19,13 @@ from benchmarks.recording_transports import (LocalChatCompletions, FixtureComple
     FixtureReceiptRouter, TransportCapacity, TransportMemoryBudget, TransportOutcomeSink,
     _response, _validate_png)
 from benchmarks.owned_capture import CapturePacket
-from humansense import TextContextCalls, VisualContextCalls
-from humansense.call_controller import _digest
-from humansense.native_entry import NativeEntryBinding
+from gamst import TextContextCalls, VisualContextCalls
+from gamst.call_controller import _digest
+from gamst.native_entry import NativeEntryBinding
 from test_recording_sdk_scopes import NativeFixture
 import test_text_context_call as text_tests
 import test_visual_context_call as visual_tests
-from humansense.schema import timestamp
+from gamst.schema import timestamp
 
 import sysconfig
 METADATA_ROOTS = (Path(sysconfig.get_paths()['purelib']),)
@@ -299,7 +299,7 @@ class ValidationTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('cv2') and importlib.util.find_spec('numpy'), 'optional vision dependencies absent')
     def test_png_wrong_valid_source_digest_and_mismatched_pixels(self):
         import numpy as np
-        from humansense.smolvlm_call import smolvlm_frame_sha256
+        from gamst.smolvlm_call import smolvlm_frame_sha256
         pixels=np.arange(32*48*3,dtype=np.uint8).reshape(32,48,3)
         request=VisualContextCalls._encode(dict(_pixels=pixels,_capture_ms=100,_source_sha=smolvlm_frame_sha256(pixels)))
         image=request['images'][0];capacity=TransportCapacity(262144,65536,pixels.nbytes)
@@ -315,7 +315,7 @@ class ValidationTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('cv2') and importlib.util.find_spec('numpy'), 'optional vision dependencies absent')
     def test_png_ancillary_and_inflation_rejected_before_native_decoder(self):
         import struct,zlib,numpy as np
-        from humansense.smolvlm_call import smolvlm_frame_sha256
+        from gamst.smolvlm_call import smolvlm_frame_sha256
         pixels=np.zeros((32,48,3),dtype=np.uint8)
         image=VisualContextCalls._encode(dict(_pixels=pixels,_capture_ms=100,_source_sha=smolvlm_frame_sha256(pixels)))['images'][0]
         original=base64.b64decode(image['data_base64'])

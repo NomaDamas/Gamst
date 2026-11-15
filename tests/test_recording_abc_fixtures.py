@@ -116,7 +116,7 @@ class ActualInputs(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):build_runtime_fixture(root,count=1,dependency_evidence=self.dependencies)
 
     async def test_actual_pcm_context_continues_while_vision_is_pending(self):
-        from humansense import HumanSense,SensorStreams
+        from gamst import Gamst,SensorStreams
         from benchmarks.recording_capture_router import RecordingCaptureRouter
         from benchmarks.recording_runtime_profiles import builtin_profile
         from benchmarks.recording_evaluation import RecordingEvaluationSession
@@ -134,7 +134,7 @@ class ActualInputs(unittest.IsolatedAsyncioTestCase):
         owner=RecordingEvaluationSession.from_runtime_frozen(d,writer,
             latency_policy=fixture.documents['runtime/latency.json'],source_bundles=fixture.source_bundles,
             run_nonce='a'*64,execution_ordinal=1,retain_evaluation_hashes=True)
-        human=HumanSense(consent=True);streams=SensorStreams(human);source=None;router=None
+        human=Gamst(consent=True);streams=SensorStreams(human);source=None;router=None
         try:
             bindings=d['collection']['arms'][1]['provider_bindings']
             for delivery in arm['recording_policies'][0]['deliveries']:

@@ -9,7 +9,7 @@ from benchmarks.controller_attempts import RecordedContextClient
 from benchmarks.perception_comparison import plan_digest
 from benchmarks.stream_attempts import StreamAttemptRecorder, validate_report
 from benchmarks.three_arm_attempts import cost_quantities as native2_quantities
-from humansense import TextContextCalls
+from gamst import TextContextCalls
 from test_itemized_costs import itemized
 from test_stream_cost_ledger import fixture as stream_fixture
 from test_three_arm_replay import setup

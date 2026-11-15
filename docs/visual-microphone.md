@@ -61,7 +61,7 @@ Explicit departures/limitations:
 ## API, bounds and time semantics
 
 ```python
-from humansense.providers.visual_microphone import recover
+from gamst.providers.visual_microphone import recover
 
 result = recover(grayscale_roi_frames, capture_fps=2200)
 waveform = result['waveform']  # Owned local ndarray, or None on abstention.

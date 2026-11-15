@@ -12,8 +12,8 @@ from pathlib import Path
 import stat
 import time
 
-from humansense.call_controller import _digest
-from humansense.evaluation_snapshot import (CAPABILITY_ID,VIEW_NAME,_spec,
+from gamst.call_controller import _digest
+from gamst.evaluation_snapshot import (CAPABILITY_ID,VIEW_NAME,_spec,
     evaluation_snapshot_implementation_sha256)
 from .recording_native_channel import NativeRunInventory
 from .recording_native_schema import digest,encoded,decode,keys,integer,sha
@@ -433,7 +433,7 @@ def _context_records(directory,context,publications,mapping_records,observed_end
             records[rid]=read_ref(directory,pub['record'],maximum=131072)
     observations=context.get('observations')
     if type(observations) is not dict or len(observations)>32:raise ValueError('bounded original SDK Context observations required')
-    from humansense.context import observation_packet
+    from gamst.context import observation_packet
     for name,value in observations.items():
         record=records.get(value.get('evidence_id'))
         if record is None or record.get('subject_id')!=context.get('subject_id'):
@@ -747,7 +747,7 @@ def _task_join(directory,summary,tasks,receipts,execution,manifest,mapping,opera
                     used_operations.add(op['instance'])
                     # The exact TextContextCalls request is deterministic from
                     # original question, complete record and frozen native ID.
-                    from humansense.text_context_call import _SYSTEM
+                    from gamst.text_context_call import _SYSTEM
                     request=dict(provider=op['provider'],model_revision=op['model_revision'],messages=[dict(role='system',content=_SYSTEM),
                         dict(role='user',content=json.dumps(dict(question=task['input']['question'],observation_record=record),ensure_ascii=False,allow_nan=False,separators=(',',':')))])
                     if _digest(request)!=op['prompt_sha256']:raise ValueError('answer prompt changed original frozen Context/question')
@@ -765,7 +765,7 @@ def _task_join(directory,summary,tasks,receipts,execution,manifest,mapping,opera
                         raise ValueError('actual SDK response crosses original task/native operation')
                     sdk=response['sdk_result']
                     keys(sdk,('status','accepted','text','usage','actual_cost','source_record_id','source_record_sha256','prompt_sha256','provider','model_revision','interpretation','usage_verified','quality_validated'))
-                    from humansense.text_context_call import TextContextCalls
+                    from gamst.text_context_call import TextContextCalls
                     raw=TextContextCalls._response(dict(text=sdk['text'],usage=sdk['usage']))
                     if (sdk['status']!='completed' or sdk['accepted'] is not True or sdk['actual_cost'] is not None or
                             sdk['source_record_id']!=record['id'] or sdk['source_record_sha256']!=digest(record) or

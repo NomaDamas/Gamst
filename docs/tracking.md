@@ -3,7 +3,7 @@
 `PersonTracker` associates normalized detector boxes between frames using IoU. The OpenCV plugin emits `scene.person_tracks` alongside counts and boxes. Custom SAM/YOLO detectors may call the same tracker after converting their boxes to normalized xywh.
 
 ```python
-from humansense.tracking import PersonTracker
+from gamst.tracking import PersonTracker
 tracker = PersonTracker(iou_threshold=.2, max_age_ms=1500)
 tracks = tracker.update(boxes, timestamp_ms, stream_id="camera-0")
 ```

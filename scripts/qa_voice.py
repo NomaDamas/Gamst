@@ -13,13 +13,13 @@ from pathlib import Path
 async def main():
     import torch
     from faster_whisper.audio import decode_audio
-    from humansense import HumanSense
-    from humansense.extensions import register_config
-    from humansense.mcp import MCPServer
+    from gamst import Gamst
+    from gamst.extensions import register_config
+    from gamst.mcp import MCPServer
     torch.set_num_threads(2)
     config=json.loads(Path('.local-models/voice-emotion/plugins.json').read_text())
     report={'model':'superb/wav2vec2-base-superb-er','revision':config[0]['options']['revision'],'fixtures':[]}
-    async with HumanSense(consent=True,sensor_inference_interval_ms=250) as human:
+    async with Gamst(consent=True,sensor_inference_interval_ms=250) as human:
         register_config(human,config)
         worker=human.plugins[0]
         for name in ('emotion-happy.wav','emotion-neutral.wav'):

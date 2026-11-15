@@ -8,7 +8,7 @@ from benchmarks.recording_evaluation import RecordingEvaluationSession
 from benchmarks.recording_native_writer import RecordingNativeWriter
 from benchmarks.recording_native_validation import validate_recording_native_inventory,lookup_canonical_operation
 from benchmarks.replay_clock import ReplayClock
-from humansense.schema import timestamp
+from gamst.schema import timestamp
 from recording_native_fixtures import declarations,rehash
 import test_text_context_call as text_tests
 

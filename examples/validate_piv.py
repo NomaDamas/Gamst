@@ -7,9 +7,9 @@ import platform
 import time
 import types
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.piv import OpenPIVFlow
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.piv import OpenPIVFlow
 
 SOURCE_SHA256 = '09019b6486fbd28628d977eb86112bde97310c2381289ab145340e0811030601'
 SOURCE_COMMIT = '048474c4db04c66156bca2b89632a76d778cddcb'

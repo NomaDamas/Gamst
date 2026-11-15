@@ -15,9 +15,9 @@ import test_openai_responses_native4 as native4_tests
 from benchmarks.billing_native4_crosscheck import crosscheck_recording_transport
 from benchmarks.billing_native4_bundle import persist_recording_crosscheck
 from benchmarks.billing_aggregate import encoded
-from humansense.responses_evidence import ResponsesEvidenceSession
-from humansense.openai_responses import TRANSPORT
-from humansense.openai_responses_codec import PROJECTION
+from gamst.responses_evidence import ResponsesEvidenceSession
+from gamst.openai_responses import TRANSPORT
+from gamst.openai_responses_codec import PROJECTION
 
 
 class RecordingCrosscheck(unittest.IsolatedAsyncioTestCase):

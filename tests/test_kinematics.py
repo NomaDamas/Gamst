@@ -2,10 +2,10 @@ import dataclasses
 import json
 import unittest
 
-from humansense import HumanSense, SensorMetadata
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.kinematics import MetricKinematics
+from gamst import Gamst, SensorMetadata
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.kinematics import MetricKinematics
 
 
 def provider(**kwargs):
@@ -105,7 +105,7 @@ class ContextTests(unittest.IsolatedAsyncioTestCase):
         now=int(time.time()*1000)
         p=provider();p.process(frame(0,now-100))
         f=frame(1,now,(1,0,0));value=p.process(f)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(p.spec)
             await human.push_observation(p.spec.id,value,sensor=f.sensor,timestamp_ms=f.timestamp_ms)
             result=await MCPServer(human).call_tool('get_observations',{'capability_id':p.spec.id})

@@ -30,7 +30,7 @@ class MediaPipePosePlugin(PerceptionPlugin):
             from mediapipe.tasks import python
             from mediapipe.tasks.python import vision
         except ImportError as exc:
-            raise RuntimeError("Install humansense-sdk[mediapipe]") from exc
+            raise RuntimeError("Install gamst-sdk[mediapipe]") from exc
         self.mp = mp
         self.max_poses = max_poses
         self.model_hash = hashlib.sha256(path.read_bytes()).hexdigest()

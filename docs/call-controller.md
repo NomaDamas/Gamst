@@ -3,9 +3,9 @@
 `CallController` connects `CallPolicy` recommendations to a bounded pending queue and an exclusively owned `CallBudget`. It never invokes a model, changes capture/delivery cadence, retrieves media, injects Context into an LLM, or interprets model text as authorization. Applications perform calls themselves after explicit reservation and dispatch admission.
 
 ```python
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
 
 controller = CallController(
     policy=CallPolicy(mode='sentinel'),
@@ -53,4 +53,4 @@ Default bounds: 32 sources, 128 total active requests (including dispatched and 
 
 Give the controller a fresh ledger and never mutate/share that ledger externally; there is no multi-controller admission arbitration. Both components are memory-only and trusted Python application surfaces, not authenticated remote financial services. Persist/reconcile outstanding charges before replacing the controller on process restart. There is no restart recovery guarantee.
 
-Python lifecycle API and real registered-observation integration tests are implemented here. Optional [HumanSense/MCP integration](call-integration.md) provides bounded status, runtime consent/pause/delete binding and executable synthetic application wiring. This class is not automatically attached to a HumanSense instance; registration is explicit. Full actual A/B/C cost/quality/latency acceptance remains open under #57/#135. Tests with controlled acknowledgements do not establish real VLM accuracy or savings.
+Python lifecycle API and real registered-observation integration tests are implemented here. Optional [Gamst/MCP integration](call-integration.md) provides bounded status, runtime consent/pause/delete binding and executable synthetic application wiring. This class is not automatically attached to a Gamst instance; registration is explicit. Full actual A/B/C cost/quality/latency acceptance remains open under #57/#135. Tests with controlled acknowledgements do not establish real VLM accuracy or savings.

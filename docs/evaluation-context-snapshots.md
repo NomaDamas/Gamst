@@ -1,6 +1,6 @@
 # Frozen Context task evidence
 
-`HumanSense.create_evaluation_snapshot_publisher(subject_id,
+`Gamst.create_evaluation_snapshot_publisher(subject_id,
 implementation_sha256=...)` issues one publisher and an immutable
 `publisher.context_view` for that host, subject and processing generation.
 The expected implementation hash must equal

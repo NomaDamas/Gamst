@@ -7,13 +7,13 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense.engine import HumanSense
-from humansense.mcp import MCPServer
+from gamst.engine import Gamst
+from gamst.mcp import MCPServer
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         await self.human.__aenter__()
         self.server = MCPServer(self.human)
 
@@ -108,7 +108,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             def status(self):
                 return {"running": self.running, "paused": self.paused}
 
-        with patch("humansense.capture.CaptureSession", Capture):
+        with patch("gamst.capture.CaptureSession", Capture):
             results = await asyncio.gather(
                 self.request("start_capture", {"consent": True, "video": None, "audio": True}),
                 self.request("start_capture", {"consent": True, "video": None, "audio": True}))
@@ -125,7 +125,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.server.capture)
 
     async def test_local_model_selection_rollback_reuse_and_subject_binding(self):
-        from humansense.plugins import PerceptionPlugin
+        from gamst.plugins import PerceptionPlugin
         created = []
 
         class Model(PerceptionPlugin):
@@ -156,19 +156,19 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         args = {"consent": True, "video": None, "audio": True,
                 "subject_id": "alice", "vad_model_path": "/tmp/vad.jit",
                 "asr_model_path": "/tmp/asr"}
-        with patch("humansense.capture.CaptureSession", Capture), \
-                patch("humansense.plugins.AudioLevelPlugin", Model), \
-                patch("humansense.plugins.SileroVADPlugin", Model), \
-                patch("humansense.plugins.FasterWhisperPlugin", side_effect=RuntimeError("missing local ASR")):
+        with patch("gamst.capture.CaptureSession", Capture), \
+                patch("gamst.plugins.AudioLevelPlugin", Model), \
+                patch("gamst.plugins.SileroVADPlugin", Model), \
+                patch("gamst.plugins.FasterWhisperPlugin", side_effect=RuntimeError("missing local ASR")):
             failed = await self.request("start_capture", args)
             self.assertTrue(failed["isError"])
             self.assertEqual(self.human.plugins, [])
             self.assertEqual(self.server._capture_plugins, {})
             self.assertTrue(all(model.closed for model in created))
-        with patch("humansense.capture.CaptureSession", Capture), \
-                patch("humansense.plugins.AudioLevelPlugin", Model), \
-                patch("humansense.plugins.SileroVADPlugin", Model), \
-                patch("humansense.plugins.FasterWhisperPlugin", Model):
+        with patch("gamst.capture.CaptureSession", Capture), \
+                patch("gamst.plugins.AudioLevelPlugin", Model), \
+                patch("gamst.plugins.SileroVADPlugin", Model), \
+                patch("gamst.plugins.FasterWhisperPlugin", Model):
             result = await self.request("start_capture", args)
             self.assertFalse(result["isError"], result)
             self.assertNotIn("vad_model_path", self.server.capture.args)
@@ -194,7 +194,7 @@ class StdioTests(unittest.TestCase):
                     json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
                     json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "push_text", "arguments": {"text": "Please explain again"}}}),
                     json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "get_events", "arguments": {}}})]
-        proc = subprocess.run([sys.executable, "-m", "humansense.mcp"], input="\n".join(messages) + "\n", text=True,
+        proc = subprocess.run([sys.executable, "-m", "gamst.mcp"], input="\n".join(messages) + "\n", text=True,
                               capture_output=True, timeout=15, env=os.environ.copy())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         output = [json.loads(line) for line in proc.stdout.splitlines()]

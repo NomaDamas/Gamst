@@ -8,7 +8,7 @@ worker; `start()` separately activates its frozen timer. It does not open a came
 download assets, create a consumer LLM, or change capture/consumer cadence.
 
 ```python
-from humansense import FreshFrameSentinel
+from gamst import FreshFrameSentinel
 
 # human has consent and a registered controller; sensor is the original camera
 # SensorMetadata, including an explicit stream_epoch. config is the existing
@@ -21,7 +21,7 @@ async with await FreshFrameSentinel.open(
     evaluation_observer=existing_opt_in_evaluation_session,
 ) as sentinel:
     sentinel.start()
-    # Called on HumanSense's event loop when the application returns a capture.
+    # Called on Gamst's event loop when the application returns a capture.
     admission = sentinel.offer(original_input_frame)
     # Consumer reads/polls remain independent; polling never triggers inference.
     status = await human.get_sentinel_status(sentinel_id="blindspot")
@@ -58,7 +58,7 @@ descriptor's identity and owner containment against path swaps.
 ## Clocks, ownership and admission
 
 This API accepts **Unix milliseconds** for `InputFrame.timestamp_ms`, from the
-same host wall-clock domain used by HumanSense. Neither `InputFrame` nor
+same host wall-clock domain used by Gamst. Neither `InputFrame` nor
 `SensorMetadata` has a clock-domain field. A producer using a device/stream clock
 must first apply its own explicit, bounded mapping and retain its mapping evidence;
 this API cannot authenticate that mapping. Arbitrary stream milliseconds will
@@ -128,7 +128,7 @@ accepted point. Bounded metadata history omits older rows with an explicit count
 
 `await human.get_sentinel_status(...)` and MCP `get_sentinel_status` are read-only,
 bounded metadata queries. They do not expose pixels/model answer bodies or activate
-workers/capture. Once cleanup retires a sentinel, HumanSense no longer retains it;
+workers/capture. Once cleanup retires a sentinel, Gamst no longer retains it;
 an application holding the instance may still read its scrubbed terminal counters.
 Normal registered observations have the existing store retention rules; delete
 uses the existing sensory deletion path. External copies have external owners.
@@ -142,7 +142,7 @@ Startup cancellation/revocation and registration overflow cannot leave an unowne
 child. `close()` joins only owned tasks and worker handles and tolerates repeated
 cancellation. No external client is signalled or awaited by this driver.
 
-The shared internal HumanSense driver registry accepts `frame_sentinel` and
+The shared internal Gamst driver registry accepts `frame_sentinel` and
 `context_fill`: at most four of each and eight total, including invalidated owners
 whose cleanup is not terminal. The driver protocol is synchronous
 `invalidate(reason)` plus `owns_task(task)`. Cleanup is registered through

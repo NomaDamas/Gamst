@@ -317,16 +317,16 @@ class ChatCompletionsBackend:
 def backend_from_env() -> ChatCompletionsBackend | None:
     """Configure an optional backend without placing secrets in MCP arguments.
 
-    HUMANSENSE_REASONING_URL is the full chat-completions endpoint. MODEL is
+    GAMST_REASONING_URL is the full chat-completions endpoint. MODEL is
     required when URL is present. KEY_ENV names a different environment variable
     containing a provider key; ALLOW_REMOTE must equal ``true`` for remote hosts.
     """
-    endpoint = os.environ.get("HUMANSENSE_REASONING_URL")
+    endpoint = os.environ.get("GAMST_REASONING_URL")
     if not endpoint:
         return None
-    model = os.environ.get("HUMANSENSE_REASONING_MODEL")
+    model = os.environ.get("GAMST_REASONING_MODEL")
     if not model:
-        raise ValueError("HUMANSENSE_REASONING_MODEL is required with HUMANSENSE_REASONING_URL")
+        raise ValueError("GAMST_REASONING_MODEL is required with GAMST_REASONING_URL")
     return ChatCompletionsBackend(endpoint, model,
-        api_key_env=os.environ.get("HUMANSENSE_REASONING_KEY_ENV"),
-        allow_remote=os.environ.get("HUMANSENSE_REASONING_ALLOW_REMOTE", "").lower() == "true")
+        api_key_env=os.environ.get("GAMST_REASONING_KEY_ENV"),
+        allow_remote=os.environ.get("GAMST_REASONING_ALLOW_REMOTE", "").lower() == "true")

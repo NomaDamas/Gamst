@@ -9,10 +9,10 @@ try:
 except ImportError:
     np = None
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.detection import RFDETRObjects
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.detection import RFDETRObjects
+from gamst.schema import timestamp
 
 
 class Backend:
@@ -118,7 +118,7 @@ class Detection(unittest.TestCase):
 class DetectionRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_observations_reach_memory_and_survive_disappearance(self):
         backend = Backend()
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = RFDETRObjects.capability('test')
             streams.register(spec, lambda: RFDETRObjects(backend, version='test'))

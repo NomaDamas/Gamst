@@ -8,9 +8,9 @@ from pathlib import Path
 import sys
 import time
 
-from humansense import HumanSense, SensorStreams, SensorMetadata, ObjectAppearancePipeline
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata, ObjectAppearancePipeline
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 async def run(args):
@@ -25,7 +25,7 @@ async def run(args):
         detector_python=args.detector_python,embedding_python=args.embedding_python,
         detector=detector,regions=regions,timestamp_origin='replay_wall_time_not_original_capture',
         image_orientation='encoded_pixels_no_exif_rotation',observations=[])
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams=SensorStreams(human,max_packet_bytes=8*1024*1024);streams.register(spec,factory)
         start=time.perf_counter();await streams.open('object-replay','images',[spec.id])
         report['startup_ms']=(time.perf_counter()-start)*1000;last=-1

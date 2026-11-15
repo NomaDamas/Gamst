@@ -63,7 +63,7 @@ class PGCanonicalProcess:
             os.chmod(path,0o400)
             env=os.environ.copy();env.update(HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',HF_HUB_DISABLE_TELEMETRY='1')
             deadline=_now()+startup_timeout
-            spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','humansense.pg_canonical_worker',
+            spawn=asyncio.create_task(asyncio.create_subprocess_exec(python,'-u','-m','gamst.pg_canonical_worker',
                 '--request',str(path),'--sha256',hashlib.sha256(request).hexdigest(),
                 stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,
                 env=env,limit=65536))

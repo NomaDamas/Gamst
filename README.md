@@ -16,7 +16,7 @@ Turn speech, voice activity, facial movement, and surroundings into bounded, tim
 
 ---
 
-gamst gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The Python import remains `humansense` for compatibility. The product's core is context delivery; Companion replies are optional.
+GAMST gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The product's core is context delivery; Companion replies are optional.
 
 **Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
@@ -77,10 +77,10 @@ source .venv/bin/activate
 python -m pip install -e .
 
 # Synthetic inputs: inspect all three output domains.
-python -m humansense demo
+python -m gamst demo
 
 # Local dashboard.
-python -m humansense dashboard
+python -m gamst dashboard
 ```
 
 Open **http://127.0.0.1:8766**, give processing consent, and enter a message such as `I am having trouble understanding. Please explain again.`
@@ -91,7 +91,7 @@ The core SDK and MCP have **no runtime dependencies**. The dashboard supports te
 python -m pip install -e '.[vision,audio]'
 ```
 
-The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). For compatibility, the distribution remains `humansense-sdk`, the Python import remains `humansense`, and the SDK class remains `HumanSense`. Existing `humansense*` commands, plugin entry points and wire protocol names remain supported.
+The project is **GAMST**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). The distribution is `gamst-sdk`, the Python package is `gamst`, and the SDK class is `Gamst`.
 
 <details>
 <summary>🧩 Additional sensor and model integrations</summary>
@@ -107,7 +107,7 @@ The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDam
 
 </details>
 
-After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`; these are aliases of the existing commands. For example, `gamst demo` and `python -m humansense demo` run the same CLI. Install from this repository or a built wheel; a PyPI release under the new name is not claimed.
+After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`. `gamst demo` and `python -m gamst demo` run the same CLI. Install from this repository or a built wheel; a PyPI release is not claimed.
 
 <a id="local-stack"></a>
 ## 🏠 Run the complete local stack
@@ -128,7 +128,7 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 .venv/bin/python examples/live_context.py
 
 # MCP stdio bridge to that running session
-.venv/bin/python -m humansense.mcp_live
+.venv/bin/python -m gamst.mcp_live
 
 # Stop this checkout's stack, then remove installer-owned models
 .venv/bin/python scripts/run_local.py --stop
@@ -142,10 +142,10 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 
 ```python
 import asyncio
-from humansense import HumanSense
+from gamst import Gamst
 
 async def main():
-    async with HumanSense(
+    async with Gamst(
         consent=True,
         store="sqlite:///local.db",
         retention_hours=24,
@@ -230,7 +230,7 @@ Run `PYTHONPATH=. .venv/bin/python scripts/qa_temporal.py` to verify the
 Changing settings or stopping capture clears the buffer and invalidates queued
 results. Already-running HTTP inference may finish, but its output is discarded.
 
-Agents connected to the same runtime through `humansense.mcp_live` can use:
+Agents connected to the same runtime through `gamst.mcp_live` can use:
 
 ```json
 {"name":"configure_vlm","arguments":{"enabled":true,"interval":3,"window_seconds":4,"sample_fps":2}}
@@ -245,8 +245,8 @@ subscription include the temporal result. Settings do not start camera capture.
 Start the stdio server:
 
 ```bash
-python -m humansense.mcp
-# Installed entry point: humansense-mcp
+python -m gamst.mcp
+# Installed entry point: gamst-mcp
 ```
 
 Add it to your MCP client's server configuration, replacing the absolute paths:
@@ -256,7 +256,7 @@ Add it to your MCP client's server configuration, replacing the absolute paths:
   "mcpServers": {
     "gamst": {
       "command": "/path/to/Gamst/.venv/bin/python",
-      "args": ["-m", "humansense.mcp"],
+      "args": ["-m", "gamst.mcp"],
       "cwd": "/path/to/Gamst"
     }
   }
@@ -292,7 +292,7 @@ Use `video: null` for microphone-only capture. Optional local model paths are `f
 | faster-whisper | `asr` | Transcripts and transcribed-word-rate measurements; local model directory |
 
 ```python
-from humansense.plugins import AudioLevelPlugin, MediaPipeFacePlugin
+from gamst.plugins import AudioLevelPlugin, MediaPipeFacePlugin
 
 human.register(AudioLevelPlugin())
 human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
@@ -308,24 +308,24 @@ No weights are bundled or automatically downloaded. Native capture uses `Capture
 Configure an actual chat-completions server and installed model:
 
 ```bash
-export HUMANSENSE_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
-export HUMANSENSE_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
-python -m humansense dashboard
+export GAMST_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
+export GAMST_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
+python -m gamst dashboard
 ```
 
 Choose **Send to Companion** in the dashboard, or call the MCP `chat` tool. The Companion uses conversation history, observation context, and the suggested strategy to generate a reply. Without a configured backend it reports an error instead of producing a fake model response.
 
-For evidence-citing semantic analysis, configure `HUMANSENSE_REASONING_URL` and `HUMANSENSE_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
+For evidence-citing semantic analysis, configure `GAMST_REASONING_URL` and `GAMST_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
 
 <a id="integrations"></a>
 ## 🌐 WebSocket & integrations
 
 ```bash
 python -m pip install -e '.[websocket]'
-python -m humansense.server --port 8765 --origin http://localhost:3000
+python -m gamst.server --port 8765 --origin http://localhost:3000
 ```
 
-The loopback WebSocket service exposes the same tool calls. Events are the default stream; the `humansense/subscribe` extension selects events, signals, and inferences.
+The loopback WebSocket service exposes the same tool calls. Events are the default stream; the `gamst/subscribe` extension selects events, signals, and inferences.
 
 - **JavaScript / TypeScript:** [Promise-based client](integrations/typescript/README.md) with subscriptions, timeouts, and response matching.
 - **LiveKit / Pipecat:** [Decoded-media bridges](docs/integrations.md) with explicit participant attribution, media-clock mapping, and mono/16kHz conversion. Native framework compatibility still needs validation.
@@ -391,7 +391,7 @@ The SDK default is 24 hours. Both now also enforce **5,000 records** and **32 Mi
 serialized UTF-8 record payload**, whichever limit is reached first. Oldest inserted
 records are evicted; a single oversized record can be streamed but is not retained.
 These limits bound retained payload, not total process RAM or model weight memory.
-They are configurable via `HumanSense(max_records=..., max_payload_bytes=...)`.
+They are configurable via `Gamst(max_records=..., max_payload_bytes=...)`.
 Age expiry is applied on ingestion and reads. Storage counters are exposed in
 `get_state().storage`; summaries describe retained evidence, not an unlimited archive.
 
@@ -492,9 +492,9 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 
 [Optional call budget ledger](docs/call-budget.md): bounded atomic reservations, explicit unknown liabilities and verified-charge settlement. Controller/API integration remains separate.
 
-[Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; HumanSense/MCP lifecycle integration remains required.
+[Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; Gamst/MCP lifecycle integration remains required.
 
-[HumanSense/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.
+[Gamst/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.
 
 [Call admission diagnostics](docs/call-admission.md): desired/reserved/dispatched routes, bounded denial outcomes, provider provenance and unresolved semantic coverage.
 
@@ -504,7 +504,7 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 
 [Evaluation attempt recorder](docs/call-attempts.md): explicit async call/error/cancellation records, late receipts and frozen itemized-cost reduction.
 
-[On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to HumanSense/MCP.
+[On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to Gamst/MCP.
 
 </details>
 
@@ -541,7 +541,7 @@ For this evaluation campaign, model execution and benchmark dataset downloads ha
 ```bash
 python -m unittest discover -s tests -v
 node integrations/typescript/client.test.mjs
-python -m humansense demo
+python -m gamst demo
 python -m benchmarks.runtime --samples 200
 ```
 

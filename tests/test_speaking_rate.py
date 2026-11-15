@@ -4,12 +4,12 @@ import sys
 import unicodedata
 import unittest
 
-from humansense import HumanSense, SensorMetadata, SensorStreams, transcript_capability
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
-from humansense.speaking_rate import estimate_rate
-from humansense.transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
+from gamst import Gamst, SensorMetadata, SensorStreams, transcript_capability
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
+from gamst.speaking_rate import estimate_rate
+from gamst.transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 
 try:
     from websockets.asyncio.server import serve
@@ -33,7 +33,7 @@ def record(value, seq=0, subject='user', epoch='e1'):
 
 class RateTests(unittest.TestCase):
     def test_no_optional_imports_and_english_units(self):
-        code = "from humansense.speaking_rate import estimate_rate; import sys; assert not {'torch','numpy','scipy','onnxruntime'} & sys.modules.keys()"
+        code = "from gamst.speaking_rate import estimate_rate; import sys; assert not {'torch','numpy','scipy','onnxruntime'} & sys.modules.keys()"
         subprocess.run([sys.executable, '-S', '-c', code], check=True)
         result = estimate_rate(update("We're well-known—really. Café!", language='EN-us'), 'partial')
         self.assertEqual(result['count'], 4)
@@ -143,7 +143,7 @@ class RateRuntimeTests(unittest.IsolatedAsyncioTestCase):
                               'ko', start=start, end=frame.timestamp_ms, revision=self.revision)
             def reset(self):
                 self.revision = -1
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec = transcript_capability('asr.rate', 'fixture', '1', streaming_mode='native', freshness_ms=10000)
             streams = SensorStreams(human)
             streams.register(spec, Backend)
@@ -169,8 +169,8 @@ class RateRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipIf(serve is None, 'optional websockets absent')
     async def test_actual_context_subscription_recomputes_without_model_calls(self):
-        from humansense.server import handle_connection
-        async with HumanSense(consent=True) as human:
+        from gamst.server import handle_connection
+        async with Gamst(consent=True) as human:
             spec = transcript_capability('asr.rate', 'fixture', '1', streaming_mode='native', freshness_ms=10000)
             human.register_capability(spec)
             start = timestamp()-5000
@@ -183,12 +183,12 @@ class RateRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async with serve(lambda socket: handle_connection(server, socket), '127.0.0.1', 0,
                              origins=[None], max_size=1048576, max_queue=16) as listener:
                 async with connect('ws://127.0.0.1:'+str(listener.sockets[0].getsockname()[1])) as socket:
-                    await socket.send(json.dumps(dict(jsonrpc='2.0', id=1, method='humansense/subscribe',
+                    await socket.send(json.dumps(dict(jsonrpc='2.0', id=1, method='gamst/subscribe',
                         params=dict(types=['context'], interval_ms=50))))
                     async def next_revision(revision):
                         for _ in range(20):
                             message = json.loads(await asyncio.wait_for(socket.recv(), 2))
-                            if message.get('method') == 'notifications/humansense/context':
+                            if message.get('method') == 'notifications/gamst/context':
                                 entries = message['params']['transcripts']['utterances']
                                 if entries and entries[0]['update']['revision'] == revision:
                                     return entries[0]

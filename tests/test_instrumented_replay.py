@@ -75,8 +75,8 @@ asyncio.run(main())
 def setup(root,mode='ok',script=SCRIPT,*,provider='test.client',revision='v1',extra_input=None,timeout_ms=3000):
     plan,spec,inputs,stream,reconciliation=fixture(root)
     if script==SMOL_SCRIPT:
-        from humansense.provider_profiles import capability
-        from humansense.providers.smolvlm_native import configuration
+        from gamst.provider_profiles import capability
+        from gamst.providers.smolvlm_native import configuration
         from test_smolvlm_native import CONFIG
         contract=capability('smolvlm2.500m.local',dict(configuration(CONFIG),window_frames=1))
         provider,revision=contract.provider,contract.version

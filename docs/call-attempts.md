@@ -101,7 +101,7 @@ billing semantics from the frozen protocol.
 
 This is in-memory, with no crash durability, incremental file journal or automatic
 export/redaction. Use pseudonymous evaluation task IDs and hashes; hashes are not
-anonymization. Explicitly manage artifact retention. HumanSense consent/deletion
+anonymization. Explicitly manage artifact retention. Gamst consent/deletion
 controls do not manage these application-owned evaluation artifacts. Never put
 personal names, secrets or raw payloads into provider/revision/task labels.
 

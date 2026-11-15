@@ -4,18 +4,18 @@ import json
 import time
 import unittest
 
-from humansense import (HumanSense, SensorMetadata, TextContextCalls, SourceContextView,
+from gamst import (Gamst, SensorMetadata, TextContextCalls, SourceContextView,
                         evaluation_snapshot_implementation_sha256)
-from humansense.capabilities import CapabilitySpec, OutputField, bounded_json
-from humansense.call_controller import CallController, _digest
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
-from humansense.schema import timestamp
+from gamst.capabilities import CapabilitySpec, OutputField, bounded_json
+from gamst.call_controller import CallController, _digest
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
+from gamst.schema import timestamp
 
 
 class SnapshotContext(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.h = HumanSense(consent=True)
+        self.h = Gamst(consent=True)
         self.publisher = self.h.create_evaluation_snapshot_publisher(
             implementation_sha256=evaluation_snapshot_implementation_sha256())
         self.view = self.publisher.context_view
@@ -119,7 +119,7 @@ class SnapshotContext(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TypeError): SourceContextView(self.publisher)
         with self.assertRaises(TypeError): await self.h.get_context(context_view={})
         with self.assertRaises(ValueError): await self.h.get_context('someone-else', context_view=self.view)
-        other = HumanSense(consent=True)
+        other = Gamst(consent=True)
         try:
             with self.assertRaises(ValueError): await other.get_context(context_view=self.view)
         finally:
@@ -147,7 +147,7 @@ class SnapshotContext(unittest.IsolatedAsyncioTestCase):
 
     async def test_privacy_actions_invalidate_issued_views(self):
         for action in ('delete', 'revoke', 'close'):
-            human = HumanSense(consent=True)
+            human = Gamst(consent=True)
             publisher = human.create_evaluation_snapshot_publisher(
                 implementation_sha256=evaluation_snapshot_implementation_sha256())
             try:

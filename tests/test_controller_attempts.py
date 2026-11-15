@@ -5,9 +5,9 @@ import unittest
 from benchmarks.controller_attempts import RecordedContextClient
 from benchmarks.call_attempts import AttemptRecorder,cost_quantities
 from benchmarks.perception_comparison import plan_digest
-from humansense import TextContextCalls,VisualContextCalls
-from humansense.call_controller import _digest
-from humansense.schema import timestamp
+from gamst import TextContextCalls,VisualContextCalls
+from gamst.call_controller import _digest
+from gamst.schema import timestamp
 from test_itemized_costs import itemized
 import test_text_context_call as text_tests
 import test_visual_context_call as visual_tests
@@ -118,9 +118,9 @@ class Clients(unittest.IsolatedAsyncioTestCase):
         rec.close();self.assertEqual(self.reduce(plan,rec)['strong.input'],1)
 
     async def test_default_and_long_cooldown_allow_current_text_dispatch(self):
-        from humansense.call_controller import CallController
-        from humansense.call_policy import CallPolicy
-        from humansense.call_budget import CallBudget
+        from gamst.call_controller import CallController
+        from gamst.call_policy import CallPolicy
+        from gamst.call_budget import CallBudget
         for cooldown in (1000,600000):
             self.controller_id='cooldown'+str(cooldown)
             self.c=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=cooldown,max_age_ms=60000),
@@ -136,9 +136,9 @@ class Clients(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipIf(visual_tests.np is None,'optional vision dependencies absent')
     async def test_default_cooldown_visual_dispatch_and_runtime_invalidation(self):
-        from humansense.call_controller import CallController
-        from humansense.call_policy import CallPolicy
-        from humansense.call_budget import CallBudget
+        from gamst.call_controller import CallController
+        from gamst.call_policy import CallPolicy
+        from gamst.call_budget import CallBudget
         self.controller_id='default.visual'
         self.c=CallController(policy=CallPolicy(mode='escalation',max_age_ms=60000),
             budget=CallBudget(unit='USD.micro',pricing_revision='v1',ceiling=100))

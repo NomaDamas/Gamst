@@ -3,9 +3,9 @@ import asyncio
 import hashlib
 import unittest
 
-from humansense.native_entry import BoundCompletion,PreparedCall
-from humansense.recording_settlement import RecordingSettlementRecorder
-from humansense.schema import timestamp
+from gamst.native_entry import BoundCompletion,PreparedCall
+from gamst.recording_settlement import RecordingSettlementRecorder
+from gamst.schema import timestamp
 from benchmarks.recording_financial import digest,encode
 from benchmarks.recording_lifetime_ledger import _native_inventory
 from benchmarks.recording_native_validation import validate_recording_native_inventory,iter_canonical_inventory

@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from humansense.providers.smolvlm_native import (RUNTIME,SPECIAL,SmolVLMNative,
+from gamst.providers.smolvlm_native import (RUNTIME,SPECIAL,SmolVLMNative,
     configuration,verified_file,model_config,build_processor,prepare,load_state,materialize)
 CONFIG=dict(checkpoint_path='/explicit/model.safetensors',checkpoint_sha256='a'*64,
     tokenizer_path='/explicit/tokenizer.json',tokenizer_sha256='b'*64,max_new_tokens=2)
@@ -20,7 +20,7 @@ def available():
 
 class Contract(unittest.TestCase):
     def test_discovery_and_configuration(self):
-        p=subprocess.run([sys.executable,'-c','from humansense.providers.smolvlm_native import configuration;import sys;configuration('+repr(CONFIG)+');assert not {"torch","numpy","transformers","PIL"}&sys.modules.keys()'],capture_output=True)
+        p=subprocess.run([sys.executable,'-c','from gamst.providers.smolvlm_native import configuration;import sys;configuration('+repr(CONFIG)+');assert not {"torch","numpy","transformers","PIL"}&sys.modules.keys()'],capture_output=True)
         self.assertEqual(p.returncode,0,p.stderr)
         for bad in ({'device':'auto'},{'precision':'float16'},{'precision':'bfloat16'},
             {'checkpoint_path':'model-id'},{'tokenizer_sha256':'X'*64},{'max_new_tokens':True},{'max_new_tokens':129},{'extra':1}):
@@ -93,17 +93,17 @@ class Native(unittest.TestCase):
             # ONLY the architecture with this explicitly generated tiny fixture.
             import asyncio
             from unittest.mock import patch
-            from humansense import HumanSense,ProcessProvider,SensorStreams,SensorMetadata
-            from humansense.plugins import InputFrame
-            from humansense.schema import timestamp
-            from humansense.mcp import MCPServer
+            from gamst import Gamst,ProcessProvider,SensorStreams,SensorMetadata
+            from gamst.plugins import InputFrame
+            from gamst.schema import timestamp
+            from gamst.mcp import MCPServer
             tokenizer_path=Path(directory)/'tokenizer.json';tok.backend_tokenizer.save(str(tokenizer_path))
             worker_config=dict(CONFIG,checkpoint_path=str(path),checkpoint_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 tokenizer_path=str(tokenizer_path),tokenizer_sha256=hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),window_frames=2)
             code=('import torch;torch.set_num_threads(1)\n'
-                'from humansense.providers import smolvlm_native as n\n'
+                'from gamst.providers import smolvlm_native as n\n'
                 'n.model_config=lambda cls:cls.from_dict('+repr(config.to_dict())+')\n'
-                'from humansense.provider_worker import main\nmain()')
+                'from gamst.provider_worker import main\nmain()')
             async def managed():
                 real_spawn=asyncio.create_subprocess_exec
                 children=[]
@@ -112,7 +112,7 @@ class Native(unittest.TestCase):
                 with patch('asyncio.create_subprocess_exec',spawn):
                     worker=await ProcessProvider.open(sys.executable,'smolvlm2.500m.local',worker_config,inference_timeout=60)
                 try:
-                    async with HumanSense(consent=True) as human:
+                    async with Gamst(consent=True) as human:
                         streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                         await streams.open('camera','video',[worker.spec.id]);start=timestamp()-500
                         try:
@@ -131,15 +131,15 @@ class Native(unittest.TestCase):
                 self.assertIsNotNone(children[0].returncode)
             asyncio.run(managed())
             async def on_demand():
-                from humansense import SmolVLMCalls,smolvlm_frame_sha256
-                from humansense.capabilities import CapabilitySpec,OutputField
-                from humansense.call_policy import CallPolicy
-                from humansense.call_controller import CallController
-                from humansense.call_budget import CallBudget
+                from gamst import SmolVLMCalls,smolvlm_frame_sha256
+                from gamst.capabilities import CapabilitySpec,OutputField
+                from gamst.call_policy import CallPolicy
+                from gamst.call_controller import CallController
+                from gamst.call_budget import CallBudget
                 real_spawn=asyncio.create_subprocess_exec;children=[]
                 async def spawn(*args,**kwargs):
                     child=await real_spawn(sys.executable,'-u','-c',code,**kwargs);children.append(child);return child
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     thin=CapabilitySpec('fixture.detect','fixture.objects','video','fixture','1',(OutputField('count','integer'),),'frame',freshness_ms=1000)
                     human.register_capability(thin)
                     controller=CallController(policy=CallPolicy(mode='sentinel'),budget=CallBudget(unit='fixture',pricing_revision='1',ceiling=2))

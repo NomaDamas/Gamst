@@ -12,9 +12,9 @@ import struct
 import time
 import tracemalloc
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.thermal import TLinearThermal
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.thermal import TLinearThermal
 
 
 def run():

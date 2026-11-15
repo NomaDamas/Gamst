@@ -62,7 +62,7 @@ class YAMNetEvents:
             from mediapipe.tasks.python import audio
             from mediapipe.tasks.python.components.containers.audio_data import AudioData
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[environment-audio] in the selected runtime') from exc
+            raise RuntimeError('Install gamst-sdk[environment-audio] in the selected runtime') from exc
         classifier = audio.AudioClassifier.create_from_options(audio.AudioClassifierOptions(
             base_options=python.BaseOptions(model_asset_path=str(path)),
             running_mode=audio.RunningMode.AUDIO_CLIPS, max_results=521))

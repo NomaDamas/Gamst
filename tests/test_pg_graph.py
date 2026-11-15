@@ -13,8 +13,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense.pg_artifact import manifest_digest
-from humansense.pg_graph import (FILES,project_sources,inspect_graph,_tokenizer_dir,_inventory,
+from gamst.pg_artifact import manifest_digest
+from gamst.pg_graph import (FILES,project_sources,inspect_graph,_tokenizer_dir,_inventory,
                                 _execute_projection,_unavailable,_verify_runtime_lock,_check_defaults)
 from test_pg_artifact import declaration
 
@@ -22,14 +22,14 @@ from test_pg_artifact import declaration
 class Contract(unittest.TestCase):
     def test_bad_or_missing_source_never_reaches_ast(self):
         raw={name:b'raise RuntimeError("must not execute")' for name in FILES}
-        with patch('humansense.pg_graph.ast.parse',side_effect=AssertionError('parsed unauthenticated source')):
+        with patch('gamst.pg_graph.ast.parse',side_effect=AssertionError('parsed unauthenticated source')):
             with self.assertRaisesRegex(ValueError,'source hash'):project_sources(raw)
             with self.assertRaisesRegex(ValueError,'exact original'):project_sources({})
 
     def test_runtime_mismatch_is_import_light_and_no_file_access(self):
         value=declaration(Path('/missing/pg'))
-        with patch('humansense.pg_graph._runtime',return_value=['transformers','timm']), \
-             patch('humansense.pg_graph._read_entry',side_effect=AssertionError('must not open files')):
+        with patch('gamst.pg_graph._runtime',return_value=['transformers','timm']), \
+             patch('gamst.pg_graph._read_entry',side_effect=AssertionError('must not open files')):
             result=inspect_graph(value,expected_sha256=manifest_digest(value))
         self.assertEqual(result['reason'],'declared_runtime_mismatch')
         self.assertFalse(result['native_ready']);self.assertFalse(result['trained_state_loaded'])
@@ -41,7 +41,7 @@ class Contract(unittest.TestCase):
             path=Path(directory).resolve()/'manifest.json';path.write_text(json.dumps(value))
             code='''import sys,runpy,json
 sys.argv=['pg_graph','--manifest',sys.argv[1],'--sha256',sys.argv[2]]
-runpy.run_module('humansense.pg_graph',run_name='__main__')
+runpy.run_module('gamst.pg_graph',run_name='__main__')
 assert not any(x in sys.modules for x in ('torch','transformers','accelerate','timm','lavis'))
 '''
             run=subprocess.run([sys.executable,'-c',code,str(path),manifest_digest(value)],capture_output=True,text=True,timeout=10)
@@ -62,18 +62,18 @@ assert not any(x in sys.modules for x in ('torch','transformers','accelerate','t
                   machine=platform.machine(),packages={'package-a':'1.0','package-b':'2.0'})
         items=[SimpleNamespace(metadata={'Name':'package_a'},version='1.0'),
                SimpleNamespace(metadata={'Name':'Package.B'},version='2.0')]
-        with patch('humansense.pg_graph.importlib.metadata.distributions',return_value=items):
+        with patch('gamst.pg_graph.importlib.metadata.distributions',return_value=items):
             self.assertTrue(_verify_runtime_lock(lock,manifest_digest(lock)))
             missing=dict(lock,packages={'package-a':'1.0'})
             self.assertFalse(_verify_runtime_lock(missing,manifest_digest(missing)))
             bad=dict(lock,packages={'Package_A':'1.0'})
             with self.assertRaises(ValueError):_verify_runtime_lock(bad,manifest_digest(bad))
             with self.assertRaises(ValueError):_verify_runtime_lock(lock,'0'*64)
-        with patch('humansense.pg_graph.importlib.metadata.distributions',return_value=items+items[:1]):
+        with patch('gamst.pg_graph.importlib.metadata.distributions',return_value=items+items[:1]):
             with self.assertRaisesRegex(ValueError,'duplicate'):_verify_runtime_lock(lock,manifest_digest(lock))
         value=declaration(Path('/missing/pg'))
-        with patch('humansense.pg_graph._runtime',return_value=[]), \
-             patch('humansense.pg_graph._read_entry',side_effect=AssertionError('no complete lock')):
+        with patch('gamst.pg_graph._runtime',return_value=[]), \
+             patch('gamst.pg_graph._read_entry',side_effect=AssertionError('no complete lock')):
             result=inspect_graph(value,expected_sha256=manifest_digest(value))
         self.assertEqual(result['reason'],'complete_worker_runtime_lock_required')
         self.assertFalse(result['native_ready'])

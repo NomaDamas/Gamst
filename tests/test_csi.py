@@ -10,10 +10,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.csi import COLUMNS, ESP32CSI, parse_esp32_csi
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.csi import COLUMNS, ESP32CSI, parse_esp32_csi
 
 MAC='1a:00:00:00:00:00'
 CONFIG=dict(transmitter_mac=MAC,clock_calibration_id='clock1')
@@ -121,7 +121,7 @@ class CSI(unittest.TestCase):
         self.assertIn('capture_clock_disagreement',reasons)
 
     def test_profile_stdlib_and_config(self):
-        code="import sys; from humansense import ProcessProvider; ProcessProvider.capability('esp32.csi',{'transmitter_mac':'1a:00:00:00:00:00','clock_calibration_id':'c'}); assert not {'numpy','torch','serial'} & sys.modules.keys()"
+        code="import sys; from gamst import ProcessProvider; ProcessProvider.capability('esp32.csi',{'transmitter_mac':'1a:00:00:00:00:00','clock_calibration_id':'c'}); assert not {'numpy','torch','serial'} & sys.modules.keys()"
         result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for changes in ({'window_ms':True},{'variation_threshold':float('nan')},{'max_gap_ms':2000}):
@@ -137,7 +137,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         config=dict(CONFIG,window_ms=100,max_gap_ms=50)
         try:
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human)
                     spec=ProcessProvider.capability('esp32.csi',config)
                     async def create():return await ProcessProvider.open(sys.executable,'esp32.csi',config)

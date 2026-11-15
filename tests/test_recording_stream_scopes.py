@@ -8,8 +8,8 @@ import tempfile
 import threading
 import unittest
 
-from humansense import HumanSense, SensorStreams, CapabilitySpec, OutputField, SensorMetadata
-from humansense.plugins import InputFrame
+from gamst import Gamst, SensorStreams, CapabilitySpec, OutputField, SensorMetadata
+from gamst.plugins import InputFrame
 from benchmarks.recording_evaluation import RecordingEvaluationSession
 from benchmarks.recording_native_schema import digest, run_context
 from benchmarks.recording_native_writer import RecordingNativeWriter
@@ -51,7 +51,7 @@ class Streams(unittest.IsolatedAsyncioTestCase):
             execution_ordinal=0,retain_evaluation_hashes=True)
         self.addAsyncCleanup(self.observer.close)
         self.clock=ReplayClock(d['source_manifest']);self.scope=self.observer.stream_scope(0)
-        self.human=HumanSense(consent=True);self.addAsyncCleanup(self.human.close)
+        self.human=Gamst(consent=True);self.addAsyncCleanup(self.human.close)
         self.runtime=SensorStreams(self.human,capacity=capacity,evaluation_publication_sink=publication_sink)
         self.spec=CapabilitySpec('fixture.audio','fixture.audio','audio','fixture.stream','1',
             (OutputField('count','integer'),OutputField('value','object')),'native',

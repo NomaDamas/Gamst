@@ -11,7 +11,7 @@ head orientation; the adapter cannot authenticate the caller's model geometry.
 ## Required configuration
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(
     path='/absolute/face_landmarker.task', sha256=task_sha256,

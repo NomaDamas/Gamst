@@ -12,11 +12,11 @@ try:
 except ImportError:
     cv2=np=None
 
-from humansense import VisualContextCalls,SensorMetadata,smolvlm_frame_sha256
-from humansense.plugins import InputFrame
-from humansense.call_controller import _digest
-from humansense.schema import timestamp
-from humansense.mcp import MCPServer
+from gamst import VisualContextCalls,SensorMetadata,smolvlm_frame_sha256
+from gamst.plugins import InputFrame
+from gamst.call_controller import _digest
+from gamst.schema import timestamp
+from gamst.mcp import MCPServer
 import test_text_context_call as text_tests
 
 

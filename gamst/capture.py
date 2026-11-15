@@ -60,7 +60,7 @@ class CaptureSession:
             self._cleanup_task = None
             # The session, not the caller, owns native startup. Cancelling a
             # to_thread waiter cannot stop a constructor or recover its result.
-            self._startup_task = asyncio.create_task(self._run_startup(), name="humansense-capture-startup")
+            self._startup_task = asyncio.create_task(self._run_startup(), name="gamst-capture-startup")
             try:
                 result, error = await asyncio.shield(self._startup_task)
                 if error is not None:
@@ -104,7 +104,7 @@ class CaptureSession:
                 try:
                     import cv2
                 except ImportError as exc:
-                    raise RuntimeError('Install humansense-sdk[vision] for camera capture') from exc
+                    raise RuntimeError('Install gamst-sdk[vision] for camera capture') from exc
                 self._camera = await asyncio.to_thread(cv2.VideoCapture, self.video)
                 if not self._camera.isOpened():
                     raise RuntimeError(f"Cannot open camera {self.video!r}")
@@ -114,7 +114,7 @@ class CaptureSession:
                 try:
                     import sounddevice as sd
                 except ImportError as exc:
-                    raise RuntimeError('Install humansense-sdk[audio] for microphone capture') from exc
+                    raise RuntimeError('Install gamst-sdk[audio] for microphone capture') from exc
                 loop = asyncio.get_running_loop()
                 def callback(indata, frames, timing, status):
                     self._post_audio(loop, indata, str(status) if status else None)
@@ -129,9 +129,9 @@ class CaptureSession:
             self._running = True
             self._paused = False
             if self._camera is not None:
-                self._tasks.append(asyncio.create_task(self._camera_loop(), name="humansense-camera"))
+                self._tasks.append(asyncio.create_task(self._camera_loop(), name="gamst-camera"))
             if self._mic is not None:
-                self._tasks.append(asyncio.create_task(self._microphone_loop(), name="humansense-microphone"))
+                self._tasks.append(asyncio.create_task(self._microphone_loop(), name="gamst-microphone"))
             for task in self._tasks:
                 task.add_done_callback(self._task_done)
             return self
@@ -158,7 +158,7 @@ class CaptureSession:
         if self._cleanup_task is None:
             self._running = False
             self._capture_generation += 1
-            self._cleanup_task = asyncio.create_task(self._cleanup(), name="humansense-capture-cleanup")
+            self._cleanup_task = asyncio.create_task(self._cleanup(), name="gamst-capture-cleanup")
             # Automatic failure cleanup can finish before any public waiter.
             # Retain its result for wait/stop, while consuming background errors.
             self._cleanup_task.add_done_callback(

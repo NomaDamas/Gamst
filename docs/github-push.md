@@ -1,6 +1,6 @@
 # GitHub publishing from the host terminal
 
-This development sandbox cannot resolve github.com and masks the root .git metadata as read-only. No remote push has succeeded. A local commit bundle is available at dist/humansense-v0.1.bundle.
+This development sandbox cannot resolve github.com and masks the root .git metadata as read-only. No remote push has succeeded. A local commit bundle is available at dist/gamst-v0.1.bundle.
 
 First inspect the normal terminal (not the restricted development shell):
 

@@ -82,7 +82,7 @@ class PPOCRContext:
             from rapidocr.utils.process_img import get_rotate_crop_image
             from rapidocr.utils.typings import EngineType
         except (ImportError,importlib.metadata.PackageNotFoundError) as exc:
-            raise RuntimeError('install humansense-sdk[ocr] in the selected isolated runtime') from exc
+            raise RuntimeError('install gamst-sdk[ocr] in the selected isolated runtime') from exc
         options=ort.SessionOptions(); options.intra_op_num_threads=1; options.inter_op_num_threads=1
         sessions=[ort.InferenceSession(blob,sess_options=options,providers=['CPUExecutionProvider']) for blob in blobs]
         for session in sessions:

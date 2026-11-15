@@ -3,7 +3,7 @@ export interface ClientOptions {
   WebSocketImpl?: typeof WebSocket;
   timeoutMs?: number;
 }
-export declare class HumanSenseClient {
+export declare class GamstClient {
   readonly socket: WebSocket;
   constructor(url?: string, options?: ClientOptions);
   ready(): Promise<void>;

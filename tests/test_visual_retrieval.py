@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.visual_retrieval import DINOv3Retrieval
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.visual_retrieval import DINOv3Retrieval
 try:
     import numpy as np
 except ImportError:
@@ -61,11 +61,11 @@ class Retrieval(unittest.TestCase):
 
     def test_capacity_expiry_monotonic_and_capture_time(self):
         p=DINOv3Retrieval(lambda _:self.vector(),sha256='0'*64,capacity=2,retention_ms=10)
-        with patch('humansense.providers.visual_retrieval.time.monotonic',return_value=10):
+        with patch('gamst.providers.visual_retrieval.time.monotonic',return_value=10):
             a=p.process(frame()); b=p.process(frame(1,1001)); c=p.process(frame(2,1002))
             self.assertTrue(c['summary']['capacity_evicted']); self.assertEqual(len(p._entries),2)
             result=p.process(frame(3,1013)); self.assertEqual(result['candidates'],[])
-        with patch('humansense.providers.visual_retrieval.time.monotonic',return_value=11):
+        with patch('gamst.providers.visual_retrieval.time.monotonic',return_value=11):
             self.assertEqual(p.process(frame(4,1014))['candidates'],[])
 
     def test_owner_reset_explicit_clear_and_sequence_gaps(self):
@@ -158,11 +158,11 @@ class Retrieval(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy absent')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_managed_gallery_and_mcp_clear(self):
-        from humansense import HumanSense,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst import Gamst,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         p=DINOv3Retrieval(lambda _:np.ones(384),sha256='0'*64)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);streams.register(p.spec,lambda:p)
             await streams.open('cam','sensor',[p.spec.id],subject_id='person')
             now=timestamp()-100

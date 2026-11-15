@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 
-from humansense.providers import efficientphys_native as native
+from gamst.providers import efficientphys_native as native
 
 try:
     import numpy as np
@@ -16,7 +16,7 @@ except ImportError:
 class Configuration(unittest.TestCase):
     def test_import_and_artifact_rejection(self):
         run = subprocess.run([sys.executable, '-c',
-            "import humansense.providers.efficientphys_native; import sys; assert not {'torch','numpy'} & sys.modules.keys()"], capture_output=True)
+            "import gamst.providers.efficientphys_native; import sys; assert not {'torch','numpy'} & sys.modules.keys()"], capture_output=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         with self.assertRaises(ValueError): native.model_class(b'raise RuntimeError("must not execute")')
         for size, depth in ((True, 10), (64, 10), (72, True), (72, 20)):

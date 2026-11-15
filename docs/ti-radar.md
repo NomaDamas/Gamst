@@ -100,14 +100,14 @@ must be checked for the actual binary. Read serial data only through your
 application's explicitly configured capture driver.
 
 ```python
-from humansense import ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.radar import TIRadarPackets
+from gamst import ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.radar import TIRadarPackets
 
 config = dict(sdk_version=firmware_sdk_version_word,
               coordinate_frame="radar_local", calibration_id="radar_cal1")
 spec = ProcessProvider.capability("ti.radar", config)
-streams = SensorStreams(human)  # Existing consented HumanSense instance.
+streams = SensorStreams(human)  # Existing consented Gamst instance.
 async def create():
     return await ProcessProvider.open(worker_python, "ti.radar", config)
 streams.register(spec, create)

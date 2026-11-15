@@ -4,14 +4,14 @@ import io
 import json
 import unittest
 from types import SimpleNamespace
-from humansense import HumanSense
-from humansense.dashboard import Dashboard, handler_for
-from humansense.plugins import AudioLevelPlugin
+from gamst import Gamst
+from gamst.dashboard import Dashboard, handler_for
+from gamst.plugins import AudioLevelPlugin
 
 
 class DashboardTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.human.register(AudioLevelPlugin())
         self.app = Dashboard(self.human, asyncio.get_running_loop())
         await self.human.pause()
@@ -39,7 +39,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_speech_language_selection(self):
         from unittest.mock import patch
-        from humansense.plugins import FasterWhisperPlugin
+        from gamst.plugins import FasterWhisperPlugin
         plugin = FasterWhisperPlugin.__new__(FasterWhisperPlugin)
         plugin.language = "ko"
         plugin.buffers = {"local-user": [0.1]}
@@ -74,7 +74,7 @@ class HTTPBoundaryTests(unittest.TestCase):
         app = SimpleNamespace(token="secret")
         handler = handler_for(app).__new__(handler_for(app))
         handler.server = SimpleNamespace(server_port=8766)
-        handler.headers = {"Host": host, "X-HumanSense-Token": token}
+        handler.headers = {"Host": host, "X-Gamst-Token": token}
         handler.path = path
         handler.rfile = io.BytesIO(b"{}")
         handler.response = None
@@ -107,13 +107,13 @@ class HTTPBoundaryTests(unittest.TestCase):
 
 class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_does_not_wait_for_long_model_call(self):
-        from humansense.companion import Companion
+        from gamst.companion import Companion
         entered, release = asyncio.Event(), asyncio.Event()
         class Backend:
             model_id, model_version = 'fixture', '1'
             async def reply(self, records, context, inference):
                 entered.set(); await release.wait(); return 'late response'
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             app = Dashboard(human, asyncio.get_running_loop())
             app.companion = Companion(human, Backend())
             await app.dispatch({'op':'start','consent':True})

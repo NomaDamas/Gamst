@@ -5,7 +5,7 @@ try:
     import numpy as np
 except ImportError:
     cv=np=None
-from humansense.camera_similarity import BackgroundSimilarity
+from gamst.camera_similarity import BackgroundSimilarity
 
 
 @unittest.skipIf(cv is None,'optional OpenCV/NumPy missing')

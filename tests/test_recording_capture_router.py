@@ -9,7 +9,7 @@ from benchmarks.recording_runtime_profiles import builtin_profile
 from benchmarks.owned_capture import OwnedCaptureSource,CaptureCapacity
 from benchmarks.recorded_source import digest
 from benchmarks.recording_native_validation import validate_recording_native_inventory
-from humansense import HumanSense,SensorStreams
+from gamst import Gamst,SensorStreams
 from recording_native_fixtures import declarations,rehash
 from benchmarks.recording_evaluation import RecordingEvaluationSession
 from benchmarks.recording_native_writer import RecordingNativeWriter
@@ -28,7 +28,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
             rehash(d)
             writer=await RecordingNativeWriter.open(root/'native',run_context(d,'a'*64,0))
             owner=RecordingEvaluationSession.from_frozen(d,writer,run_nonce='a'*64,execution_ordinal=0,retain_evaluation_hashes=True)
-            human=HumanSense(consent=True);streams=SensorStreams(human)
+            human=Gamst(consent=True);streams=SensorStreams(human)
             delivery=dict(profile='pcm_level',config_sha256=digest({}),source_id='mic',binding_id='semantic')
             spec,factory,config=builtin_profile(delivery,{})
             streams.register(spec,factory)

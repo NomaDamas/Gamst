@@ -3,18 +3,18 @@ import copy
 import json
 import unittest
 
-from humansense import HumanSense,TextContextCalls,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
-from humansense.call_controller import CallController,_digest
-from humansense.call_budget import CallBudget
-from humansense.call_policy import CallPolicy
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import Gamst,TextContextCalls,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
+from gamst.call_controller import CallController,_digest
+from gamst.call_budget import CallBudget
+from gamst.call_policy import CallPolicy
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 
 
 class Calls(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.h=HumanSense(consent=True)
+        self.h=Gamst(consent=True)
         self.spec=CapabilitySpec('test.context','test.context','video','test.provider','1',
             (OutputField('objects','array'),OutputField('note','string')),'frame',freshness_ms=60000)
         self.h.register_capability(self.spec)

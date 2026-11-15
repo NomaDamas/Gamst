@@ -4,11 +4,11 @@ try:
     import numpy as np
 except ImportError:
     np = None
-from humansense.providers.beamforming import DelaySumBeamformer
-from humansense import HumanSense, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.prosody import AudioProsody
-from humansense.schema import timestamp
+from gamst.providers.beamforming import DelaySumBeamformer
+from gamst import Gamst, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.prosody import AudioProsody
+from gamst.schema import timestamp
 
 
 def provider(delay=5/16000):
@@ -84,7 +84,7 @@ class Beamforming(unittest.TestCase):
 @unittest.skipIf(np is None, 'numpy not installed')
 class BeamformingContext(unittest.IsolatedAsyncioTestCase):
     async def test_selected_audio_feeds_real_prosody_and_metadata_reaches_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             p, prosody = provider(), AudioProsody()
             human.register_capability(p.spec)
             features = None

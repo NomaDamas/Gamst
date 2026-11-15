@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 
-from humansense.call_budget import CallBudget
+from gamst.call_budget import CallBudget
 
 
 def ledger(**kwargs):

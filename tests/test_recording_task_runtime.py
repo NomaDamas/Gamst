@@ -16,11 +16,11 @@ from benchmarks.recording_runtime_artifacts import RecordingRuntimeArtifacts,rea
 from benchmarks.recording_task_runtime import RecordingTaskRuntime
 from benchmarks.recording_transports import FixtureCompletion,TransportCapacity,TransportMemoryBudget
 from benchmarks.replay_clock import ReplayClock
-from humansense import HumanSense,SensorMetadata,TextContextCalls,evaluation_snapshot_implementation_sha256
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
-from humansense.capabilities import CapabilitySpec,OutputField
+from gamst import Gamst,SensorMetadata,TextContextCalls,evaluation_snapshot_implementation_sha256
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
+from gamst.capabilities import CapabilitySpec,OutputField
 from recording_native_fixtures import rehash
 from test_recording_runtime_native import runtime_declarations
 
@@ -77,7 +77,7 @@ class TaskRuntime(unittest.IsolatedAsyncioTestCase):
     async def setup_runtime(self,snapshots,**changes):
         d,l,bundles,responses=originals(snapshots,**changes)
         temporary=tempfile.TemporaryDirectory(dir='.');self.addCleanup(temporary.cleanup);root=Path(temporary.name)
-        human=HumanSense(consent=True);self.addAsyncCleanup(human.close)
+        human=Gamst(consent=True);self.addAsyncCleanup(human.close)
         human.register_capability(CapabilitySpec('source.fill','source.fill','video','test.source','1',(OutputField('fraction','number'),),'frame'))
         await human.push_observation('source.fill',{'fraction':.4},sensor=SensorMetadata('camera','video',1,stream_epoch='original'))
         publisher=human.create_evaluation_snapshot_publisher(implementation_sha256=evaluation_snapshot_implementation_sha256())

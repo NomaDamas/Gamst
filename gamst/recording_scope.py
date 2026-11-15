@@ -50,7 +50,7 @@ class RecordingScope:
         return self.owner.reserve_work(*args, evaluation_scope=self, **kwargs)
 
     def invalidate(self, reason, subject_id=None):
-        # HumanSense registers the root owner, so this delegate is not another
+        # Gamst registers the root owner, so this delegate is not another
         # privacy registry entry and cannot narrow a global lifecycle operation.
         self.owner.invalidate(reason, subject_id=subject_id)
 

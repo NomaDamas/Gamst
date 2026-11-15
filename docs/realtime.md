@@ -16,9 +16,9 @@ The runtime is an observation layer. Fast sensor measurements continue while bou
 The full launcher exposes the dashboard's exact runtime at `ws://127.0.0.1:8765`. Native local clients are accepted; browser origins are not implicitly permitted.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"humansense/subscribe","params":{"types":["context"]}}
+{"jsonrpc":"2.0","id":1,"method":"gamst/subscribe","params":{"types":["context"]}}
 ```
 
-Notifications use `notifications/humansense/context`. Other subscriptions are `event`, `signal`, and `inference`. Runtime records are bounded; consumers should retain only their newest needed context. A slow client is not entitled to every historical video frame.
+Notifications use `notifications/gamst/context`. Other subscriptions are `event`, `signal`, and `inference`. Runtime records are bounded; consumers should retain only their newest needed context. A slow client is not entitled to every historical video frame.
 
-For standard MCP clients use `humansense.mcp_live` as a stdio bridge, then call `get_context`. Registering an MCP server does not automatically add context to every LLM request; the host agent must call the tools or integrate a streaming client.
+For standard MCP clients use `gamst.mcp_live` as a stdio bridge, then call `get_context`. Registering an MCP server does not automatically add context to every LLM request; the host agent must call the tools or integrate a streaming client.

@@ -2,10 +2,10 @@ import json
 import struct
 import unittest
 
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.thermal import TLinearThermal
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.thermal import TLinearThermal
+from gamst.schema import timestamp
 
 
 def provider(**kwargs):
@@ -91,7 +91,7 @@ class Thermal(unittest.TestCase):
 
 class ThermalRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_streamed_thermal_reaches_context_without_pixels(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = TLinearThermal.capability()
             streams.register(spec, provider)

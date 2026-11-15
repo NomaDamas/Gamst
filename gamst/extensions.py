@@ -6,7 +6,7 @@ import re
 
 from .plugins import _signal as signal
 
-ENTRY_POINT_GROUP = 'catch_your_mind.plugins'
+ENTRY_POINT_GROUP = 'gamst.plugins'
 
 
 @dataclass(frozen=True)

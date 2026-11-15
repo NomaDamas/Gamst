@@ -34,7 +34,7 @@ assets currently present on a machine.
 
 The core package has no mandatory third-party dependencies and requires Python
 3.10+. [pyproject.toml](../pyproject.toml) is authoritative for optional extras;
-[provider_profiles.py](../humansense/provider_profiles.py) is authoritative for
+[provider_profiles.py](../gamst/provider_profiles.py) is authoritative for
 worker profile names. A generic Hugging Face callback is not candidate support.
 
 Use an explicitly selected, already provisioned interpreter for each worker as

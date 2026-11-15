@@ -12,12 +12,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.providers.tactile import (TactileSource, TactileInputContext, TactileWindow,
+from gamst import Gamst, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.providers.tactile import (TactileSource, TactileInputContext, TactileWindow,
     tactile_frame, decode_tactile, recording_frames, MAGIC, HEADER_LIMIT, PACKET_LIMIT)
-from humansense.providers.tactile_capture import TactileCapture
-from humansense.schema import timestamp
+from gamst.providers.tactile_capture import TactileCapture
+from gamst.schema import timestamp
 
 
 def source(**changes):
@@ -114,7 +114,7 @@ class TactilePackets(unittest.TestCase):
             manifest = root/'recording.json'
             manifest.write_text(json.dumps(dict(schema_version=1, packets=entries)))
             self.assertEqual(len(list(recording_frames(str(manifest)))), 6)
-            result = subprocess.run([sys.executable, '-m', 'humansense.tactile_replay', '--manifest', str(manifest)],
+            result = subprocess.run([sys.executable, '-m', 'gamst.tactile_replay', '--manifest', str(manifest)],
                                     capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [json.loads(line)['capture'] for line in result.stdout.splitlines()]
@@ -164,7 +164,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
         for cancel in (True, False):
             camera=Camera(); gate=Gate(camera)
             capture=TactileCapture(source(), consent=True)
-            with patch('humansense.providers.tactile_capture._opencv', return_value=cv(gate)):
+            with patch('gamst.providers.tactile_capture._opencv', return_value=cv(gate)):
                 opening=asyncio.create_task(capture.open_gelsight(device=3)); closing=None
                 try:
                     await asyncio.wait_for(gate.entered.wait(), 2)
@@ -186,7 +186,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_read_serializes_release_and_returns_no_late_frame(self):
         camera=Camera(); gate=Gate((True,None)); camera.read=gate
         capture=TactileCapture(source(), consent=True)
-        with patch('humansense.providers.tactile_capture._opencv', return_value=cv(lambda _:camera)):
+        with patch('gamst.providers.tactile_capture._opencv', return_value=cv(lambda _:camera)):
             await capture.open_gelsight(device=0)
             reading=asyncio.create_task(capture.next_frame()); closing=None
             try:
@@ -216,8 +216,8 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
         binding=source(sensor_model='digit', width=320,height=240,reference=bytes(320*240*3),
                        configured_fps=30,configured_led_intensity=15)
         capture=TactileCapture(binding,consent=True)
-        with patch('humansense.providers.tactile_capture._digit_class',return_value=Digit), \
-                patch('humansense.providers.tactile_capture._opencv',return_value=cv(None)):
+        with patch('gamst.providers.tactile_capture._digit_class',return_value=Digit), \
+                patch('gamst.providers.tactile_capture._opencv',return_value=cv(None)):
             with self.assertRaisesRegex(RuntimeError,'lighting fixture failure'): await capture.open_digit()
             await capture.close()
             self.assertEqual(calls.count('disconnect'),1)
@@ -234,8 +234,8 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
         binding=source(sensor_model='digit',width=320,height=240,reference=bytes(320*240*3),
                        configured_fps=30,configured_led_intensity=15)
         capture=TactileCapture(binding,consent=True)
-        with patch('humansense.providers.tactile_capture._digit_class',return_value=Digit), \
-                patch('humansense.providers.tactile_capture._opencv',return_value=cv(None)):
+        with patch('gamst.providers.tactile_capture._digit_class',return_value=Digit), \
+                patch('gamst.providers.tactile_capture._opencv',return_value=cv(None)):
             opening=asyncio.create_task(capture.open_digit())
             try:
                 await asyncio.wait_for(gate.entered.wait(),2)
@@ -266,8 +266,8 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
         binding=source(sensor_model='digit',width=320,height=240,reference=bytes(320*240*3),
                        configured_fps=30,configured_led_intensity=15)
         capture=TactileCapture(binding,consent=True)
-        with patch('humansense.providers.tactile_capture._digit_class',return_value=Digit), \
-                patch('humansense.providers.tactile_capture._opencv',return_value=cv(None)):
+        with patch('gamst.providers.tactile_capture._digit_class',return_value=Digit), \
+                patch('gamst.providers.tactile_capture._opencv',return_value=cv(None)):
             await capture.open_digit()
             with self.assertRaisesRegex(ValueError,'fixture read failure'): await capture.next_frame()
             self.assertIn(('transpose',True),calls)
@@ -279,7 +279,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
     async def test_close_cancellation_drains_release_once_and_records_failure(self):
         camera=Camera(); gate=Gate(error=RuntimeError('delayed release failure')); camera.release=gate
         capture=TactileCapture(source(),consent=True)
-        with patch('humansense.providers.tactile_capture._opencv',return_value=cv(lambda _:camera)):
+        with patch('gamst.providers.tactile_capture._opencv',return_value=cv(lambda _:camera)):
             await capture.open_gelsight(device=0)
             closing=asyncio.create_task(capture.close())
             try:
@@ -298,7 +298,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
         except ImportError: self.skipTest('optional NumPy unavailable')
         pixels=np.arange(12,dtype=np.uint8).reshape(2,2,3)
         camera=Camera(pixels); capture=TactileCapture(source(),consent=True)
-        with patch('humansense.providers.tactile_capture._opencv',return_value=cv(lambda _:camera)):
+        with patch('gamst.providers.tactile_capture._opencv',return_value=cv(lambda _:camera)):
             await capture.open_gelsight(device=4)
             result=await capture.next_frame(); meta,raw=decode_tactile(result.data)
             self.assertEqual(raw,pixels.tobytes()); self.assertEqual(meta['acquisition'],'host_read_end')
@@ -312,7 +312,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
     async def test_opt_in_and_explicit_selection_before_native_access(self):
         with self.assertRaises(PermissionError): TactileCapture(source())
         capture=TactileCapture(source(),consent=True)
-        with patch('humansense.providers.tactile_capture._opencv') as backend:
+        with patch('gamst.providers.tactile_capture._opencv') as backend:
             for device in (None, True, -1, 'https://camera', '/tmp/recording.mp4'):
                 with self.assertRaises(ValueError): await capture.open_gelsight(device=device)
             backend.assert_not_called()
@@ -321,7 +321,7 @@ class TactileNative(unittest.IsolatedAsyncioTestCase):
 
 class TactileRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_typed_input_metadata_reaches_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human); spec=TactileInputContext.capability()
             streams.register(spec,TactileInputContext)
             await streams.open('touch','finger',[spec.id])

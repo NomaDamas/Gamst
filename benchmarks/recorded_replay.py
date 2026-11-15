@@ -2,10 +2,10 @@
 import asyncio
 import time
 
-from humansense import HumanSense
-from humansense.capabilities import CapabilitySpec, OutputField, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.streams import SensorStreams, _finish
+from gamst import Gamst
+from gamst.capabilities import CapabilitySpec, OutputField, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.streams import SensorStreams, _finish
 from .recorded_source import validate_manifest, read_capture, digest, encoded, _integer
 from .replay_clock import ReplayClock, validate_tasks
 from .recorded_profiles import profiles_for
@@ -143,7 +143,7 @@ class RecordedSourceReplay:
             for record in self.manifest['records']:
                 if record['payload_path'] not in verified:
                     await self._read(record); verified.add(record['payload_path'])
-            self.human = HumanSense(consent=True)
+            self.human = Gamst(consent=True)
             self.streams = SensorStreams(self.human,capacity=2,max_streams=16,
                 max_packet_bytes=8*1024**2,max_buffer_bytes=256*1024**2)
             for spec,factory in self.profiles.values():

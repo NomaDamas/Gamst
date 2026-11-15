@@ -154,7 +154,7 @@ class _BridgeLifecycle:
 
 
 class InputBridge:
-    """Bind explicitly owned decoded inputs to a shared HumanSense runtime.
+    """Bind explicitly owned decoded inputs to a shared Gamst runtime.
 
     ``subject_id`` is supplied by the application, never inferred from a face or
     a voice. For group calls, create one bridge per known participant/track.

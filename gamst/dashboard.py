@@ -225,7 +225,7 @@ def handler_for(app):
         def do_POST(self):
             if not self.allowed_host() or self.path != "/api":
                 return self.respond(404, {"error": "Not found"})
-            if not secrets.compare_digest(self.headers.get("X-HumanSense-Token", ""), app.token):
+            if not secrets.compare_digest(self.headers.get("X-Gamst-Token", ""), app.token):
                 return self.respond(403, {"error": "Invalid session token"})
             origin = self.headers.get("Origin")
             if origin and origin not in {f"http://localhost:{self.server.server_port}", f"http://127.0.0.1:{self.server.server_port}"}:
@@ -267,9 +267,9 @@ def handler_for(app):
 
 
 async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None):
-    from . import HumanSense
+    from . import Gamst
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
-    async with HumanSense(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
+    async with Gamst(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
         from .reasoning import backend_from_env
         backend = backend_from_env()
         if backend is not None:

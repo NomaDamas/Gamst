@@ -81,7 +81,7 @@ class Replay(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[-1]['completed_observations'],0)
 
     async def test_cancellation_first_arriving_during_cleanup_remains_failed(self):
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         root,path,m=self.assets()
         original=ProcessProvider.close
         for count in (1,4):

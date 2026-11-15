@@ -14,9 +14,9 @@ import struct
 import time
 import zlib
 
-from humansense.native_entry import BoundCompletion, PreparedCall, NativeEntryBinding
-from humansense.capabilities import bounded_json, identifier
-from humansense.streams import _finish
+from gamst.native_entry import BoundCompletion, PreparedCall, NativeEntryBinding
+from gamst.capabilities import bounded_json, identifier
+from gamst.streams import _finish
 from .owned_capture import CapturePacket
 from .recorded_source import encoded, digest, _keys, _integer
 from .recording_runtime_contract import validate_adapter, validate_fixture_responses, sha, text
@@ -293,7 +293,7 @@ def _validate_png(image, capacity, capture):
         raise ValueError('complete exact bounded PNG pixel stream required')
     import cv2
     import numpy as np
-    from humansense.smolvlm_call import smolvlm_frame_sha256
+    from gamst.smolvlm_call import smolvlm_frame_sha256
     pixels = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
     if type(pixels) is not np.ndarray or pixels.dtype != np.uint8 or pixels.shape != tuple(shape):
         raise ValueError('lossless PNG must decode to original plain BGR pixels')
@@ -315,7 +315,7 @@ class _Completion(BoundCompletion):
         if type(capacity) is not TransportCapacity or type(memory) is not TransportMemoryBudget:
             raise TypeError('typed joint completion workspace reservation required')
         # Native context validation is reused; no user-authored current scope.
-        from humansense.native_entry import validate_owner
+        from gamst.native_entry import validate_owner
         from .recording_native_schema import snapshot
         context = snapshot(context, maximum=4096)
         validate_owner('recording_native4', dict(context=context, scope_index=0, binding_index=binding_index))

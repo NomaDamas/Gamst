@@ -23,7 +23,7 @@ class TextContextCalls:
     def __init__(self, human, controller_id, completion, *, provider, model_revision, timeout=30, evaluation_observer=None):
         human._check(); identifier(controller_id); identifier(provider); identifier(model_revision)
         if controller_id not in human._call_controllers:
-            raise ValueError('registered HumanSense controller required')
+            raise ValueError('registered Gamst controller required')
         if not (inspect.iscoroutinefunction(completion) or inspect.iscoroutinefunction(getattr(completion,'__call__',None))):
             raise ValueError('completion must be an asynchronous callable')
         if type(timeout) not in (int,float) or not math.isfinite(timeout) or not .01 <= timeout <= 300:

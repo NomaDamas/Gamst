@@ -31,13 +31,13 @@ await streams.drain()
 context = await human.get_context()
 ```
 
-Imports: `HumanSense`, `ProcessProvider`, `SensorStreams`, `SensorMetadata` from
-`humansense`, and `InputFrame` from `humansense.plugins`. Use one worker per open
+Imports: `Gamst`, `ProcessProvider`, `SensorStreams`, `SensorMetadata` from
+`gamst`, and `InputFrame` from `gamst.plugins`. Use one worker per open
 stream. Registration/opening failure requires caller cleanup with
 `await worker.close()`; after successful registration, stream clear and host
 pause/delete/close dispose the owned worker. Reopening requires a fresh worker.
 Explicit standalone use of `RFDETRTrajectories` from
-`humansense.providers.detection_trajectories` is synchronous and caller-owned.
+`gamst.providers.detection_trajectories` is synchronous and caller-owned.
 
 The selected environment must already have the existing validated RF-DETR
 1.12.1 runtime and trusted local checkpoint. Loading uses the existing

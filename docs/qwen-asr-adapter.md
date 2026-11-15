@@ -1,6 +1,6 @@
 # Qwen streaming lifecycle adapter
 
-`humansense.providers.qwen_asr.QwenStreamingASR` implements the concrete Qwen vLLM streaming API described in the [source-verified contract](asr-streaming-contract.md). It consumes fixed mono hops, emits replacement transcript revisions and flushes a residual tail. This is an adapter implementation with test-double lifecycle evidence; actual Qwen checkpoint inference is not yet validated (#68).
+`gamst.providers.qwen_asr.QwenStreamingASR` implements the concrete Qwen vLLM streaming API described in the [source-verified contract](asr-streaming-contract.md). It consumes fixed mono hops, emits replacement transcript revisions and flushes a residual tail. This is an adapter implementation with test-double lifecycle evidence; actual Qwen checkpoint inference is not yet validated (#68).
 
 ## Explicit engine ownership and limits
 

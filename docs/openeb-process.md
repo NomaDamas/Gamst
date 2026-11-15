@@ -18,7 +18,7 @@ flowchart LR
 ## API and lifecycle
 
 ```python
-from humansense import OpenEBProcess
+from gamst import OpenEBProcess
 
 selection = dict(kind="camera", source="EXACT_SERIAL", source_id="event-camera",
     sensor_id="events", sensor_origin_us="0", capture_origin_ms=known_capture_origin_ms,

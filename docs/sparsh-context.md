@@ -113,7 +113,7 @@ its own `to_thread` must retain and drain that task, as documented for the nativ
 bridge. Do not equate direct synchronous calls with an async publication guarantee.
 
 ```sh
-python -m humansense.sparsh_replay \
+python -m gamst.sparsh_replay \
   --manifest /absolute/tactile-recording.json \
   --config /absolute/sparsh-context.json
 ```
@@ -121,7 +121,7 @@ python -m humansense.sparsh_replay \
 This implemented command emits one bounded observation per validated packet and
 closes its owned provider on completion/failure. It requires all source/native/
 reference assets; missing assets fail, never substitute a mock. The existing
-`humansense.tactile_replay` remains the model-free raw-input inspection command.
+`gamst.tactile_replay` remains the model-free raw-input inspection command.
 A partial replay followed by a bad packet is incomplete evidence, not acceptance.
 
 ## Verification boundary

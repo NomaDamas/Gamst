@@ -22,7 +22,7 @@ class OpenCVFlow:
             import cv2
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[vision] for optical flow') from exc
+            raise RuntimeError('Install gamst-sdk[vision] for optical flow') from exc
         self.cv2, self.np = cv2, np
         self.method, self.max_side, self.max_gap_ms = method, max_side, max_gap_ms
         self.max_points, self.threshold = max_points, float(motion_threshold_px)

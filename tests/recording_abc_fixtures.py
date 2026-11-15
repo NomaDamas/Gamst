@@ -103,8 +103,8 @@ def build_runtime_fixture(root, *, count=24, duration_ns=700_000_000,
         arm['recording_policies'] = []
     fill_config=None
     if include_fill:
-        from humansense.providers.fill import _configuration
-        from humansense.fill_conflict_rule import RULE_SHA,PREDICATE
+        from gamst.providers.fill import _configuration
+        from gamst.fill_conflict_rule import RULE_SHA,PREDICATE
         fill_config=_configuration(width=64,height=64,roi=[8,8,56,56],
             hsv_lower=[110,100,100],hsv_upper=[130,255,255],volume_curve_ml=[[0,0],[1,100]],
             calibration_id='cal1',container_id='cup1',coordinate_frame='pixels')
@@ -254,7 +254,7 @@ def build_runtime_fixture(root, *, count=24, duration_ns=700_000_000,
                 model_revision=PCMLevel.spec.version,role='signal',config_sha256=digest({}),
                 source_ids=['mic'],entry_boundary='in_process_backend',operation_kinds=['process'],semantic_lane=None))
         if include_fill and arm['arm']=='C':
-            from humansense.providers.fill import CalibratedColorFill
+            from gamst.providers.fill import CalibratedColorFill
             fill_spec=CalibratedColorFill.capability(**fill_config)
             bindings.append(dict(binding_id='fill_measurement',provider=fill_spec.provider,
                 model_revision=fill_spec.version,role='signal',config_sha256=digest(fill_config),

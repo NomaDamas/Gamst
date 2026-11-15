@@ -4,11 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from humansense import HumanSense,ProcessProvider,SensorStreams,SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.mcp import MCPServer
-from humansense.pg_generation import PACKET_LIMIT,unpack_capture
-from humansense.sam_audio_artifact import _json,_keys
+from gamst import Gamst,ProcessProvider,SensorStreams,SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.mcp import MCPServer
+from gamst.pg_generation import PACKET_LIMIT,unpack_capture
+from gamst.sam_audio_artifact import _json,_keys
 
 
 async def deliver(python,config,packet,metadata):
@@ -16,7 +16,7 @@ async def deliver(python,config,packet,metadata):
     _keys(metadata,('timestamp_ms','subject_id','sensor'),'PG recorded capture')
     sensor=dict(metadata['sensor']);sensor['channels']=tuple(sensor['channels'])
     frame=InputFrame(packet,'video',metadata['timestamp_ms'],metadata['subject_id'],sensor=SensorMetadata(**sensor))
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams=SensorStreams(human,capacity=1,max_packet_bytes=32*1024**2,max_buffer_bytes=64*1024**2)
         spec=ProcessProvider.capability('pg.physical.local',config)
         async def factory():return await ProcessProvider.open(python,'pg.physical.local',config)

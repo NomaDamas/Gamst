@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 import time
 
-from humansense.streams import _finish
+from gamst.streams import _finish
 from .recorded_source import digest
 from .recording_runtime_inputs import OwnedRuntimeInputs
 from .recording_runtime_native import RuntimeChildNativeChannel

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from humansense.reasoning import (ChatCompletionsBackend, backend_from_env,
+from gamst.reasoning import (ChatCompletionsBackend, backend_from_env,
     parse_analysis, prepare_records, validate_analysis, _normalize)
 
 
@@ -121,15 +121,15 @@ class ReasoningValidationTests(unittest.TestCase):
     def test_env_factory_and_remote_consent(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(backend_from_env())
-            os.environ["HUMANSENSE_REASONING_URL"] = "http://127.0.0.1:8000/v1/chat/completions"
+            os.environ["GAMST_REASONING_URL"] = "http://127.0.0.1:8000/v1/chat/completions"
             with self.assertRaises(ValueError):
                 backend_from_env()
-            os.environ["HUMANSENSE_REASONING_MODEL"] = "local-model"
+            os.environ["GAMST_REASONING_MODEL"] = "local-model"
             self.assertEqual(backend_from_env().model_id, "local-model")
-            os.environ["HUMANSENSE_REASONING_URL"] = "https://provider.example/v1/chat/completions"
+            os.environ["GAMST_REASONING_URL"] = "https://provider.example/v1/chat/completions"
             with self.assertRaises(PermissionError):
                 backend_from_env()
-            os.environ["HUMANSENSE_REASONING_ALLOW_REMOTE"] = "true"
+            os.environ["GAMST_REASONING_ALLOW_REMOTE"] = "true"
             self.assertTrue(backend_from_env().remote)
 
 
@@ -143,7 +143,7 @@ class AsyncReasoningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(output["recommended_action"])
 
     async def test_async_analyze_and_runtime_integration(self):
-        from humansense import HumanSense
+        from gamst import Gamst
         backend = ChatCompletionsBackend("http://127.0.0.1:8000/v1/chat/completions", "local")
         # Exercise async adapter and runtime without sockets or real model weights.
         def fake_provider(prepared):
@@ -154,8 +154,8 @@ class AsyncReasoningTests(unittest.IsolatedAsyncioTestCase):
             # CI sandbox restricts event-loop wakeup sockets. Test provider IO
             # separately above; retain actual threading in production code.
             return function(*args, **kwargs)
-        with patch("humansense.reasoning.asyncio.to_thread", inline_worker):
-            async with HumanSense(consent=True) as human:
+        with patch("gamst.reasoning.asyncio.to_thread", inline_worker):
+            async with Gamst(consent=True) as human:
                 await human.push_text("Please explain again")
                 human.set_analysis_backend(backend)
                 output = await human.analyze()

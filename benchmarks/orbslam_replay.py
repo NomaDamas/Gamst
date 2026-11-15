@@ -11,10 +11,10 @@ import re
 import sys
 import time
 
-from humansense import ProcessProvider, ORBSLAMProcess, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.orbslam_context import configuration
-from humansense.streams import _finish
+from gamst import ProcessProvider, ORBSLAMProcess, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.orbslam_context import configuration
+from gamst.streams import _finish
 
 MAX_MANIFEST=1024*1024
 MAX_REPORT=32*1024*1024
@@ -78,13 +78,13 @@ def load_manifest(path):
 
 def _environment():
     versions={}
-    for name in ('numpy','opencv-python','humansense-sdk'):
+    for name in ('numpy','opencv-python','gamst-sdk'):
         try:versions[name]=importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:versions[name]='unavailable'
     root=Path(__file__).resolve().parents[1]
-    files=('benchmarks/orbslam_replay.py','humansense/orbslam_process.py',
-           'humansense/providers/orbslam_context.py','humansense/providers/orbslam_native.py',
-           'humansense/process_provider.py','humansense/provider_wire.py')
+    files=('benchmarks/orbslam_replay.py','gamst/orbslam_process.py',
+           'gamst/providers/orbslam_context.py','gamst/providers/orbslam_native.py',
+           'gamst/process_provider.py','gamst/provider_wire.py')
     return dict(python=sys.version,platform=platform.platform(),packages=versions,
                 source_sha256={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files})
 

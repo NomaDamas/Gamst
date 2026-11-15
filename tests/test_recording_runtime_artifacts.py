@@ -16,8 +16,8 @@ from benchmarks.recording_runtime_artifacts import (RecordingRuntimeArtifacts,
     validate_task_artifact,read_publication)
 from benchmarks.recording_native_writer import ArtifactBudget
 from benchmarks.recording_native_schema import digest
-from humansense import HumanSense,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
+from gamst import Gamst,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
 
 H='a'*64
 
@@ -85,7 +85,7 @@ class RuntimeArtifacts(unittest.IsolatedAsyncioTestCase):
         await self.writer.close(cleanup_finished=True)
 
     async def test_actual_sdk_accepted_record_snapshot_mutation_alias_and_external_retention(self):
-        human=HumanSense(consent=True);self.addAsyncCleanup(human.close)
+        human=Gamst(consent=True);self.addAsyncCleanup(human.close)
         human.register_capability(CapabilitySpec('source.fill','source.fill','video','test.source','1',
             (OutputField('fraction','number'),),'frame'))
         record=await human.push_observation('source.fill',{'fraction':.4},sensor=SensorMetadata('camera','video',1,stream_epoch='original'))
@@ -187,7 +187,7 @@ class RuntimeArtifacts(unittest.IsolatedAsyncioTestCase):
         native=await RecordingNativeWriter.open(root/'native',context)
         observer=RecordingEvaluationSession.from_frozen(d,native,run_nonce='b'*64,execution_ordinal=0,retain_evaluation_hashes=True)
         self.addAsyncCleanup(observer.close)
-        human=HumanSense(consent=True);self.addAsyncCleanup(human.close)
+        human=Gamst(consent=True);self.addAsyncCleanup(human.close)
         human.register_capability(CapabilitySpec('source.level','source.level','audio','fixture','1',(OutputField('level','number'),),'frame'))
         async def callback():return {'level':.5}
         observer.bind_backend(0,callback,'callback');clock=ReplayClock(d['source_manifest']);observer.bind_mapping(clock.mapping,clock.sha256)

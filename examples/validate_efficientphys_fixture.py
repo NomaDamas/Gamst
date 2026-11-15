@@ -8,16 +8,16 @@ from pathlib import Path
 import tempfile
 import time
 
-from humansense.providers.efficientphys_native import EfficientPhysNative, model_class, SOURCE_SHA256
-from humansense.providers.vocal_expression import _read
+from gamst.providers.efficientphys_native import EfficientPhysNative, model_class, SOURCE_SHA256
+from gamst.providers.vocal_expression import _read
 
 
 
 async def worker_check(source, checkpoint, digest):
     import numpy as np
-    from humansense import ProcessProvider, SensorMetadata
-    from humansense.plugins import InputFrame
-    from humansense.providers.efficientphys_context import face_frame
+    from gamst import ProcessProvider, SensorMetadata
+    from gamst.plugins import InputFrame
+    from gamst.providers.efficientphys_context import face_frame
     config=dict(source_path=str(source),checkpoint_path=str(checkpoint),checkpoint_sha256=digest)
     worker=await ProcessProvider.open(sys.executable,'efficientphys.local',config)
     try:

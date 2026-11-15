@@ -9,11 +9,11 @@ import hashlib
 from pathlib import Path
 import time
 
-from humansense.capabilities import CapabilitySpec,OutputField,SensorMetadata
-from humansense.fill_evaluation import FillEvaluationContext
-from humansense.schema import timestamp
-from humansense.smolvlm_call import smolvlm_frame_sha256
-from humansense.streams import _finish
+from gamst.capabilities import CapabilitySpec,OutputField,SensorMetadata
+from gamst.fill_evaluation import FillEvaluationContext
+from gamst.schema import timestamp
+from gamst.smolvlm_call import smolvlm_frame_sha256
+from gamst.streams import _finish
 from .recorded_source import digest
 from .recorded_ticks import RecordedTickSchedule
 from .recording_capture_router import capture_reference,packet_frame
@@ -51,7 +51,7 @@ class RecordingPerceptionRuntime:
             lane=lanes[periodic['lane_id']]
             self.smol=lane['declaration']['implementation']=='smolvlm_process_v1'
             if self.smol:
-                from humansense.providers.smolvlm_native import PROMPT
+                from gamst.providers.smolvlm_native import PROMPT
                 if periodic['scheduler']!='smolvlm_sentinel_v1' or self.question!=PROMPT:
                     raise ValueError('fixed original Smol prompt/sentinel policy required')
             elif periodic['scheduler']!='recorded_visual_v1':raise ValueError('explicit Visual scheduler required')

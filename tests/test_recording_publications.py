@@ -1,8 +1,8 @@
 """Actual accepted store records are exported with their entered operation."""
 import threading
 import unittest
-from humansense.evaluation_publication import AcceptedObservationSink
-from humansense.native_operation import NativeOperationRef
+from gamst.evaluation_publication import AcceptedObservationSink
+from gamst.native_operation import NativeOperationRef
 import test_recording_stream_scopes as stream_tests
 
 

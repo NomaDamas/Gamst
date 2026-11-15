@@ -5,10 +5,10 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.provider_wire import encode_frame, decode_frame, envelope, sizes, PAYLOAD_LIMIT
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.provider_wire import encode_frame, decode_frame, envelope, sizes, PAYLOAD_LIMIT
+from gamst.schema import timestamp
 
 try:
     import numpy as np
@@ -18,7 +18,7 @@ except ImportError:
 
 FAKE_WORKER = '''
 import os, time
-from humansense import provider_worker as w
+from gamst import provider_worker as w
 class Provider:
     def process(self, frame):
         print('native backend diagnostic')
@@ -158,7 +158,7 @@ class Processes(unittest.IsolatedAsyncioTestCase):
 
     async def test_qwen_profile_offline_environment_is_child_local(self):
         import os
-        from humansense.qwen_artifact import REQUIRED
+        from gamst.qwen_artifact import REQUIRED
         before = dict(os.environ)
         code = FAKE_WORKER.replace('w.main()',
             "assert os.environ['HF_HUB_OFFLINE'] == '1'\n"
@@ -176,17 +176,17 @@ class Processes(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipIf(np is None,'numpy not installed')
     async def test_endpoint_composition_over_real_child_pipe_with_engine_doubles(self):
-        from humansense.qwen_artifact import REQUIRED
+        from gamst.qwen_artifact import REQUIRED
         code = """
 import sys
 sys.path.insert(0,'tests')
 from test_qwen_asr import EngineDouble
 from test_qwen_endpoint import ActivityModel
-from humansense import provider_worker as w
-from humansense.providers.endpoint_asr import SileroEndpointASR
-from humansense.providers.qwen_asr import QwenStreamingASR
-from humansense.providers.vad import SileroActivity
-from humansense.qwen_artifact import artifact_version
+from gamst import provider_worker as w
+from gamst.providers.endpoint_asr import SileroEndpointASR
+from gamst.providers.qwen_asr import QwenStreamingASR
+from gamst.providers.vad import SileroActivity
+from gamst.qwen_artifact import artifact_version
 
 def construct(profile,config):
     asr=QwenStreamingASR(EngineDouble(),model_version=artifact_version(config['asr']['files']))
@@ -284,7 +284,7 @@ w.main()
         code = FAKE_WORKER.replace('    def reset(self): pass',
             "    def finish(self): return {'features': {'raw': 'forbidden'}}\n    def reset(self): pass")
         code = code.replace('w.main()',
-            'from humansense.capabilities import CapabilitySpec\nCapabilitySpec.validate = lambda self, value: value\nw.main()')
+            'from gamst.capabilities import CapabilitySpec\nCapabilitySpec.validate = lambda self, value: value\nw.main()')
         with self.fixture(code):
             provider = await ProcessProvider.open(sys.executable, 'audio.prosody', {})
             with self.assertRaises(ValueError): await provider.finish()
@@ -295,7 +295,7 @@ w.main()
         code = FAKE_WORKER.replace('    def reset(self): pass',
             "    def finish(self): return {'features': {'final': True}}\n    def reset(self): pass")
         with self.fixture(code):
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams = SensorStreams(human)
                 contract = ProcessProvider.capability('audio.prosody', {})
                 streams.register(contract, lambda: ProcessProvider.open(sys.executable, 'audio.prosody', {}))
@@ -376,8 +376,8 @@ w.main()
 
     async def test_wrong_contract_and_raw_response_are_rejected(self):
         for suffix in (
-            "w.capability=lambda p,c: __import__('humansense').CapabilitySpec('wrong','wrong','audio','wrong','1',(__import__('humansense').OutputField('features','object'),),'frame')\n",
-            "w.envelope=lambda value: __import__('humansense.provider_wire',fromlist=['envelope']).envelope(value,b'raw')\n",
+            "w.capability=lambda p,c: __import__('gamst').CapabilitySpec('wrong','wrong','audio','wrong','1',(__import__('gamst').OutputField('features','object'),),'frame')\n",
+            "w.envelope=lambda value: __import__('gamst.provider_wire',fromlist=['envelope']).envelope(value,b'raw')\n",
         ):
             code = FAKE_WORKER.replace('w.main()', suffix+'w.main()')
             with self.fixture(code):
@@ -386,7 +386,7 @@ w.main()
 
     async def test_stalled_sensor_does_not_block_other_worker(self):
         with self.fixture():
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams = SensorStreams(human)
                 spec = ProcessProvider.capability('audio.prosody', {})
                 async def factory():
@@ -405,7 +405,7 @@ w.main()
 
     async def test_factory_contract_mismatch_closes_worker_before_stream_opens(self):
         with self.fixture():
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams = SensorStreams(human)
                 spec = ProcessProvider.capability('audio.prosody', {})
                 async def factory():

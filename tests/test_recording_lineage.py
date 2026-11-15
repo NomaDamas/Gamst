@@ -1,9 +1,9 @@
 """Actual SDK entry lineage and direct callback operation locators."""
 import unittest
 from benchmarks.recording_native_schema import digest
-from humansense.native_operation import NativeOperationRef
-from humansense.recording_scope import evaluation_lineage
-from humansense.schema import timestamp
+from gamst.native_operation import NativeOperationRef
+from gamst.recording_scope import evaluation_lineage
+from gamst.schema import timestamp
 from test_recording_sdk_scopes import NativeFixture
 import test_recording_native_guards as guard_tests
 import test_text_context_call as text_tests

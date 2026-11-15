@@ -8,9 +8,9 @@ import platform
 import time
 import wave
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.duplex import WebRTCDuplex
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.duplex import WebRTCDuplex
 
 
 def read_pcm(path):

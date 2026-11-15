@@ -10,7 +10,7 @@ from fractions import Fraction
 import hashlib
 from types import MappingProxyType
 
-from humansense.capabilities import identifier
+from gamst.capabilities import identifier
 from .recording_financial import (FinancialAdapters,FinancialRunView,N63,PAGE_BYTES,array,
     claim_sha256,digest,encode,enum,fraction,integer,iter_financial_rows,keys,nullable,
     operation_key,ratio,rational,reference,sha,snapshot,validate_adapters,

@@ -17,8 +17,8 @@ from unittest.mock import patch
 from benchmarks.recording_dependencies import distribution_descriptor,verify_dependencies
 from benchmarks.recorded_source import digest,encoded
 import benchmarks.recording_smol_runtime as smol
-from humansense.provider_profiles import capability
-from humansense.providers.smolvlm_native import configuration,RUNTIME,MODEL_ID
+from gamst.provider_profiles import capability
+from gamst.providers.smolvlm_native import configuration,RUNTIME,MODEL_ID
 import test_smolvlm_call as calls
 import test_smolvlm_context as context_fixture
 from test_recording_sdk_scopes import NativeFixture
@@ -63,7 +63,7 @@ class Admission(unittest.TestCase):
 
     def test_owned_metadata_loader_resolves_original_fixed_smol_prompt(self):
         from benchmarks.recording_runtime_inputs import OwnedRuntimeInputs
-        from humansense.providers.smolvlm_native import PROMPT
+        from gamst.providers.smolvlm_native import PROMPT
         a,assets,docs,_,_,_=deepcopy(self.case)
         prompt=dict(schema_version=1,kind='recording_visual_prompt',question=PROMPT)
         path='configurations/001.json';docs[path]=prompt

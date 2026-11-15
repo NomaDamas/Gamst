@@ -6,9 +6,9 @@ from pathlib import Path
 import platform
 import time
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.fill import CalibratedColorFill
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.fill import CalibratedColorFill
 
 
 def run(args):

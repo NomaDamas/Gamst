@@ -1,7 +1,7 @@
 # Managed nonterminal utterance control
 
 `SensorStreams.endpoint` finalizes one existing provider lane without closing its
-capture stream. Use `endpoint_sensor_stream` through HumanSense, MCP or the live
+capture stream. Use `endpoint_sensor_stream` through Gamst, MCP or the live
 WebSocket `tools/call` API. No sensor/provider is opened, installed or inferred by
 discovery. The provider must explicitly implement `endpoint()`.
 

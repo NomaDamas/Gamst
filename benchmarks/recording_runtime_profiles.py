@@ -40,7 +40,7 @@ def builtin_profile(delivery,config):
         _keys(config,('delay_ms',));return FixtureBGR.capability(config['delay_ms']),lambda:_Fixture(config),deepcopy(config)
     if name=='opencv_lk':
         _keys(config,())
-        from humansense.providers.motion import OpenCVFlow
+        from gamst.providers.motion import OpenCVFlow
         import cv2
         spec=OpenCVFlow.capability(version=cv2.__version__)
         class OwnedFlow(OpenCVFlow):
@@ -48,7 +48,7 @@ def builtin_profile(delivery,config):
                 super().__init__();self.config={};self.spec=spec
         return spec,OwnedFlow,{}
     if name=='opencv_fill':
-        from humansense.providers.fill import CalibratedColorFill,_configuration
+        from gamst.providers.fill import CalibratedColorFill,_configuration
         normalized=_configuration(**config)
         if digest(normalized)!=digest(config):raise ValueError('effective fill configuration required')
         spec=CalibratedColorFill.capability(**config)

@@ -2,8 +2,8 @@
 import asyncio
 import importlib.util
 
-from humansense.capabilities import CapabilitySpec, OutputField
-from humansense.plugins import AudioLevelPlugin
+from gamst.capabilities import CapabilitySpec, OutputField
+from gamst.plugins import AudioLevelPlugin
 from .recorded_source import _keys, digest, _integer
 
 
@@ -62,7 +62,7 @@ def profiles_for(manifest, profiles):
                     raise RuntimeError('selected actual OpenCV profile requires existing cv2 and no fixture delay')
                 if any(min(r['shape'][:2]) < 16 for r in manifest['records'] if r['source_id']==sid):
                     raise ValueError('OpenCV profile requires dimensions at least16')
-                from humansense.providers.motion import OpenCVFlow
+                from gamst.providers.motion import OpenCVFlow
                 spec, factory = OpenCVFlow.capability(), OpenCVFlow
         else:
             raise ValueError('unsupported explicit source profile')

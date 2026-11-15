@@ -1,6 +1,6 @@
 # Owned recorded-source Context replay
 
-This benchmark runtime opens one real `HumanSense` and `SensorStreams` instance,
+This benchmark runtime opens one real `Gamst` and `SensorStreams` instance,
 replays explicitly supplied BGR/PCM captures at 1x, and takes scheduled Context
 snapshots. It is the source/clock part of #256 (#268). It does not yet execute
 the persistent A/B/C experiment, reconcile recording scopes, score answers or

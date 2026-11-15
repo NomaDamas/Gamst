@@ -1,10 +1,10 @@
 from copy import deepcopy
 import unittest
 
-from humansense import HumanSense, CapabilitySpec, OutputField, SensorMetadata, SensorStreams
-from humansense.memory import ObjectMemory
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst import Gamst, CapabilitySpec, OutputField, SensorMetadata, SensorStreams
+from gamst.memory import ObjectMemory
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 def evidence(objects=None, ts=1000, seq=1, epoch='run1'):
@@ -99,7 +99,7 @@ class MemoryRuntime(unittest.IsolatedAsyncioTestCase):
                 return {'objects': [{'track_id': '1', 'label': self.label}]}
             def reset(self):
                 self.label = 'plate'
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             streams.register(CapabilitySpec('objects', 'scene.objects', 'video', 'detector', '1',
                 (OutputField('objects', 'array'),), 'native', stateful=True, reset_on_gap=True), Detector)
@@ -118,7 +118,7 @@ class MemoryRuntime(unittest.IsolatedAsyncioTestCase):
         class Detector:
             def process(self, frame):
                 return {'objects': [{'track_id': '1', 'label': 'cup'}]}
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             streams.register(CapabilitySpec('objects', 'scene.objects', 'video', 'detector', '1',
                 (OutputField('objects', 'array'),), 'frame'), Detector)
@@ -135,7 +135,7 @@ class MemoryRuntime(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(not e['currently_visible'] for e in found))
 
     async def test_memory_survives_record_eviction_and_is_deleted(self):
-        async with HumanSense(consent=True, max_records=5) as human:
+        async with Gamst(consent=True, max_records=5) as human:
             human.register_capability(CapabilitySpec('objects', 'scene.objects', 'video', 'detector', '1',
                 (OutputField('objects', 'array'),), 'frame'))
             record = await human.push_observation('objects', {'objects': [{'track_id': 'cup1', 'label': 'cup'}]},
@@ -151,7 +151,7 @@ class MemoryRuntime(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await human.find_objects(), [])
 
     async def test_old_evidence_after_reset_does_not_become_visible(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(CapabilitySpec('objects', 'scene.objects', 'video', 'detector', '1',
                 (OutputField('objects', 'array'),), 'frame'))
             record = await human.push_observation('objects', {'objects': [{'track_id': 'cup1', 'label': 'cup'}]},

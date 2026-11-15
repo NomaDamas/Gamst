@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import stat
 
-from humansense.streams import _finish
+from gamst.streams import _finish
 from .recording_native_schema import encoded, digest, keys, sha, integer, validate_collection
 from .recording_runtime_contract import validate_runtime_policy, validate_assets
 
@@ -310,7 +310,7 @@ class OwnedRuntimeInputs:
         required={c['budget_sha256'] for a in policy['arms'] for c in a['controllers']}
         budgets={p for p in docs if p.startswith('budgets/')}
         if len(budgets)!=len(required) or {digest(docs[p]) for p in budgets}!=required:raise ValueError('one original budget document per unique frozen hash required')
-        from humansense.call_budget import CallBudget
+        from gamst.call_budget import CallBudget
         for path in budgets:
             keys(docs[path],('unit','pricing_revision','ceiling','max_calls','max_inflight','receipt_limit'))
             CallBudget(**docs[path])
@@ -343,7 +343,7 @@ class OwnedRuntimeInputs:
                 from .recording_runtime_contract import validate_visual_prompt
                 validate_visual_prompt(docs[path],digest(docs[path]));prompts[digest(docs[path])]=docs[path]
             else:
-                from humansense.providers.smolvlm_native import configuration
+                from gamst.providers.smolvlm_native import configuration
                 if configuration(docs[path])!=docs[path]:raise ValueError('explicit effective worker configuration required')
                 worker_hashes[asset['sha256']]=docs[path]
         required_configs=set();required_responses=set();required_workers=set();required_prompts=set()
@@ -357,7 +357,7 @@ class OwnedRuntimeInputs:
                 if recording['periodic'] is not None:
                     prompt_hash=recording['periodic']['prompt_policy_sha256'];required_prompts.add(prompt_hash)
                     if recording['periodic']['scheduler']=='smolvlm_sentinel_v1':
-                        from humansense.providers.smolvlm_native import PROMPT
+                        from gamst.providers.smolvlm_native import PROMPT
                         if prompt_hash not in prompts or prompts[prompt_hash]['question']!=PROMPT:
                             raise ValueError('original fixed Smol prompt policy required before worker startup')
                 for delivery in recording['deliveries']:
@@ -368,13 +368,13 @@ class OwnedRuntimeInputs:
                     if profile=='fixture_bgr':keys(cfg,('delay_ms',));integer(cfg['delay_ms'],0,500)
                     elif profile in ('pcm_level','opencv_lk'):keys(cfg,())
                     elif profile=='opencv_fill':
-                        from humansense.providers.fill import _configuration
+                        from gamst.providers.fill import _configuration
                         if encoded(_configuration(**cfg))!=encoded(cfg):raise ValueError('explicit effective fill configuration required')
                 fill=recording['fill_chain']
                 if fill is not None:
                     h=fill['fill_config_sha256'];required_configs.add(h)
                     if h not in configs:raise ValueError('missing direct fill configuration')
-                    from humansense.providers.fill import _configuration
+                    from gamst.providers.fill import _configuration
                     if encoded(_configuration(**configs[h]))!=encoded(configs[h]):raise ValueError('explicit effective fill configuration required')
         if set(configs)!=required_configs or set(responses)!=required_responses or set(worker_hashes)!=required_workers or set(prompts)!=required_prompts:
             raise ValueError('missing or unreferenced configuration/response input')

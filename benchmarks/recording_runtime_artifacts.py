@@ -312,8 +312,8 @@ class RecordingRuntimeArtifacts:
 
     def record_publication(self,record,*,binding_index,builder_sha256,operation_reference,
                            capture_refs,role,origin_result_sha256,mapping_sha256):
-        from humansense.native_operation import NativeOperationRef
-        from humansense.call_controller import _digest
+        from gamst.native_operation import NativeOperationRef
+        from gamst.call_controller import _digest
         if asyncio.get_running_loop() is not self._loop:raise RuntimeError('accepted publication handoff belongs to writer event loop')
         data=_line(record,128*1024); original=decode(data)
         if type(original) is not dict or original.get('type')!='observation.signal': raise ValueError('actual accepted observation.signal record required')
@@ -971,7 +971,7 @@ def read_publication(directory,ref,*,execution_sha256):
     The caller additionally joins the issuer-provided operation and acquired
     capture inventory. A stored record alone cannot authenticate that boundary.
     """
-    from humansense.call_controller import _digest
+    from gamst.call_controller import _digest
     row=read_ref(directory,ref,maximum=ROW_BYTES)
     keys(row,('schema_version','kind','execution_sha256','publication_ordinal','binding_index','builder_sha256',
         'operation_instance','role','capture_refs','record','record_sha256','record_id','processing_epoch',

@@ -61,7 +61,7 @@ class WebRTCDuplex:
             if importlib.metadata.version('pywebrtc-audio')!='0.2.0':raise RuntimeError('select pywebrtc-audio==0.2.0 in the AEC runtime')
             import pywebrtc_audio
         except (ImportError,importlib.metadata.PackageNotFoundError) as exc:
-            raise RuntimeError('install humansense-sdk[duplex] in an explicitly selected runtime') from exc
+            raise RuntimeError('install gamst-sdk[duplex] in an explicitly selected runtime') from exc
         if options.get('noise_suppression',False) or options.get('automatic_gain_control',False):
             constructor=getattr(pywebrtc_audio,'AudioProcessor',None)
             if not callable(constructor):raise RuntimeError('selected pywebrtc-audio runtime lacks native AudioProcessor NS/AGC API')

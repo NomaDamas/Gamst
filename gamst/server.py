@@ -1,10 +1,10 @@
 """Optional loopback WebSocket transport for the same MCP/runtime contract.
 
 Each connection can call the MCP JSON-RPC tools and receives
-``notifications/humansense/event`` messages. Every connection must present the
+``notifications/gamst/event`` messages. Every connection must present the
 per-launch token (``Authorization: Bearer`` or ``?token=``); see ``ws_auth``.
 Browser origins are rejected unless explicitly supplied with --origin.
-Install humansense-sdk[websocket] first.
+Install gamst-sdk[websocket] first.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ async def handle_connection(server, socket):
                     started = time.monotonic()
                     context = await server.human.get_context(subject_id=context_options['subject_id'],
                                                             window=context_options['window'])
-                    await send({'jsonrpc': '2.0', 'method': 'notifications/humansense/context',
+                    await send({'jsonrpc': '2.0', 'method': 'notifications/gamst/context',
                                 'params': context})
                     completed = time.monotonic()
                     profile.record((completed-started)*1000, completed*1000)
@@ -57,7 +57,7 @@ async def handle_connection(server, socket):
                 profile.running = False
             return
         async for record in getattr(server.human, allowed[kind])():
-            await send({"jsonrpc": "2.0", "method": f"notifications/humansense/{kind}", "params": record})
+            await send({"jsonrpc": "2.0", "method": f"notifications/gamst/{kind}", "params": record})
 
     async def subscribe(kinds, context_options=None):
         nonlocal cadence_profile
@@ -79,7 +79,7 @@ async def handle_connection(server, socket):
             except (ValueError, UnicodeDecodeError):
                 response = server.error(None, -32700, "Parse error")
             else:
-                if isinstance(request, dict) and request.get("method") == "humansense/subscribe":
+                if isinstance(request, dict) and request.get("method") == "gamst/subscribe":
                     ident = request.get("id")
                     if request.get("jsonrpc") != "2.0" or type(ident) not in (str, int):
                         response = server.error(None, -32600, "Subscription requires a request ID")
@@ -112,7 +112,7 @@ async def handle_connection(server, socket):
                                 response = {"jsonrpc": "2.0", "id": ident, "result": result}
                             except (ValueError, TypeError, OverflowError) as exc:
                                 response = server.error(ident, -32602, str(exc))
-                elif isinstance(request, dict) and request.get('method') == 'humansense/context_profile':
+                elif isinstance(request, dict) and request.get('method') == 'gamst/context_profile':
                     ident = request.get('id')
                     if request.get('jsonrpc') != '2.0' or type(ident) not in (str, int):
                         response = server.error(None, -32600, 'Profile requires a JSON-RPC request ID')
@@ -121,7 +121,7 @@ async def handle_connection(server, socket):
                     else:
                         response = {'jsonrpc': '2.0', 'id': ident, 'result': cadence_profile.snapshot()}
                 elif isinstance(request, dict) and request.get('method') in (
-                        'humansense/stream/start', 'humansense/stream/stop', 'humansense/stream/status', 'humansense/media'):
+                        'gamst/stream/start', 'gamst/stream/stop', 'gamst/stream/status', 'gamst/media'):
                     ident = request.get('id')
                     try:
                         if request.get('jsonrpc') != '2.0' or type(ident) not in (str,int):
@@ -130,18 +130,18 @@ async def handle_connection(server, socket):
                         if not isinstance(params, dict):
                             raise ValueError('params must be an object')
                         method = request['method']
-                        if method == 'humansense/stream/start':
+                        if method == 'gamst/stream/start':
                             if params.get('consent') is not True:
                                 raise ValueError('Explicit consent required')
                             await server.human.acquire_capture(source)
                             streaming = True
                             result = {'streaming': True, 'source': source}
-                        elif method == 'humansense/stream/stop':
+                        elif method == 'gamst/stream/stop':
                             streaming = False
                             await router.clear(source)
                             await server.human.release_capture(source)
                             result = {'streaming': False}
-                        elif method == 'humansense/stream/status':
+                        elif method == 'gamst/stream/status':
                             result = {'streaming': streaming, 'routing': router.status()}
                         else:
                             if not streaming:
@@ -175,7 +175,7 @@ async def serve_websocket(server: MCPServer, port: int = 8765,
         from websockets.http11 import Response
         from websockets.datastructures import Headers
     except ImportError as exc:
-        raise RuntimeError("WebSocket transport requires pip install 'humansense-sdk[websocket]'") from exc
+        raise RuntimeError("WebSocket transport requires pip install 'gamst-sdk[websocket]'") from exc
     from .ws_auth import authorized, issue_token
     token = token or issue_token()
 
@@ -187,13 +187,13 @@ async def serve_websocket(server: MCPServer, port: int = 8765,
     # Bind only to loopback. Browsers must opt in with an exact trusted origin.
     async with serve(lambda socket: handle_connection(server, socket), "127.0.0.1", port, origins=[None, *(origins or [])],
                      process_request=check_token, max_size=MAX_MESSAGE_BYTES, max_queue=16):
-        logging.getLogger(__name__).warning("HumanSense WebSocket listening on 127.0.0.1:%s (token required)", port)
+        logging.getLogger(__name__).warning("Gamst WebSocket listening on 127.0.0.1:%s (token required)", port)
         await asyncio.Future()
 
 
 async def _main(args):
-    from .engine import HumanSense
-    async with HumanSense(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
+    from .engine import Gamst
+    async with Gamst(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
         adapter = MCPServer(human)
         try:
             from .reasoning import backend_from_env
@@ -208,7 +208,7 @@ async def _main(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HumanSense local WebSocket server")
+    parser = argparse.ArgumentParser(description="Gamst local WebSocket server")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--origin", action="append", default=[], help="Allow an exact trusted browser origin")
     parser.add_argument("--store", default=":memory:")

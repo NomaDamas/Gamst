@@ -6,9 +6,9 @@ import subprocess
 import sys
 import unittest
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.efficientphys_context import EfficientPhysContext, face_frame, decode, spectral_candidate
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.efficientphys_context import EfficientPhysContext, face_frame, decode, spectral_candidate
 
 try:
     import numpy as np
@@ -52,7 +52,7 @@ def _capture_mode(f,sequence,capture_sequence):
 
 class Discovery(unittest.TestCase):
     def test_profile_import_and_errors(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("efficientphys.local",'+repr(CONFIG)+');assert not {"torch","numpy","cv2"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("efficientphys.local",'+repr(CONFIG)+');assert not {"torch","numpy","cv2"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for bad in ({'source_path':'relative'},{'device':'auto'},{'checkpoint_sha256':'x'},{'window_frames':10}):
@@ -151,9 +151,9 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None,'optional NumPy/OpenCV absent')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_sensor_stream_and_mcp_observation(self):
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);backend=Backend()
             p=EfficientPhysContext(backend,checkpoint_sha256='a'*64)
             streams.register(p.spec,lambda:p);await streams.open('cam','video',[p.spec.id])

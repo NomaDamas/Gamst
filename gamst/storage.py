@@ -147,7 +147,7 @@ class Store:
 
     @staticmethod
     def _context_exclusion(exclusion):
-        # Only HumanSense's SDK-issued view supplies this private query seam.
+        # Only Gamst's SDK-issued view supplies this private query seam.
         # COALESCE preserves legacy records without registered capability fields.
         if exclusion is None:
             return '', ()

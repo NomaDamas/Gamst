@@ -48,7 +48,7 @@ class CalibratedColorFill:
             import cv2
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError('Install optional humansense-sdk[vision] in the selected runtime for calibrated fill') from exc
+            raise RuntimeError('Install optional gamst-sdk[vision] in the selected runtime for calibrated fill') from exc
         self.cv,self.np=cv2,np
         self._lock=threading.RLock()
         self.closed=False

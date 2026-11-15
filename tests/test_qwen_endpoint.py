@@ -1,9 +1,9 @@
 import unittest
 from dataclasses import replace
-from humansense import HumanSense, SensorStreams
-from humansense.providers.endpoint_asr import SileroEndpointASR
-from humansense.providers.vad import SileroActivity
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams
+from gamst.providers.endpoint_asr import SileroEndpointASR
+from gamst.providers.vad import SileroActivity
+from gamst.schema import timestamp
 from test_qwen_asr import frame, np, provider
 
 
@@ -144,8 +144,8 @@ class EndpointPolicy(unittest.TestCase):
 @unittest.skipIf(np is None,'numpy not installed')
 class EndpointPublication(unittest.IsolatedAsyncioTestCase):
     async def test_nonterminal_endpoints_keep_stream_open_and_finals_immutable(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=pipeline([.9,.9,.1,.1]*2)
             streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)

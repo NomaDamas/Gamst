@@ -1,8 +1,8 @@
 import json
 import unittest
-from humansense.call_budget import CallBudget, BudgetDenied
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
+from gamst.call_budget import CallBudget, BudgetDenied
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
 from test_call_controller import record, visual
 
 
@@ -104,11 +104,11 @@ class Admission(unittest.TestCase):
 
 class Wire(unittest.IsolatedAsyncioTestCase):
     async def test_actual_mcp_denial_provenance_and_delete_redaction(self):
-        from humansense import HumanSense,SensorMetadata
-        from humansense.capabilities import CapabilitySpec,OutputField
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst import Gamst,SensorMetadata
+        from gamst.capabilities import CapabilitySpec,OutputField
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             spec=CapabilitySpec('test.c','test.c','video','test.provider','1',(OutputField('text','string'),),'frame',freshness_ms=1000)
             human.register_capability(spec);c=make();human.register_call_controller('main',c)
             r=await human.push_observation(spec.id,{'text':'PRIVATE-DATA'},subject_id='alice',sensor=SensorMetadata('cam','video',0,coordinate_frame='pixels',stream_epoch='epoch'))

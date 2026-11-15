@@ -2,11 +2,11 @@
 
 `RFDETRObjects` runs RF-DETR Nano 1.12.1 on an explicitly supplied local checkpoint. Model construction verifies the required SHA256 and creates an inference-only `model.inference(compile=False)` snapshot. This uses upstream eager inference optimizations without compilation caches or CUDA graph capture. Discovery does not import RF-DETR, download weights or open a camera. The version attached to observations includes package version, eager runtime and checkpoint digest.
 
-Install `humansense-sdk[detection]` in a dedicated runtime. RF-DETR 1.12.1 requires Transformers 5, whereas the existing `huggingface` extra requires Transformers 4; these extras must not be resolved into the same environment. The standalone SDK/core and remote context consumer need neither ML environment. Cross-process deployment remains part of #13; this adapter does not pretend an in-process dependency conflict is solved.
+Install `gamst-sdk[detection]` in a dedicated runtime. RF-DETR 1.12.1 requires Transformers 5, whereas the existing `huggingface` extra requires Transformers 4; these extras must not be resolved into the same environment. The standalone SDK/core and remote context consumer need neither ML environment. Cross-process deployment remains part of #13; this adapter does not pretend an in-process dependency conflict is solved.
 
 ```python
-from humansense import SensorStreams
-from humansense.providers.detection import RFDETRObjects
+from gamst import SensorStreams
+from gamst.providers.detection import RFDETRObjects
 
 provider = RFDETRObjects.from_local(
     '/models/rf-detr-nano.pth', sha256=CHECKPOINT_SHA256, device='cpu')

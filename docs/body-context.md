@@ -7,7 +7,7 @@ matching ProcessProvider profile. It reuses the existing pose plugin's bounding-
 and wrist comparison helpers while leaving that legacy plugin compatible.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 config = {'path': '/absolute/pose_landmarker_lite.task',
           'sha256': checkpoint_sha256, 'max_poses': 4}
 spec = ProcessProvider.capability('mediapipe.body', config)

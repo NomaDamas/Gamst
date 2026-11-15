@@ -20,7 +20,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from humansense import HumanSense, __version__
+from gamst import Gamst, __version__
 
 
 def percentile(values, fraction):
@@ -84,7 +84,7 @@ def _environment():
     return {"python": platform.python_version(), "implementation": platform.python_implementation(),
             "platform": platform.platform(), "machine": platform.machine(),
             "logical_cpu_count": os.cpu_count(), "cpu_model": cpu_model or "unavailable",
-            "humansense_version": __version__}
+            "gamst_version": __version__}
 
 
 async def run_benchmark(*, samples=200, warmup=20, duration_seconds=None, store=":memory:",
@@ -106,7 +106,7 @@ async def run_benchmark(*, samples=200, warmup=20, duration_seconds=None, store=
     if store_path != ":memory:" and Path(store_path).exists():
         raise ValueError("benchmark requires a new SQLite path so existing observations are not modified")
     metrics = {name: _Timings() for name in ("text_input", "signal_input", "state_query")}
-    async with HumanSense(consent=True, store=store, retention_hours=retention_hours, queue_size=queue_size) as human:
+    async with Gamst(consent=True, store=store, retention_hours=retention_hours, queue_size=queue_size) as human:
         for i in range(warmup):
             await human.push_text(f"synthetic warmup item {i}")
             await human.push_signal("audio.rms", .1+(i % 10)/100, "audio",

@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from humansense.capture import CaptureSession
+from gamst.capture import CaptureSession
 
 
 class Device:

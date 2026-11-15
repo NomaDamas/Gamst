@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.landmarker_video import MediaPipeVideoContext
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.landmarker_video import MediaPipeVideoContext
+from gamst.schema import timestamp
 try:
     import numpy as np
 except ImportError:
@@ -192,8 +192,8 @@ class Continuity(unittest.TestCase):
 @unittest.skipIf(np is None,'numpy not installed')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_video_context_managed_reset_and_mcp_provenance(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p,made=provider(); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('cam','sensor',[p.spec.id])

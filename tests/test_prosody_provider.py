@@ -6,10 +6,10 @@ try:
 except ImportError:
     np = None
 
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.prosody import AudioProsody
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.prosody import AudioProsody
+from gamst.schema import timestamp
 
 
 @unittest.skipIf(np is None, 'optional numpy not installed')
@@ -144,7 +144,7 @@ class Prosody(unittest.TestCase):
 @unittest.skipIf(np is None, 'optional numpy not installed')
 class ProsodyRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_feature_window_reaches_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = AudioProsody.capability()
             streams.register(spec, AudioProsody)

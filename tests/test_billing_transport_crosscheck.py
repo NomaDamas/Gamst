@@ -12,9 +12,9 @@ from benchmarks.billing_crosscheck_bundle import persist_crosscheck
 from benchmarks.billing_aggregate import encoded, sha
 from benchmarks.native3_evidence import read_native3_evidence
 from benchmarks.native3_files import LIMITS
-from humansense.openai_responses import TRANSPORT
-from humansense.openai_responses_codec import PROJECTION
-from humansense.responses_evidence import ResponsesEvidenceSession
+from gamst.openai_responses import TRANSPORT
+from gamst.openai_responses_codec import PROJECTION
+from gamst.responses_evidence import ResponsesEvidenceSession
 from test_instrumented_replay import setup, collect
 from test_openai_responses import response
 
@@ -23,9 +23,9 @@ from pathlib import Path
 from benchmarks.runtime_channel import ChildChannel
 from benchmarks.runtime_instrumentation import EvaluationSession
 from benchmarks.perception_comparison import plan_digest
-from humansense import TextContextCalls,VisualContextCalls
-from humansense.openai_responses import OpenAIResponsesClient
-from humansense.responses_evidence import ResponsesEvidenceSession
+from gamst import TextContextCalls,VisualContextCalls
+from gamst.openai_responses import OpenAIResponsesClient
+from gamst.responses_evidence import ResponsesEvidenceSession
 async def main():
     channel=await ChildChannel.from_environment()
     request=json.loads(sys.stdin.readline())

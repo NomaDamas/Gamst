@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 import unittest
 
-from humansense.integrations import ClockMapper, PCMConverter, InputBridge, LiveKitBridge, PipecatBridge
+from gamst.integrations import ClockMapper, PCMConverter, InputBridge, LiveKitBridge, PipecatBridge
 
 
 class ClockTests(unittest.TestCase):
@@ -149,9 +149,9 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(human.calls, [("reset",)])
 
     async def test_decoded_media_reaches_real_sdk_with_grounded_outputs(self):
-        from humansense import HumanSense
-        from humansense.plugins import AudioLevelPlugin
-        async with HumanSense(consent=True) as human:
+        from gamst import Gamst
+        from gamst.plugins import AudioLevelPlugin
+        async with Gamst(consent=True) as human:
             human.register(AudioLevelPlugin())
             bridge = PipecatBridge(human, subject_id="participant")
             await bridge.on_audio(struct.pack("<hhhh", 16384, -16384, 16384, 0),
@@ -172,11 +172,11 @@ if __name__ == "__main__":
 class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_deletion_clears_bridge_audio_and_inflight_decoder(self):
         import asyncio
-        from humansense import HumanSense
+        from gamst import Gamst
         entered, release = asyncio.Event(), asyncio.Event()
         async def decoder(frame):
             entered.set(); await release.wait(); return frame
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             bridge = InputBridge(human, subject_id='a', video_decoder=decoder)
             await bridge.push_audio([.5] * 4, sample_rate=48000)
             self.assertTrue(bridge.audio_converter._buffer)

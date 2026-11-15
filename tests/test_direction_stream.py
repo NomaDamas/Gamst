@@ -4,10 +4,10 @@ try:
     import numpy as np
 except ImportError:
     np = None
-from humansense.providers.direction import GCCPHATDirection, GCCPHATStream
-from humansense.plugins import InputFrame
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.schema import timestamp
+from gamst.providers.direction import GCCPHATDirection, GCCPHATStream
+from gamst.plugins import InputFrame
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.schema import timestamp
 
 
 def provider():
@@ -83,7 +83,7 @@ class StreamingDirection(unittest.TestCase):
 @unittest.skipIf(np is None, 'numpy not installed')
 class StreamRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_real_dsp_hops_publish_after_window_and_reset_on_gap(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = GCCPHATStream.capability()
             streams.register(spec, provider)

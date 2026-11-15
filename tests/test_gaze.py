@@ -4,11 +4,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.gaze import L2CSGaze
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.gaze import L2CSGaze
+from gamst.schema import timestamp
 
 try:
     import numpy as np
@@ -136,7 +136,7 @@ class Gaze(unittest.TestCase):
             digest=hashlib.sha256(path.read_bytes()).hexdigest()
             with patch('importlib.metadata.version',side_effect=versions.__getitem__), \
                  patch('torch.load',load), \
-                 patch('humansense.providers.gaze.MediaPipeFaceContext.from_local',return_value=Face([BOX])):
+                 patch('gamst.providers.gaze.MediaPipeFaceContext.from_local',return_value=Face([BOX])):
                 p=L2CSGaze.from_local(str(path),digest,str(path),digest,arch='ResNet18')
             try:
                 result=p.process(frame())
@@ -173,8 +173,8 @@ class Gaze(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy not installed')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_managed_observation_and_mcp(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider(); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('camera','sensor',[p.spec.id])

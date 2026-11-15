@@ -53,7 +53,7 @@ const demoMessages = {
   clipboard: ["Clipboard unavailable. Select and copy the displayed text.", "클립보드를 사용할 수 없습니다. 표시된 텍스트를 선택해 복사하세요.", "剪贴板不可用。请选择并复制显示的文本。"]
 };
 let demoLanguage = "en", statusKey = "ready", errorText = "";
-try { const saved = localStorage.getItem("cym.publicDemoLanguage"); if (["en", "ko", "zh"].includes(saved)) demoLanguage = saved; } catch {}
+try { const saved = localStorage.getItem("gamst.publicDemoLanguage"); if (["en", "ko", "zh"].includes(saved)) demoLanguage = saved; } catch {}
 const demoText = (key) => demoMessages[key][["en", "ko", "zh"].indexOf(demoLanguage)];
 function translateError(text) {
   const key = Object.keys(demoMessages).find((k) => demoMessages[k][0] === text);
@@ -75,7 +75,7 @@ function applyDemoLanguage() {
 $("demoLanguage").onchange = () => {
   demoLanguage = $("demoLanguage").value;
   if (!["en", "ko", "zh"].includes(demoLanguage)) demoLanguage = "en";
-  try { localStorage.setItem("cym.publicDemoLanguage", demoLanguage); } catch {}
+  try { localStorage.setItem("gamst.publicDemoLanguage", demoLanguage); } catch {}
   applyDemoLanguage();
 };
 applyDemoLanguage();

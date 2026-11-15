@@ -95,7 +95,7 @@ class OpenCVPersonPlugin(PerceptionPlugin):
         try:
             import cv2
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[vision] for OpenCV') from exc
+            raise RuntimeError('Install gamst-sdk[vision] for OpenCV') from exc
         from .tracking import PersonTracker
         self.tracker = PersonTracker()
         self._generation = 0
@@ -157,7 +157,7 @@ class MediaPipeFacePlugin(PerceptionPlugin):
             from mediapipe.tasks import python
             from mediapipe.tasks.python import vision
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[mediapipe]') from exc
+            raise RuntimeError('Install gamst-sdk[mediapipe]') from exc
         self.mp = mp
         self.model_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         self._native_lock = threading.Lock()
@@ -214,7 +214,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[asr]') from exc
+            raise RuntimeError('Install gamst-sdk[asr]') from exc
         self.model = WhisperModel(model_path, device=device, compute_type="int8" if device == "cpu" else "float16", local_files_only=True)
         artifact_hash = hashlib.sha256()
         for artifact in sorted(Path(model_path).glob("*")):
@@ -303,7 +303,7 @@ class SileroVADPlugin(PerceptionPlugin):
         try:
             import torch
         except ImportError as exc:
-            raise RuntimeError('Install humansense-sdk[vad]') from exc
+            raise RuntimeError('Install gamst-sdk[vad]') from exc
         self.torch = torch
         self.model_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         self.model = torch.jit.load(str(path), map_location="cpu")

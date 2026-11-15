@@ -17,7 +17,7 @@ from ..schema import timestamp
 
 CAPABILITY_ID = "perception.multimodal_decision"
 OUTPUT_NAME = "decision.multimodal"
-PROVIDER_ID = "humansense.multimodal_decision.baseline"
+PROVIDER_ID = "gamst.multimodal_decision.baseline"
 MODEL_VERSION = "0.1.0"
 
 

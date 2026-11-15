@@ -3,10 +3,10 @@
 The Companion uses the same gamst runtime and retention store as perception. A real configured chat-completions endpoint generates the assistant's response; there is no canned fallback pretending to be a model. Generation is not proof of the reply's factual correctness.
 
 ```python
-from humansense import HumanSense
-from humansense.companion import Companion, LocalChatBackend
+from gamst import Gamst
+from gamst.companion import Companion, LocalChatBackend
 
-async with HumanSense(consent=True) as human:
+async with Gamst(consent=True) as human:
     backend = LocalChatBackend(
         "http://127.0.0.1:11434/v1/chat/completions",
         "YOUR_INSTALLED_MODEL_NAME",
@@ -23,14 +23,14 @@ The prompt includes bounded prior turns, measured aggregate context and the reco
 Configure a provider you actually run:
 
 ```bash
-export HUMANSENSE_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
-export HUMANSENSE_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
-python -m humansense dashboard
+export GAMST_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
+export GAMST_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
+python -m gamst dashboard
 ```
 
-Consent and start collection, enter a message, and click **Companion에게 보내기**. For MCP, start `python -m humansense.mcp` with the same environment and call `chat` with `{"text":"설명을 짧게 해 주세요"}`. WebSocket clients call the same tool. The UI does not automatically upload camera recordings to the provider or continuously call a model for every frame.
+Consent and start collection, enter a message, and click **Companion에게 보내기**. For MCP, start `python -m gamst.mcp` with the same environment and call `chat` with `{"text":"설명을 짧게 해 주세요"}`. WebSocket clients call the same tool. The UI does not automatically upload camera recordings to the provider or continuously call a model for every frame.
 
-If separate Companion variables are absent, an explicitly configured reasoning endpoint/model is reused. If neither is configured, chat reports a missing-backend error. For an external provider use HTTPS, `HUMANSENSE_COMPANION_ALLOW_REMOTE=true`, and optionally `HUMANSENSE_COMPANION_KEY_ENV=YOUR_KEY_VARIABLE`. Obtain consent to transmit conversation/context before enabling remote service. Keys remain in the environment and are not observations.
+If separate Companion variables are absent, an explicitly configured reasoning endpoint/model is reused. If neither is configured, chat reports a missing-backend error. For an external provider use HTTPS, `GAMST_COMPANION_ALLOW_REMOTE=true`, and optionally `GAMST_COMPANION_KEY_ENV=YOUR_KEY_VARIABLE`. Obtain consent to transmit conversation/context before enabling remote service. Keys remain in the environment and are not observations.
 
 Stop/delete invalidates in-flight model results so a late answer cannot restore deleted or paused observations. User-visible transcripts already displayed by other applications or remote provider copies are outside the SDK's deletion boundary.
 

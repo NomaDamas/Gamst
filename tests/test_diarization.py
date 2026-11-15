@@ -11,11 +11,11 @@ import types
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers import diarization as module
-from humansense.providers.diarization import NemotronDiarization, MODES, _NativeBackend
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers import diarization as module
+from gamst.providers.diarization import NemotronDiarization, MODES, _NativeBackend
 
 try:
     import numpy as np
@@ -47,7 +47,7 @@ class Backend:
 
 class ContractTests(unittest.TestCase):
     def test_stdlib_discovery_and_config(self):
-        code = "from humansense.provider_profiles import capability; import sys; capability('nemotron3.diarization',{'path':'/local'}); assert not {'torch','numpy','transformers'} & sys.modules.keys()"
+        code = "from gamst.provider_profiles import capability; import sys; capability('nemotron3.diarization',{'path':'/local'}); assert not {'torch','numpy','transformers'} & sys.modules.keys()"
         subprocess.run([sys.executable, '-S', '-c', code], check=True)
         for options in ({'mode': 'offline'}, {'threshold': True}, {'threshold': float('nan')},
                         {'threshold': 0}, {'device': 'auto'}):
@@ -261,8 +261,8 @@ class ManagedTests(unittest.IsolatedAsyncioTestCase):
 import sys
 sys.path.insert(0,'tests')
 from test_diarization import Backend
-from humansense.providers.diarization import NemotronDiarization
-from humansense.provider_worker import main
+from gamst.providers.diarization import NemotronDiarization
+from gamst.provider_worker import main
 NemotronDiarization.from_local=classmethod(lambda cls,path,**options:cls(Backend(options.get('mode','ultra_low_latency')),**options))
 main()
 '''
@@ -272,7 +272,7 @@ main()
             return child
         try:
             with patch('asyncio.create_subprocess_exec', spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams = SensorStreams(human)
                     spec = ProcessProvider.capability('nemotron3.diarization', {'path': '/fixture'})
                     async def create():

@@ -2,14 +2,14 @@
 # Run in a normal host terminal. Never force-push or alter the current checkout.
 set -euo pipefail
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bundle_path="$project_dir/dist/humansense-v0.1.bundle"
+bundle_path="$project_dir/dist/gamst-v0.1.bundle"
 remote_url='https://github.com/NomaDamas/Gamst.git'
-branch_name="feat/humansense-$(date +%Y%m%d-%H%M%S)"
+branch_name="feat/gamst-$(date +%Y%m%d-%H%M%S)"
 if ! test -f "$bundle_path"; then
   printf '%s\n' "Missing bundle: $bundle_path" >&2
   exit 1
 fi
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/humansense-publish.XXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/gamst-publish.XXXXXX")
 printf 'Preparing a separate checkout at %s\n' "$work_dir"
 git clone "$bundle_path" "$work_dir/source"
 git clone "$remote_url" "$work_dir/remote"
@@ -24,7 +24,7 @@ fi
 author_name=$(git -C "$work_dir/remote" config user.name || true)
 author_email=$(git -C "$work_dir/remote" config user.email || true)
 git -C "$work_dir/remote" -c "user.name=${author_name:-gamst Development}" \
-  -c "user.email=${author_email:-humansense@localhost}" \
+  -c "user.email=${author_email:-gamst@localhost}" \
   commit -m 'Implement gamst local SDK, MCP and real-time demo'
 git -C "$work_dir/remote" push -u origin "$branch_name"
 printf '\nPushed branch: %s\nReview: https://github.com/NomaDamas/Gamst/pull/new/%s\n' "$branch_name" "$branch_name"

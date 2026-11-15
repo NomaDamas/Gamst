@@ -248,7 +248,7 @@ asyncio.run(main())
     from benchmarks.recording_native_schema import digest
     sys.path.insert(0,'tests')
     from test_text_context_call import Calls
-    from humansense.schema import timestamp
+    from gamst.schema import timestamp
     fixture=Calls();await fixture.asyncSetUp()
     bound=[]
     async def actual(binding):bound.append(binding);return dict(answer='synthetic')

@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.ocr import PPOCRContext, _BoundedSession
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.ocr import PPOCRContext, _BoundedSession
+from gamst.schema import timestamp
 try:
     import numpy as np
 except ImportError:
@@ -165,8 +165,8 @@ class OCR(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy not installed')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_managed_ocr_mcp_provenance(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider(); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('camera','sensor',[p.spec.id])

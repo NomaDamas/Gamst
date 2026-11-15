@@ -10,13 +10,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, FreshFrameSentinel, SensorMetadata
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.smolvlm_call import smolvlm_frame_sha256
+from gamst import Gamst, FreshFrameSentinel, SensorMetadata
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.smolvlm_call import smolvlm_frame_sha256
 import test_smolvlm_context as smol_tests
 from test_smolvlm_context import frame, np, WORKER
 from test_smolvlm_native import CONFIG
@@ -31,7 +31,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
         for human in self.humans:await human.close()
         self.assertTrue(all(child.returncode is not None for child in self.children))
     def human(self,budget=None,**policy):
-        h=HumanSense(consent=True);self.humans.append(h)
+        h=Gamst(consent=True);self.humans.append(h)
         settings=dict(mode='sentinel',semantic_interval_ms=1,cooldown_ms=0);settings.update(policy)
         c=CallController(policy=CallPolicy(**settings),
             budget=budget or CallBudget(unit='fixture',pricing_revision='unpriced-test',ceiling=10000,max_inflight=128))
@@ -145,7 +145,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):s.offer(b)
             stale=self.frame(2,a.timestamp_ms-1)
             with self.assertRaises(ValueError):s.offer(stale)
-            with patch('humansense.frame_sentinel.timestamp',return_value=a.timestamp_ms-1):
+            with patch('gamst.frame_sentinel.timestamp',return_value=a.timestamp_ms-1):
                 with self.assertRaises(ValueError):s.offer(self.frame(2))
             await s.close()
             with self.assertRaises(ValueError):await self.open(h,capture_clock='arbitrary_stream_ms')
@@ -179,7 +179,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
                             index=t//5;present=phase<=t<phase+duration
                             if present:event_indices.add(index)
                             f=self.frame(index);f.data[:]=255 if present else 0
-                            with patch('humansense.frame_sentinel.time.monotonic_ns',return_value=s._origin+t*1000000):
+                            with patch('gamst.frame_sentinel.time.monotonic_ns',return_value=s._origin+t*1000000):
                                 s.offer(f)
                                 if t%100==0:
                                     await s._tick();await self.until(lambda:s._active_task is None)
@@ -248,7 +248,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
                 s._active_meta['due_monotonic_ns']=1
                 clock.return_value=time.perf_counter_ns()+2000000000
                 return result
-            with patch('humansense.smolvlm_call.time.monotonic_ns',return_value=time.perf_counter_ns()) as clock,patch.object(c,'reserve',expire):
+            with patch('gamst.smolvlm_call.time.monotonic_ns',return_value=time.perf_counter_ns()) as clock,patch.object(c,'reserve',expire):
                 await self.tick(s);await self.until(lambda:s._active_task is None)
             self.assertEqual(c.snapshot()['budget']['dispatched'],0)
             self.assertEqual(c.snapshot()['budget']['reserved_liability'],0)
@@ -299,8 +299,8 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
 
     async def test_authoritative_observer_tracks_one_actual_call_and_worker_lifetime(self):
         from test_runtime_instrumentation import session
-        from humansense.provider_profiles import capability
-        from humansense.providers.smolvlm_native import configuration
+        from gamst.provider_profiles import capability
+        from gamst.providers.smolvlm_native import configuration
         with tempfile.TemporaryDirectory(dir='.') as directory,self.fixture():
             contract=capability('smolvlm2.500m.local',dict(configuration(CONFIG),window_frames=1))
             observer=session(Path(directory).resolve(),contract.provider,contract.version)
@@ -354,7 +354,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
                 f=self.frame()
                 instances.append(await FreshFrameSentinel.open(h,'audit'+str(index),'main',sys.executable,CONFIG,
                     sensor=f.sensor,frame_shape=f.data.shape))
-            with patch('humansense.frame_sentinel.SmolVLMCalls.open',side_effect=AssertionError('overflow spawned worker')):
+            with patch('gamst.frame_sentinel.SmolVLMCalls.open',side_effect=AssertionError('overflow spawned worker')):
                 with self.assertRaises(RuntimeError):await self.open(h)
             for invalid in (True,1.0,0,-1,2**63):
                 with self.assertRaises(ValueError):
@@ -393,7 +393,7 @@ class Sentinel(unittest.IsolatedAsyncioTestCase):
 
 class OwnedDrivers(unittest.IsolatedAsyncioTestCase):
     async def test_shared_bounded_driver_registry_revoke_retire_identity_and_self_join(self):
-        h=HumanSense(consent=True);gate=asyncio.Event();drivers=[]
+        h=Gamst(consent=True);gate=asyncio.Event();drivers=[]
         class Driver:
             def __init__(self,kind,ident):
                 self.kind=kind;self.id=ident;self.buffer=bytearray(b'private');self.task=None;self.close_task=None

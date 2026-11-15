@@ -6,9 +6,9 @@ import sys
 import unittest
 import test_camera_similarity as images
 import test_detection_provider as detection
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.compensated_trajectories import CompensatedTrajectories,ASSUMPTION
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.compensated_trajectories import CompensatedTrajectories,ASSUMPTION
 
 CONFIG=dict(path='/fixture/checkpoint',sha256='a'*64,background_roi=[0,0,1,1],operating_assumption=ASSUMPTION)
 
@@ -126,6 +126,6 @@ class Paths(unittest.TestCase):
 
 class Discovery(unittest.TestCase):
     def test_profile_discovery_does_not_import_optional_runtime(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("rfdetr.compensated_trajectories",'+repr(CONFIG)+');assert not {"cv2","numpy","rfdetr","torch"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("rfdetr.compensated_trajectories",'+repr(CONFIG)+');assert not {"cv2","numpy","rfdetr","torch"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)

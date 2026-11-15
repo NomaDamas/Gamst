@@ -1,6 +1,6 @@
 # Controller lifecycle replay
 
-This dedicated subprocess exercises actual `HumanSense`, `CallPolicy`,
+This dedicated subprocess exercises actual `Gamst`, `CallPolicy`,
 `CallController`, `CallBudget` and MCP status using synthetic observations.
 It verifies lifecycle behavior; it does not invoke models or measure their
 quality, cost, streaming latency or cold/warm performance.

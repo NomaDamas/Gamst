@@ -14,7 +14,7 @@ async def bridge(url):
     async with connect_local(url, max_size=1048576) as socket:
         # MCP clients do not consume our optional custom event notifications.
         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': '__bridge_subscription__',
-                                      'method': 'humansense/subscribe', 'params': {'types': []}}))
+                                      'method': 'gamst/subscribe', 'params': {'types': []}}))
         async def receive():
             async for raw in socket:
                 message = json.loads(raw)

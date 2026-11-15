@@ -7,7 +7,7 @@ flowchart LR
   C --> D[MCP or consumer LLM]
 ```
 
-`humansense.providers.trajectories.ImageTrajectories` is a standard-library local
+`gamst.providers.trajectories.ImageTrajectories` is a standard-library local
 structured-input processor. It consumes complete caller-associated snapshots,
 retains up to eight observed samples for each of up to eight currently observed
 tracks, and computes normalized image-plane interval velocity. It does not load
@@ -15,9 +15,9 @@ models or perform detection, association, prediction or camera-motion compensati
 It is not a pixel ProcessProvider/SensorStreams transport adapter.
 
 ```python
-from humansense.providers.trajectories import ImageTrajectories
-from humansense.plugins import InputFrame
-from humansense import SensorMetadata
+from gamst.providers.trajectories import ImageTrajectories
+from gamst.plugins import InputFrame
+from gamst import SensorMetadata
 
 provider = ImageTrajectories(max_gap_ms=1000, max_samples=8)
 sensor = SensorMetadata('camera', 'rgb', 0, 'image', stream_epoch='capture-1')

@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from humansense.feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
-from humansense.schema import validate_output
+from gamst.feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
+from gamst.schema import validate_output
 
 
 def samples(prefix, score, count, positives):

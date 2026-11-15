@@ -11,7 +11,7 @@ import stat
 
 from .recorded_source import digest, encoded, _keys
 from .recording_runtime_contract import sha, rows
-from humansense.capabilities import identifier
+from gamst.capabilities import identifier
 
 MAX_FILES = 32768
 MAX_READ_BYTES = 2*1024**3

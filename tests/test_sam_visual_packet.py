@@ -4,9 +4,9 @@ import struct
 import unittest
 from dataclasses import replace
 
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.sam_visual_packet import visual_frame, unpack_visual_packet, MAGIC
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.sam_visual_packet import visual_frame, unpack_visual_packet, MAGIC
 
 try:
     import numpy as np
@@ -92,8 +92,8 @@ class VisualPacketTests(unittest.TestCase):
             visual_frame(self.audio,self.rgb,self.masks.astype(bool),**self.kw)
 
     def test_parent_binding_exact_policy_outer_capture_and_runtime_epoch(self):
-        from humansense.provider_wire import encode_frame
-        from humansense.sam_visual_packet import visual_policy,visual_request_binding
+        from gamst.provider_wire import encode_frame
+        from gamst.sam_visual_packet import visual_policy,visual_request_binding
         packet=self.packet(); metadata,*_=unpack_visual_packet(packet.data)
         policy=visual_policy(metadata)
         runtime=replace(packet,sensor=replace(packet.sensor,sequence=999,

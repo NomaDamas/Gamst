@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import stat
 
-from humansense.capabilities import identifier
+from gamst.capabilities import identifier
 
 MAX_MANIFEST_BYTES = 64 * 1024**2
 MAX_RECORDS = 262144

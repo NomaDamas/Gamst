@@ -46,7 +46,7 @@ class DepthAnythingContext:
             from safetensors.torch import load
             from transformers import DepthAnythingConfig, DepthAnythingForDepthEstimation, Dinov2Config, DPTImageProcessor
         except (ImportError,importlib.metadata.PackageNotFoundError) as exc:
-            raise RuntimeError('select a compatible isolated depth runtime; see humansense-sdk[depth]') from exc
+            raise RuntimeError('select a compatible isolated depth runtime; see gamst-sdk[depth]') from exc
         # Fixed HF Small config at5426e4f0; no AutoClass, Hub call, external
         # config, pickle loading, metric head or pretrained-backbone download.
         backbone=Dinov2Config(hidden_size=384,image_size=518,num_attention_heads=6,

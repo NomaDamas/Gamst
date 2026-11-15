@@ -1,6 +1,6 @@
 # Two-microphone direction context
 
-`humansense.providers.direction.GCCPHATDirection` is an executable NumPy GCC-PHAT DSP provider for two synchronized microphones. The [SpeechBrain GCC-PHAT API](https://speechbrain.readthedocs.io/en/latest/API/speechbrain.processing.multi_mic.html) and [Pyroomacoustics TDOA API](https://pyroomacoustics.readthedocs.io/en/stable/pyroomacoustics.sync.html) describe this method family. This SDK implementation uses its own bounded NumPy calculations; it does not load either toolkit or model weights. SDK code is Apache-2.0; NumPy has its own license. Tested locally with NumPy 2.2.6/Python 3.10.11; the existing optional audio extra supplies NumPy, while core discovery remains dependency-free.
+`gamst.providers.direction.GCCPHATDirection` is an executable NumPy GCC-PHAT DSP provider for two synchronized microphones. The [SpeechBrain GCC-PHAT API](https://speechbrain.readthedocs.io/en/latest/API/speechbrain.processing.multi_mic.html) and [Pyroomacoustics TDOA API](https://pyroomacoustics.readthedocs.io/en/stable/pyroomacoustics.sync.html) describe this method family. This SDK implementation uses its own bounded NumPy calculations; it does not load either toolkit or model weights. SDK code is Apache-2.0; NumPy has its own license. Tested locally with NumPy 2.2.6/Python 3.10.11; the existing optional audio extra supplies NumPy, while core discovery remains dependency-free.
 
 ## Input and geometry
 
@@ -9,11 +9,11 @@ Construct with explicit `spacing_m` (.02–1 m), `sound_speed_m_s` (300–380), 
 Input is a NumPy samples-by-two float32/float64 array normalized to [-1,1], or signed native-endian int16 PCM. Bytes, mono, unsupported dtypes, missing/mismatched metadata, nonfinite samples and incorrect window lengths are rejected. Sample rate is 16–96 kHz, configured window 20–200 ms (default80). Each input contains exactly one contiguous complete window. Its timestamp is the capture end; the start is end minus window. Aggregate smaller capture chunks upstream without joining across gaps. Independent windows retain no PCM state, have no lookahead beyond their collection window, and can be submitted continuously through `SensorStreams`. Reset never joins old/new audio.
 
 ```python
-from humansense import SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.direction import GCCPHATDirection
+from gamst import SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.direction import GCCPHATDirection
 
-# Within a consented async HumanSense application:
+# Within a consented async Gamst application:
 async def register_array(human):
     streams = SensorStreams(human)
     spec = GCCPHATDirection.capability(window_ms=80)

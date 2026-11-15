@@ -34,7 +34,7 @@ def _window_ms(value):
     return duration
 
 
-class HumanSense:
+class Gamst:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
                  capabilities=None, sensor_inference_interval_ms=0,

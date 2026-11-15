@@ -11,7 +11,7 @@ import os
 import stat
 import time
 
-from humansense.streams import _finish
+from gamst.streams import _finish
 from .recorded_source import validate_manifest, digest, _integer
 from .replay_clock import ReplayClock
 

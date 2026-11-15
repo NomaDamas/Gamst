@@ -5,13 +5,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense
-from humansense.companion import Companion, LocalChatBackend, companion_backend_from_env
+from gamst import Gamst
+from gamst.companion import Companion, LocalChatBackend, companion_backend_from_env
 
 
 class CompanionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
 
     async def asyncTearDown(self):
         await self.human.close()
@@ -54,7 +54,7 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
     async def test_late_response_discarded_on_deletion_pause_or_close(self):
         for operation in ("delete", "pause", "close"):
             with self.subTest(operation=operation):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     started, release = asyncio.Event(), asyncio.Event()
 
                     class Backend:
@@ -114,7 +114,7 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
         for index in range(43):
             await self.human.push_text("turn-" + str(index) + " " + "x" * 450, role="user")
         await self.human.push_signal("scene.image", "private image not a turn", "video", model_id="test", model_version="1")
-        with patch("humansense.companion.asyncio.to_thread", inline):
+        with patch("gamst.companion.asyncio.to_thread", inline):
             output = await Companion(self.human, backend).reply("Please explain again")
         self.assertEqual(output["assistant_text"], "Could I clarify the last step?")
         body = json.loads(requests[0].data)
@@ -139,12 +139,12 @@ class CompanionConfigurationTests(unittest.TestCase):
     def test_env_factory_and_reasoning_fallback(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(companion_backend_from_env())
-            os.environ.update(HUMANSENSE_REASONING_URL="http://127.0.0.1/v1/chat/completions", HUMANSENSE_REASONING_MODEL="reasoning")
+            os.environ.update(GAMST_REASONING_URL="http://127.0.0.1/v1/chat/completions", GAMST_REASONING_MODEL="reasoning")
             self.assertEqual(companion_backend_from_env().model_id, "reasoning")
-            os.environ.update(HUMANSENSE_COMPANION_URL="https://provider.example/v1/chat/completions", HUMANSENSE_COMPANION_MODEL="chat")
+            os.environ.update(GAMST_COMPANION_URL="https://provider.example/v1/chat/completions", GAMST_COMPANION_MODEL="chat")
             with self.assertRaises(PermissionError):
                 companion_backend_from_env()
-            os.environ["HUMANSENSE_COMPANION_ALLOW_REMOTE"] = "true"
+            os.environ["GAMST_COMPANION_ALLOW_REMOTE"] = "true"
             self.assertEqual(companion_backend_from_env().model_id, "chat")
 
     def test_malformed_response_rejected(self):

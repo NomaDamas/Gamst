@@ -7,12 +7,12 @@ import asyncio
 import hashlib
 import json
 
-from humansense import HumanSense, SensorMetadata
-from humansense.capabilities import CapabilitySpec, OutputField
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata
+from gamst.capabilities import CapabilitySpec, OutputField
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
+from gamst.call_controller import CallController
+from gamst.schema import timestamp
 
 
 def digest(value):
@@ -65,7 +65,7 @@ async def execute(human, controller, record, media, invoke):
 
 
 async def main():
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         spec = CapabilitySpec('demo.measurement', 'demo.measurement', 'video', 'demo.provider', '1',
                               (OutputField('count', 'integer'),), 'frame', freshness_ms=1000)
         human.register_capability(spec)

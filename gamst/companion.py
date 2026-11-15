@@ -173,7 +173,7 @@ class Companion:
 
 def companion_backend_from_env() -> LocalChatBackend | None:
     """Explicit companion configuration, falling back to configured reasoning URL."""
-    prefix = "HUMANSENSE_COMPANION" if os.environ.get("HUMANSENSE_COMPANION_URL") else "HUMANSENSE_REASONING"
+    prefix = "GAMST_COMPANION" if os.environ.get("GAMST_COMPANION_URL") else "GAMST_REASONING"
     endpoint = os.environ.get(prefix + "_URL")
     if not endpoint:
         return None

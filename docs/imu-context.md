@@ -1,6 +1,6 @@
 # IMU motion context
 
-`humansense.providers.imu.BNO055IMU` decodes an exact18-byte, page-zero burst beginning at0x08. It uses only Python's standard library, never accesses I2C/UART, and does not install firmware or models. SDK code is Apache-2.0; hardware/driver licensing is separate.
+`gamst.providers.imu.BNO055IMU` decodes an exact18-byte, page-zero burst beginning at0x08. It uses only Python's standard library, never accesses I2C/UART, and does not install firmware or models. SDK code is Apache-2.0; hardware/driver licensing is separate.
 
 The source format is [Bosch BNO055 datasheet revision1.8](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bno055-ds000.pdf), sections3.6/4.3: signed little-endian acceleration at0x08..0x0D and angular rate at0x14..0x19. Intermediate magnetometer bytes are ignored. UNIT_SEL bits0/1 select acceleration m/s² versus mg and angular rate degrees/s versus radians/s. Decoder factors are0.01m/s² or0.00980665m/s² per count, andπ/(180×16)rad/s or1/900rad/s per count. This reads acceleration registers, not the sensor's separate gravity-compensated linear-acceleration output.
 
@@ -15,9 +15,9 @@ The profile must record device/firmware identity, register settings, onboard cal
 Optional residual biases are SI values in the input sensor frame. Apply only residual corrections appropriate to the actual operating mode; do not double-apply onboard offsets. The adapter subtracts each bias, then applies `rotation_to_output` to the vectors. The3×3 transform must be finite, orthonormal and right-handed. Nonidentity rotation requires a distinct output-frame name. This is an application-declared fixed mounting transform, not estimated orientation or world tracking. Configurations are copied into bounded tuples.
 
 ```python
-from humansense import SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.imu import BNO055IMU
+from gamst import SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.imu import BNO055IMU
 
 async def configure_imu(human):
     streams = SensorStreams(human)

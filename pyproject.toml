@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "humansense-sdk"
+name = "gamst-sdk"
 version = "0.3.1"
 description = "gamst: local-first real-time sensory context for AI agents"
 readme = "README.md"
@@ -51,22 +51,17 @@ vocal-expression-export = ["torch==2.8.0", "funasr==1.4.26", "onnx==1.18.0", "on
 diarization = ["transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"]
 
 [project.scripts]
-gamst = "humansense.cli:main"
-gamst-serve = "humansense.server:main"
-gamst-mcp = "humansense.mcp:main"
-gamst-mcp-live = "humansense.mcp_live:main"
-gamst-dashboard = "humansense.dashboard:main"
-humansense = "humansense.cli:main"
-humansense-serve = "humansense.server:main"
-humansense-mcp = "humansense.mcp:main"
-humansense-mcp-live = "humansense.mcp_live:main"
-humansense-dashboard = "humansense.dashboard:main"
+gamst = "gamst.cli:main"
+gamst-serve = "gamst.server:main"
+gamst-mcp = "gamst.mcp:main"
+gamst-mcp-live = "gamst.mcp_live:main"
+gamst-dashboard = "gamst.dashboard:main"
 
 [project.urls]
 Repository = "https://github.com/NomaDamas/Gamst"
 
 [tool.setuptools.packages.find]
-include = ["humansense*"]
+include = ["gamst*"]
 
 [tool.setuptools.package-data]
-humansense = ["dashboard.html", "observability.js", "i18n.js"]
+gamst = ["dashboard.html", "observability.js", "i18n.js"]

@@ -12,7 +12,7 @@ residency or whole-stream savings.
 Evaluation artifacts have an explicit owner separate from the sensory store.
 Constructing `EvaluationSession` requires `retain_evaluation_hashes=True`. Task,
 input, prompt and evidence hashes remain correlation artifacts retained by that
-owner. `HumanSense.delete_data()` does not erase those immutable external artifacts.
+owner. `Gamst.delete_data()` does not erase those immutable external artifacts.
 This consent does not waive normal SDK deletion, freshness or publication rules.
 
 The observer never retains prompts, answers, pixels, raw subject IDs, private
@@ -21,7 +21,7 @@ a private subject mapping allows targeted invalidation; it is scrubbed at operat
 completion or subject deletion. Pause, reset, consent revocation and close revoke
 future observer admission and scrub private mappings synchronously. Outstanding
 financial linkage uses opaque random operation tokens. Late billing cannot restore
-private mappings. At most 32 distinct observers may register with one HumanSense
+private mappings. At most 32 distinct observers may register with one Gamst
 runtime; repeated registration of the same observer does not consume another slot.
 
 ## Actual SDK boundaries

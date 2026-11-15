@@ -31,14 +31,14 @@ def smolvlm_frame_sha256(image):
 class SmolVLMCalls:
     """Application-owned adapter: explicit open/execute/close, no automatic routing.
 
-    One in-flight call; raw pixels are retained only for that call. HumanSense owns
+    One in-flight call; raw pixels are retained only for that call. Gamst owns
     admission and output lifecycle, while the application owns this worker lifetime.
     """
     @classmethod
     async def open(cls, human, controller_id, python, config, *, startup_timeout=120, inference_timeout=30, evaluation_observer=None, evaluation_worker_scope=None):
         human._check(); identifier(controller_id)
         if controller_id not in human._call_controllers:
-            raise ValueError('registered HumanSense controller required')
+            raise ValueError('registered Gamst controller required')
         worker_observer=validate_evaluation_worker_scope(evaluation_observer,evaluation_worker_scope)
         if evaluation_observer is not None:human._register_evaluation_observer(evaluation_observer)
         native = configuration(config)
@@ -187,7 +187,7 @@ class SmolVLMCalls:
                 outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)
             # No await between accepted epoch validation and push_signal's initial
-            # synchronous store emission. As with HumanSense, use one event loop.
+            # synchronous store emission. As with Gamst, use one event loop.
             if evidence['processing_epoch']!=f'{self.human._session_id}:{self.human._generation}':
                 outcome='discarded'
                 return dict(status='discarded',accepted=False,actual_cost=None)

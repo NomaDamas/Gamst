@@ -17,7 +17,7 @@ actual-runtime/fluid acceptance [#107](https://github.com/NomaDamas/Gamst/issues
 
 ## Selected implementation
 
-Optional environment: `humansense-sdk[piv]`, selecting **openpiv==0.26.1**.
+Optional environment: `gamst-sdk[piv]`, selecting **openpiv==0.26.1**.
 No automatic install/download/device startup. Core import and profile discovery
 need only the standard library. `OpenPIVFlow.from_installed(**config)` checks the
 installed version and imports `openpiv.pyprocess.extended_search_area_piv` only
@@ -90,7 +90,7 @@ are serialized; close clears state/backend. Direct calls have no hard timeout.
 ## Streaming and process isolation
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 spec = ProcessProvider.capability('openpiv.flow', config)
 async def create():

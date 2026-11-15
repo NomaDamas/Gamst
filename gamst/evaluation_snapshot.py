@@ -59,7 +59,7 @@ class SourceContextView:
 
     def __init__(self, publisher, *, _issuer=None):
         if _issuer is not _ISSUER:
-            raise TypeError('SourceContextView must be issued by HumanSense')
+            raise TypeError('SourceContextView must be issued by Gamst')
         object.__setattr__(self, '_publisher', publisher)
 
     @property
@@ -86,7 +86,7 @@ class EvaluationSnapshotPublisher:
 
     def __init__(self, human, subject_id, implementation_sha256, *, _issuer=None):
         if _issuer is not _ISSUER:
-            raise TypeError('EvaluationSnapshotPublisher must be issued by HumanSense')
+            raise TypeError('EvaluationSnapshotPublisher must be issued by Gamst')
         self._human = human
         self._subject_id = subject_id
         self._generation = human._generation
@@ -121,7 +121,7 @@ class EvaluationSnapshotPublisher:
     def _retire(self):
         # Privacy invalidation is synchronous, including before async cleanup.
         # Externally retained old views remain permanently unusable and do not
-        # retain subject IDs, original task IDs or the owning HumanSense graph.
+        # retain subject IDs, original task IDs or the owning Gamst graph.
         self._task_ids.clear()
         self._subject_id = self._session_id = self._generation = self._human = None
         self._sequence = self._bytes = 0

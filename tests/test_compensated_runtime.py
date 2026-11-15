@@ -11,18 +11,18 @@ from unittest.mock import patch
 
 import test_camera_similarity as images
 from test_compensated_trajectories import CONFIG
-from humansense import HumanSense,ProcessProvider,SensorStreams,SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import Gamst,ProcessProvider,SensorStreams,SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 
 WORKER='''
 import os,time
 from pathlib import Path
 import numpy as np
 from types import SimpleNamespace
-from humansense.providers.detection import RFDETRObjects
-from humansense import provider_worker as w
+from gamst.providers.detection import RFDETRObjects
+from gamst import provider_worker as w
 class Backend:
     def __init__(self):self.index=0
     def predict(self,data,**kwargs):
@@ -62,7 +62,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
     async def test_actual_worker_sensorstreams_context_mcp_pause(self):
         worker,children=await self.open()
         try:
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('camera','rgb',[worker.spec.id],subject_id='subject')
                 now=timestamp()-200
@@ -92,7 +92,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
                 worker,children=await self.open(ready)
                 task=None;streams=None
                 try:
-                    async with HumanSense(consent=True) as human:
+                    async with Gamst(consent=True) as human:
                         if action=='cancel':task=asyncio.create_task(worker.process(self.frame(0)))
                         else:
                             streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)

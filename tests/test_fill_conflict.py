@@ -12,15 +12,15 @@ try:
     import numpy as np
 except ImportError:cv2=np=None
 
-from humansense import HumanSense,SensorMetadata
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.call_budget import CallBudget
-from humansense.fill_conflict import FillConflictRuntime
-from humansense.fill_conflict_rule import PREDICATE
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
-from humansense.mcp import MCPServer
+from gamst import Gamst,SensorMetadata
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.call_budget import CallBudget
+from gamst.fill_conflict import FillConflictRuntime
+from gamst.fill_conflict_rule import PREDICATE
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
+from gamst.mcp import MCPServer
 
 
 def configuration():
@@ -40,7 +40,7 @@ def answer(interval):
 @unittest.skipIf(np is None,'optional vision required')
 class Runtime(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.h=HumanSense(consent=True);self.drivers=[]
+        self.h=Gamst(consent=True);self.drivers=[]
     async def asyncTearDown(self):
         for driver in self.drivers:await driver.close()
         await self.h.close()
@@ -117,7 +117,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         advanced=[];now=timestamp()
         async def callback(request):advanced.append(True);return answer([.48,.52])
         driver,c,requests=self.create([],callback=callback)
-        with patch('humansense.fill_conflict.timestamp',side_effect=lambda:now+1001 if advanced else now):
+        with patch('gamst.fill_conflict.timestamp',side_effect=lambda:now+1001 if advanced else now):
             result=await driver.inspect(frame(ts=now))
         value=result['observation']['value']['comparison']
         self.assertEqual(value['outcome'],'blocked_stale_evidence');self.assertFalse(value['current_evidence'])
@@ -139,7 +139,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         await self.h.close()
         for stage,action in ((1,'consent'),(2,'reset_processing'),(3,'delete_data'),(2,'close')):
             with self.subTest(stage=stage,action=action):
-                self.h=HumanSense(consent=True);entered=asyncio.Event();count=[]
+                self.h=Gamst(consent=True);entered=asyncio.Event();count=[]
                 async def callback(request):
                     count.append(True)
                     if len(count)==stage:entered.set();await asyncio.Event().wait()
@@ -274,8 +274,8 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         # Advance the SDK/controller/client capture clocks together, not sleep or
         # silently relax production cooldown/freshness/queue capacity.
         with ExitStack() as stack:
-            for name in ('humansense.fill_conflict.timestamp','humansense.engine.timestamp',
-                         'humansense.text_context_call.timestamp','test_fill_conflict.timestamp'):
+            for name in ('gamst.fill_conflict.timestamp','gamst.engine.timestamp',
+                         'gamst.text_context_call.timestamp','test_fill_conflict.timestamp'):
                 stack.enter_context(patch(name,side_effect=lambda value=None:now[0] if value is None else value))
             driver,c,requests=self.create([[.1,.2]]*4,cooldown=1000,max_requests=2)
             for sequence in range(1,5):

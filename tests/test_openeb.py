@@ -9,10 +9,10 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.openeb import OpenEBContext,event_packet,decode_event_packet,HEADER,MAX_EVENTS
-from humansense.providers.openeb_capture import OpenEBCapture
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.openeb import OpenEBContext,event_packet,decode_event_packet,HEADER,MAX_EVENTS
+from gamst.providers.openeb_capture import OpenEBCapture
 
 try:import numpy as np
 except ImportError:np=None
@@ -35,7 +35,7 @@ def frame(i=0,rows=None,start=None,end=None):
 
 class Discovery(unittest.TestCase):
     def test_import_isolation_and_config(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("openeb.eventcd",'+repr(CONFIG)+');assert not {"numpy","metavision_core","metavision_hal"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("openeb.eventcd",'+repr(CONFIG)+');assert not {"numpy","metavision_core","metavision_hal"}&sys.modules.keys()'
         run=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(run.returncode,0,run.stderr)
         for bad in ({'width':True},{'height':5000},{'sensor_origin_us':'00'},{'sensor_origin_us':str(2**63)},
@@ -138,7 +138,7 @@ class Capture(unittest.TestCase):
             def __exit__(self,*args):self.stops+=1
         options=dict(source_id='eventcam',sensor_id='events',sensor_origin_us='0',capture_origin_ms=1000,
             calibration_id='clock1',coordinate_frame='pixels')
-        with patch('humansense.providers.openeb_capture._installed_iterator',return_value=Reader):
+        with patch('gamst.providers.openeb_capture._installed_iterator',return_value=Reader):
             with OpenEBCapture.camera('SERIAL1',**options) as capture:
                 reader=instances[-1]
                 self.assertEqual(reader.kwargs,dict(start_ts=0,mode='mixed',delta_t=10000,n_events=8192,relative_timestamps=False))
@@ -159,10 +159,10 @@ class Capture(unittest.TestCase):
 @unittest.skipIf(np is None,'optional NumPy absent')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_real_context_worker_sensor_stream_mcp(self):
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
         config=dict(CONFIG,capture_origin_ms=timestamp()-10)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);spec=ProcessProvider.capability('openeb.eventcd',config)
             async def factory():return await ProcessProvider.open(sys.executable,'openeb.eventcd',config)
             streams.register(spec,factory);await streams.open('eventcam','events',[spec.id])

@@ -24,7 +24,7 @@ class GCCPHATDirection:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError('Install numpy or humansense-sdk[audio] for GCC-PHAT') from exc
+            raise RuntimeError('Install numpy or gamst-sdk[audio] for GCC-PHAT') from exc
         self.np = np
         self.spacing, self.speed = float(spacing_m), float(sound_speed_m_s)
         self.calibration_id, self.channels = calibration_id, channels

@@ -7,7 +7,7 @@ try:
 except ImportError:
     cv2 = np = None
 
-from humansense.providers.stereo_metric import StereoGeometry
+from gamst.providers.stereo_metric import StereoGeometry
 
 
 def calibration():

@@ -2,10 +2,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.duplex import WebRTCDuplex
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.duplex import WebRTCDuplex
 try:
     import numpy as np
 except ImportError:np=None
@@ -187,15 +187,15 @@ class Duplex(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy absent')
 class Context(unittest.IsolatedAsyncioTestCase):
     async def test_ambient_and_speech_feed_separate_prosody_and_mcp(self):
-        from humansense import HumanSense,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.providers.prosody import AudioProsody
-        from humansense.schema import timestamp
+        from gamst import Gamst,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.providers.prosody import AudioProsody
+        from gamst.schema import timestamp
         p=WebRTCDuplex(lambda:SimpleNamespace(process=lambda near,far:near-far),
             noise_suppression=True,automatic_gain_control=True)
         ambient,speech=AudioProsody(window_ms=80),AudioProsody(window_ms=80)
         start=timestamp()-100;ambient_result=speech_result=None
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(p.spec)
             for seq in range(8):
                 f=frame(seq,start+10*seq);out=p.transform(f)
@@ -211,11 +211,11 @@ class Context(unittest.IsolatedAsyncioTestCase):
             p.close();ambient.close();speech.close()
 
     async def test_managed_context_reference_gap_and_clear(self):
-        from humansense import HumanSense,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst import Gamst,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         p=WebRTCDuplex(lambda:SimpleNamespace(process=lambda near,far:near-far))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);streams.register(p.spec,lambda:p)
             await streams.open('duplex','paired',[p.spec.id]);now=timestamp()-100
             await streams.submit(frame(0,now));await streams.drain()
