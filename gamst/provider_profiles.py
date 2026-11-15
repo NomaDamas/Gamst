@@ -111,6 +111,13 @@ def capability(profile, config):
             raise ValueError('OCR requires local detector/recognizer paths and hashes, optional language/max_regions')
         return PPOCRContext.capability(config['det_sha256'],config['rec_sha256'],
             language=config.get('language','en'),max_regions=config.get('max_regions',16))
+    if profile == 'video_depth_anything.small':
+        from .providers.video_depth import VideoDepthAnythingContext, configuration
+        args = configuration(config)
+        return VideoDepthAnythingContext.capability(**args)
+    if profile == 'sam3.1.video':
+        from .providers.sam31_video import SAM31VideoContext, configuration
+        return SAM31VideoContext.capability(**configuration(config))
     if profile == 'depth_anything_v2.small':
         from .providers.depth import DepthAnythingContext
         if (not {'path','sha256'} <= set(config) or set(config)-{'path','sha256','grid_size'} or

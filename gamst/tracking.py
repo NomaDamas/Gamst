@@ -165,3 +165,15 @@ class PersonTracker:
             self._streams.clear()
         else:
             self._streams.pop(stream_id, None)
+
+
+def create_tracker(tracker: str = "iou", **options):
+    """Construct the default IoU tracker or explicitly selected OC-SORT."""
+    if tracker == "iou":
+        if options:
+            return PersonTracker(**options)
+        return PersonTracker()
+    if tracker == "ocsort":
+        from .providers.ocsort import OCSORTPersonTracker
+        return OCSORTPersonTracker(**options)
+    raise ValueError("tracker must be 'iou' or 'ocsort'")

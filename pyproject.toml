@@ -25,16 +25,28 @@ talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
 audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]
+# TEN-VAD uses an explicitly hashed local native library and NumPy from `audio`;
+# no TEN-VAD PyPI dependency is installed (Agora additional license conditions).
 asr = ["faster-whisper>=1.0,<2"]
+moonshine = ["moonshine-voice==0.0.45", "numpy>=1.24"]
 mediapipe = ["mediapipe>=0.10,<0.11"]
 huggingface = ["transformers>=4.45,<5", "torch>=2.2,<3", "Pillow>=10", "numpy>=1.24"]
 providers = ["httpx>=0.27,<1"]
 detection = ["rfdetr==1.12.1"]
 environment-audio = ["mediapipe==0.10.35", "numpy>=1.24"]
+# CED is GPL-3.0: optional isolated extra only, never a default dependency.
+ced = ["onnxruntime==1.23.2", "torch==2.8.0", "torchaudio==2.8.0", "numpy>=1.24"]
 websocket = ["websockets>=13,<16"]
 gaze = ["torch==2.8.0", "torchvision==0.23.0", "mediapipe==0.10.35", "opencv-python>=4.8,<5", "numpy>=1.24", "Pillow>=10"]
 
 depth = ["transformers==4.57.6", "torch==2.8.0", "huggingface-hub>=0.34,<1", "safetensors>=0.4.3,<1", "numpy>=1.24", "Pillow>=10"]
+
+# Versions follow the pinned upstream requirements/install instructions. OpenCV,
+# TorchVision and several SAM libraries are intentionally not assigned invented
+# exact versions where upstream leaves them unpinned.
+video-depth = ["torch==2.1.1", "torchvision==0.16.1", "numpy==1.24.0", "einops==0.4.1", "opencv-python"]
+
+sam31-video = ["torch==2.10.0", "torchvision", "timm>=1.0.17", "numpy>=1.26,<2", "ftfy==6.1.1", "regex", "iopath>=0.1.10", "typing_extensions", "huggingface-hub", "Pillow>=10", "tqdm"]
 
 ocr = ["rapidocr==3.10.0", "onnxruntime==1.23.2"]
 

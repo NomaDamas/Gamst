@@ -4,7 +4,8 @@ Use the build-free ES module `client.mjs`, with TypeScript declarations `client.
 
 ```js
 import { GamstClient } from './client.mjs';
-const client = new GamstClient('ws://127.0.0.1:8765');
+// Token from ~/.gamst/websocket-token (browsers cannot set WebSocket headers).
+const client = new GamstClient('ws://127.0.0.1:8765/?token=' + encodeURIComponent(token));
 await client.ready();
 client.onMessage(message => {
   if (message.method?.startsWith('notifications/gamst/')) console.log(message.params);

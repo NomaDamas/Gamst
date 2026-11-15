@@ -91,13 +91,14 @@ class OpenCVPersonPlugin(PerceptionPlugin):
     name = "opencv_hog_person"
     modalities = ("video",)
 
-    def __init__(self):
+    def __init__(self, tracker: str = 'iou', **tracker_options):
         try:
             import cv2
         except ImportError as exc:
             raise RuntimeError('Install gamst-sdk[vision] for OpenCV') from exc
-        from .tracking import PersonTracker
-        self.tracker = PersonTracker()
+        from .tracking import create_tracker
+        self.tracker = create_tracker(tracker, **tracker_options)
+        self.tracker_name = tracker
         self._generation = 0
         self.cv2 = cv2
         self.detector = cv2.HOGDescriptor()
@@ -129,7 +130,7 @@ class OpenCVPersonPlugin(PerceptionPlugin):
         tracks = self.tracker.update(boxes, frame.timestamp_ms, stream_id=frame.subject_id)
         return [_signal(frame, "scene.person_count", len(boxes), self.name, self.cv2.__version__),
                 _signal(frame, "scene.person_boxes", boxes, self.name, self.cv2.__version__),
-                _signal(frame, "scene.person_tracks", tracks, self.name + ":iou-tracker", "0.1")]
+                _signal(frame, "scene.person_tracks", tracks, self.name + ":" + self.tracker_name + "-tracker", "0.1")]
 
     def reset(self):
         self._generation += 1

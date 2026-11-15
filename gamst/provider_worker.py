@@ -77,6 +77,12 @@ def _construct(profile, config):
     elif profile == 'ppocr.mobile':
         from .providers.ocr import PPOCRContext
         provider = PPOCRContext.from_local(**config)
+    elif profile == 'video_depth_anything.small':
+        from .providers.video_depth import load_worker
+        provider = load_worker(config)
+    elif profile == 'sam3.1.video':
+        from .providers.sam31_video import load_worker
+        provider = load_worker(config)
     elif profile == 'depth_anything_v2.small':
         from .providers.depth import DepthAnythingContext
         provider = DepthAnythingContext.from_local(**config)

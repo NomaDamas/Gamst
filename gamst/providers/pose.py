@@ -12,14 +12,14 @@ from pathlib import Path
 import threading
 
 from ..plugins import PerceptionPlugin, InputFrame, _signal, _version
-from ..tracking import PersonTracker
+from ..tracking import create_tracker
 
 
 class MediaPipePosePlugin(PerceptionPlugin):
     name = "mediapipe_pose_landmarker"
     modalities = ("video",)
 
-    def __init__(self, model_path: str, max_poses: int = 4):
+    def __init__(self, model_path: str, max_poses: int = 4, tracker: str = 'iou', **tracker_options):
         path = Path(model_path)
         if not path.is_file():
             raise ValueError("Supply an existing local pose_landmarker.task file")
@@ -42,7 +42,8 @@ class MediaPipePosePlugin(PerceptionPlugin):
         self._process_lock = asyncio.Lock()
         self._generation = 0
         self._closed = False
-        self.tracker = PersonTracker()
+        self.tracker = create_tracker(tracker, **tracker_options)
+        self.tracker_name = tracker
 
     @staticmethod
     def _landmarks(raw):
@@ -133,7 +134,7 @@ class MediaPipePosePlugin(PerceptionPlugin):
             version = f"{_version('mediapipe')}:sha256:{self.model_hash}"
             return [_signal(frame, "scene.poses", poses, self.name, version),
                     _signal(frame, "scene.pose_count", len(poses), self.name, version),
-                    _signal(frame, "scene.body_tracks", tracks, self.name + ":iou-tracker", "0.1")]
+                    _signal(frame, "scene.body_tracks", tracks, self.name + ":" + getattr(self, 'tracker_name', 'iou') + "-tracker", "0.1")]
 
     def reset(self):
         self._generation += 1

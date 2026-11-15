@@ -18,13 +18,13 @@ Turn speech, voice activity, facial movement, and surroundings into bounded, tim
 
 GAMST gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The product's core is context delivery; Companion replies are optional.
 
-**Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
+**Status: v0.3 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and the GAMST Playground (browser + local). See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
 [🌱 Context layer](#overview) · [✨ Capabilities](#capabilities) · [🚀 Quick start](#quick-start) · [🏠 Complete local stack](#local-stack)<br>
 [🐍 Python SDK](#python-sdk) · [🔌 Context MCP](#mcp) · [🎥 Vision & voice](#perception) · [🤝 Companion](#companion) · [🌐 Integrations](#integrations)<br>
-[🖥️ Dashboard guide](#dashboard-guide) · [🗄️ Retention](#retention) · [🧩 Optional providers](#providers) · [📊 Benchmarking](#benchmarking)<br>
+[🖥️ Playground](#dashboard-guide) · [🗄️ Retention](#retention) · [🧩 Optional providers](#providers) · [🔬 Research & roadmap](#research) · [📊 Benchmarking](#benchmarking)<br>
 [🔒 Privacy](#privacy) · [🧪 Validation](#validation) · [📚 Documentation](#documentation) · [📄 License](#license)
 
 <a id="overview"></a>
@@ -196,14 +196,21 @@ Every record carries a subject ID, timestamp, schema version, model provenance, 
 
 **Scores have distinct meanings:** `model_score` is a pattern score; `probability` requires a registered calibration artifact and held-out validation. Without that evidence, probabilities remain `null`. See the [output contract](docs/contract.md) and [prediction/feedback workflow](docs/predictions.md).
 
-### Dashboard workspace
+### Playground workspace
 
-Camera controls stay in the left panel. Drag the divider to resize camera and
-analysis panels; arrow keys resize it when focused. On narrow screens they stack.
-The right panel has Observability, Context, Categories/Time series, Text/Companion
-and VLM tabs. Category plots have observation and individual-label subtabs.
-Tab changes preserve live capture, context streaming and chart history. The
-active observation state uses rainbow colors; stopped state is gray.
+The browser preview and the local dashboard share one Playground. The left rail
+holds presets, input switches (camera, microphone, text) and overlays; the center
+shows the camera with face/body overlays, live gauges with sparklines and a shared
+speech/frame timeline; the right inspector has Response, Context, JSON and Metrics
+tabs. The top bar reports packet rate, packet bytes, end-to-end age and drops,
+computed from the context packet actually sent.
+
+In the browser, MediaPipe runs locally and responses stream from an
+OpenAI-compatible endpoint you configure (bring your own key; stored in
+sessionStorage unless you opt in). Only the question and bounded sensor text are
+sent, as untrusted user-role `<sensor_context>`; raw camera/audio never leaves the
+page. Without a configured model the Response tab shows setup, never a fabricated
+answer. Served locally, the same UI uses the full stack (ASR, VLM, Companion).
 
 Optional voice emotion: run `sh scripts/setup_voice.sh`, then restart the local
 launcher while capture is stopped. It adds SUPERB Wav2Vec2 with 3-second windows
@@ -326,6 +333,8 @@ python -m gamst.server --port 8765 --origin http://localhost:3000
 ```
 
 The loopback WebSocket service exposes the same tool calls. Events are the default stream; the `gamst/subscribe` extension selects events, signals, and inferences.
+
+Every connection needs the per-launch token. The server writes it to `~/.gamst/websocket-token` (mode 0600; override with `GAMST_WS_TOKEN_FILE`). Python clients use `gamst.ws_auth.connect_local()`; other clients send `Authorization: Bearer <token>` or, for browsers, `?token=<token>`. Media streams take capture ownership: the runtime returns to its prior paused state when the last consenting client stops or disconnects.
 
 - **JavaScript / TypeScript:** [Promise-based client](integrations/typescript/README.md) with subscriptions, timeouts, and response matching.
 - **LiveKit / Pipecat:** [Decoded-media bridges](docs/integrations.md) with explicit participant attribution, media-clock mapping, and mono/16kHz conversion. Native framework compatibility still needs validation.
@@ -507,6 +516,34 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 [On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to Gamst/MCP.
 
 </details>
+
+<a id="research"></a>
+## 🔬 Research basis & roadmap
+
+Defaults stay lightweight and local; higher-accuracy models are opt-in extras with pinned revisions and licenses. The full per-modality comparison, evidence links and Jev-style decision-model notes are in **[research basis and roadmap](docs/research-roadmap.md)**.
+
+| Area | Default | Optional (implemented adapter) | Basis |
+|---|---|---|---|
+| Multimodal decision | Deterministic rules | Intern-Decision-2B / 4B | Jev-style typed decisions, 84.7% / 90.0% seven-suite mean ([arXiv 2610.22131](https://arxiv.org/abs/2610.22131)) |
+| Tracking | IoU | OC-SORT | Observation-centric SORT, CVPR 2023 |
+| Video masks | EfficientTAM tiny512 | SAM3.1 video | Object Multiplex, ~7× at 128 objects (H100) |
+| Temporal depth | DAV2-Small per frame | Video Depth Anything Small | CVPR 2025, Apache-2.0 |
+| ASR / VAD / tagging | Qwen3-ASR, Silero, YAMNet | Moonshine v2, TEN-VAD, CED-Tiny (GPL, opt-in) | Edge latency, noisy-speech PR, AudioSet mAP |
+| Physics | — | Deterministic physical state (kinematics, trajectory envelopes, contacts, cross-modal impacts) | Precompute before learned world models |
+
+**How fusion works today.** Each specialist emits timestamped typed observations; GAMST selects fresh evidence and hands it to the LLM or decision provider. This is *decision-level late fusion mediated by language* ([Baltrušaitis et al., TPAMI 2019](https://ieeexplore.ieee.org/document/8269806)): modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry.
+
+**Future work** (tracked in GitHub issues with the `roadmap` label):
+
+1. Calibrate the learned decision provider on GAMST traces (coverage-risk, abstention precision).
+2. Event-gated hybrid streaming with heartbeat fallback ([StreamMind, ICCV 2025](https://openaccess.thecvf.com/content/ICCV2025/html/Ding_StreamMind_Unlocking_Full_Frame_Rate_Streaming_Video_Dialogue_through_Event-Gated_ICCV_2025_paper.html); [Dispider, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Qian_Dispider_Enabling_Video_LLMs_with_Active_Real-Time_Interaction_via_Disentangled_CVPR_2025_paper.html)).
+3. Shared retrieval embeddings without replacing typed evidence ([ImageBind, CVPR 2023](https://openaccess.thecvf.com/content/CVPR2023/html/Girdhar_ImageBind_One_Embedding_Space_To_Bind_Them_All_CVPR_2023_paper.html); [LanguageBind, ICLR 2024](https://proceedings.iclr.cc/paper_files/paper/2024/hash/2862ccf01e3843c81623b246895bcc45-Abstract-Conference.html)).
+4. Bounded intermediate-fusion AV specialists ([MBT, NeurIPS 2021](https://proceedings.neurips.cc/paper/2021/hash/76ba9f564ebbc35b1014ac498fafadd0-Abstract.html)) and latent compression ([Perceiver IO, ICLR 2022](https://iclr.cc/virtual/2022/poster/6269)).
+5. Streaming-VLM comparison as bench arm E ([StreamingVLM, ICLR 2026](https://arxiv.org/abs/2510.09608); [StreamingLLM, ICLR 2024](https://iclr.cc/virtual/2024/poster/NG7sS51zVF)) and response-timing metrics ([OVO-Bench, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Niu_OVO-Bench_How_Far_is_Your_Video-LLMs_from_Real-World_Online_Video_CVPR_2025_paper.html); [VideoLLM-online, CVPR 2024](https://openaccess.thecvf.com/content/CVPR2024/html/Chen_VideoLLM-online_Online_Video_Large_Language_Model_for_Streaming_Video_CVPR_2024_paper.html)).
+6. Latent-prediction novelty gates ([V-JEPA, ICLR 2025](https://www.iclr.cc/virtual/2025/poster/31477)) and physics world models as labeled synthetic tests only ([Cosmos](https://arxiv.org/abs/2501.03575); [Genie, ICML 2024](https://proceedings.mlr.press/v235/bruce24a.html)).
+7. Goal-level handoff to embodied policies ([RT-2, Science Robotics 2023](https://www.science.org/doi/10.1126/scirobotics.adi9579); [OpenVLA, CoRL 2024](https://proceedings.mlr.press/v270/kim25c.html); [π0, RSS 2025](https://www.roboticsproceedings.org/rss21/p010.html)).
+
+None of these papers has been reproduced here; each issue states its acceptance test.
 
 <a id="benchmarking"></a>
 ## 📊 Benchmarking with Gamst Bench
