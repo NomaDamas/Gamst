@@ -989,32 +989,6 @@ class Gamst:
         if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > max_bytes:
             raise ValueError("temporal context exceeds byte budget")
         return result
-        from .evaluation_snapshot import context_exclusion
-        exclusion = context_exclusion(self, subject_id, context_view)
-        self._prune()
-        now = timestamp()
-        start = now-_window_ms(window)
-        counts, events = self.store.event_summary(subject_id, start, now, per_kind=8, _exclude_capability=exclusion)
-        total_events = sum(counts.values())
-        records = [r for r in self.store.latest_signals(subject_id, start, now, _exclude_capability=exclusion)+events
-                   if r.get("observation", {}).get("name") != TRANSCRIPT_OUTPUT]
-        result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
-            evidence=[{"record_id": r["id"]} for r in events])
-        result["models"] = self._models_for(records, result["models"])
-        from .context import observation_packet
-        result.update({"observations": observation_packet(records, now),
-                       "transcripts": self.transcript_memory.snapshot(subject_id, now_ms=now, start_ms=start),
-                       "context_policy": {"raw_media_included": False, "hypotheses_verified": False, "freshness_ms": 5000},
-                       "summary": {"event_counts": counts, "event_count": total_events,
-                                   "evidence_count": len(events), "max_evidence_per_event_type": 8,
-                                   "evidence_truncated": total_events > len(events),
-                                   "record_count": self.store.count(subject_id, start, now, _exclude_capability=exclusion), "method": "deterministic_aggregate"},
-                       "trends": await self.get_trends(subject_id, window, context_view=context_view),
-                       "include": include or ["speech", "movement", "interaction"]})
-        if context_view is not None:
-            result['context_policy'].update(view=context_view.name,
-                excluded_capability_sha256=context_view._publisher.capability_sha256)
-        return result
 
     async def get_context(self, subject_id="local-user", window="1h", include=None, *, context_view=None):
         from .evaluation_snapshot import context_exclusion
