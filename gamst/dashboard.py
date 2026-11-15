@@ -183,9 +183,13 @@ class Dashboard:
         raise ValueError("Unknown operation")
 
 
-CONTENT_SECURITY_POLICY = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+# MediaPipe is an exact-version ES module protected by the modulepreload SRI hash
+# in dashboard.html. Its WASM/models and the user's explicit BYOK endpoint need
+# HTTPS connections; loopback HTTP supports local OpenAI-compatible providers.
+# No inline script is permitted, and framing remains disabled for consent/delete.
+CONTENT_SECURITY_POLICY = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
                            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; "
-                           "connect-src 'self'; "
+                           "connect-src 'self' https: http://127.0.0.1:* http://localhost:*; "
                            "worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
@@ -215,8 +219,19 @@ def handler_for(app):
             return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
 
         def do_GET(self):
-            if self.allowed_host() and self.path in ("/observability.js", "/i18n.js"):
-                return self.respond(200, Path(__file__).with_name(self.path[1:]).read_text(), "application/javascript")
+            static_types = {
+                "/app.js": "application/javascript",
+                "/playground.js": "application/javascript",
+                "/observability.js": "application/javascript",
+                "/i18n.js": "application/javascript",
+                "/style.css": "text/css",
+                "/icon.svg": "image/svg+xml",
+            }
+            if self.allowed_host() and self.path in static_types:
+                # The public site owns the shared client; the Python server only
+                # exposes this fixed allowlist, never arbitrary repository files.
+                asset = Path(__file__).parent.parent / "site" / self.path[1:]
+                return self.respond(200, asset.read_text(), static_types[self.path])
             if not self.allowed_host() or self.path != "/":
                 return self.respond(404, {"error": "Not found"})
             page = Path(__file__).with_name("dashboard.html").read_text()

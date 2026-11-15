@@ -99,10 +99,12 @@ class HTTPBoundaryTests(unittest.TestCase):
         handler = self.make_handler(path="/")
         handler.do_GET()
         self.assertEqual(handler.response[0], 200)
-        self.assertIn("const token='secret'", handler.response[1])
+        self.assertIn('name="gamst-session-token" content="secret"', handler.response[1])
         self.assertNotIn("__SESSION_TOKEN__", handler.response[1])
         self.assertNotIn('<script src="http', handler.response[1])
-        self.assertIn('<script src="/observability.js"', handler.response[1])
+        self.assertIn('<script type="module" src="/app.js">', handler.response[1])
+        self.assertIn('id="panel-response"', handler.response[1])
+        self.assertIn('id="featureSwitches"', handler.response[1])
 
 
 class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
