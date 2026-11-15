@@ -3,8 +3,8 @@ import asyncio
 import json
 
 async def main():
-    from websockets.asyncio.client import connect
-    async with connect('ws://127.0.0.1:8765') as socket:
+    from humansense.ws_auth import connect_local
+    async with connect_local() as socket:
         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/subscribe', 'params': {'types': ['context']}}))
         async for raw in socket:
             message = json.loads(raw)

@@ -7,11 +7,11 @@ from urllib.parse import urlsplit
 
 
 async def bridge(url):
-    from websockets.asyncio.client import connect
+    from .ws_auth import connect_local
     parsed = urlsplit(url)
     if parsed.scheme != 'ws' or parsed.hostname not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The live MCP bridge only connects to loopback WebSocket servers')
-    async with connect(url, max_size=1048576) as socket:
+    async with connect_local(url, max_size=1048576) as socket:
         # MCP clients do not consume our optional custom event notifications.
         await socket.send(json.dumps({'jsonrpc': '2.0', 'id': '__bridge_subscription__',
                                       'method': 'humansense/subscribe', 'params': {'types': []}}))

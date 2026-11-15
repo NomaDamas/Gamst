@@ -190,6 +190,8 @@ class MCPServer:
                                   SileroVADPlugin, FasterWhisperPlugin, MediaPipeFacePlugin)
             subject = args.get("subject_id", "local-user")
             video, audio = args.get("video", 0), args.get("audio", False)
+            if isinstance(video, str) and not video.startswith("/dev/"):
+                raise ValueError("video must be a camera index or a /dev/ device path; files and URLs are rejected")
             if "vad" in self._capture_plugins and self._capture_plugins["vad"][0][1] != subject:
                 raise ValueError("Selected VAD model is bound to another subject; restart the server to change streams")
             factories = []
@@ -216,7 +218,12 @@ class MCPServer:
             try:
                 for key, signature, factory in factories:
                     if key not in self._capture_plugins:
-                        staged.append((key, signature, factory()))
+                        # Model construction loads weights and hashes artifacts; keep it off the event loop.
+                        plugin = await asyncio.to_thread(factory)
+                        if key == "asr":
+                            from .realtime import QueuedPlugin
+                            plugin = QueuedPlugin(self.human, plugin, capacity=4)
+                        staged.append((key, signature, plugin))
             except Exception:
                 for _, _, plugin in staged:
                     await self._close_plugin(plugin)
@@ -226,9 +233,11 @@ class MCPServer:
             try:
                 for _, _, plugin in staged:
                     self.human.register(plugin)
+                await self.human.acquire_capture("mcp")
                 await session.start()
             except Exception:
                 await session.stop()
+                await self.human.release_capture("mcp")
                 for _, _, plugin in staged:
                     if plugin in self.human.plugins:
                         self.human.plugins.remove(plugin)
@@ -250,10 +259,12 @@ class MCPServer:
                 await self._reset_capture_plugins()
             if name == "stop_capture":
                 self.capture = None
+                await self.human.release_capture("mcp")
             return result
         if name == "delete_data" and self.capture:
             await self.capture.stop()
             self.capture = None
+            await self.human.release_capture("mcp")
         return await getattr(self.human, name)(**args)
 
     @staticmethod

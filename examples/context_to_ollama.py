@@ -11,9 +11,9 @@ from humansense.providers.ollama import OllamaChat
 
 
 async def main(model, question):
-    from websockets.asyncio.client import connect
+    from humansense.ws_auth import connect_local
     latest = asyncio.Queue(maxsize=1)
-    async with connect('ws://127.0.0.1:8765') as socket:
+    async with connect_local() as socket:
         await socket.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'humansense/subscribe',
                                       'params':{'types':['context']}}))
         async def receive():

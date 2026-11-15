@@ -174,7 +174,8 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("vad_model_path", self.server.capture.args)
             models = list(self.human.plugins)
             await self.request("stop_capture", {})
-            self.assertTrue(all(model.resets == 1 for model in models))
+            # ASR is wrapped in a bounded queue; the wrapper forwards reset to the model.
+            self.assertTrue(all(getattr(model, "plugin", model).resets == 1 for model in models))
             result = await self.request("start_capture", args)
             self.assertFalse(result["isError"], result)
             self.assertEqual(self.human.plugins, models)

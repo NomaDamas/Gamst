@@ -67,6 +67,8 @@ class HumanSense:
         self._subscribers = set()
         self._last_ts = {}
         self._generation = 0
+        self._capture_owners: set[str] = set()
+        self._paused_before_capture = False
         self._session_id = uuid.uuid4().hex
         self._evaluation_snapshot_publishers = {}
         self._metric_directions = {}
@@ -1031,6 +1033,32 @@ class HumanSense:
             raise RuntimeError("runtime is closed")
         self.paused = False
         return {"paused": False}
+
+    async def acquire_capture(self, owner: str):
+        """Register a transport that consented to observation; resume on the first owner.
+
+        Transports share one runtime, so one client must not override another's
+        deliberate pause after it leaves. The last owner restores the pause state
+        that existed before the first owner arrived.
+        """
+        if not self._capture_owners:
+            self._paused_before_capture = self.paused
+            await self.resume()
+        self._capture_owners.add(owner)
+        return {"paused": self.paused, "owners": len(self._capture_owners)}
+
+    async def release_capture(self, owner: str, *, pause_when_idle: bool = False):
+        """Drop a transport's ownership.
+
+        When the last owner leaves, restore the pause state from before the first
+        owner arrived; ``pause_when_idle`` pauses regardless (an explicit user Stop).
+        """
+        if owner not in self._capture_owners:
+            return {"paused": self.paused, "owners": len(self._capture_owners)}
+        self._capture_owners.discard(owner)
+        if not self._capture_owners and (pause_when_idle or self._paused_before_capture) and not self.closed:
+            await self.pause()
+        return {"paused": self.paused, "owners": len(self._capture_owners)}
 
     async def delete_data(self, subject_id=None):
         # Deletion resets the global processing generation, so every issued

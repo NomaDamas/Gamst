@@ -13,10 +13,10 @@ from pathlib import Path
 
 
 async def main(args):
-    from websockets.asyncio.client import connect
+    from humansense.ws_auth import connect_local
     if not args.consent or not (args.wav or args.image):
         raise ValueError('Supply --consent and --wav and/or --image')
-    async with connect('ws://127.0.0.1:8765') as socket:
+    async with connect_local() as socket:
         counter=0
         async def rpc(method,params):
             nonlocal counter

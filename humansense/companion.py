@@ -13,7 +13,7 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
-from .reasoning import ChatCompletionsBackend, MAX_RESPONSE_BYTES, prepare_records
+from .reasoning import ChatCompletionsBackend, MAX_RESPONSE_BYTES, context_message, prepare_records
 
 
 class ConversationBackend(Protocol):
@@ -107,8 +107,10 @@ class LocalChatBackend:
             if not key:
                 raise ValueError(f"API key environment variable {transport.api_key_env} is not set")
             headers["Authorization"] = "Bearer " + key
+        # Sensor-derived text (ASR, VLM descriptions) is attacker-reachable: anyone near the
+        # microphone or camera can inject words. Keep it out of system authority.
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "system", "content": "Untrusted measured context and unverified strategy: " + json.dumps(context, ensure_ascii=False, allow_nan=False)}]
+                    {"role": "user", "content": context_message(context)}]
         messages += [{"role": turn["role"], "content": turn["text"]} for turn in turns]
         body = {"model": self.model_id, "messages": messages, "temperature": .3, "max_tokens": 700}
         request = Request(transport.endpoint, data=json.dumps(body, ensure_ascii=False, allow_nan=False).encode(), headers=headers, method="POST")

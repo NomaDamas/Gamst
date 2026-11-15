@@ -150,12 +150,12 @@ class Dashboard:
                 raise ValueError("Wait for the guide sample test to finish")
             if body.get("consent") is not True:
                 raise ValueError("Explicit consent is required")
-            await self.human.resume()
+            await self.human.acquire_capture("dashboard")
             self.capture = True
             return {"capture": True}
         if op == "stop":
             self.capture = False
-            await self.human.pause()
+            await self.human.release_capture("dashboard", pause_when_idle=True)
             return {"capture": False}
         if op == "delete":
             await self.human.delete_data()
@@ -183,6 +183,17 @@ class Dashboard:
         raise ValueError("Unknown operation")
 
 
+CONTENT_SECURITY_POLICY = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                           "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; "
+                           "connect-src 'self'; "
+                           "worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
+
+def security_headers(handler):
+    """Block framing (clickjacking of consent/delete) and cross-origin script/exfiltration."""
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+
 def handler_for(app):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -196,6 +207,7 @@ def handler_for(app):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            security_headers(self)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -231,7 +243,9 @@ def handler_for(app):
                     self.send_header('Content-Type', 'application/x-ndjson')
                     self.send_header('Cache-Control', 'no-store')
                     self.send_header('X-Content-Type-Options', 'nosniff')
+                    security_headers(self)
                     self.end_headers()
+                    # Headers are sent: any failure must end the stream, never write a second status line.
                     try:
                         while not app.human.closed:
                             future = asyncio.run_coroutine_threadsafe(app.dispatch({'op': 'state'}), app.loop)
@@ -239,8 +253,9 @@ def handler_for(app):
                             self.wfile.write((json.dumps(data, ensure_ascii=False) + '\n').encode())
                             self.wfile.flush()
                             time.sleep(.25)
-                    except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                        return
+                    except Exception:
+                        if future is not None and not future.done():
+                            future.cancel()
                     return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
                 self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm", "test_guides") else 30))

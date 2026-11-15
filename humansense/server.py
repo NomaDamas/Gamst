@@ -1,14 +1,15 @@
 """Optional loopback WebSocket transport for the same MCP/runtime contract.
 
 Each connection can call the MCP JSON-RPC tools and receives
-``notifications/humansense/event`` messages. Browser origins are rejected unless
-explicitly supplied with --origin. Install humansense-sdk[websocket] first.
+``notifications/humansense/event`` messages. Every connection must present the
+per-launch token (``Authorization: Bearer`` or ``?token=``); see ``ws_auth``.
+Browser origins are rejected unless explicitly supplied with --origin.
+Install humansense-sdk[websocket] first.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import json
 import logging
 import time
@@ -132,12 +133,13 @@ async def handle_connection(server, socket):
                         if method == 'humansense/stream/start':
                             if params.get('consent') is not True:
                                 raise ValueError('Explicit consent required')
-                            await server.human.resume()
+                            await server.human.acquire_capture(source)
                             streaming = True
                             result = {'streaming': True, 'source': source}
                         elif method == 'humansense/stream/stop':
                             streaming = False
                             await router.clear(source)
+                            await server.human.release_capture(source)
                             result = {'streaming': False}
                         elif method == 'humansense/stream/status':
                             result = {'streaming': streaming, 'routing': router.status()}
@@ -158,6 +160,7 @@ async def handle_connection(server, socket):
     finally:
         try:
             await router.clear(source)
+            await server.human.release_capture(source)
         finally:
             for task in publishers:
                 task.cancel()
@@ -165,16 +168,26 @@ async def handle_connection(server, socket):
 
 
 async def serve_websocket(server: MCPServer, port: int = 8765,
-                          origins: list[str] | None = None) -> None:
+                          origins: list[str] | None = None,
+                          token: str | None = None) -> None:
     try:
         from websockets.asyncio.server import serve
+        from websockets.http11 import Response
+        from websockets.datastructures import Headers
     except ImportError as exc:
         raise RuntimeError("WebSocket transport requires pip install 'humansense-sdk[websocket]'") from exc
+    from .ws_auth import authorized, issue_token
+    token = token or issue_token()
+
+    def check_token(connection, request):
+        if not authorized(token, request.path, request.headers):
+            return Response(401, "Unauthorized", Headers([("Content-Type", "text/plain")]), b"WebSocket token required\n")
+        return None
 
     # Bind only to loopback. Browsers must opt in with an exact trusted origin.
     async with serve(lambda socket: handle_connection(server, socket), "127.0.0.1", port, origins=[None, *(origins or [])],
-                     max_size=MAX_MESSAGE_BYTES, max_queue=16):
-        logging.getLogger(__name__).warning("HumanSense WebSocket listening on 127.0.0.1:%s", port)
+                     process_request=check_token, max_size=MAX_MESSAGE_BYTES, max_queue=16):
+        logging.getLogger(__name__).warning("HumanSense WebSocket listening on 127.0.0.1:%s (token required)", port)
         await asyncio.Future()
 
 

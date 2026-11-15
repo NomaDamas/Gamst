@@ -26,6 +26,25 @@ FILES = {
     **{f'whisper-small/{f}': f'https://huggingface.co/Systran/faster-whisper-small/resolve/{WHISPER}/{f}' for f in ('config.json', 'model.bin', 'tokenizer.json', 'vocabulary.txt')},
     **{f'qwen3-vl/{f}': f'https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/{QWEN}/{f}' for f in ('Qwen3-VL-2B-Instruct-Q8_0.gguf', 'mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf')},
 }
+LLAMA_URL = 'https://github.com/ggml-org/llama.cpp/releases/download/b12318/llama-b12318-bin-macos-arm64.tar.gz'
+# Expected (bytes, sha256). Cross-checked against publisher metadata: Hugging Face
+# LFS oids / git blob ids, GitHub release digest and blob id, GCS md5 headers.
+EXPECTED = {
+    'face_landmarker.task': (3758596, '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'),
+    'pose/pose_landmarker.task': (5777746, '59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a'),
+    'silero_vad.jit': (2272526, 'e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720'),
+    'whisper-small/config.json': (2370, 'b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828'),
+    'whisper-small/model.bin': (483546902, '3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671'),
+    'whisper-small/tokenizer.json': (2203239, 'fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab'),
+    'whisper-small/vocabulary.txt': (459861, '34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913'),
+    'qwen3-vl/Qwen3-VL-2B-Instruct-Q8_0.gguf': (1834427296, 'b7802e29f71a9e5b5e3f83f613df898a2204342dcea71a231ea501d481813c39'),
+    'qwen3-vl/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf': (445053056, '69066c8f279ec85ff48ab4059f6ebba0d2932ca57667f2bbdac7d9805bca9e7b'),
+    'llama.tar.gz': (16896103, 'c8de54b88616af7f76911608905ab4fd2e2343aefcdf997b4823f73ea7341f53'),
+    'voice-emotion/config.json': (2153, '631bd282ad58492a69cf870c2917bae90ef963079ed2d6e0611eee9e40a19894'),
+    'voice-emotion/preprocessor_config.json': (215, '99272fe8ccfab114b68b478681ea47ee3a1ce62bb788cb92dd6e4f69fb1f1da2'),
+    'voice-emotion/pytorch_model.bin': (378361105, 'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'),
+    'voice-emotion/README.md': (3499, '99985cae3f746d8d11e758cd2c5d8d2918b457f6e1117191003d27656ba4d29b'),
+}
 
 def digest(path):
     h = hashlib.sha256()
@@ -33,6 +52,17 @@ def digest(path):
         for block in iter(lambda: handle.read(1024 * 1024), b''):
             h.update(block)
     return h.hexdigest()
+
+def verify(name, path):
+    """Raise unless the file has the pinned size and digest."""
+    size, sha = EXPECTED[name]
+    actual_size = path.stat().st_size
+    if actual_size != size:
+        raise SystemExit(f'{name}: expected {size} bytes, got {actual_size}')
+    actual_sha = digest(path)
+    if actual_sha != sha:
+        raise SystemExit(f'{name}: sha256 mismatch (expected {sha}, got {actual_sha})')
+    return actual_sha
 
 def download(item):
     name, url = item
@@ -46,10 +76,16 @@ def download(item):
             context = ssl.create_default_context(cafile=certifi.where())
         except ImportError:
             context = ssl.create_default_context()
-        with urllib.request.urlopen(url, timeout=120, context=context) as response, temporary.open('wb') as output:
-            shutil.copyfileobj(response, output)
+        try:
+            with urllib.request.urlopen(url, timeout=120, context=context) as response, temporary.open('wb') as output:
+                shutil.copyfileobj(response, output)
+            # A truncated or tampered artifact must never be promoted into place.
+            verify(name, temporary)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         temporary.replace(path)
-    return name, {'url': url, 'bytes': path.stat().st_size, 'sha256': digest(path)}
+    return name, {'url': url, 'bytes': path.stat().st_size, 'sha256': verify(name, path)}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -66,7 +102,7 @@ def main():
         marker.write_text(json.dumps({'project': str(ROOT), 'installer': 'scripts/local_models.py'}))
         files = dict(VOICE_FILES if args.action == "install-voice" else POSE_FILES if args.action == "install-pose" else FILES)
         if args.action == 'install' and platform.system() == 'Darwin' and platform.machine() == 'arm64':
-            files['llama.tar.gz'] = 'https://github.com/ggml-org/llama.cpp/releases/download/b12318/llama-b12318-bin-macos-arm64.tar.gz'
+            files['llama.tar.gz'] = LLAMA_URL
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             manifest = dict(pool.map(download, files.items()))
         if args.action == 'install' and (BASE / 'llama.tar.gz').exists():

@@ -9,6 +9,41 @@ from .plugins import _pcm_floats
 from .schema import timestamp
 
 
+MAX_VIDEO_WIDTH, MAX_VIDEO_HEIGHT = 1920, 1080
+_JPEG_SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+
+def jpeg_dimensions(data: bytes) -> tuple[int, int]:
+    """Read (width, height) from JPEG markers without decoding pixels.
+
+    Decoding first lets a small, highly compressible JPEG allocate gigabytes.
+    """
+    if data[:2] != b'\xff\xd8':
+        raise ValueError('Invalid JPEG')
+    i = 2
+    while i + 4 <= len(data):
+        if data[i] != 0xFF:
+            raise ValueError('Invalid JPEG marker')
+        marker = data[i + 1]
+        if marker == 0xFF:
+            i += 1
+            continue
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        length = int.from_bytes(data[i + 2:i + 4], 'big')
+        if length < 2:
+            raise ValueError('Invalid JPEG segment')
+        if marker in _JPEG_SOF:
+            if i + 9 > len(data):
+                break
+            return int.from_bytes(data[i + 7:i + 9], 'big'), int.from_bytes(data[i + 5:i + 7], 'big')
+        if marker in (0xD9, 0xDA):
+            break
+        i += 2 + length
+    raise ValueError('JPEG frame header not found')
+
+
 def decode_media(body):
     """Shared browser/WebSocket wire format: normalized PCM or base64 JPEG."""
     modality = body.get('modality', body.get('op'))
@@ -25,8 +60,12 @@ def decode_media(body):
             raise ValueError('Invalid video payload')
         import cv2
         import numpy as np
-        frame = cv2.imdecode(np.frombuffer(base64.b64decode(encoded, validate=True), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is None or frame.shape[0] > 1080 or frame.shape[1] > 1920:
+        data = base64.b64decode(encoded, validate=True)
+        width, height = jpeg_dimensions(data)
+        if not (0 < width <= MAX_VIDEO_WIDTH and 0 < height <= MAX_VIDEO_HEIGHT):
+            raise ValueError('Invalid video dimensions')
+        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is None or frame.shape[0] > MAX_VIDEO_HEIGHT or frame.shape[1] > MAX_VIDEO_WIDTH:
             raise ValueError('Invalid video dimensions')
         return modality, frame, None
     raise ValueError('modality must be audio or video')
