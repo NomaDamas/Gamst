@@ -1,12 +1,12 @@
 {
   "algorithm": "sha256",
-  "version": 1,
-  "recorded_in": "865809fe89c9ceed401325e45379dc0cd6d40b46",
-  "probe_core_head": "865809fe89c9ceed401325e45379dc0cd6d40b46",
-  "crew_head": "f357789199579943205d9453c01aa9a80e05c41b",
-  "bench_head": "b667c62b9602882a6463fc8af09e8d1f8cbaa41e",
-  "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
-  "crew_verified": true,
+  "bench_head": "d943660a2f1aaeaeb78c9daf80192ebfc0edf409",
   "bench_verified": true,
+  "crew_head": "f357789199579943205d9453c01aa9a80e05c41b",
+  "crew_verified": true,
+  "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
+  "version": 1,
+  "recorded_in": "3a8a08ccbb8376c200b2171adeeb0d3bf0c6cfc3",
+  "probe_core_head": "3a8a08ccbb8376c200b2171adeeb0d3bf0c6cfc3",
   "scope": "canonical-byte contract probe; not model or host acceptance"
 }
