@@ -15,6 +15,7 @@ from typing import Any
 MAX_PACKET_BYTES = 131072
 MAX_EVIDENCE = 64
 MAX_SAMPLES = 128
+MAX_RELATION_TYPE = 64
 
 
 def _finite(value: Any) -> bool:
@@ -25,6 +26,38 @@ def _bounded_text(value: Any, name: str, limit: int = 256) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ValueError(f"{name} must be a non-empty string of at most {limit} characters")
     return value
+
+
+def _relation_shape(value: Any) -> None:
+    """Validate the bounded, provenance-carrying relation wire shape."""
+    if not isinstance(value, dict):
+        raise ValueError("temporal relation must be an object")
+    if value.get("schema_version") != "gamst.relation.v1":
+        raise ValueError("unsupported temporal relation schema")
+    _bounded_text(value.get("relation"), "relation", MAX_RELATION_TYPE)
+    if value.get("status") not in ("candidate", "accepted", "rejected"):
+        raise ValueError("invalid temporal relation status")
+    ids = value.get("event_ids")
+    if (not isinstance(ids, list) or len(ids) != 2 or ids[0] == ids[1]
+            or any(not isinstance(x, str) or not x for x in ids)):
+        raise ValueError("temporal relations require two event IDs")
+    overlap = value.get("overlap")
+    if type(overlap) not in (int, float) or not math.isfinite(overlap) or not 0 <= overlap <= 1:
+        raise ValueError("temporal relation overlap must be in 0..1")
+    evidence = value.get("evidence_ids", [])
+    if not isinstance(evidence, list) or len(evidence) > MAX_EVIDENCE or any(not isinstance(x, str) for x in evidence):
+        raise ValueError("temporal relation evidence is bounded")
+    provenance = value.get("provenance")
+    if not isinstance(provenance, list) or len(provenance) != 2:
+        raise ValueError("temporal relation provenance must contain both events")
+    for item in provenance:
+        if not isinstance(item, dict) or item.get("event_id") not in ids:
+            raise ValueError("temporal relation provenance does not match event IDs")
+        for key in ("source_clock", "clock_id", "clock_epoch"):
+            _bounded_text(item.get(key), key)
+        if not isinstance(item.get("evidence_ids"), list) or len(item["evidence_ids"]) > MAX_EVIDENCE:
+            raise ValueError("temporal relation provenance evidence is bounded")
+    _json_safe(value.get("clock_calibration", {}))
 
 
 def _json_safe(value: Any) -> Any:
@@ -117,6 +150,11 @@ class TemporalPacket:
             raise ValueError("temporal packet is too large")
         _json_safe(self.clock)
         _json_safe(list(self.relations))
+        for relation in self.relations:
+            _relation_shape(relation)
+        event_ids = {event.event_id for event in self.events}
+        if any(set(relation["event_ids"]) - event_ids for relation in self.relations):
+            raise ValueError("relation references an event outside the packet")
         if any(event.capture_timestamp_ms > self.query_cutoff_ms for event in self.events):
             raise ValueError("events after query cutoff are not eligible")
 
@@ -182,9 +220,50 @@ class TemporalAligner:
         now = int(time.time() * 1000) if now_ms is None else now_ms
         return [event for event in self._revisions.values() if event.capture_timestamp_ms <= query_cutoff_ms]
 
+    def materialize_relation(self, left: TemporalEvent, right: TemporalEvent, relation: str, *,
+                             status: str = "candidate", max_gap_ms: int = 250,
+                             evidence_ids: tuple[str, ...] | list[str] | None = None) -> dict[str, Any]:
+        """Create a relation without dropping either event's temporal provenance.
+
+        Relations remain explicit candidates unless a caller supplies a reviewed
+        status. Clock calibration is diagnostic metadata; it never upgrades a
+        relation or confidence into a fact.
+        """
+        if not isinstance(left, TemporalEvent) or not isinstance(right, TemporalEvent):
+            raise TypeError("relations require TemporalEvent operands")
+        _bounded_text(relation, "relation", MAX_RELATION_TYPE)
+        if status not in ("candidate", "accepted", "rejected"):
+            raise ValueError("invalid temporal relation status")
+        if type(max_gap_ms) is not int or not 0 <= max_gap_ms <= 60000:
+            raise ValueError("max_gap_ms must be bounded")
+        combined = list(left.evidence_ids) + list(right.evidence_ids) + list(evidence_ids or ())
+        if len(combined) > MAX_EVIDENCE or any(not isinstance(item, str) for item in combined):
+            raise ValueError("temporal relation evidence is bounded")
+        # Keep first-seen order while preventing duplicate citations.
+        combined = list(dict.fromkeys(combined))
+        clocks = {}
+        for event in (left, right):
+            clocks.setdefault(event.source_clock, self.clock_status(event.source_clock))
+        provenance = [
+            {"event_id": event.event_id, "stream_id": event.stream_id,
+             "subject_id": event.subject_id, "modality": event.modality,
+             "source_clock": event.source_clock, "clock_id": event.clock_id,
+             "clock_epoch": event.clock_epoch, "capture_timestamp_ms": event.capture_timestamp_ms,
+             "start_ms": event.start_ms, "end_ms": event.end_ms, "sequence": event.sequence,
+             "evidence_ids": list(event.evidence_ids)}
+            for event in (left, right)
+        ]
+        result = {"schema_version": "gamst.relation.v1", "status": status,
+                  "relation": relation, "event_ids": [left.event_id, right.event_id],
+                  "overlap": self.overlap(left, right, max_gap_ms=max_gap_ms),
+                  "uncertainty": "unverified", "evidence_ids": combined,
+                  "provenance": provenance, "clock_calibration": clocks,
+                  "max_gap_ms": max_gap_ms}
+        _relation_shape(result)
+        return result
+
     def relation_candidate(self, left: TemporalEvent, right: TemporalEvent, relation: str) -> dict[str, Any]:
-        return {"status": "candidate", "relation": relation, "event_ids": [left.event_id, right.event_id],
-                "overlap": self.overlap(left, right, max_gap_ms=250), "uncertainty": "unverified"}
+        return self.materialize_relation(left, right, relation)
 
     def packet(self, query_cutoff_ms: int, *, now_ms: int | None = None, relations: list[dict[str, Any]] | None = None) -> TemporalPacket:
         events = tuple(self.eligible(query_cutoff_ms, now_ms=now_ms))

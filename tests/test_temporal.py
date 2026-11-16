@@ -35,6 +35,36 @@ class TemporalTests(unittest.TestCase):
         relation = aligner.relation_candidate(left, right, 'temporally_related')
         self.assertEqual(relation['status'], 'candidate')
         self.assertEqual(relation['uncertainty'], 'unverified')
+        self.assertEqual(relation['schema_version'], 'gamst.relation.v1')
+        self.assertEqual([item['clock_epoch'] for item in relation['provenance']], ['epoch-1', 'epoch-1'])
+        self.assertEqual(relation['provenance'][0]['capture_timestamp_ms'], 100)
+        self.assertEqual(relation['evidence_ids'], ['a', 'b'])
+
+    def test_relation_preserves_calibration_and_packet_cutoff(self):
+        aligner = TemporalAligner(min_samples=2)
+        for source in ('clock', 'audio-clock'):
+            aligner.add_clock_sample(source, 0, 10)
+            aligner.add_clock_sample(source, 100, 110)
+        left = event('vision', 100)
+        right = replace(event('audio', 120, modality='audio'), source_clock='audio-clock',
+                        clock_id='audio-clock-id', evidence_ids=('audio-evidence',))
+        relation = aligner.materialize_relation(left, right, 'cross_modal', evidence_ids=('join',))
+        self.assertTrue(relation['clock_calibration']['clock']['calibrated'])
+        self.assertTrue(relation['clock_calibration']['audio-clock']['calibrated'])
+        packet = TemporalPacket('gamst.temporal.v1', 200, (left, right), (relation,))
+        self.assertEqual(packet.as_dict()['relations'][0]['event_ids'], ['vision', 'audio'])
+        with self.assertRaises(ValueError):
+            TemporalPacket('gamst.temporal.v1', 110, (left, right), (relation,))
+
+    def test_relation_rejects_unbounded_or_malformed_shape(self):
+        aligner = TemporalAligner()
+        left, right = event('a', 100), event('b', 100)
+        with self.assertRaises(ValueError):
+            aligner.materialize_relation(left, right, 'x' * 65)
+        relation = aligner.relation_candidate(left, right, 'related')
+        relation['provenance'][1]['clock_epoch'] = ''
+        with self.assertRaises(ValueError):
+            TemporalPacket('gamst.temporal.v1', 200, (left, right), (relation,))
 
     def test_revision_replaces_only_newer_revision(self):
         aligner = TemporalAligner()
