@@ -29,3 +29,16 @@ The complete epic/sub-issue map and tracked gap issues are in
 `docs/epic-issue-breakdown.md` (GAMST #315–#325, Gamst-bench #6–#7 and
 GamstCrew #8–#10). These issues are deliberately open until implementation,
 focused tests, real runtime evidence and review exist.
+
+## Independent review evidence
+
+An independent review was run through the configured Myproxy OpenAI-compatible
+endpoint on `gpt-6-astra` with `reasoning_effort=medium` against the current
+handoff commits (`4fea924`, `ec80c2a`, `66e9c61`, `f4b135c`, `3649389`,
+`ca566bb`). The review did not approve merge. It identified remaining gates:
+actual host enforcement versus accounting-only resource reservations,
+concurrent/crash reservation tests, runtime-manifest provenance, cutoff-boundary
+and mixed-clock tests, cross-repository relation compatibility, and real held-out
+B/C/D/E measurements. This is review evidence, not an approval claim. The
+approved reviewer/merge gate remains open until the required model and host
+evidence are available.
