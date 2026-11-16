@@ -1,6 +1,6 @@
 import {
   LOCALES, t, utf8Bytes, gaugeValues, packetMetrics, packetRate, evidenceIds,
-  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta,
+  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear,
   sparklinePoints,
 } from "./playground.js";
 
@@ -21,7 +21,7 @@ const state = {
   stream: null, audioContext: null, analyser: null, processor: null, source: null, mute: null,
   faceModel: null, poseModel: null, captureTimer: null, audioBuffer: [], audioSending: false,
   videoBusy: false, localController: null, localData: null, localReconnect: null,
-  localCaptureRevision: 0, localCaptureTransition: null,
+  localCaptureRevision: 0, localCaptureTransition: null, localCaptureTransitionId: 0,
   arrivals: [], droppedFrames: 0, histories: Object.fromEntries(GAUGE_NAMES.map((name) => [name, []])),
   metricHistory: [], audioTimeline: [], sceneTimeline: [], lastTimelineStamp: 0,
   sending: false, chatController: null, featureSignature: "", guidePreview: null,
@@ -466,7 +466,8 @@ function releaseMedia() {
 }
 async function stopCapture(notify = true) {
   const wasActive = state.active;
-  if (isLocal && wasActive && notify) state.localCaptureTransition = "stopping";
+  const transitionId = isLocal && wasActive && notify ? ++state.localCaptureTransitionId : null;
+  if (transitionId !== null) state.localCaptureTransition = transitionId;
   state.active = false;
   releaseMedia();
   clearGuidePreview();
@@ -481,7 +482,7 @@ async function stopCapture(notify = true) {
       if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
     } catch (error) { showError("errorRequest", error); }
   }
-  if (isLocal && wasActive && notify) state.localCaptureTransition = null;
+  if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
 }
 
 async function beginCapture() {
@@ -490,7 +491,8 @@ async function beginCapture() {
   if (!pressed("inputCamera") && !pressed("inputMicrophone") && !pressed("inputText")) return showError("errorInput");
   const generation = ++state.generation;
   state.active = true;
-  if (isLocal) state.localCaptureTransition = "starting";
+  const transitionId = isLocal ? ++state.localCaptureTransitionId : null;
+  if (transitionId !== null) state.localCaptureTransition = transitionId;
   clearGuidePreview();
   updateCaptureUI();
   setStatus("waitingModel");
@@ -517,7 +519,7 @@ async function beginCapture() {
     setStatus(camera || microphone ? "observing" : "noDevices");
     if (isLocal) {
       const data = await api({ op: "state" });
-      state.localCaptureTransition = null;
+      if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
       handleLocalState(data);
     }
   } catch (error) {
@@ -529,7 +531,7 @@ async function beginCapture() {
           if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
         } catch { /* preserve the original capture error */ }
       }
-      if (isLocal) state.localCaptureTransition = null;
+      if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
       showError("errorCapture", error);
       setStatus("stopped");
     }
@@ -760,13 +762,12 @@ function renderLocalSettings(data) {
 }
 
 function handleLocalState(data) {
-  const revision = Number(data?.capture_revision);
   // A state poll can complete after a start/stop request that superseded it.
   // Ignore all snapshots during the short transition and older revisions
   // thereafter, otherwise a queued paused snapshot stops fresh camera tracks.
-  if (state.localCaptureTransition) return;
-  if (Number.isFinite(revision) && revision < state.localCaptureRevision) return;
-  if (Number.isFinite(revision)) state.localCaptureRevision = revision;
+  const decision = captureSnapshotDecision(state.localCaptureRevision, Boolean(state.localCaptureTransition), data);
+  if (!decision.accept) return;
+  state.localCaptureRevision = decision.revision;
   state.localData = data;
   const running = !data.state?.paused;
   if (state.active && !running) {

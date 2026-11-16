@@ -128,6 +128,23 @@ export function packetRate(arrivalTimes, now = Date.now(), windowMs = 4000) {
   return (times.length - 1) * 1000 / span;
 }
 
+export function captureSnapshotDecision(currentRevision, transitionActive, data) {
+  const revision = Number(data?.capture_revision);
+  if (transitionActive) return { accept: false, revision: currentRevision, reason: "transition" };
+  if (Number.isFinite(revision) && revision < currentRevision) {
+    return { accept: false, revision: currentRevision, reason: "stale_revision" };
+  }
+  return {
+    accept: true,
+    revision: Number.isFinite(revision) ? revision : currentRevision,
+    running: !data?.state?.paused,
+  };
+}
+
+export function captureTransitionCanClear(activeTransition, completedTransition) {
+  return activeTransition === completedTransition;
+}
+
 export function evidenceIds(packet) {
   return [...new Set(Object.values(packet?.observations || {}).map((observation) => observation?.evidence_id).filter((id) => typeof id === "string" && id))].slice(0, 32);
 }

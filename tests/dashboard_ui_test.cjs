@@ -7,7 +7,7 @@ const path = require('node:path');
   const pure = await import(pathToFileURL(path.resolve('site/playground.js')).href);
   const {
     MESSAGES, LOCALES, t, utf8Bytes, gaugeValues, newestObservationTimestamp,
-    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage,
+    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage, captureSnapshotDecision, captureTransitionCanClear,
     buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta,
     sparklinePoints,
   } = pure;
@@ -52,6 +52,13 @@ const path = require('node:path');
   assert.equal(metrics.dropped, 3);
   assert.equal(packetMetrics({}, 100).ageMs, null);
   assert.equal(packetRate([0, 1000, 2000, 3000], 4000), .75);
+  const stalePaused = { capture_revision: 2, state: { paused: true } };
+  assert.deepEqual(captureSnapshotDecision(3, false, stalePaused), { accept: false, revision: 3, reason: "stale_revision" });
+  assert.deepEqual(captureSnapshotDecision(3, true, { capture_revision: 3, state: { paused: true } }), { accept: false, revision: 3, reason: "transition" });
+  assert.deepEqual(captureSnapshotDecision(2, false, { capture_revision: 3, state: { paused: true } }), { accept: true, revision: 3, running: false });
+  assert.equal(captureTransitionCanClear(2, 1), false, 'old stop cannot clear newer start guard');
+  assert.equal(captureTransitionCanClear(2, 2), true, 'current transition clears its own guard');
+  console.log('Capture lifecycle: stale paused snapshots are ignored and current stop snapshots are accepted');
   assert.deepEqual(evidenceIds(packet), ['face-1', 'audio-1']);
   console.log('Packet metrics: UTF-8 bytes, newest age, cadence, drops and evidence ids passed');
 

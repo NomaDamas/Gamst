@@ -26,8 +26,10 @@ evidence IDs, packet contents, privacy consent or provider behavior.
 
 ## Acceptance evidence
 
-Issue #332 requires a focused regression that delivers a stale paused snapshot
-after a successful current start and verifies that media remains active, plus a
-post-stop paused snapshot that verifies owned tracks are released. Existing
+Issue #332 is covered by the pure browser helper regression in
+`tests/dashboard_ui_test.cjs`: a stale paused snapshot is rejected by revision,
+all snapshots are suppressed during a start/stop transition, and a current
+post-stop paused snapshot is accepted. The client also uses a transition token
+so an overlapping old stop cannot clear a newer start's guard. Existing
 dashboard and browser tests must continue to pass. This issue does not claim
 camera hardware coverage on unsupported hosts or model quality.
