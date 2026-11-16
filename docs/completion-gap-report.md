@@ -59,7 +59,7 @@ The active handoff uses these exact commits:
 
 - GAMST `feat/temporal-contract`: `c950a573944c85264f6d046d0bf112b5d50dd0df`
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
-- Gamst-bench `feat/temporal-metrics`: `d78c0f0` (live Crew bench execution evidence)
+- Gamst-bench `feat/temporal-metrics`: `3ae70cb` (live Crew bench execution evidence and CI-isolated runtime checkout)
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
