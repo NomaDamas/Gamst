@@ -48,7 +48,7 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `974d1f1` (`429440a` contradiction API plus current hierarchy and handoff documentation)
+- GAMST `feat/temporal-contract`: `56a6225` (`429440a` contradiction API plus hierarchy and exact checksum probe)
 - GamstCrew `feat/runtime-pr`: `a20854c465a911ea9824f6a6fc999ed42f1aa261`
 - Gamst-bench `feat/temporal-metrics`: `23d159f862b8a3ad23f931a973b66d11a7b740a0`
 
@@ -75,6 +75,13 @@ Focused Crew checksum/transport tests are `31/31`; bench checksum and protocol
 focused tests are `5` and `37`. This is implementation evidence only: the
 required exact-byte Core→Crew→bench end-to-end run and independent review are
 still open, so the B4 and #331 acceptance gates remain open.
+
+The exact-byte probe in `scripts/verify_cross_repo_checksum.py` has now run
+successfully with all three current worktrees. It recorded Core→Crew→bench
+verification, the shared SHA-256 digest, and exact repository heads in
+`docs/evidence/cross-repo-checksum-2026-11-16.json`. This closes the canonical
+wire compatibility portion of #331, while the full runtime-manager/benchmark
+execution, host enforcement and independent-review portions remain open.
 
 This records verification only. It does not close any open A–F child:
 exact-SHA Core→Crew→bench evidence, host-enforced resource limits, real
