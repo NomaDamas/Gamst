@@ -77,7 +77,7 @@ required exact-byte Core→Crew→bench end-to-end run and independent review ar
 still open, so the B4 and #331 acceptance gates remain open.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` has now run
-successfully with all three current worktrees. It recorded Core→Crew→bench
+successfully with all three current worktrees at the exact heads listed above. It recorded Core→Crew→bench
 verification, the shared SHA-256 digest, and exact repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-16.json`. This closes the canonical
 wire compatibility portion of #331, while the full runtime-manager/benchmark
