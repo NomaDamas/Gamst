@@ -48,10 +48,9 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `4a9e6f4` (exact checksum probe; this
-  handoff section is documentation-only)
-- GamstCrew `feat/runtime-pr`: `a20854c465a911ea9824f6a6fc999ed42f1aa261`
-- Gamst-bench `feat/temporal-metrics`: `23d159f862b8a3ad23f931a973b66d11a7b740a0`
+- GAMST `feat/temporal-contract`: `0a2fdc1` (exact checksum probe source)
+- GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
+- Gamst-bench `feat/temporal-metrics`: `b667c62b9602882a6463fc8af09e8d1f8cbaa41e`
 
 The GAMST hosted runs `43851362894` and `43851370720` passed the required
 Python 3.10–3.13 and motion-provider matrices. The subsequent documentation
@@ -70,8 +69,9 @@ Local validation at this handoff is:
   Vitest tests, `npm run results:check`, and `npm run build` passed.
 
 The B4 checksum slice now exists in all three branches: GAMST canonical
-packet SHA-256 (`429440a`), Crew strict EventPacket verification and bounded
-transport (`a20854c`), and bench collector verification/counters (`23d159f`).
+packet SHA-256 (`429440a`), Crew strict EventPacket verification, bounded
+transport and explicit host-limit seam (`f357789`), and bench collector
+verification/three-repository provenance (`b667c62`).
 Focused Crew checksum/transport tests are `31/31`; bench checksum and protocol
 focused tests are `5` and `37`. This is implementation evidence only: the
 required exact-byte Core→Crew→bench end-to-end run and independent review are
