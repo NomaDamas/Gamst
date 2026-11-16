@@ -25,6 +25,7 @@ linked issue.
 | Benchmark adapter and frozen manifests | `docs/approved-plan.md` § benchmark; bench `docs/ADAPTERS.md` | GAMST #300, #307; bench #1, #3, #7 | exact manifest digest, same input/consumer/prompt, complete denominators | foundation; real B/C/D/E open |
 | CostBench and default selection | `docs/approved-plan.md` § CostBench | bench #6, #7; GAMST #293, #308 | matched held-out quality/latency/resource/cost and independent assessment | unmeasured; no default promotion |
 | Open-source integration candidates | `docs/approved-plan.md` § OS/runtime matrix | GAMST #294, #298, #302 | compatibility is recorded per profile; no tool is treated as universal fix | documented |
+| Playground / BYOK MyProxy Terra Low integration | GAMST Playground and OpenAI-compatible BYOK contract | GAMST #311; bench #1/#9 for runtime trace handoff | user-configured endpoint/model/key, non-stream and SSE response, compact Context/evidence inspection, raw-media exclusion and bounded error report | endpoint and credentials are user-supplied; no successful MyProxy call is claimed in this session |
 
 ## Runtime issue tree
 
@@ -32,15 +33,15 @@ The detailed child map is maintained in [`docs/epic-issue-breakdown.md`](epic-is
 The tracked issue roots are:
 
 - **Epic A — GamstCrew runtime platform:** GAMST #294, #296, #304, #305,
-  #313–#315, #326, #329, #331; Crew #11/#8.
+  #311, #313–#315, #326, #329, #331; Crew #11/#8.
 - **Epic B — context transport:** GAMST #295, #299, #316, #327; Crew #11/#9.
 - **Epic C — temporal and multimodal fusion:** GAMST #297, #306, #312, #317,
   #328; Crew #11.
 - **Epic D — memory/context:** GAMST #318–#322, #330; Crew #11.
 - **Epic E — OS adaptation:** GAMST #298, #301, #302, #309, #314,
   #323–#325; Crew #11/#2–#7/#10.
-- **Epic F — benchmark/default selection:** GAMST #300, #307, #308;
-  GamstCrew #11; Gamst-bench #1, #3–#8.
+- **Epic F — benchmark/default selection:** GAMST #300, #307, #308, #311;
+  GamstCrew #11; Gamst-bench #1, #3–#9.
 
 GitHub native hierarchy is also present: GAMST #294 is the top-level parent
 with nested children listed in the epic map; GamstCrew #11 is the repository

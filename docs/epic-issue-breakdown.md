@@ -46,6 +46,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
+| A8 Playground/BYOK | OpenAI-compatible endpoint, model/key configuration, non-stream/SSE response and compact Context/evidence inspection | user-provided MyProxy endpoint/model/key; raw media remains excluded; errors are bounded and visible; no credentials or successful call are fabricated | GAMST #311; endpoint/credentials blocker remains |
 | A7 motion-provider compatibility | preserve temporal clock metadata at OpenEB, separation-media, PG physical and SAM visual native boundaries | legacy eight-key and canonical clock-aware SensorMetadata normalize safely; unknown fields reject; hosted motion-provider job passes all required suites | GAMST #326; current c965c63 run `43867251845` passed; rerun of `43867261850` passed. The original single timeout is retained as an intermittent CI timing observation; no assertion or production timeout relaxation. |
 
 ## Epic B — context transport
@@ -112,6 +113,7 @@ Parent: `F-benchmark` (Gamst-bench #1/#3–#8 and GAMST #293/#300/#307/#308).
 | F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | Gamst-bench #6; missing |
 | F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | Gamst-bench #7; pending real host |
 | F6 Linux acceptance | real Linux/CUDA matched runs | no synthetic or Mac substitution | pending real host |
+| F7 runtime trace handoff | real Crew Core provider execution through the bench JSONL adapter | live manager-owned lifecycle, temporal packet/checksum/provenance retention and explicit failure categories | Gamst-bench #9 under #1; design frozen in `docs/GAMSTCREW_RUNTIME_ADAPTER.md`, implementation pending |
 
 ## Exhaustive issue crosswalk
 
