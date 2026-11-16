@@ -57,7 +57,7 @@ materialization is GAMST #317.
 | C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | partial |
 | C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | partial |
 | C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | partial; bench integration pending |
-| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | pending; GAMST #328 |
+| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | GAMST #328; Core candidate/abstention foundation `68cfb0d`; bench metrics and independent review open |
 | C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | missing |
 
 ## Epic D — memory and context
