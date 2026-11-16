@@ -20,6 +20,7 @@ class Dashboard:
         self.capture_revision = 0
         self.companion = None
         self._lock = asyncio.Lock()
+        self._capture_lock = asyncio.Lock()
         self._vlm_test_lock = asyncio.Lock()
         self._guide_test_lock = asyncio.Lock()
         self.fixture_image = None
@@ -154,15 +155,17 @@ class Dashboard:
                 raise ValueError("Wait for the guide sample test to finish")
             if body.get("consent") is not True:
                 raise ValueError("Explicit consent is required")
-            await self.human.acquire_capture("dashboard")
-            self.capture = True
-            self.capture_revision += 1
-            return {"capture": True, "capture_revision": self.capture_revision}
+            async with self._capture_lock:
+                await self.human.acquire_capture("dashboard")
+                self.capture = True
+                self.capture_revision += 1
+                return {"capture": True, "capture_revision": self.capture_revision}
         if op == "stop":
-            await self.human.release_capture("dashboard", pause_when_idle=True)
-            self.capture = False
-            self.capture_revision += 1
-            return {"capture": False, "capture_revision": self.capture_revision}
+            async with self._capture_lock:
+                await self.human.release_capture("dashboard", pause_when_idle=True)
+                self.capture = False
+                self.capture_revision += 1
+                return {"capture": False, "capture_revision": self.capture_revision}
         if op == "delete":
             await self.human.delete_data()
             return {"deleted": True}

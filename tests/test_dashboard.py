@@ -82,6 +82,30 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(idle["capture"])
         self.assertEqual(idle["capture_revision"], 2)
 
+    async def test_capture_start_waits_for_inflight_stop(self):
+        await self.app.dispatch({"op": "start", "consent": True})
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.human.release_capture
+
+        async def delayed_release(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        from unittest.mock import patch
+        with patch.object(self.human, "release_capture", side_effect=delayed_release):
+            stopping = asyncio.create_task(self.app.dispatch({"op": "stop"}))
+            await entered.wait()
+            starting = asyncio.create_task(self.app.dispatch({"op": "start", "consent": True}))
+            await asyncio.sleep(0)
+            self.assertFalse(starting.done(), "start must wait behind the in-flight stop")
+            release.set()
+            await stopping
+            started = await starting
+        self.assertTrue(started["capture"])
+        self.assertTrue(self.app.capture)
+        await self.app.dispatch({"op": "stop"})
+
 
 class HTTPBoundaryTests(unittest.TestCase):
     def make_handler(self, host="localhost:8766", token="secret", path="/api"):
