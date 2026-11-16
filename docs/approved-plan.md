@@ -144,6 +144,56 @@ Implement deterministic, bounded physical context before learned world models:
 - force only with calibrated mass/force evidence
 - cross-modal impact alignment using audio, visual and tactile signals
 
+## Owner-approved seven-layer product model
+
+The product is implemented as seven explicit layers:
+
+1. **Multimodal Input Layer**: camera/video, microphone/system audio, text/events, tactile, RF/radar, thermal and physical sensors.
+2. **Lightweight Sensory Layer**: motion, OCR, objects, masks, VAD, streaming ASR and audio events. Cheap signals gate expensive perception; not every model runs continuously.
+3. **Event Normalizer**: one event schema with timestamp, modality, entity, confidence/uncertainty and evidence.
+4. **Temporal & Multimodal Fusion**: event relations, time alignment, state changes, deduplication, contradiction candidates and evidence retrieval. It includes event-level fusion, temporal-state fusion and selective intermediate fusion; it is not limited to late fusion.
+5. **Decision Router**: rules and optional Jev-style decisions select ignore/update/store/inspect/escalate/emit/abstain actions. The router is not called on every frame.
+6. **Context & Memory Engine**: current state, recent event timeline, episodic memory, compressed history, delta updates, session resumption, evidence references and uncertainty.
+7. **LLM/VLM/Agent Integration**: OpenAI-compatible, local and agent/robotics consumers through stable contracts.
+
+The core output distinguishes **Live Context** (current state, recent events, changes and immediate uncertainty) from **Historical Context** (past events, repeated patterns and prior state relations). A context delta may be delivered instead of repeating the entire snapshot.
+
+## Mathematical and physical context
+
+The physics layer is a required bounded capability, not a decorative future claim. It computes position, velocity, acceleration, direction, jerk, covariance, trajectory envelopes, support/containment, collision/contact candidates, impact timing and audio/visual/tactile alignment. It must abstain from numeric force, mass or precise 3D trajectory when calibration or dimensional evidence is absent. Free-fall, drag and grounded-friction hypotheses are explicit alternatives with uncertainty.
+
+Learned world models (Cosmos, V-JEPA 2, Genesis) are optional labeled prediction/simulation paths only. Generated futures never enter the raw evidence store or benchmark ground truth.
+
+## OS and runtime matrix
+
+The supported profiles are explicit:
+
+- macOS/Apple Silicon: Python 3.11, MLX, MPS, ONNX Runtime, CoreML-capable providers, llama.cpp and CPU fallback.
+- Linux/NVIDIA: Python 3.11, CUDA, NVIDIA Container Toolkit, PyTorch CUDA, TensorRT, ONNX Runtime GPU, vLLM, Triton and Ray where compatible.
+- Windows: CPU, ONNX Runtime, DirectML-capable providers and llama.cpp first; CUDA is a separate profile.
+- Linux ARM/Jetson: TensorRT, ONNX Runtime, CUDA, GStreamer and V4L2 as a separate edge profile.
+
+Each profile reports available/installed/runtime-compatible/weight-ready/benchmark-accepted. Triton, Ray, BentoML, KServe, ONNX Runtime, ExecuTorch, MLX, llama.cpp, uv, pixi, conda-lock, Docker/Podman and Unix/shared-memory IPC are integration candidates, not automatic compatibility guarantees.
+
+## Benchmark selection policy
+
+Gamst-bench remains the reference repository. The first benchmark suite includes FastBench, OmniPro Online, VSAS-Bench and GAMST CostBench. SPOT-Bench is a later silence/intervention evaluation, not removed from the research roadmap.
+
+CostBench scenarios are Static, Fast Event, Cross-modal, Semantic Change and Resilience. Comparisons include VLM 1FPS, VLM 2FPS, lightweight event text, full GAMST and an Oracle Router upper bound. Metrics include event precision/recall/F1, time-to-detect, p50/p95, cross-modal association, VLM calls, cost/hour, CPU/GPU/RAM, miss/recovery rate and downstream LLM QA accuracy.
+
+Default models remain lightweight until measured Mac results select a replacement. No CUDA/H100 result promotes a Mac default.
+
+## Approved implementation epics
+
+- **Epic A — GamstCrew Runtime Platform**: runtime API, process lifecycle, health/readiness, crash isolation, provider registry, resource allocation, OS adapter, runtime locks and local launcher.
+- **Epic B — Context Transport**: packet schema, Unix socket, shared memory, bounded queue, backpressure, drop accounting, packet checksum and provider revision.
+- **Epic C — Temporal Fusion**: source/monotonic clocks, drift, AV offset, interval overlap, revisions, query cutoff, stale/current/last-seen, contradictions and cross-modal relations.
+- **Epic D — Memory and Context**: current state, recent timeline, episodic memory, compression, delta update, evidence retrieval and session resumption.
+- **Epic E — OS Adaptation**: macOS, Linux CUDA, Linux CPU, Windows, Jetson/ARM, compatibility matrix, install diagnostics and native dependency checks.
+- **Epic F — Benchmark**: adapter, frozen manifests, Mac/Linux profiles, B/C/D/E, CostBench, temporal metrics and default selection.
+
+Each epic is decomposed into implementation sub-issues. An issue is not complete because its documentation exists; its code, focused tests, runtime evidence and review must pass.
+
 Cosmos, V-JEPA 2 and Genesis are optional labeled prediction/simulation paths. Generated futures are never raw evidence.
 
 ## Default model policy
