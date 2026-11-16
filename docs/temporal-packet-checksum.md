@@ -27,6 +27,15 @@ pre-checksum packets and returns an unverified result (`False`) from the
 verification function. Legacy packets are accepted only when that mode is
 selected and are re-emitted with the current checksum when serialized.
 
-The GAMST implementation and focused tests are present here. Cross-repository
-agreement with GamstCrew and Gamst-bench remains an open B4 acceptance item
-until their fixtures use the same canonical bytes and digest.
+The GAMST implementation and focused tests are present here. A reproducible
+cross-repository probe is available at
+`scripts/verify_cross_repo_checksum.py`. On 2026-11-16 it used GAMST
+`bb3949184077dc0373ff28fb06c458dd12cb6b22`, Crew
+`a20854c465a911ea9824f6a6fc999ed42f1aa261`, and bench
+`23d159f862b8a3ad23f931a973b66d11a7b740a0`; Crew and bench both verified the
+Core-produced envelope and the shared digest was
+`6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
+This proves canonical-byte agreement. The exact-SHA issue remains open until
+the probe is attached to the required cross-repository acceptance run and
+independent review; it does not establish model, host, benchmark, or
+production readiness.
