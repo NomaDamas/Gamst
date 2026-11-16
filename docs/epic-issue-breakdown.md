@@ -17,7 +17,7 @@ The three repositories remain separate:
 ## Epic A — GamstCrew runtime platform
 
 Parent: `A-runtime-platform` (GAMST issue umbrella #294; implementation in
-GamstCrew).
+GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
@@ -30,7 +30,8 @@ GamstCrew).
 
 ## Epic B — context transport
 
-Parent: `B-context-transport` (GAMST #295/#299).
+Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
+#316 and the Crew transport hardening child is Crew #9.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
@@ -42,7 +43,8 @@ Parent: `B-context-transport` (GAMST #295/#299).
 
 ## Epic C — temporal and multimodal fusion
 
-Parent: `C-temporal-fusion` (GAMST #297/#306/#312).
+Parent: `C-temporal-fusion` (GAMST #297/#306/#312). Cross-modal relation
+materialization is GAMST #317.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
@@ -55,39 +57,39 @@ Parent: `C-temporal-fusion` (GAMST #297/#306/#312).
 
 ## Epic D — memory and context
 
-Parent: `D-memory-context` (new dedicated parent issue).
+Parent: `D-memory-context` (GAMST #318).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | partial |
-| D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | missing as epic-level gate |
-| D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | partial |
-| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | missing |
+| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | GAMST #319; partial |
+| D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | GAMST #320; missing as epic-level gate |
+| D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | GAMST #321; partial |
+| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | GAMST #322; missing |
 
 ## Epic E — OS adaptation
 
-Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314).
+Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314; Crew #10).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
 | E1 macOS Apple Silicon | MLX/MPS/ONNX/llama.cpp and CPU fallback | one-command lightweight profile with pinned revisions on target Mac | pending real run |
 | E2 Linux CUDA | containers, CUDA, TensorRT/ORT/vLLM/Triton/Ray candidates | same packet contract on real target hardware | pending host |
-| E3 Linux CPU | no-CUDA profile and native dependency diagnostics | profile refuses unsupported acceleration and completes CPU smoke | missing |
-| E4 Windows | CPU/ORT/DirectML/llama.cpp profile | clean install and provider compatibility report on Windows host | missing |
-| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | missing |
+| E3 Linux CPU | no-CUDA profile and native dependency diagnostics | profile refuses unsupported acceleration and completes CPU smoke | GAMST #323; missing |
+| E4 Windows | CPU/ORT/DirectML/llama.cpp profile | clean install and provider compatibility report on Windows host | GAMST #324; missing |
+| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | GAMST #325; missing |
 | E6 compatibility matrix | available/installed/runtime-compatible/weight-ready/benchmark-accepted states | every provider reports all five states and license gate | partial |
 
 ## Epic F — benchmark and default selection
 
-Parent: `F-benchmark` (Gamst-bench #1/#2 and GAMST #293/#300/#307/#308).
+Parent: `F-benchmark` (Gamst-bench #1/#2/#6/#7 and GAMST #293/#300/#307/#308).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
 | F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | partial; integration pending |
 | F2 temporal metrics | capture time, age, detection, cutoff, stale, drops, recovery and escalation | collector emits metrics and scorer consumes them | partial; scorer integration pending |
 | F3 matched B/C/D/E | same held-out inputs, consumer, prompt and context contract; distinct E checkpoint | all arms have complete scored traces and denominators | unmeasured smoke only |
-| F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | missing |
-| F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | pending real host |
+| F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | Gamst-bench #6; missing |
+| F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | Gamst-bench #7; pending real host |
 | F6 Linux acceptance | real Linux/CUDA matched runs | no synthetic or Mac substitution | pending real host |
 
 ## Cross-epic order and blockers
