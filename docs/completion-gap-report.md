@@ -48,7 +48,7 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `586373d` (latest docs/evidence handoff; probe source is `3a8a08c`)
+- GAMST `feat/temporal-contract`: `19b5faf` (latest docs/evidence handoff; probe source is `3a8a08c`)
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
 - Gamst-bench `feat/temporal-metrics`: `d943660a2f1aaeaeb78c9daf80192ebfc0edf409`
 
