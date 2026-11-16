@@ -1,12 +1,17 @@
 import asyncio
+import importlib.util
 import unittest
 from gamst.crew_bridge import CrewBridge
 from gamst.temporal import TemporalEvent
-from gamstcrew.transport import JsonlUnixServer
+if importlib.util.find_spec('gamstcrew') is not None:
+    from gamstcrew.transport import JsonlUnixServer
+else:
+    JsonlUnixServer = None
 
 def event():
     return TemporalEvent('e','s','u','vision','event','wall','clock-1','epoch-1',1,1,1,1,'fixture','1',{'x':1})
 
+@unittest.skipIf(JsonlUnixServer is None, 'optional GamstCrew integration is not installed')
 class Bridge(unittest.IsolatedAsyncioTestCase):
     async def test_submit_roundtrip(self):
         async def handler(request):
