@@ -963,13 +963,24 @@ class Gamst:
         """
         from .evaluation_snapshot import context_exclusion
         from .temporal import TemporalAligner, TemporalEvent
+        from .contradictions import detect_contradictions
         exclusion = context_exclusion(self, subject_id, context_view)
         self._prune()
         cutoff = timestamp(query_cutoff_ms)
         start = cutoff - _window_ms(window)
-        records = [r for r in self.store.latest_signals(subject_id, start, cutoff, _exclude_capability=exclusion)
-                   if r.get("timestamp_ms", 0) <= cutoff]
+        # Context snapshots may collapse same-name observations to their latest
+        # value. Contradiction detection needs both cross-modal source records,
+        # so query the bounded signal history directly while retaining the same
+        # cutoff/exclusion policy.
+        records = [r for r in self.store.query(subject_id, start, cutoff,
+                                               "observation.signal", limit=64)
+                   if r.get("timestamp_ms", 0) <= cutoff
+                   and (exclusion is None or not (
+                       r.get("observation", {}).get("capability", {}).get("id") == exclusion[0]
+                       and r.get("models", [{}])[0].get("id") == exclusion[1]
+                       and r.get("models", [{}])[0].get("version") == exclusion[2]))]
         aligner = TemporalAligner()
+        events = []
         for record in records[:64]:
             observation = record.get("observation", {})
             ts = record.get("timestamp_ms")
@@ -995,8 +1006,31 @@ class Gamst:
                 processing_end_ms=record.get("processing_end_ms"),
                 gap=bool(record.get("gap", False)), revision=int(record.get("revision", 0)),
                 supersedes=record.get("supersedes"))
-            aligner.accept(event)
-        packet = aligner.packet(cutoff, now_ms=cutoff)
+            if aligner.accept(event) is not None:
+                events.append(event)
+        detection = detect_contradictions(events, query_cutoff_ms=cutoff,
+                                          now_ms=cutoff, aligner=aligner)
+        # A rejected relation is an explicit abstention: it keeps both source
+        # records inspectable without presenting unresolved evidence as a
+        # contradiction. TemporalPacket validates all relation provenance.
+        relations = list(detection["candidates"])
+        for item in detection["abstentions"]:
+            if len(relations) >= 64 or len(item.get("event_ids", [])) != 2:
+                continue
+            try:
+                left = next(event for event in events if event.event_id == item["event_ids"][0])
+                right = next(event for event in events if event.event_id == item["event_ids"][1])
+                rejected = aligner.materialize_relation(left, right, "contradiction",
+                                                        status="rejected")
+                rejected.update({"contradiction_status": "abstained",
+                                 "verification_status": "not_checked",
+                                 "deception_assessed": False,
+                                 "abstention_reason": item.get("reason", "unresolved"),
+                                 "uncertainty": item.get("uncertainty", {"status": "unresolved"})})
+                relations.append(rejected)
+            except (StopIteration, ValueError):
+                continue
+        packet = aligner.packet(cutoff, now_ms=cutoff, relations=relations[:64])
         result = packet.as_dict()
         if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > max_bytes:
             raise ValueError("temporal context exceeds byte budget")

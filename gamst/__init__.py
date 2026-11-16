@@ -19,6 +19,11 @@ __all__ += ['MultimodalDecisionProvider']
 from .transcripts import transcript_capability
 __all__ += ['transcript_capability']
 
+from .contradictions import (contradiction_candidate, detect_contradictions,
+                             detect_contradiction_candidates)
+__all__ += ['contradiction_candidate', 'detect_contradictions',
+            'detect_contradiction_candidates']
+
 from .object_appearance import ObjectAppearancePipeline
 __all__ += ['ObjectAppearancePipeline']
 
