@@ -48,8 +48,8 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `eb436b9` (`429440a` contradiction API plus current hierarchy documentation)
-- GamstCrew `feat/runtime-pr`: `634fa2a0b3d9f5615af2da321b96d4533815f50c`
+- GAMST `feat/temporal-contract`: `974d1f1` (`429440a` contradiction API plus current hierarchy and handoff documentation)
+- GamstCrew `feat/runtime-pr`: `a20854c465a911ea9824f6a6fc999ed42f1aa261`
 - Gamst-bench `feat/temporal-metrics`: `23d159f862b8a3ad23f931a973b66d11a7b740a0`
 
 The latest GAMST hosted runs `43851362894` and `43851370720` are running the
