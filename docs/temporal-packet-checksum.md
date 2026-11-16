@@ -30,7 +30,7 @@ selected and are re-emitted with the current checksum when serialized.
 The GAMST implementation and focused tests are present here. A reproducible
 cross-repository probe is available at
 `scripts/verify_cross_repo_checksum.py`. On 2026-11-16 it used GAMST
-`0a2fdc1cf6f8c003ad60b1dfe87da934b1b8b6b2`, Crew
+`865809fe89c9ceed401325e45379dc0cd6d40b46`, Crew
 `f357789199579943205d9453c01aa9a80e05c41b`, and bench
 `b667c62b9602882a6463fc8af09e8d1f8cbaa41e`; Crew and bench both verified the
 Core-produced envelope and the shared digest was
