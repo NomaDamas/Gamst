@@ -6,6 +6,10 @@ only when its code, focused tests, runtime evidence, documentation, and required
 review are attached to the issue. A parent epic cannot be closed while any child
 is pending or blocked.
 
+The complete requirement-to-issue traceability table is maintained in
+[`docs/requirements-traceability.md`](requirements-traceability.md). This map is
+the execution status view; the traceability document is the completeness gate.
+
 The three repositories remain separate:
 
 | Repository | Responsibility | Existing branch |
@@ -27,6 +31,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | missing |
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
+| A7 motion-provider compatibility | preserve temporal clock metadata at native provider boundaries | OpenEB accepts the canonical ten-key sensor metadata shape, rejects non-null worker clock fields at the source boundary, and the hosted motion-provider job passes both OpenEB process/context suites | GAMST #326; fixed in `73b9e80`; hosted rerun pending |
 
 ## Epic B — context transport
 
@@ -96,7 +101,9 @@ Parent: `F-benchmark` (Gamst-bench #1/#2/#6/#7 and GAMST #293/#300/#307/#308).
 
 1. Freeze this map and the packet/manifest revisions.
 2. Resolve the GAMST motion-provider CI failure and record the child failure
-   category before changing assertions.
+   category before changing assertions. The OpenEB metadata compatibility child
+   is tracked separately as A7; it must preserve the clock fields added by the
+   temporal contract without pretending that OpenEB itself owns a worker clock.
 3. Implement A/B/C contract slices in parallel only where revisions are already
    frozen; integrate them sequentially at the cross-repository boundary.
 4. Implement D and E profiles after the transport contract is stable.
