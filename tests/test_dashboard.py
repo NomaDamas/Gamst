@@ -68,6 +68,20 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.app.dispatch(body)
 
+    async def test_capture_revision_advances_with_start_and_stop(self):
+        before = await self.app.dispatch({"op": "state"})
+        self.assertEqual(before["capture_revision"], 0)
+        started = await self.app.dispatch({"op": "start", "consent": True})
+        self.assertEqual(started["capture_revision"], 1)
+        live = await self.app.dispatch({"op": "state"})
+        self.assertTrue(live["capture"])
+        self.assertEqual(live["capture_revision"], 1)
+        stopped = await self.app.dispatch({"op": "stop"})
+        self.assertEqual(stopped["capture_revision"], 2)
+        idle = await self.app.dispatch({"op": "state"})
+        self.assertFalse(idle["capture"])
+        self.assertEqual(idle["capture_revision"], 2)
+
 
 class HTTPBoundaryTests(unittest.TestCase):
     def make_handler(self, host="localhost:8766", token="secret", path="/api"):
