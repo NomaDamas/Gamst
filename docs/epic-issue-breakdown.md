@@ -70,6 +70,7 @@ Parent: `D-memory-context` (GAMST #318).
 | D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | GAMST #320; missing as epic-level gate |
 | D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | GAMST #321; partial |
 | D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | GAMST #322; missing |
+| D5 deterministic physics | bounded kinematics, trajectory hypotheses and physical uncertainty | held-out trajectory/contact evidence; calibrated claims only; synthetic futures isolated | GAMST #330; partial implementation, acceptance open |
 
 ## Epic E — OS adaptation
 
@@ -96,6 +97,27 @@ Parent: `F-benchmark` (Gamst-bench #1/#2/#6/#7 and GAMST #293/#300/#307/#308).
 | F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | Gamst-bench #6; missing |
 | F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | Gamst-bench #7; pending real host |
 | F6 Linux acceptance | real Linux/CUDA matched runs | no synthetic or Mac substitution | pending real host |
+
+## Exhaustive issue crosswalk
+
+The following inventory prevents an older parent issue from becoming an
+untracked implementation request. Parent issues remain open until their child
+acceptance gates close; duplicate issue names are intentional cross-repository
+facets of the same epic and are linked in the issue bodies.
+
+| Epic | GAMST issue(s) | GamstCrew issue(s) | Gamst-bench issue(s) | Current gate |
+|---|---|---|---|---|
+| A runtime platform | #294, #296, #304, #305, #313–#315, #326, #329, #331 | #1, #8 | #1 | foundation exists; host enforcement, exact-SHA and production review open |
+| B transport | #295, #299, #316, #327 | #9 | #1 | packet foundation; checksum/shared-memory/transport hardening open |
+| C temporal/fusion | #297, #306, #312, #317, #328 | #1 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
+| D memory/physics | #318–#322, #330 | #1 | #1 | memory and measured physics acceptance open |
+| E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
+| F benchmark/default | #293, #300, #307, #308 | #1 | #1, #3–#8 | synthetic report only; matched real B/C/D/E and CostBench open |
+
+Optional research issues #285–#292 remain linked from README and are not used
+to satisfy a required acceptance gate. They cover intermediate fusion,
+retrieval embeddings, event-gated streaming, streaming arm E, physics/world
+models, embodied handoff and optional provider acceptance.
 
 ## Cross-epic order and blockers
 
