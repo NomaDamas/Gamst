@@ -1,12 +1,10 @@
 
 ## Final execution status
 
-The approved workflow was executed through foundation implementation, targeted verification, PR creation and manual review. Final independent reviewer/merge steps are blocked by environment/tooling, not silently skipped:
+The approved workflow was executed through foundation implementation, targeted verification, PR creation and manual review. The Epic 0 correctness gate is now closed; repository-wide production merge remains gated by the open A–F acceptance work documented below.
 
-- `gpt-6-astra-medium` is unavailable in the runtime model registry.
-- Fallback reviewer task calls were rejected by the task runtime because ordinary reviewer jobs were incorrectly rejected for `sourceSession` schema handling.
-- PR gate APIs returned incomplete/404 responses for some repositories; stable CI approval was not available.
-- Therefore no PR was merged.
+- The fresh Epic 0 review was completed by the independent Astra reviewer against `c950a57` and returned **APPROVE** for Epic 0.
+- PR gate APIs remain incomplete for some repositories, and no PR was merged.
 
 Unimplemented approved-plan gaps remain explicit above. They are not marked complete and must be resumed after reviewer/CI access is fixed.
 
@@ -32,6 +30,14 @@ focused tests, real runtime evidence and review exist.
 
 ## Independent review evidence
 
+### Current Epic 0 review
+
+The independent Astra review against GAMST `c950a57` returned **APPROVE** for
+Epic 0. It verified motion-provider runs `43898470715` and `43899185401`, the
+Python 3.10–3.13 matrix, the capture transition fixes `3e28737`/`fa38ef7`,
+dashboard lifecycle tests, and browser UI tests. This approval is scoped to
+the Epic 0 correctness gate and does not approve the open production gates.
+
 Independent review was run through the configured Myproxy OpenAI-compatible
 endpoint on `gpt-6.1-sol` with `reasoning_effort=high` against the exact current
 handoff commits (`9bb5323`, `f4b135c`, `ca566bb`). Review response IDs were
@@ -42,17 +48,20 @@ confirmed the historical motion-provider diagnosis but identified blockers:
 host-resource enforcement without real stress evidence, full runtime-manager→bench
 execution, unmeasured B/C/D/E, absent Linux/CUDA/Windows/Jetson acceptance,
 and incomplete temporal/physics/provenance evidence.
-This is review evidence, not an approval claim. The merge gate remains open.
+That earlier HOLD remains valid for the broader production scope. It is not
+overridden by the narrower Epic 0 approval: host-resource stress evidence, full
+runtime-manager→bench execution, measured B/C/D/E, Linux/CUDA/Windows/Jetson
+acceptance, and full temporal/physics/provenance evidence remain open.
 
-## Current handoff (2026-11-16)
+## Current handoff (2026-11-17)
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `f00c673` (latest docs/evidence handoff; probe source is `3a8a08c`)
+- GAMST `feat/temporal-contract`: `c950a573944c85264f6d046d0bf112b5d50dd0df`
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
-- Gamst-bench `feat/temporal-metrics`: `9f450f3e5b4d2f477e46fcbbca91a75086a92539` (bench #9 adapter contract docs; implementation pending)
+- Gamst-bench `feat/temporal-metrics`: `d78c0f0` (live Crew bench execution evidence)
 
-The GAMST hosted runs `43874878225` and `43874888866` for `f00c673` passed every
+The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
 retained as a diagnosed artifact and is not being used to relax an assertion.
 
@@ -84,11 +93,13 @@ independent review remain open, so the B4/#331 acceptance gates remain open.
 Motion-provider CI status: the original c965c63 run `43867261850` recorded one
 real `test_actual_startup_and_owned_cleanup` timeout with child evidence and
 cleanup complete; the concurrent run `43867251845` and the failed-run rerun
-passed all Python 3.10–3.13 and motion-provider jobs. The narrow test passes
-locally three times. The test fixture now leaves a one-second bounded margin
-after its frozen snapshot; production deadline enforcement and assertions are
-unchanged. This is monitored as hosted scheduler timing evidence, not treated
-as a protocol failure or proof of production readiness.
+passed all Python 3.10–3.13 and motion-provider jobs. On the current head
+`c950a57`, hosted runs `43898470715` and `43899185401` both pass the complete
+Python matrix and motion-provider job. The narrow test passes locally three
+times. The test fixture now leaves a one-second bounded margin after its frozen
+snapshot; production deadline enforcement and assertions are unchanged. This
+is monitored as hosted scheduler timing evidence, not treated as a protocol
+failure or proof of production readiness.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` ran successfully
 against GAMST probe source `3a8a08c`, Crew `f357789`, and bench `d943660`; the
