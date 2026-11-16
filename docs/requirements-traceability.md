@@ -32,15 +32,22 @@ The detailed child map is maintained in [`docs/epic-issue-breakdown.md`](epic-is
 The tracked issue roots are:
 
 - **Epic A — GamstCrew runtime platform:** GAMST #294, #296, #304, #305,
-  #313–#315, #326, #329, #331; Crew #8.
-- **Epic B — context transport:** GAMST #295, #299, #316, #327; Crew #9.
+  #313–#315, #326, #329, #331; Crew #11/#8.
+- **Epic B — context transport:** GAMST #295, #299, #316, #327; Crew #11/#9.
 - **Epic C — temporal and multimodal fusion:** GAMST #297, #306, #312, #317,
-  #328.
-- **Epic D — memory/context:** GAMST #318–#322, #330.
+  #328; Crew #11.
+- **Epic D — memory/context:** GAMST #318–#322, #330; Crew #11.
 - **Epic E — OS adaptation:** GAMST #298, #301, #302, #309, #314,
-  #323–#325; Crew #2–#7 and #10.
+  #323–#325; Crew #11/#2–#7/#10.
 - **Epic F — benchmark/default selection:** GAMST #300, #307, #308;
-  Gamst-bench #1, #3–#8.
+  GamstCrew #11; Gamst-bench #1, #3–#8.
+
+GitHub native hierarchy is also present: GAMST #294 is the top-level parent
+with nested children listed in the epic map; GamstCrew #11 is the repository
+local parent for Crew #2–#10 (Crew #1 is a pull request, so it cannot be a
+sub-issue parent); and Gamst-bench #1 owns #3–#8. Cross-repository links remain
+in issue bodies and this crosswalk because parent/sub-issue metadata cannot span
+repositories.
 
 Older roadmap issues (#285–#292) remain explicitly optional research work and
 cannot close a required acceptance gate by themselves.
