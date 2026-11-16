@@ -380,9 +380,11 @@ class TemporalPacket:
             # counter here so the byte-level receiver records one rejection per
             # packet, even when a nested schema/checksum check fails.
             packet = cls.from_dict(value, counter=None, allow_legacy=allow_legacy)
-            # The wire representation itself is canonical. A semantically
-            # unchanged but noncanonical spelling is rejected at this boundary.
-            if raw != _canonical_json(value):
+            # Current packets bind exact canonical bytes. Legacy packets are
+            # parsed under the explicit compatibility switch even if their old
+            # serializer used insertion-order JSON; re-serialization upgrades
+            # them to the current canonical form and checksum.
+            if "checksum" in value and raw != _canonical_json(value):
                 raise ValueError("temporal packet bytes are not canonical")
             return packet
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -498,6 +500,21 @@ class TemporalAligner:
 
     def relation_candidate(self, left: TemporalEvent, right: TemporalEvent, relation: str) -> dict[str, Any]:
         return self.materialize_relation(left, right, relation)
+
+    def contradiction_candidate(self, left: TemporalEvent, right: TemporalEvent, **kwargs) -> dict[str, Any] | None:
+        """Return a provenance-preserving cross-modal contradiction candidate.
+
+        The implementation lives in :mod:`gamst.contradictions` to keep this
+        dependency-free temporal module small; importing here is lazy so the
+        existing packet/checksum API remains dependency-free and unchanged.
+        """
+        from .contradictions import contradiction_candidate
+        return contradiction_candidate(left, right, aligner=self, **kwargs)
+
+    def detect_contradictions(self, events, **kwargs) -> dict[str, Any]:
+        """Detect bounded cross-modal disagreement using this aligner's clocks."""
+        from .contradictions import detect_contradictions
+        return detect_contradictions(events, aligner=self, **kwargs)
 
     def packet(self, query_cutoff_ms: int, *, now_ms: int | None = None, relations: list[dict[str, Any]] | None = None) -> TemporalPacket:
         events = tuple(self.eligible(query_cutoff_ms, now_ms=now_ms))

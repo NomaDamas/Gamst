@@ -145,6 +145,10 @@ class TemporalTests(unittest.TestCase):
         self.assertNotEqual(noncanonical, raw)
         with self.assertRaises(ValueError):
             TemporalPacket.from_bytes(noncanonical)
+        legacy = packet.as_dict(include_checksum=False)
+        legacy_wire = json.dumps(legacy, ensure_ascii=False,
+                                 separators=(',', ':')).encode()
+        self.assertEqual(TemporalPacket.from_bytes(legacy_wire, allow_legacy=True), packet)
 
 
 if __name__ == '__main__':
