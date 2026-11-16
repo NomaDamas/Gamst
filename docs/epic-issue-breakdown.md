@@ -122,12 +122,12 @@ facets of the same epic and are linked in the issue bodies.
 
 | Epic | GAMST issue(s) | GamstCrew issue(s) | Gamst-bench issue(s) | Current gate |
 |---|---|---|---|---|
-| A runtime platform | #294, #296, #304, #305, #313–#315, #326, #329, #331 | #1, #8 | #1 | foundation exists; host enforcement, exact-SHA and production review open |
-| B transport | #295, #299, #316, #327 | #9 | #1 | packet foundation; checksum/shared-memory/transport hardening open |
-| C temporal/fusion | #297, #306, #312, #317, #328 | #1 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
-| D memory/physics | #318–#322, #330 | #1 | #1 | memory and measured physics acceptance open |
-| E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
-| F benchmark/default | #293, #300, #307, #308 | #1 | #1, #3–#8 | synthetic report only; matched real B/C/D/E and CostBench open |
+| A runtime platform | #294, #296, #304, #305, #313–#315, #326, #329, #331 | #11, #8 | #1 | foundation exists; host enforcement, exact-SHA and production review open |
+| B transport | #295, #299, #316, #327 | #11, #9 | #1 | packet foundation; checksum/shared-memory/transport hardening open |
+| C temporal/fusion | #297, #306, #312, #317, #328 | #11 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
+| D memory/physics | #318–#322, #330 | #11 | #1 | memory and measured physics acceptance open |
+| E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
+| F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#8 | synthetic report only; matched real B/C/D/E and CostBench open |
 
 Optional research issues #285–#292 remain linked from README and are not used
 to satisfy a required acceptance gate. They cover intermediate fusion,

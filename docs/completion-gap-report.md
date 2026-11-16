@@ -48,9 +48,9 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `429440a5d58d160031607a004f3d8806d607a8cc`
-- GamstCrew `feat/runtime-pr`: `f4b135c87f0ba03f194024a0b16acd058e22a2ac`
-- Gamst-bench `feat/temporal-metrics`: `84ca2b0f5632e2eb4284b82cbf52c6bf72002d62`
+- GAMST `feat/temporal-contract`: `eb436b9` (`429440a` contradiction API plus current hierarchy documentation)
+- GamstCrew `feat/runtime-pr`: `634fa2a0b3d9f5615af2da321b96d4533815f50c`
+- Gamst-bench `feat/temporal-metrics`: `23d159f862b8a3ad23f931a973b66d11a7b740a0`
 
 The latest GAMST hosted runs `43851362894` and `43851370720` are running the
 required Python 3.10–3.13 and motion-provider matrices. Completed Python jobs
@@ -69,6 +69,14 @@ Local validation at this handoff is:
   land.
 - Gamst-bench dependency-complete environment: `67/67` Python tests, `17/17`
   Vitest tests, `npm run results:check`, and `npm run build` passed.
+
+The B4 checksum slice now exists in all three branches: GAMST canonical
+packet SHA-256 (`429440a`), Crew strict EventPacket verification and bounded
+transport (`634fa2a`), and bench collector verification/counters (`23d159f`).
+Focused Crew checksum/transport tests are `30/30`; bench checksum and protocol
+focused tests are `5` and `37`. This is implementation evidence only: the
+required exact-byte Core→Crew→bench end-to-end run and independent review are
+still open, so the B4 and #331 acceptance gates remain open.
 
 This records verification only. It does not close any open A–F child:
 exact-SHA Core→Crew→bench evidence, host-enforced resource limits, real
