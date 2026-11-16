@@ -30,12 +30,14 @@ selected and are re-emitted with the current checksum when serialized.
 The GAMST implementation and focused tests are present here. A reproducible
 cross-repository probe is available at
 `scripts/verify_cross_repo_checksum.py`. On 2026-11-16 it used GAMST
-`d6f3674a02117e8f96f4fd85ff79333b5daa6e09`, Crew
+`4a9e6f4585ce7b8986f7e23c519f847e26a04d4d`, Crew
 `a20854c465a911ea9824f6a6fc999ed42f1aa261`, and bench
 `23d159f862b8a3ad23f931a973b66d11a7b740a0`; Crew and bench both verified the
 Core-produced envelope and the shared digest was
 `6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
-This proves canonical-byte agreement. The exact-SHA issue remains open until
+The GAMST hash is labeled `probe_core_head` because subsequent documentation
+commits do not change the packet implementation under test. This proves
+canonical-byte agreement. The exact-SHA issue remains open until
 the probe is attached to the required cross-repository acceptance run and
 independent review; it does not establish model, host, benchmark, or
 production readiness.

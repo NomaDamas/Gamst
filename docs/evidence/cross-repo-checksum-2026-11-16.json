@@ -1,7 +1,8 @@
 {
   "algorithm": "sha256",
   "version": 1,
-  "core_head": "d6f3674a02117e8f96f4fd85ff79333b5daa6e09",
+  "recorded_in": "4a9e6f4585ce7b8986f7e23c519f847e26a04d4d",
+  "probe_core_head": "4a9e6f4585ce7b8986f7e23c519f847e26a04d4d",
   "crew_head": "a20854c465a911ea9824f6a6fc999ed42f1aa261",
   "bench_head": "23d159f862b8a3ad23f931a973b66d11a7b740a0",
   "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
