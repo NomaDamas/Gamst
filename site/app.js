@@ -501,6 +501,7 @@ async function beginCapture() {
       const result = await api({ op: "start", consent: true });
       if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
     }
+    if (generation !== state.generation || !state.active || (transitionId !== null && state.localCaptureTransition !== transitionId)) return;
     const camera = pressed("inputCamera"), microphone = pressed("inputMicrophone");
     if (camera || microphone) {
       state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
@@ -523,7 +524,7 @@ async function beginCapture() {
       handleLocalState(data);
     }
   } catch (error) {
-    if (generation === state.generation || state.active) {
+    if (generation === state.generation) {
       await stopCapture(false);
       if (isLocal) {
         try {
