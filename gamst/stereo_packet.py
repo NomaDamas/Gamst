@@ -25,11 +25,15 @@ def _meta(value):
     identifier(value['subject_id'])
     _interval(value['interval_ms'])
     sensor = value['sensor']
-    if type(sensor) is not dict or set(sensor) != set(SensorMetadata.__dataclass_fields__):
+    sensor_fields=set(SensorMetadata.__dataclass_fields__)
+    legacy_sensor_fields=sensor_fields-{'clock_id','clock_epoch'}
+    if type(sensor) is not dict or set(sensor) not in (legacy_sensor_fields,sensor_fields):
         raise ValueError('exact stereo SensorMetadata required')
     if type(sensor['channels']) is not list:
         raise ValueError('sensor channel list required')
-    sensor = SensorMetadata(**dict(sensor, channels=tuple(sensor['channels'])))
+    sensor = dict(sensor, channels=tuple(sensor['channels']))
+    sensor.setdefault('clock_id',None); sensor.setdefault('clock_epoch',None)
+    sensor = SensorMetadata(**sensor)
     if any(getattr(sensor, k) is None for k in ('stream_epoch','coordinate_frame','calibration_id')):
         raise ValueError('stereo source epoch, optical coordinate frame and calibration required')
     digest = value['sha256']

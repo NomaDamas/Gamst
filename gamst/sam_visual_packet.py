@@ -44,19 +44,25 @@ def _validate(h):
     _keys(h['audio']['metadata'],'modality timestamp_ms subject_id sample_rate sensor')
     _keys(h['audio']['layout'],'kind dtype shape')
     audio_sensor=h['audio']['metadata']['sensor']
-    if type(audio_sensor) is not dict or set(audio_sensor)!=set(SensorMetadata.__dataclass_fields__):
+    sensor_fields=set(SensorMetadata.__dataclass_fields__)
+    legacy_sensor_fields=sensor_fields-{'clock_id','clock_epoch'}
+    if type(audio_sensor) is not dict or set(audio_sensor) not in (legacy_sensor_fields,sensor_fields):
         raise ValueError('exact audio SensorMetadata required')
     if type(audio_sensor['channels']) is not list:
         raise ValueError('audio channel list required')
-    SensorMetadata(**dict(audio_sensor,channels=tuple(audio_sensor['channels'])))
+    audio_sensor=dict(audio_sensor,channels=tuple(audio_sensor['channels']))
+    audio_sensor.setdefault('clock_id',None); audio_sensor.setdefault('clock_epoch',None)
+    SensorMetadata(**audio_sensor)
     _hash(h['audio_sha256'])
     w,hgt = _integer(h['width'],16,640),_integer(h['height'],16,480)
     sensor=h['visual_sensor']
-    if type(sensor) is not dict or set(sensor)!=set(SensorMetadata.__dataclass_fields__):
+    if type(sensor) is not dict or set(sensor) not in (legacy_sensor_fields,sensor_fields):
         raise ValueError('exact visual SensorMetadata required')
     if type(sensor['channels']) is not list or sensor['channels'] != ['R','G','B']:
         raise ValueError('explicit RGB channel order required')
-    s=SensorMetadata(**dict(sensor,channels=tuple(sensor['channels'])))
+    sensor=dict(sensor,channels=tuple(sensor['channels']))
+    sensor.setdefault('clock_id',None); sensor.setdefault('clock_epoch',None)
+    s=SensorMetadata(**sensor)
     for name in ('stream_epoch','coordinate_frame','calibration_id'):
         if getattr(s,name) is None:
             raise ValueError('visual epoch, geometry and calibration required')
@@ -212,11 +218,15 @@ def visual_request_binding(outer_header, payload, *, policy, generation,
            for k in ('modality','timestamp_ms','subject_id','sample_rate')):
         raise ValueError('outer audio identity or capture timing differs')
     osensor=outer['sensor']; original_sensor=original['sensor']
-    if type(osensor) is not dict or set(osensor)!=set(SensorMetadata.__dataclass_fields__):
+    sensor_fields=set(SensorMetadata.__dataclass_fields__)
+    legacy_sensor_fields=sensor_fields-{'clock_id','clock_epoch'}
+    if type(osensor) is not dict or set(osensor) not in (legacy_sensor_fields,sensor_fields):
         raise ValueError('exact outer sensor required')
     if type(osensor['channels']) is not list:
         raise ValueError('outer channel list required')
-    SensorMetadata(**dict(osensor,channels=tuple(osensor['channels'])))
+    osensor_validated=dict(osensor,channels=tuple(osensor['channels']))
+    osensor_validated.setdefault('clock_id',None); osensor_validated.setdefault('clock_epoch',None)
+    SensorMetadata(**osensor_validated)
     identity=('source_id','sensor_id','coordinate_frame','calibration_id','channels')
     if any(osensor[k]!=original_sensor[k] for k in identity):
         raise ValueError('outer audio source binding differs')
