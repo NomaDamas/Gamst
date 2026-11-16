@@ -28,7 +28,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A1 lifecycle | start/stop/readiness/health, owned process reap | repeated start/stop, readiness timeout and clean reap tests | foundation; pending production integration |
 | A2 crash isolation | child failure, cancellation and restart policy | failed provider cannot corrupt siblings; restart releases handles and queues | pending |
 | A3 registry and locks | provider descriptor, runtime lock/artifact/model/license hashes | launch refuses mismatched Python, lock, artifact or license metadata | partial |
-| A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | missing |
+| A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
 | A7 motion-provider compatibility | preserve temporal clock metadata at native provider boundaries | OpenEB accepts the canonical ten-key sensor metadata shape, rejects non-null worker clock fields at the source boundary, and the hosted motion-provider job passes both OpenEB process/context suites | GAMST #326; fixed in `73b9e80`; hosted rerun pending |
@@ -44,7 +44,7 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | partial; oversized-line hardening pending |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
 | B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | missing |
-| B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending |
+| B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
 
 ## Epic C — temporal and multimodal fusion
 
@@ -57,7 +57,7 @@ materialization is GAMST #317.
 | C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | partial |
 | C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | partial |
 | C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | partial; bench integration pending |
-| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | pending |
+| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | pending; GAMST #328 |
 | C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | missing |
 
 ## Epic D — memory and context

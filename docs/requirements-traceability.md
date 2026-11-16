@@ -32,9 +32,10 @@ The detailed child map is maintained in [`docs/epic-issue-breakdown.md`](epic-is
 The tracked issue roots are:
 
 - **Epic A — GamstCrew runtime platform:** GAMST #294, #296, #304, #305,
-  #313–#315, #326; Crew #8.
-- **Epic B — context transport:** GAMST #295, #299, #316; Crew #9.
-- **Epic C — temporal and multimodal fusion:** GAMST #297, #306, #312, #317.
+  #313–#315, #326, #329; Crew #8.
+- **Epic B — context transport:** GAMST #295, #299, #316, #327; Crew #9.
+- **Epic C — temporal and multimodal fusion:** GAMST #297, #306, #312, #317,
+  #328.
 - **Epic D — memory/context:** GAMST #318–#322.
 - **Epic E — OS adaptation:** GAMST #298, #301, #302, #309, #314,
   #323–#325; Crew #2–#7 and #10.
