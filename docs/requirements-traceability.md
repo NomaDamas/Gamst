@@ -19,7 +19,7 @@ linked issue.
 | Internal evidence cutoff | `docs/approved-plan.md` § canonical temporal packet | GAMST #297, #312, #317; bench #1, #3 | post-cutoff evidence is excluded from answer support | implemented in foundation; integration evidence open |
 | Current/recent/episodic context and resume | `docs/approved-plan.md` § context and memory | GAMST #318–#322 | bounded retention, replay, retrieval ownership and restart lineage | open |
 | Rules/decision provider routing | `docs/approved-plan.md` § Decision Router | GAMST #285, #294 | calibrated decision traces and abstention behavior | optional provider roadmap |
-| Deterministic physical context | `docs/approved-plan.md` § physics; `docs/physical-state.md` | GAMST #290 and the physics provider tests | kinematics, covariance, trajectory hypotheses, contact/impact alignment; abstain without calibration | implementation exists in parts; acceptance evidence open |
+| Deterministic physical context | `docs/approved-plan.md` § physics; `docs/physical-state.md` | GAMST #290, #330 and the physics provider tests | kinematics, covariance, trajectory hypotheses, contact/impact alignment; abstain without calibration | implementation exists in parts; acceptance evidence open |
 | Synthetic world-model separation | `docs/approved-plan.md` § physics | GAMST #290 | generated futures labeled synthetic and excluded from evidence/ground truth | policy documented |
 | OS adaptation | `docs/approved-plan.md` § OS matrix | GAMST #298, #301, #302, #309, #314, #323–#325; Crew #2–#10 | five-state compatibility matrix and host evidence per OS | macOS foundation; Linux/Windows/Jetson hosts unavailable |
 | Benchmark adapter and frozen manifests | `docs/approved-plan.md` § benchmark; bench `docs/ADAPTERS.md` | GAMST #300, #307; bench #1, #3, #7 | exact manifest digest, same input/consumer/prompt, complete denominators | foundation; real B/C/D/E open |
@@ -32,15 +32,15 @@ The detailed child map is maintained in [`docs/epic-issue-breakdown.md`](epic-is
 The tracked issue roots are:
 
 - **Epic A — GamstCrew runtime platform:** GAMST #294, #296, #304, #305,
-  #313–#315, #326, #329; Crew #8.
+  #313–#315, #326, #329, #331; Crew #8.
 - **Epic B — context transport:** GAMST #295, #299, #316, #327; Crew #9.
 - **Epic C — temporal and multimodal fusion:** GAMST #297, #306, #312, #317,
   #328.
-- **Epic D — memory/context:** GAMST #318–#322.
+- **Epic D — memory/context:** GAMST #318–#322, #330.
 - **Epic E — OS adaptation:** GAMST #298, #301, #302, #309, #314,
   #323–#325; Crew #2–#7 and #10.
 - **Epic F — benchmark/default selection:** GAMST #300, #307, #308;
-  Gamst-bench #1, #3–#7.
+  Gamst-bench #1, #3–#8.
 
 Older roadmap issues (#285–#292) remain explicitly optional research work and
 cannot close a required acceptance gate by themselves.
