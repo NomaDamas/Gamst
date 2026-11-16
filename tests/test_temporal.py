@@ -134,12 +134,15 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual(restored.as_dict()['checksum']['algorithm'], 'sha256')
 
     def test_canonical_bytes_roundtrip_rejects_noncanonical_wire(self):
+        import json
         packet = TemporalPacket('gamst.temporal.v1', 1000, (event('e', 900),))
         raw = packet.to_bytes()
         self.assertEqual(TemporalPacket.from_bytes(raw), packet)
         # Parsing equivalent JSON with a different key order is deliberately
         # rejected so every repository hashes exactly the same bytes.
-        noncanonical = b'{"schema_version":"gamst.temporal.v1","query_cutoff_ms":1000,"clock":{},"events":[],"relations":[],"checksum":{"algorithm":"sha256","version":1,"sha256":"' + packet.checksum()['sha256'].encode() + b'"}}'
+        noncanonical = json.dumps(packet.as_dict(), ensure_ascii=False,
+                                  separators=(',', ':')).encode()
+        self.assertNotEqual(noncanonical, raw)
         with self.assertRaises(ValueError):
             TemporalPacket.from_bytes(noncanonical)
 
