@@ -20,7 +20,7 @@ def header_value(value,generation_sha):
     identifier(binding['subject_id']);identifier(binding['worker_epoch']);identifier(binding['track_provenance'])
     ts=binding['timestamp_ms']
     if type(ts) is not int or not 0<=ts<=2**53-1:raise ValueError('capture timestamp required')
-    sensor=binding['sensor'];_keys(sensor,('source_id','sensor_id','sequence','coordinate_frame','channels','calibration_id','stream_epoch','capture_sequence'),'capture sensor')
+    sensor=binding['sensor'];_keys(sensor,('source_id','sensor_id','sequence','coordinate_frame','channels','calibration_id','stream_epoch','capture_sequence','clock_id','clock_epoch'),'capture sensor')
     if type(sensor['channels']) is not list:raise ValueError('declared RGB channel list required')
     SensorMetadata(**dict(sensor,channels=tuple(sensor['channels'])))
     if sensor['channels']!=['R','G','B'] or sensor['coordinate_frame'] is None or sensor['stream_epoch'] is None or sensor['capture_sequence'] is None:
