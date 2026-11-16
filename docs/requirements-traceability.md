@@ -46,7 +46,7 @@ The tracked issue roots are:
 GitHub native hierarchy is also present: GAMST #294 is the top-level parent
 with nested children listed in the epic map; GamstCrew #11 is the repository
 local parent for Crew #2–#10 (Crew #1 is a pull request, so it cannot be a
-sub-issue parent); and Gamst-bench #1 owns #3–#8. Cross-repository links remain
+sub-issue parent); and Gamst-bench #1 owns #3–#9. Cross-repository links remain
 in issue bodies and this crosswalk because parent/sub-issue metadata cannot span
 repositories.
 

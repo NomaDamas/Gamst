@@ -48,15 +48,13 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `19b5faf` (latest docs/evidence handoff; probe source is `3a8a08c`)
+- GAMST `feat/temporal-contract`: `f00c673` (latest docs/evidence handoff; probe source is `3a8a08c`)
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
-- Gamst-bench `feat/temporal-metrics`: `d943660a2f1aaeaeb78c9daf80192ebfc0edf409`
+- Gamst-bench `feat/temporal-metrics`: `9f450f3e5b4d2f477e46fcbbca91a75086a92539` (bench #9 adapter contract docs; implementation pending)
 
-The GAMST hosted runs `43851362894` and `43851370720` passed the required
-Python 3.10–3.13 and motion-provider matrices. The subsequent documentation
-handoff run for `0681308` (`43853497858`/`43853504866`) also passed every
-required job. The historical failure `43844596666` is retained as a diagnosed
-timeout artifact and is not being used to relax an assertion.
+The GAMST hosted runs `43874878225` and `43874888866` for `f00c673` passed every
+required Python 3.10–3.13 and motion-provider job. The historical timeout is
+retained as a diagnosed artifact and is not being used to relax an assertion.
 
 Local validation at this handoff is:
 
@@ -74,7 +72,9 @@ Local validation at this handoff is:
 The B4 checksum slice now exists in all three branches: GAMST canonical
 packet SHA-256 (`429440a`), Crew strict EventPacket verification, bounded
 transport and explicit host-limit seam (`f357789`), and bench collector
-verification/three-repository provenance (`d943660`).
+verification/three-repository provenance (`d943660`). The current bench head
+`9f450f3` adds the docs-first Crew runtime adapter contract; it contains no
+runtime adapter implementation yet.
 Focused Crew checksum/transport/host tests are `35/35`; bench full validation is
 `72 passed, 1 skipped, 4 subtests` (the skip reports an unavailable MCP
 dependency). This is implementation evidence only: the exact-byte Core→Crew→

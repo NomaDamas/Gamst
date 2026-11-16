@@ -27,7 +27,7 @@ memory, benchmark and exact-SHA children; the nested implementation children
 are attached under #296, #297, #298, #299, #300, #315 and #318. GamstCrew uses
 #11 as its repository-local Epic parent for Crew #2–#10 because the previously
 referenced Crew #1 is a pull request and cannot be a GitHub sub-issue parent.
-Gamst-bench #1 is the parent for bench #3–#8. Cross-repository relationships
+Gamst-bench #1 is the parent for bench #3–#9. Cross-repository relationships
 (GAMST↔Crew↔bench) remain explicit links in the issue bodies and the
 requirements crosswalk because GitHub does not allow a parent issue in another
 repository. The hierarchy is tracking structure only; an open child still
@@ -103,7 +103,7 @@ Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314; Crew #10).
 
 ## Epic F — benchmark and default selection
 
-Parent: `F-benchmark` (Gamst-bench #1/#3–#8 and GAMST #293/#300/#307/#308).
+Parent: `F-benchmark` (Gamst-bench #1/#3–#9 and GAMST #293/#300/#307/#308).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
@@ -129,7 +129,7 @@ facets of the same epic and are linked in the issue bodies.
 | C temporal/fusion | #297, #306, #312, #317, #328 | #11 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
 | D memory/physics | #318–#322, #330 | #11 | #1 | memory and measured physics acceptance open |
 | E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
-| F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#8 | synthetic report only; matched real B/C/D/E and CostBench open |
+| F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#9 | runtime adapter design frozen; live execution, matched real B/C/D/E and CostBench open |
 
 Optional research issues #285–#292 remain linked from README and are not used
 to satisfy a required acceptance gate. They cover intermediate fusion,
