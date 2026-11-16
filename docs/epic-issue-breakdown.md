@@ -31,7 +31,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
-| A7 motion-provider compatibility | preserve temporal clock metadata at native provider boundaries | OpenEB accepts the canonical ten-key sensor metadata shape, rejects non-null worker clock fields at the source boundary, and the hosted motion-provider job passes both OpenEB process/context suites | GAMST #326; fixed in `73b9e80`; hosted rerun pending |
+| A7 motion-provider compatibility | preserve temporal clock metadata at OpenEB, separation-media, PG physical and SAM visual native boundaries | legacy eight-key and canonical clock-aware SensorMetadata normalize safely; unknown fields reject; hosted motion-provider job passes all required suites | GAMST #326; OpenEB `73b9e80`, PG `f8c35fa`, SAM/separation follow-up pending hosted rerun |
 
 ## Epic B — context transport
 
