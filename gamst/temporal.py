@@ -6,16 +6,140 @@ processing latency and never upgrades a relation candidate into a fact.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import math
 import statistics
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 MAX_PACKET_BYTES = 131072
 MAX_EVIDENCE = 64
 MAX_SAMPLES = 128
 MAX_RELATION_TYPE = 64
+CHECKSUM_ALGORITHM = "sha256"
+CHECKSUM_VERSION = 1
+INTEGRITY_COUNTER_LIMIT = 2**31 - 1
+
+
+class PacketIntegrityCounter:
+    """Bounded receiver-side count of rejected packet integrity checks.
+
+    The counter is operational metadata only. It never enters a temporal event,
+    relation, or evidence list.
+    """
+
+    __slots__ = ("limit", "rejected")
+
+    def __init__(self, *, limit: int = INTEGRITY_COUNTER_LIMIT):
+        if type(limit) is not int or not 1 <= limit <= INTEGRITY_COUNTER_LIMIT:
+            raise ValueError("integrity counter limit must be a positive bounded integer")
+        self.limit = limit
+        self.rejected = 0
+
+    def record_rejection(self) -> int:
+        self.rejected = min(self.limit, self.rejected + 1)
+        return self.rejected
+
+    @property
+    def integrity_rejected(self) -> int:
+        return self.rejected
+
+    def snapshot(self) -> dict[str, int]:
+        return {"integrity_rejected": self.rejected}
+
+
+def _integrity_rejection(counter: Any) -> None:
+    """Increment an optional bounded counter without making it packet data."""
+    if counter is None:
+        return
+    record = getattr(counter, "record_rejection", None)
+    if callable(record):
+        record()
+        return
+    if isinstance(counter, dict):
+        current = counter.get("integrity_rejected", 0)
+        if type(current) is not int or current < 0:
+            raise ValueError("integrity counter must contain a nonnegative integer")
+        counter["integrity_rejected"] = min(INTEGRITY_COUNTER_LIMIT, current + 1)
+        return
+    raise TypeError("counter must be PacketIntegrityCounter or a mutable counter mapping")
+
+
+def _canonical_json(value: Mapping[str, Any]) -> bytes:
+    """Encode a packet body using the cross-runtime canonical JSON form."""
+    if not isinstance(value, Mapping):
+        raise ValueError("temporal packet must be an object")
+    try:
+        return json.dumps(value, ensure_ascii=False, allow_nan=False,
+                          sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError("temporal packet is not canonical JSON") from exc
+
+
+def canonical_packet_bytes(packet: Mapping[str, Any]) -> bytes:
+    """Return canonical bytes covered by a temporal packet checksum.
+
+    The checksum envelope is deliberately excluded from the covered body so a
+    receiver can recompute it. The caller's mapping is never modified.
+    """
+    if not isinstance(packet, Mapping):
+        raise ValueError("temporal packet must be an object")
+    body = dict(packet)
+    body.pop("checksum", None)
+    return _canonical_json(body)
+
+
+def packet_sha256(packet: Mapping[str, Any]) -> str:
+    """Compute the lowercase SHA-256 digest of canonical packet bytes."""
+    return hashlib.sha256(canonical_packet_bytes(packet)).hexdigest()
+
+
+def packet_checksum(packet: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the versioned checksum envelope for a packet body."""
+    return {"algorithm": CHECKSUM_ALGORITHM, "version": CHECKSUM_VERSION,
+            "sha256": packet_sha256(packet)}
+
+
+def verify_packet_checksum(packet: Mapping[str, Any], *, counter: Any = None,
+                           allow_legacy: bool = False) -> bool:
+    """Verify a packet before dispatch.
+
+    Current packets require the exact SHA-256/version envelope. Packets from
+    the pre-checksum contract may be accepted only with ``allow_legacy=True``;
+    that path returns ``False`` to make its unverified status explicit.
+    Any malformed, unsupported, or mismatched checksum increments ``counter``
+    (when supplied) and raises ``ValueError``.
+    """
+    try:
+        if not isinstance(packet, Mapping):
+            raise ValueError("temporal packet must be an object")
+        checksum = packet.get("checksum")
+        if checksum is None:
+            if allow_legacy:
+                return False
+            raise ValueError("temporal packet checksum is required")
+        if (not isinstance(checksum, dict)
+                or set(checksum) != {"algorithm", "version", "sha256"}
+                or checksum.get("algorithm") != CHECKSUM_ALGORITHM
+                or checksum.get("version") != CHECKSUM_VERSION
+                or not isinstance(checksum.get("sha256"), str)
+                or len(checksum["sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in checksum["sha256"])):
+            raise ValueError("unsupported temporal packet checksum")
+        actual = packet_sha256(packet)
+        if not hmac.compare_digest(actual, checksum["sha256"]):
+            raise ValueError("temporal packet checksum mismatch")
+        return True
+    except (TypeError, ValueError):
+        _integrity_rejection(counter)
+        raise
+
+
+# Explicit integrity spelling for receivers that do not use "checksum" in
+# their local terminology.
+verify_packet_integrity = verify_packet_checksum
 
 
 def _finite(value: Any) -> bool:
@@ -158,14 +282,124 @@ class TemporalPacket:
         if any(event.capture_timestamp_ms > self.query_cutoff_ms for event in self.events):
             raise ValueError("events after query cutoff are not eligible")
 
-    def as_dict(self) -> dict[str, Any]:
-        result = {"schema_version": self.schema_version, "query_cutoff_ms": self.query_cutoff_ms,
-                  "clock": self.clock, "events": [event.as_dict(now_ms=self.query_cutoff_ms) for event in self.events],
-                  "relations": list(self.relations)}
-        encoded = json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+    def _body_dict(self) -> dict[str, Any]:
+        """Return the packet body covered by the checksum."""
+        return {"schema_version": self.schema_version, "query_cutoff_ms": self.query_cutoff_ms,
+                "clock": self.clock, "events": [event.as_dict(now_ms=self.query_cutoff_ms) for event in self.events],
+                "relations": list(self.relations)}
+
+    def canonical_bytes(self) -> bytes:
+        """Return deterministic UTF-8 bytes covered by the packet checksum."""
+        encoded = canonical_packet_bytes(self._body_dict())
+        if len(encoded) > MAX_PACKET_BYTES:
+            raise ValueError("temporal packet exceeds byte budget")
+        return encoded
+
+    def checksum(self) -> dict[str, Any]:
+        """Return the versioned checksum for this packet body."""
+        return packet_checksum(self._body_dict())
+
+    def as_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
+        """Render the bounded packet, including integrity by default."""
+        result = self._body_dict()
+        if include_checksum:
+            result["checksum"] = self.checksum()
+        encoded = _canonical_json(result)
         if len(encoded) > MAX_PACKET_BYTES:
             raise ValueError("temporal packet exceeds byte budget")
         return result
+
+    def to_bytes(self) -> bytes:
+        """Serialize a complete packet in canonical JSON form."""
+        encoded = _canonical_json(self.as_dict())
+        if len(encoded) > MAX_PACKET_BYTES:
+            raise ValueError("temporal packet exceeds byte budget")
+        return encoded
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any], *, counter: Any = None,
+                  allow_legacy: bool = False) -> "TemporalPacket":
+        """Verify and parse a wire packet before it reaches a consumer.
+
+        ``allow_legacy`` is an explicit compatibility switch for packets from
+        the pre-B4 contract that have no checksum. Such packets are parsed but
+        remain unverified until re-serialized with the current contract.
+        """
+        verify_packet_checksum(value, counter=counter, allow_legacy=allow_legacy)
+        if not isinstance(value, Mapping):
+            raise ValueError("temporal packet must be an object")
+        keys = set(value)
+        expected = {"schema_version", "query_cutoff_ms", "clock", "events", "relations", "checksum"}
+        if "checksum" not in value:
+            expected.remove("checksum")
+        if keys != expected:
+            raise ValueError("temporal packet has unknown or missing fields")
+        if value.get("schema_version") != "gamst.temporal.v1":
+            raise ValueError("unsupported temporal schema")
+        events = []
+        fields = {field.name for field in TemporalEvent.__dataclass_fields__.values()}
+        for item in value.get("events", ()):
+            if not isinstance(item, Mapping):
+                raise ValueError("temporal packet events must be objects")
+            if set(item) - fields - {"age_ms", "fresh", "evidence_state"}:
+                raise ValueError("temporal event has unknown fields")
+            missing = fields - set(item)
+            # Derived fields are intentionally absent from the constructor,
+            # while every declared event field remains explicit on the wire.
+            missing -= {"monotonic_timestamp_ms", "receive_timestamp_ms", "processing_start_ms",
+                        "processing_end_ms", "gap", "revision", "supersedes", "uncertainty",
+                        "freshness_ms", "evidence_ids", "source_spans"}
+            if missing:
+                raise ValueError("temporal event is missing fields")
+            kwargs = {name: item[name] for name in fields if name in item}
+            kwargs["evidence_ids"] = tuple(kwargs.get("evidence_ids", ()))
+            kwargs["source_spans"] = tuple(kwargs.get("source_spans", ()))
+            events.append(TemporalEvent(**kwargs))
+        return cls(value["schema_version"], value["query_cutoff_ms"], tuple(events),
+                   tuple(value.get("relations", ())), value.get("clock", {}))
+
+    @classmethod
+    def from_bytes(cls, raw: bytes | bytearray | memoryview, *, counter: Any = None,
+                   allow_legacy: bool = False) -> "TemporalPacket":
+        """Decode canonical packet bytes and verify integrity before parsing."""
+        try:
+            if isinstance(raw, memoryview):
+                raw = raw.tobytes()
+            if type(raw) is not bytes or not 1 <= len(raw) <= MAX_PACKET_BYTES:
+                raise ValueError("temporal packet bytes exceed bound")
+            def reject_duplicates(pairs):
+                result = {}
+                for key, item in pairs:
+                    if key in result:
+                        raise ValueError("duplicate temporal packet field")
+                    result[key] = item
+                return result
+            value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates,
+                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite packet number")))
+            # ``from_dict`` owns the detailed schema checks. Suppress its
+            # counter here so the byte-level receiver records one rejection per
+            # packet, even when a nested schema/checksum check fails.
+            packet = cls.from_dict(value, counter=None, allow_legacy=allow_legacy)
+            # The wire representation itself is canonical. A semantically
+            # unchanged but noncanonical spelling is rejected at this boundary.
+            if raw != _canonical_json(value):
+                raise ValueError("temporal packet bytes are not canonical")
+            return packet
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _integrity_rejection(counter)
+            raise ValueError("invalid temporal packet bytes")
+        except (TypeError, ValueError):
+            _integrity_rejection(counter)
+            raise
+
+
+def decode_packet(raw: bytes | bytearray | memoryview, *, counter: Any = None,
+                  allow_legacy: bool = False) -> TemporalPacket:
+    """Compatibility function for receivers decoding packet bytes."""
+    return TemporalPacket.from_bytes(raw, counter=counter, allow_legacy=allow_legacy)
+
+
+verify_packet = verify_packet_checksum
 
 
 class TemporalAligner:

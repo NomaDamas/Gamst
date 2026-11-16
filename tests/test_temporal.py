@@ -1,6 +1,8 @@
 import unittest
 from dataclasses import replace
-from gamst.temporal import TemporalAligner, TemporalEvent, TemporalPacket
+from gamst.temporal import (TemporalAligner, TemporalEvent, TemporalPacket,
+                             PacketIntegrityCounter, canonical_packet_bytes,
+                             packet_sha256, verify_packet_checksum)
 
 
 def event(event_id, ts, *, modality='vision', revision=0, value=None):
@@ -93,6 +95,53 @@ class TemporalTests(unittest.TestCase):
         huge = event('huge', 100, value={'text': 'x' * 200000})
         with self.assertRaises(ValueError):
             TemporalPacket('gamst.temporal.v1', 200, (huge,)).as_dict()
+
+    def test_checksum_is_versioned_and_outside_evidence_content(self):
+        packet = TemporalPacket('gamst.temporal.v1', 1000, (event('e', 900),))
+        rendered = packet.as_dict()
+        self.assertEqual(rendered['checksum']['algorithm'], 'sha256')
+        self.assertEqual(rendered['checksum']['version'], 1)
+        self.assertEqual(rendered['checksum']['sha256'], packet_sha256(rendered))
+        self.assertNotIn('checksum', rendered['events'][0])
+        self.assertEqual(canonical_packet_bytes(rendered), packet.canonical_bytes())
+        self.assertEqual(verify_packet_checksum(rendered), True)
+
+    def test_tampered_packet_is_rejected_and_count_is_bounded(self):
+        packet = TemporalPacket('gamst.temporal.v1', 1000, (event('e', 900),))
+        rendered = packet.as_dict()
+        counter = PacketIntegrityCounter(limit=1)
+        rendered['events'][0]['value']['x'] = 2
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            verify_packet_checksum(rendered, counter=counter)
+        with self.assertRaises(ValueError):
+            verify_packet_checksum(rendered, counter=counter)
+        self.assertEqual(counter.integrity_rejected, 1)
+
+    def test_checksum_version_and_legacy_behavior_are_explicit(self):
+        packet = TemporalPacket('gamst.temporal.v1', 1000, (event('e', 900),))
+        versioned = packet.as_dict()
+        versioned['checksum']['version'] = 2
+        counter = PacketIntegrityCounter()
+        with self.assertRaisesRegex(ValueError, 'unsupported temporal packet checksum'):
+            TemporalPacket.from_dict(versioned, counter=counter)
+        self.assertEqual(counter.integrity_rejected, 1)
+        legacy = packet.as_dict(include_checksum=False)
+        with self.assertRaisesRegex(ValueError, 'checksum is required'):
+            TemporalPacket.from_dict(legacy, counter=counter)
+        self.assertEqual(counter.integrity_rejected, 2)
+        self.assertFalse(verify_packet_checksum(legacy, allow_legacy=True))
+        restored = TemporalPacket.from_dict(legacy, allow_legacy=True)
+        self.assertEqual(restored.as_dict()['checksum']['algorithm'], 'sha256')
+
+    def test_canonical_bytes_roundtrip_rejects_noncanonical_wire(self):
+        packet = TemporalPacket('gamst.temporal.v1', 1000, (event('e', 900),))
+        raw = packet.to_bytes()
+        self.assertEqual(TemporalPacket.from_bytes(raw), packet)
+        # Parsing equivalent JSON with a different key order is deliberately
+        # rejected so every repository hashes exactly the same bytes.
+        noncanonical = b'{"schema_version":"gamst.temporal.v1","query_cutoff_ms":1000,"clock":{},"events":[],"relations":[],"checksum":{"algorithm":"sha256","version":1,"sha256":"' + packet.checksum()['sha256'].encode() + b'"}}'
+        with self.assertRaises(ValueError):
+            TemporalPacket.from_bytes(noncanonical)
 
 
 if __name__ == '__main__':
