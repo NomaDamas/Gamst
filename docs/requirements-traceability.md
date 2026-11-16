@@ -26,6 +26,7 @@ linked issue.
 | CostBench and default selection | `docs/approved-plan.md` § CostBench | bench #6, #7; GAMST #293, #308 | matched held-out quality/latency/resource/cost and independent assessment | unmeasured; no default promotion |
 | Open-source integration candidates | `docs/approved-plan.md` § OS/runtime matrix | GAMST #294, #298, #302 | compatibility is recorded per profile; no tool is treated as universal fix | documented |
 | Playground / BYOK MyProxy Terra Low integration | GAMST Playground and OpenAI-compatible BYOK contract | GAMST #311; bench #1/#9 for runtime trace handoff | user-configured endpoint/model/key, non-stream and SSE response, compact Context/evidence inspection, raw-media exclusion and bounded error report | endpoint and credentials are user-supplied; no successful MyProxy call is claimed in this session |
+| Playground capture lifecycle | `docs/playground-capture-lifecycle.md` | GAMST #311 → #332 | stale pre-start paused snapshot cannot stop current media; current post-stop snapshot still releases media | race identified; focused regression and fix pending |
 
 ## Runtime issue tree
 

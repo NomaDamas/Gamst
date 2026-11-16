@@ -47,6 +47,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
 | A8 Playground/BYOK | OpenAI-compatible endpoint, model/key configuration, non-stream/SSE response and compact Context/evidence inspection | user-provided MyProxy endpoint/model/key; raw media remains excluded; errors are bounded and visible; no credentials or successful call are fabricated | GAMST #311; endpoint/credentials blocker remains |
+| A9 Playground capture lifecycle | operation-aware local start/stop snapshots and media ownership | stale paused snapshot cannot stop a current capture; genuine current stop still releases tracks | GAMST #332 under #311; implementation pending |
 | A7 motion-provider compatibility | preserve temporal clock metadata at OpenEB, separation-media, PG physical and SAM visual native boundaries | legacy eight-key and canonical clock-aware SensorMetadata normalize safely; unknown fields reject; hosted motion-provider job passes all required suites | GAMST #326; current c965c63 run `43867251845` passed; rerun of `43867261850` passed. The original single timeout is retained as an intermittent CI timing observation; no assertion or production timeout relaxation. |
 
 ## Epic B — context transport
