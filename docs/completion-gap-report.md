@@ -43,3 +43,34 @@ accounting-only runtime resources without host enforcement, missing exact-SHA
 cross-repository end-to-end evidence, unmeasured B/C/D/E, absent Linux/CUDA/
 Windows/Jetson acceptance, and incomplete temporal/physics/provenance evidence.
 This is review evidence, not an approval claim. The merge gate remains open.
+
+## Current handoff (2026-11-16)
+
+The active handoff uses these exact commits:
+
+- GAMST `feat/temporal-contract`: `429440a5d58d160031607a004f3d8806d607a8cc`
+- GamstCrew `feat/runtime-pr`: `f4b135c87f0ba03f194024a0b16acd058e22a2ac`
+- Gamst-bench `feat/temporal-metrics`: `84ca2b0f5632e2eb4284b82cbf52c6bf72002d62`
+
+The latest GAMST hosted runs `43851362894` and `43851370720` are running the
+required Python 3.10–3.13 and motion-provider matrices. Completed Python jobs
+are green; the long motion-provider recording stage is still in progress. The
+preceding PR303 runs `43847474183` and `43847483307` passed every required
+matrix, including motion-provider. The historical failure `43844596666` is
+retained as a diagnosed timeout artifact and is not being used to relax an
+assertion.
+
+Local validation at this handoff is:
+
+- GAMST temporal/contradiction/core/capability focused suite: `55 passed, 19
+  subtests passed`; recording-runtime narrow suite: `4 passed`.
+- GamstCrew CI-equivalent environment: `23/23` tests passed; its resource
+  allocator remains accounting-only until host enforcement and stress evidence
+  land.
+- Gamst-bench dependency-complete environment: `67/67` Python tests, `17/17`
+  Vitest tests, `npm run results:check`, and `npm run build` passed.
+
+This records verification only. It does not close any open A–F child:
+exact-SHA Core→Crew→bench evidence, host-enforced resource limits, real
+Mac/Linux/CUDA/Windows/Jetson acceptance, matched measured B/C/D/E, CostBench,
+default selection, and independent approval remain open.
