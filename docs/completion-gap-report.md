@@ -48,7 +48,7 @@ This is review evidence, not an approval claim. The merge gate remains open.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `c965c63` (latest docs/probe source)
+- GAMST `feat/temporal-contract`: `53ba2ea` (latest docs/evidence handoff; probe source is `3a8a08c`)
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
 - Gamst-bench `feat/temporal-metrics`: `d943660a2f1aaeaeb78c9daf80192ebfc0edf409`
 
@@ -90,8 +90,9 @@ after its frozen snapshot; production deadline enforcement and assertions are
 unchanged. This is monitored as hosted scheduler timing evidence, not treated
 as a protocol failure or proof of production readiness.
 
-The exact-byte probe in `scripts/verify_cross_repo_checksum.py` has now run
-successfully with all three current worktrees at the exact heads listed above. It recorded Core→Crew→bench
+The exact-byte probe in `scripts/verify_cross_repo_checksum.py` ran successfully
+against GAMST probe source `3a8a08c`, Crew `f357789`, and bench `d943660`; the
+subsequent GAMST docs/evidence refresh is `53ba2ea`. It recorded Core→Crew→bench
 verification, the shared SHA-256 digest, and exact repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-16.json`. This closes the canonical
 wire compatibility portion of #331, while the full runtime-manager/benchmark
