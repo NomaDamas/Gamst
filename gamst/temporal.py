@@ -47,6 +47,8 @@ class TemporalEvent:
     modality: str
     event_type: str
     source_clock: str
+    clock_id: str
+    clock_epoch: str
     capture_timestamp_ms: int
     start_ms: int
     end_ms: int
@@ -67,7 +69,7 @@ class TemporalEvent:
     source_spans: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self):
-        for name in ("event_id", "stream_id", "subject_id", "modality", "event_type", "source_clock", "provider", "model_revision"):
+        for name in ("event_id", "stream_id", "subject_id", "modality", "event_type", "source_clock", "clock_id", "clock_epoch", "provider", "model_revision"):
             _bounded_text(getattr(self, name), name)
         if not isinstance(self.capture_timestamp_ms, int) or not isinstance(self.start_ms, int) or not isinstance(self.end_ms, int):
             raise ValueError("temporal timestamps must be integers")
@@ -94,6 +96,7 @@ class TemporalEvent:
         result["source_spans"] = list(self.source_spans)
         result["age_ms"] = max(0, now - self.capture_timestamp_ms)
         result["fresh"] = result["age_ms"] <= self.freshness_ms
+        result["evidence_state"] = "current" if result["fresh"] else "last_seen"
         return result
 
 
@@ -166,8 +169,12 @@ class TemporalAligner:
 
     def accept(self, event: TemporalEvent) -> dict[str, Any] | None:
         previous = self._revisions.get(event.event_id)
+        if previous and (previous.clock_id, previous.clock_epoch) != (event.clock_id, event.clock_epoch):
+            raise ValueError("event identity cannot cross clock epochs")
         if previous and event.revision <= previous.revision:
             return None
+        if event.revision > 0 and (not previous or event.supersedes != previous.event_id):
+            raise ValueError("newer revision must supersede the previous event")
         self._revisions[event.event_id] = event
         return event.as_dict()
 

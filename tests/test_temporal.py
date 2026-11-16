@@ -1,9 +1,10 @@
 import unittest
+from dataclasses import replace
 from gamst.temporal import TemporalAligner, TemporalEvent, TemporalPacket
 
 
 def event(event_id, ts, *, modality='vision', revision=0, value=None):
-    return TemporalEvent(event_id, 'stream', 'subject', modality, 'observation', 'clock', ts, ts, ts + 100, ts // 100, 'fixture', '1', value or {'x': 1}, revision=revision, evidence_ids=(event_id,))
+    return TemporalEvent(event_id, 'stream', 'subject', modality, 'observation', 'clock', 'clock-1', 'epoch-1', ts, ts, ts + 100, ts // 100, 'fixture', '1', value or {'x': 1}, revision=revision, evidence_ids=(event_id,))
 
 
 class TemporalTests(unittest.TestCase):
@@ -39,8 +40,24 @@ class TemporalTests(unittest.TestCase):
         aligner = TemporalAligner()
         self.assertIsNotNone(aligner.accept(event('e', 100, revision=0)))
         self.assertIsNone(aligner.accept(event('e', 100, revision=0)))
-        self.assertIsNotNone(aligner.accept(event('e', 100, revision=1, value={'x': 2})))
+        revised = replace(event('e', 100, revision=1, value={'x': 2}), supersedes='e')
+        self.assertIsNotNone(aligner.accept(revised))
         self.assertEqual(aligner.eligible(200)[0].value, {'x': 2})
+
+    def test_revision_requires_lineage_and_stable_clock_epoch(self):
+        aligner = TemporalAligner()
+        aligner.accept(event('e', 100))
+        with self.assertRaises(ValueError):
+            aligner.accept(event('e', 100, revision=1))
+        with self.assertRaises(ValueError):
+            aligner.accept(replace(event('e', 100), clock_epoch='restarted'))
+
+    def test_current_and_last_seen_are_explicit(self):
+        packet = TemporalPacket('gamst.temporal.v1', 10000, (event('e', 100),))
+        rendered = packet.as_dict()['events'][0]
+        self.assertFalse(rendered['fresh'])
+        self.assertEqual(rendered['evidence_state'], 'last_seen')
+        self.assertNotEqual(rendered['evidence_state'], 'current')
 
     def test_packet_byte_budget(self):
         huge = event('huge', 100, value={'text': 'x' * 200000})

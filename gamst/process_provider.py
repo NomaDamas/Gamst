@@ -60,6 +60,8 @@ class ProcessProvider:
         self._sequence, self.closed = 0, False
         self._evaluation_observer=evaluation_observer
         self._worker_id=uuid.uuid4().hex
+        self.clock_id=f'provider:{profile}'
+        self.clock_epoch=self._worker_id
         self._lifecycle_ticket=None
         self._separation_owner = separation_owner
         if separation_owner is not None:

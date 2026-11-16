@@ -5,7 +5,7 @@ from gamst.temporal import TemporalEvent
 from gamstcrew.transport import JsonlUnixServer
 
 def event():
-    return TemporalEvent('e','s','u','vision','event','wall',1,1,1,1,'fixture','1',{'x':1})
+    return TemporalEvent('e','s','u','vision','event','wall','clock-1','epoch-1',1,1,1,1,'fixture','1',{'x':1})
 
 class Bridge(unittest.IsolatedAsyncioTestCase):
     async def test_submit_roundtrip(self):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import math
 import re
 import uuid
@@ -981,6 +982,8 @@ class Gamst:
                 event_id=record["id"], stream_id=str(sensor.get("source_id", "runtime")),
                 subject_id=subject_id, modality=str(observation.get("modality", "unknown")),
                 event_type=str(observation["name"]), source_clock=str(sensor.get("source_clock", "wall_ms")),
+                clock_id=str(sensor.get("clock_id", sensor.get("source_clock", "wall_ms"))),
+                clock_epoch=str(sensor.get("clock_epoch", "legacy")),
                 capture_timestamp_ms=ts, start_ms=int(observation.get("start_ms", ts)),
                 end_ms=int(observation.get("end_ms", ts)), sequence=record.get("sequence", 0),
                 provider=str(model.get("id", "unknown")), model_revision=str(model.get("version", "unknown")),
