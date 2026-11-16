@@ -43,7 +43,7 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | B1 packet contract | bounded packet, capture/receive/process times, source clock, evidence and revisions | schema round-trip and unknown-field rejection across all three repositories | foundation |
 | B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | partial; oversized-line hardening pending |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
-| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | missing |
+| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | GAMST #316; Core foundation `6cefc00`; Crew/bench cross-boundary wiring and review open |
 | B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
 
 ## Epic C — temporal and multimodal fusion
