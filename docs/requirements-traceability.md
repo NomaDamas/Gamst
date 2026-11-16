@@ -13,7 +13,7 @@ linked issue.
 |---|---|---|---|---|
 | Seven-layer product model | `docs/approved-plan.md` § owner-approved seven-layer model | GAMST #294, #295, #297, #318 | layer-to-contract review and focused tests | foundation documented; several runtime gates open |
 | Isolated runtimes, one user-facing system | `docs/approved-plan.md` § runtime; `docs/epic-issue-breakdown.md` A/E | GAMST #294, #296, #298; Crew #2–#10 | profile lock, readiness, lifecycle and real-host evidence | partial; real-host gates open |
-| Canonical packet and provenance | `docs/approved-plan.md` § canonical packet; `docs/PROTOCOL.md` | GAMST #295, #303, #316; Crew #9 | cross-repository schema/digest round trip | temporal foundation; checksum/transport hardening open |
+| Canonical packet and provenance | `docs/approved-plan.md` § canonical packet; [Gamst-bench protocol](https://github.com/NomaDamas/Gamst-bench/blob/feat/temporal-metrics/docs/PROTOCOL.md) | GAMST #295, #299, #316, #331; Crew #9; bench #1 | cross-repository schema/digest round trip plus exact-byte probe | canonical wire/checksum probe passes at current heads; full runtime-manager→bench execution and review open |
 | Unix transport, bounded queues and backpressure | `docs/approved-plan.md` § runtime and transport | GAMST #299; Crew #9 | size-before-allocation, timeout, cancellation, drop and tamper tests | partial |
 | Clock identity, offset/drift and AV alignment | `docs/approved-plan.md` § temporal; `docs/epic-issue-breakdown.md` C | GAMST #297, #306, #312, #317 | drift/offset/interval fixtures and calibration uncertainty | foundation; cross-runtime and contradiction gates open |
 | Internal evidence cutoff | `docs/approved-plan.md` § canonical temporal packet | GAMST #297, #312, #317; bench #1, #3 | post-cutoff evidence is excluded from answer support | implemented in foundation; integration evidence open |
@@ -57,10 +57,11 @@ cannot close a required acceptance gate by themselves.
 The required independent review was run against exact current handoff commits
 through Myproxy `gpt-6.1-sol` with high reasoning and returned **HOLD**. The
 review evidence is recorded in `docs/completion-gap-report.md`. The HOLD remains
-correct because resource limits are accounting-only, exact-SHA cross-repository
-evidence is incomplete, B/C/D/E are unmeasured, and Linux/CUDA, Windows and
-Jetson acceptance hosts are unavailable. No PR may merge until those gates and
-the hosted motion-provider job pass.
+correct because resource limits lack real stress evidence, full
+runtime-manager→bench execution is open, B/C/D/E are unmeasured, and
+Linux/CUDA, Windows and Jetson acceptance hosts are unavailable. No PR may
+merge until those gates, a passing hosted motion-provider job, and a fresh
+independent approval exist.
 
 ## Temporal cutoff wording
 

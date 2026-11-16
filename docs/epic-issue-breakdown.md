@@ -46,7 +46,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
 | A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
-| A7 motion-provider compatibility | preserve temporal clock metadata at OpenEB, separation-media, PG physical and SAM visual native boundaries | legacy eight-key and canonical clock-aware SensorMetadata normalize safely; unknown fields reject; hosted motion-provider job passes all required suites | GAMST #326; OpenEB `73b9e80`, PG `f8c35fa`, SAM/separation follow-up pending hosted rerun |
+| A7 motion-provider compatibility | preserve temporal clock metadata at OpenEB, separation-media, PG physical and SAM visual native boundaries | legacy eight-key and canonical clock-aware SensorMetadata normalize safely; unknown fields reject; hosted motion-provider job passes all required suites | GAMST #326; current c965c63 run `43867251845` passed; rerun of `43867261850` passed. The original single timeout is retained as an intermittent CI timing observation; no assertion or production timeout relaxation. |
 
 ## Epic B — context transport
 
@@ -56,9 +56,9 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
 | B1 packet contract | bounded packet, capture/receive/process times, source clock, evidence and revisions | schema round-trip and unknown-field rejection across all three repositories | foundation |
-| B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | partial; oversized-line hardening pending |
+| B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | Crew bounded-line hardening implemented (`a20854c`, `634fa2a`) with focused tests; full cross-repository execution/review open |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
-| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | GAMST #316; Core foundation `6cefc00`; Crew/bench cross-boundary wiring and review open |
+| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | Core/Crew/bench verification and exact-byte probe pass at current heads; full runtime-manager→bench execution and review open (#331) |
 | B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
 
 ## Epic C — temporal and multimodal fusion
@@ -102,7 +102,7 @@ Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314; Crew #10).
 
 ## Epic F — benchmark and default selection
 
-Parent: `F-benchmark` (Gamst-bench #1/#2/#6/#7 and GAMST #293/#300/#307/#308).
+Parent: `F-benchmark` (Gamst-bench #1/#3–#8 and GAMST #293/#300/#307/#308).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|

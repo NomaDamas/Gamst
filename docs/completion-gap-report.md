@@ -39,18 +39,18 @@ handoff commits (`9bb5323`, `f4b135c`, `ca566bb`). Review response IDs were
 follow-up `resp_07a464aa2b39e5bd016afac2a4bd1887d0b8429da5d08c7904`.
 The reviewer verdict was **HOLD — do not approve for production merge**. It
 confirmed the historical motion-provider diagnosis but identified blockers:
-accounting-only runtime resources without host enforcement, missing exact-SHA
-cross-repository end-to-end evidence, unmeasured B/C/D/E, absent Linux/CUDA/
-Windows/Jetson acceptance, and incomplete temporal/physics/provenance evidence.
+host-resource enforcement without real stress evidence, full runtime-manager→bench
+execution, unmeasured B/C/D/E, absent Linux/CUDA/Windows/Jetson acceptance,
+and incomplete temporal/physics/provenance evidence.
 This is review evidence, not an approval claim. The merge gate remains open.
 
 ## Current handoff (2026-11-16)
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `865809f` (exact checksum probe source)
+- GAMST `feat/temporal-contract`: `c965c63` (latest docs/probe source)
 - GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
-- Gamst-bench `feat/temporal-metrics`: `b667c62b9602882a6463fc8af09e8d1f8cbaa41e`
+- Gamst-bench `feat/temporal-metrics`: `d943660a2f1aaeaeb78c9daf80192ebfc0edf409`
 
 The GAMST hosted runs `43851362894` and `43851370720` passed the required
 Python 3.10–3.13 and motion-provider matrices. The subsequent documentation
@@ -62,20 +62,33 @@ Local validation at this handoff is:
 
 - GAMST temporal/contradiction/core/capability focused suite: `55 passed, 19
   subtests passed`; recording-runtime narrow suite: `4 passed`.
-- GamstCrew CI-equivalent environment: `31/31` tests passed; its resource
-  allocator remains accounting-only until host enforcement and stress evidence
-  land.
-- Gamst-bench dependency-complete environment: `67/67` Python tests, `17/17`
-  Vitest tests, `npm run results:check`, and `npm run build` passed.
+- GamstCrew CI-equivalent environment: `35/35` tests passed; host-limit seam
+  tests are contract fixtures and real host enforcement/stress evidence remain
+  open.
+- Gamst-bench dependency-complete environment: checksum/provenance focused
+  tests `46` passed and the full suite had `71` passes plus one expected
+  system-environment MCP import failure; prior dependency-complete CI was
+  `67/67`, with `17/17` Vitest, `npm run results:check`, and `npm run build`
+  passing.
 
 The B4 checksum slice now exists in all three branches: GAMST canonical
 packet SHA-256 (`429440a`), Crew strict EventPacket verification, bounded
 transport and explicit host-limit seam (`f357789`), and bench collector
-verification/three-repository provenance (`b667c62`).
-Focused Crew checksum/transport tests are `31/31`; bench checksum and protocol
-focused tests are `5` and `37`. This is implementation evidence only: the
-required exact-byte Core→Crew→bench end-to-end run and independent review are
-still open, so the B4 and #331 acceptance gates remain open.
+verification/three-repository provenance (`d943660`).
+Focused Crew checksum/transport/host tests are `35/35`; bench full validation is
+`72 passed, 1 skipped, 4 subtests` (the skip reports an unavailable MCP
+dependency). This is implementation evidence only: the exact-byte Core→Crew→
+bench contract probe passes, while full runtime-manager/benchmark execution and
+independent review remain open, so the B4/#331 acceptance gates remain open.
+
+Motion-provider CI status: the original c965c63 run `43867261850` recorded one
+real `test_actual_startup_and_owned_cleanup` timeout with child evidence and
+cleanup complete; the concurrent run `43867251845` and the failed-run rerun
+passed all Python 3.10–3.13 and motion-provider jobs. The narrow test passes
+locally three times. The test fixture now leaves a one-second bounded margin
+after its frozen snapshot; production deadline enforcement and assertions are
+unchanged. This is monitored as hosted scheduler timing evidence, not treated
+as a protocol failure or proof of production readiness.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` has now run
 successfully with all three current worktrees at the exact heads listed above. It recorded Core→Crew→bench
@@ -85,6 +98,6 @@ wire compatibility portion of #331, while the full runtime-manager/benchmark
 execution, host enforcement and independent-review portions remain open.
 
 This records verification only. It does not close any open A–F child:
-exact-SHA Core→Crew→bench evidence, host-enforced resource limits, real
+full runtime-manager→bench execution, host-enforced resource limits, real
 Mac/Linux/CUDA/Windows/Jetson acceptance, matched measured B/C/D/E, CostBench,
 default selection, and independent approval remain open.
