@@ -32,13 +32,14 @@ focused tests, real runtime evidence and review exist.
 
 ## Independent review evidence
 
-An independent review was run through the configured Myproxy OpenAI-compatible
-endpoint on `gpt-6-astra` with `reasoning_effort=medium` against the current
-handoff commits (`4fea924`, `ec80c2a`, `66e9c61`, `f4b135c`, `3649389`,
-`ca566bb`). The review did not approve merge. It identified remaining gates:
-actual host enforcement versus accounting-only resource reservations,
-concurrent/crash reservation tests, runtime-manifest provenance, cutoff-boundary
-and mixed-clock tests, cross-repository relation compatibility, and real held-out
-B/C/D/E measurements. This is review evidence, not an approval claim. The
-approved reviewer/merge gate remains open until the required model and host
-evidence are available.
+Independent review was run through the configured Myproxy OpenAI-compatible
+endpoint on `gpt-6.1-sol` with `reasoning_effort=high` against the exact current
+handoff commits (`9bb5323`, `f4b135c`, `ca566bb`). Review response IDs were
+`resp_051ea3f22d51fb48016afac1ec87fc87d0b0ba043399f26cc9` and the concise
+follow-up `resp_07a464aa2b39e5bd016afac2a4bd1887d0b8429da5d08c7904`.
+The reviewer verdict was **HOLD — do not approve for production merge**. It
+confirmed the historical motion-provider diagnosis but identified blockers:
+accounting-only runtime resources without host enforcement, missing exact-SHA
+cross-repository end-to-end evidence, unmeasured B/C/D/E, absent Linux/CUDA/
+Windows/Jetson acceptance, and incomplete temporal/physics/provenance evidence.
+This is review evidence, not an approval claim. The merge gate remains open.
