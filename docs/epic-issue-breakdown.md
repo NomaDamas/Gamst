@@ -18,6 +18,21 @@ The three repositories remain separate:
 | GamstCrew | Isolated runtime manager, lifecycle, IPC and OS profiles | `feat/runtime-pr` |
 | Gamst-bench | Frozen manifests, adapters, measurements and scoring | `feat/temporal-metrics` |
 
+## GitHub hierarchy status
+
+The documented crosswalk is now also represented by GitHub's native
+parent/sub-issue metadata wherever the issues live in the same repository.
+GAMST #294 is the top-level parent for the GAMST runtime/transport/temporal,
+memory, benchmark and exact-SHA children; the nested implementation children
+are attached under #296, #297, #298, #299, #300, #315 and #318. GamstCrew uses
+#11 as its repository-local Epic parent for Crew #2–#10 because the previously
+referenced Crew #1 is a pull request and cannot be a GitHub sub-issue parent.
+Gamst-bench #1 is the parent for bench #3–#8. Cross-repository relationships
+(GAMST↔Crew↔bench) remain explicit links in the issue bodies and the
+requirements crosswalk because GitHub does not allow a parent issue in another
+repository. The hierarchy is tracking structure only; an open child still
+requires code, focused tests, runtime evidence and review before closure.
+
 ## Epic A — GamstCrew runtime platform
 
 Parent: `A-runtime-platform` (GAMST issue umbrella #294; implementation in
