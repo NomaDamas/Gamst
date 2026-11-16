@@ -975,14 +975,23 @@ class Gamst:
             if type(ts) is not int or not observation.get("name"):
                 continue
             sensor = observation.get("sensor", {})
+            models = record.get("models", [])
+            model = models[0] if models and isinstance(models[0], dict) else {}
             event = TemporalEvent(
                 event_id=record["id"], stream_id=str(sensor.get("source_id", "runtime")),
                 subject_id=subject_id, modality=str(observation.get("modality", "unknown")),
-                event_type=str(observation["name"]), source_clock="wall_ms",
-                capture_timestamp_ms=ts, start_ms=ts, end_ms=ts, sequence=record.get("sequence", 0),
-                provider=str(record.get("models", [{}])[0].get("id", "unknown")),
-                model_revision=str(record.get("models", [{}])[0].get("version", "unknown")),
-                value=observation.get("value"), evidence_ids=(record["id"],))
+                event_type=str(observation["name"]), source_clock=str(sensor.get("source_clock", "wall_ms")),
+                capture_timestamp_ms=ts, start_ms=int(observation.get("start_ms", ts)),
+                end_ms=int(observation.get("end_ms", ts)), sequence=record.get("sequence", 0),
+                provider=str(model.get("id", "unknown")), model_revision=str(model.get("version", "unknown")),
+                value=observation.get("value"), evidence_ids=(record["id"],),
+                uncertainty=record.get("quality"),
+                monotonic_timestamp_ms=sensor.get("monotonic_timestamp_ms"),
+                receive_timestamp_ms=record.get("received_timestamp_ms"),
+                processing_start_ms=record.get("processing_start_ms"),
+                processing_end_ms=record.get("processing_end_ms"),
+                gap=bool(record.get("gap", False)), revision=int(record.get("revision", 0)),
+                supersedes=record.get("supersedes"))
             aligner.accept(event)
         packet = aligner.packet(cutoff, now_ms=cutoff)
         result = packet.as_dict()
