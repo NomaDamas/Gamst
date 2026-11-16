@@ -52,19 +52,17 @@ The active handoff uses these exact commits:
 - GamstCrew `feat/runtime-pr`: `a20854c465a911ea9824f6a6fc999ed42f1aa261`
 - Gamst-bench `feat/temporal-metrics`: `23d159f862b8a3ad23f931a973b66d11a7b740a0`
 
-The latest GAMST hosted runs `43851362894` and `43851370720` are running the
-required Python 3.10–3.13 and motion-provider matrices. Completed Python jobs
-are green; the long motion-provider recording stage is still in progress. The
-preceding PR303 runs `43847474183` and `43847483307` passed every required
-matrix, including motion-provider. The historical failure `43844596666` is
-retained as a diagnosed timeout artifact and is not being used to relax an
-assertion.
+The GAMST hosted runs `43851362894` and `43851370720` passed the required
+Python 3.10–3.13 and motion-provider matrices. The subsequent documentation
+handoff run for `0681308` (`43853497858`/`43853504866`) also passed every
+required job. The historical failure `43844596666` is retained as a diagnosed
+timeout artifact and is not being used to relax an assertion.
 
 Local validation at this handoff is:
 
 - GAMST temporal/contradiction/core/capability focused suite: `55 passed, 19
   subtests passed`; recording-runtime narrow suite: `4 passed`.
-- GamstCrew CI-equivalent environment: `23/23` tests passed; its resource
+- GamstCrew CI-equivalent environment: `31/31` tests passed; its resource
   allocator remains accounting-only until host enforcement and stress evidence
   land.
 - Gamst-bench dependency-complete environment: `67/67` Python tests, `17/17`
@@ -72,8 +70,8 @@ Local validation at this handoff is:
 
 The B4 checksum slice now exists in all three branches: GAMST canonical
 packet SHA-256 (`429440a`), Crew strict EventPacket verification and bounded
-transport (`634fa2a`), and bench collector verification/counters (`23d159f`).
-Focused Crew checksum/transport tests are `30/30`; bench checksum and protocol
+transport (`a20854c`), and bench collector verification/counters (`23d159f`).
+Focused Crew checksum/transport tests are `31/31`; bench checksum and protocol
 focused tests are `5` and `37`. This is implementation evidence only: the
 required exact-byte Core→Crew→bench end-to-end run and independent review are
 still open, so the B4 and #331 acceptance gates remain open.
