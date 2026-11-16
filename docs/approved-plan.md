@@ -67,6 +67,8 @@ The user-facing experience may be one-command (`gamst install`, `gamst run`), wh
 
 ## Canonical temporal packet contract
 
+The owner-approved temporal requirement includes keeping event timestamps, relationships and evidence valid for the question's observation time. `query_cutoff_ms` is the concrete implementation field for that requirement; it is not an unrelated product feature. The field/API name may evolve, but the invariant must remain: evidence captured after the query cutoff cannot support the answer.
+
 Every event/observation packet must preserve:
 
 - event ID
