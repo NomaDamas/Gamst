@@ -11,7 +11,7 @@ import json
 from collections import defaultdict
 from typing import Any, Iterable
 
-from .temporal import MAX_EVIDENCE, TemporalAligner, TemporalEvent
+from .temporal import MAX_EVIDENCE, TemporalAligner, TemporalEvent, TemporalPacket
 
 MAX_CONTRADICTIONS = 32
 MAX_ABSTENTIONS = 64
@@ -197,6 +197,10 @@ def detect_contradictions(events: Iterable[TemporalEvent], *,
     packet has no inferred truth: candidates carry ``verification_status`` and
     unresolved pairs are listed under ``abstentions`` for inspection/routing.
     """
+    if isinstance(events, TemporalPacket):
+        if query_cutoff_ms is None:
+            query_cutoff_ms = events.query_cutoff_ms
+        events = events.events
     if query_cutoff_ms is not None and type(query_cutoff_ms) is not int:
         raise ValueError("query_cutoff_ms must be an integer")
     if type(max_results) is not int or not 1 <= max_results <= MAX_CONTRADICTIONS:
