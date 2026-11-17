@@ -20,9 +20,9 @@ compatibility only.
 | Audio speech | Qwen3-ASR 0.6B; Faster-Whisper compatibility path | `qwen3.asr` or `qwen3.asr.endpoint` in dedicated audio runtime; endpoint may pair with Silero | Qwen local bundle requires explicit file inventory/hashes; endpoint requires ASR + VAD artifacts and timing bounds | Streaming/revision contracts and fixtures pass; real weights/device and measured streaming acceptance remain open |
 | Voice activity | Silero VAD | `silero.activity` audio worker or paired endpoint profile | Explicit local JIT path/hash; no implicit download | Local adapter is implemented; microphone/device and accuracy acceptance remain open |
 | Audio events and prosody | YAMNet, CED-Tiny (optional GPL), prosody/emotion2vec adapters | `yamnet.events`, `audio.prosody`, `emotion2vec.seed.onnx`; each in its selected audio environment | YAMNet artifact/hash; CED is opt-in and isolated; emotion model/head paths and hashes | Contracts and synthetic/replay checks exist; license, weights, and held-out quality acceptance remain open |
-| Audio alternatives | Moonshine v2, TEN-VAD, diarization/TalkNet | Separate audio workers; diarization may require Transformers 5 | Each profile has explicit local source/checkpoint and license gates | Optional integrations are documented; no default or production-quality claim is made |
+| Audio alternatives | Moonshine v2, TEN-VAD, diarization/TalkNet | Moonshine/TEN-VAD/CED are optional adapters; a separate worker is used only when an explicit worker profile is selected; diarization may require Transformers 5 | Each selected profile must declare local source/checkpoint and license gates; adapter-only paths do not imply process isolation | Optional integrations are documented; no default or production-quality claim is made |
 | Text and LLM/VLM consumer | OpenAI-compatible endpoint, MyProxy Terra, local Qwen3-VL 2B, SmolVLM2 | Core sends bounded context text; `gamst-vlm` uses llama.cpp/MLX/vLLM; Playground BYOK is separate | Local MyProxy shortcut is ignored by Git, session-only for keys, and defaults to `gpt-6.1-terra` with low reasoning | UI/request transport and local Qwen smoke exist; user endpoint/key and matched quality/cost runs remain open |
-| Decision routing | Deterministic rules; optional Intern-Decision 2B/4B | Core/router runtime; optional model worker with its own Torch/Transformers pins | Typed actions are bounded; model artifacts and calibration are explicit | Decision contract is implemented; calibration and task-quality acceptance remain open |
+| Decision routing | Deterministic rules; optional Intern-Decision 2B/4B | Core/router runtime; the current `decision` extra loads `InternDecisionProvider` in-process; a worker profile is required before claiming process isolation | Typed actions are bounded; the in-process extra and any worker profile must declare Torch/Transformers pins, artifacts and calibration | Decision contract is implemented; calibration, process-isolated execution and task-quality acceptance remain open |
 | Tactile | DIGIT/GelSight capture; Sparsh slip/task head | `gamst-tactile`, profile `sparsh.slip.local` | Sparsh extra pins Torch 2.8; capture metadata and source/license must be explicit | Packet/replay and adapter contracts exist; physical hardware, checkpoint, and task-head acceptance remain open |
 | Radar/RF | TI xWR6843 radar; ESP32 CSI/RF variation | Sensor workers `ti.radar` and `esp32.csi`, CPU-side decoding | Explicit sensor clock/calibration and bounded raw packet schema | Parser/provider tests pass; real hardware and calibration acceptance remain open |
 | Thermal/environment | Radiometric `TLinearThermal`; BME688/BSEC2 environment context | CPU sensor runtime, `bosch.bsec2` and thermal providers | Raw units and calibration ID are mandatory; BSEC/license/source constraints remain explicit | Synthetic/replay validation exists; device and trained-pattern acceptance remain open |
@@ -32,8 +32,10 @@ compatibility only.
 ## Runtime boundary
 
 `gamst-core` owns packet schemas, timestamps, evidence, bounded queues and
-memory. GamstCrew starts each selected provider in its own interpreter and
-performs readiness, artifact, host and Python-version preflight before launch.
+memory. GamstCrew starts each provider that has an explicit worker profile in
+its own interpreter and performs readiness, artifact, host and Python-version
+preflight before launch. In-process optional adapters remain clearly marked as
+such and are not counted as isolated runtime acceptance.
 The approved environment split is:
 
 ```text
