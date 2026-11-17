@@ -536,7 +536,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         capture_sequence = frame.sensor.capture_sequence
         if capture_sequence is None:
             capture_sequence = frame.sensor.sequence
-        sensor = replace(frame.sensor, sequence=sequence, capture_sequence=capture_sequence)
+        provider = lane['provider']
+        sensor = replace(frame.sensor, sequence=sequence, capture_sequence=capture_sequence,
+            clock_id=getattr(provider, 'clock_id', frame.sensor.clock_id),
+            clock_epoch=getattr(provider, 'clock_epoch', frame.sensor.clock_epoch))
         try:
             record = await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)

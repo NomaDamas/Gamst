@@ -14,7 +14,7 @@ export const MESSAGES = {
     composerLabel: "Question", composerPlaceholder: "Ask your agent…", send: "Send", sending: "Sending…", composerHelp: "Enter to send · Shift+Enter for a new line", emptyQuestion: "Type a question first.",
     inspector: "Inspector", response: "Response", context: "Context", json: "JSON", metrics: "Metrics", responseIdle: "Ask a question to inspect a grounded response.", responseLocal: "Local Companion", responseByok: "OpenAI-compatible BYOK", evidenceSent: "Evidence sent", noEvidence: "No evidence ids in this packet", compactPacket: "Compact packet sent to the model", rawPacket: "Latest raw context packet", noPacket: "Start an input or send text to build a packet.",
     setupTitle: "Connect a model to get a response", setupBody: "No answer is generated until you configure an OpenAI-compatible endpoint or a local Companion is available.", configureModel: "Configure model",
-    settings: "Model & packet settings", packetSetting: "Packet rate", byteBudget: "Context byte budget", provider: "Response provider", localCompanion: "Local Companion", byok: "Bring your own key", baseUrl: "OpenAI-compatible base URL", model: "Model", apiKey: "API key", rememberKey: "Remember key on this device", saveSettings: "Save settings", settingsSaved: "Settings saved",
+    settings: "Model & packet settings", packetSetting: "Packet rate", byteBudget: "Context byte budget", provider: "Response provider", localCompanion: "Local Companion", byok: "Bring your own key", baseUrl: "OpenAI-compatible base URL", model: "Model", apiKey: "API key", rememberKey: "Remember key on this device", useLocalMyProxy: "Use local MyProxy", localMyProxyUnavailable: "Add site/local-config.js to enable local MyProxy", localMyProxyApplied: "Local MyProxy settings loaded for this session", errorLocalMyProxy: "Local MyProxy config is unavailable or incomplete.", saveSettings: "Save settings", settingsSaved: "Settings saved",
     providerNotice: "Your question and sensor context text are sent to {endpoint}. Raw camera and audio media are never sent by this playground.", providerNoticeLocal: "Local Companion uses the backend configured in GAMST. BYOK sends only context text and your question to the endpoint you choose.",
     metricHistory: "Packet history", metricBytesShort: "bytes", metricAgeShort: "age", metricDropsShort: "drops", observations: "observations", latestEvidence: "Latest evidence",
     localDialogTitle: "Local model settings", close: "Close", models: "Analysis models", modelHint: "Stop capture before changing a model.", asrLanguage: "Speech recognition language", auto: "Auto detect", apply: "Apply", sam3: "SAM3", vlm: "VLM scene analysis", vlmEnabled: "VLM enabled", interval: "Interval · seconds", window: "Window · seconds", sampleFps: "Sample · FPS", testVlm: "Test VLM", testGuides: "Test guides", capabilities: "Capabilities / MCP", loadCapabilities: "Load capabilities", unavailable: "Unavailable", testing: "Testing…", testReady: "Ready", deleteConfirm: "Clear all local observations?",
@@ -34,7 +34,7 @@ export const MESSAGES = {
     composerLabel: "질문", composerPlaceholder: "에이전트에게 질문하기…", send: "보내기", sending: "보내는 중…", composerHelp: "Enter 전송 · Shift+Enter 줄바꿈", emptyQuestion: "질문을 입력하세요.",
     inspector: "인스펙터", response: "응답", context: "문맥", json: "JSON", metrics: "메트릭", responseIdle: "근거 기반 응답을 확인하려면 질문하세요.", responseLocal: "로컬 Companion", responseByok: "OpenAI 호환 BYOK", evidenceSent: "전송된 근거", noEvidence: "이 패킷에 근거 ID 없음", compactPacket: "모델에 실제 전송한 압축 패킷", rawPacket: "최신 원본 문맥 패킷", noPacket: "입력을 시작하거나 텍스트를 보내 패킷을 만드세요.",
     setupTitle: "응답을 받으려면 모델을 연결하세요", setupBody: "OpenAI 호환 엔드포인트를 설정하거나 로컬 Companion을 사용할 수 있을 때까지 응답을 생성하지 않습니다.", configureModel: "모델 설정",
-    settings: "모델 및 패킷 설정", packetSetting: "패킷 속도", byteBudget: "문맥 바이트 예산", provider: "응답 제공자", localCompanion: "로컬 Companion", byok: "내 API 키 사용", baseUrl: "OpenAI 호환 base URL", model: "모델", apiKey: "API 키", rememberKey: "이 기기에 키 저장", saveSettings: "설정 저장", settingsSaved: "설정 저장됨",
+    settings: "모델 및 패킷 설정", packetSetting: "패킷 속도", byteBudget: "문맥 바이트 예산", provider: "응답 제공자", localCompanion: "로컬 Companion", byok: "내 API 키 사용", baseUrl: "OpenAI 호환 base URL", model: "모델", apiKey: "API 키", rememberKey: "이 기기에 키 저장", useLocalMyProxy: "로컬 MyProxy 사용", localMyProxyUnavailable: "로컬 MyProxy를 사용하려면 site/local-config.js를 추가하세요", localMyProxyApplied: "이 세션에 로컬 MyProxy 설정을 불러왔습니다", errorLocalMyProxy: "로컬 MyProxy 설정이 없거나 완전하지 않습니다.", saveSettings: "설정 저장", settingsSaved: "설정 저장됨",
     providerNotice: "질문과 센서 문맥 텍스트가 {endpoint}로 전송됩니다. 이 플레이그라운드는 원본 카메라·오디오 미디어를 보내지 않습니다.", providerNoticeLocal: "로컬 Companion은 GAMST에 설정된 백엔드를 사용합니다. BYOK는 문맥 텍스트와 질문만 선택한 엔드포인트로 보냅니다.",
     metricHistory: "패킷 기록", metricBytesShort: "바이트", metricAgeShort: "경과", metricDropsShort: "드롭", observations: "관측", latestEvidence: "최근 근거",
     localDialogTitle: "로컬 모델 설정", close: "닫기", models: "분석 모델", modelHint: "모델을 바꾸기 전에 수집을 정지하세요.", asrLanguage: "음성 인식 언어", auto: "자동 감지", apply: "적용", sam3: "SAM3", vlm: "VLM 장면 분석", vlmEnabled: "VLM 사용", interval: "주기 · 초", window: "구간 · 초", sampleFps: "샘플 · FPS", testVlm: "VLM 테스트", testGuides: "가이드 테스트", capabilities: "기능 / MCP", loadCapabilities: "기능 불러오기", unavailable: "사용 불가", testing: "테스트 중…", testReady: "준비됨", deleteConfirm: "모든 로컬 관측을 지울까요?",
@@ -54,7 +54,7 @@ export const MESSAGES = {
     composerLabel: "问题", composerPlaceholder: "询问你的智能体…", send: "发送", sending: "发送中…", composerHelp: "Enter 发送 · Shift+Enter 换行", emptyQuestion: "请先输入问题。",
     inspector: "检查器", response: "响应", context: "上下文", json: "JSON", metrics: "指标", responseIdle: "提问以检查基于证据的响应。", responseLocal: "本地 Companion", responseByok: "OpenAI 兼容 BYOK", evidenceSent: "已发送证据", noEvidence: "此数据包没有证据 ID", compactPacket: "实际发送给模型的紧凑数据包", rawPacket: "最新原始上下文数据包", noPacket: "启动输入或发送文本以构建数据包。",
     setupTitle: "连接模型以获取响应", setupBody: "在配置 OpenAI 兼容端点或本地 Companion 可用之前，不会生成答案。", configureModel: "配置模型",
-    settings: "模型与数据包设置", packetSetting: "数据包速率", byteBudget: "上下文字节预算", provider: "响应提供方", localCompanion: "本地 Companion", byok: "自带密钥", baseUrl: "OpenAI 兼容 base URL", model: "模型", apiKey: "API 密钥", rememberKey: "在此设备记住密钥", saveSettings: "保存设置", settingsSaved: "设置已保存",
+    settings: "模型与数据包设置", packetSetting: "数据包速率", byteBudget: "上下文字节预算", provider: "响应提供方", localCompanion: "本地 Companion", byok: "自带密钥", baseUrl: "OpenAI 兼容 base URL", model: "模型", apiKey: "API 密钥", rememberKey: "在此设备记住密钥", useLocalMyProxy: "使用本地 MyProxy", localMyProxyUnavailable: "添加 site/local-config.js 以启用本地 MyProxy", localMyProxyApplied: "已为本次会话加载本地 MyProxy 设置", errorLocalMyProxy: "本地 MyProxy 配置缺失或不完整。", saveSettings: "保存设置", settingsSaved: "设置已保存",
     providerNotice: "你的问题和传感器上下文文本会发送到 {endpoint}。本游乐场绝不发送原始摄像头和音频媒体。", providerNoticeLocal: "本地 Companion 使用 GAMST 配置的后端。BYOK 只向所选端点发送上下文文本和问题。",
     metricHistory: "数据包历史", metricBytesShort: "字节", metricAgeShort: "时龄", metricDropsShort: "丢弃", observations: "观察", latestEvidence: "最新证据",
     localDialogTitle: "本地模型设置", close: "关闭", models: "分析模型", modelHint: "更改模型前请停止采集。", asrLanguage: "语音识别语言", auto: "自动检测", apply: "应用", sam3: "SAM3", vlm: "VLM 场景分析", vlmEnabled: "启用 VLM", interval: "间隔 · 秒", window: "窗口 · 秒", sampleFps: "采样 · FPS", testVlm: "测试 VLM", testGuides: "测试叠加层", capabilities: "功能 / MCP", loadCapabilities: "加载功能", unavailable: "不可用", testing: "测试中…", testReady: "就绪", deleteConfirm: "清除所有本地观察？",
@@ -70,6 +70,21 @@ export function t(locale, key, variables = {}) {
   return value.replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? `{${name}}`));
 }
 
+// Optional local-only model configuration. The actual `site/local-config.js`
+// file is ignored and loaded dynamically by the demo; this pure normalizer
+// keeps malformed or absent config from becoming a credential-bearing request.
+export function normalizeLocalModelConfig(value) {
+  const source = value?.default && typeof value.default === "object" ? value.default : value;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const baseUrl = typeof source.baseUrl === "string" ? source.baseUrl.trim() : typeof source.endpoint === "string" ? source.endpoint.trim() : "";
+  const model = typeof source.model === "string" ? source.model.trim() : "";
+  const apiKey = typeof source.apiKey === "string" ? source.apiKey.trim() : typeof source.key === "string" ? source.key.trim() : "";
+  const configuredReasoning = source.reasoningEffort ?? source.reasoning_effort;
+  const reasoningEffort = typeof configuredReasoning === "string" ? configuredReasoning.trim().toLowerCase() : "low";
+  if (!baseUrl || !model || !apiKey || !["low", "medium", "high"].includes(reasoningEffort) || /[\u0000-\u001f\u007f]/.test(baseUrl) || /[\u0000-\u001f\u007f]/.test(model) || /[\u0000-\u001f\u007f]/.test(apiKey)) return null;
+  return Object.freeze({ baseUrl, model, apiKey, reasoning_effort: reasoningEffort });
+}
+
 export function utf8Bytes(value) {
   return new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)).byteLength;
 }
@@ -81,9 +96,12 @@ function averageBlendshape(shapes, names) {
 
 export function gaugeValues(packet, live = true) {
   const observations = packet?.observations || {};
-  const usable = (name) => live && observations[name]?.fresh !== false && Number.isFinite(observations[name]?.timestamp_ms);
+  const usable = (name) => {
+    const observation = observations[name];
+    return live && observation && typeof observation === "object" && observation.fresh !== false && Number.isFinite(observation.timestamp_ms);
+  };
   const faceObservation = observations["scene.faces"];
-  const face = live && faceObservation?.fresh !== false ? faceObservation?.value?.[0] : null;
+  const face = live && faceObservation && typeof faceObservation === "object" && faceObservation.fresh !== false && Array.isArray(faceObservation.value) ? faceObservation.value[0] : null;
   const shapes = face?.blendshapes || {};
   const first = (names) => {
     for (const name of names) if (Number.isFinite(shapes[name])) return shapes[name];
@@ -126,6 +144,26 @@ export function packetRate(arrivalTimes, now = Date.now(), windowMs = 4000) {
   if (times.length < 2) return 0;
   const span = Math.max(250, now - times[0]);
   return (times.length - 1) * 1000 / span;
+}
+
+export function captureSnapshotDecision(currentRevision, transitionActive, data) {
+  if (!data || typeof data !== "object" || !data.state || typeof data.state !== "object") {
+    return { accept: false, revision: currentRevision, reason: "invalid_snapshot" };
+  }
+  const revision = Number(data?.capture_revision);
+  if (transitionActive) return { accept: false, revision: currentRevision, reason: "transition" };
+  if (Number.isFinite(revision) && revision < currentRevision) {
+    return { accept: false, revision: currentRevision, reason: "stale_revision" };
+  }
+  return {
+    accept: true,
+    revision: Number.isFinite(revision) ? revision : currentRevision,
+    running: !data?.state?.paused,
+  };
+}
+
+export function captureTransitionCanClear(activeTransition, completedTransition) {
+  return activeTransition === completedTransition;
 }
 
 export function evidenceIds(packet) {

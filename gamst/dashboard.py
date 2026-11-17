@@ -15,8 +15,12 @@ class Dashboard:
         self.token = secrets.token_urlsafe(32)
         self.errors = []
         self.capture = False
+        # State-stream snapshots can be queued before a start/stop request.
+        # Clients use this monotonic operation revision to reject stale data.
+        self.capture_revision = 0
         self.companion = None
         self._lock = asyncio.Lock()
+        self._capture_lock = asyncio.Lock()
         self._vlm_test_lock = asyncio.Lock()
         self._guide_test_lock = asyncio.Lock()
         self.fixture_image = None
@@ -138,7 +142,8 @@ class Dashboard:
             state = await self.human.get_state()
             return {"sam3": self.sam3_status(), "features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": state, "guides": guide_packet(state),
                     "context": await self.human.get_context(),
-                    "guide_test_available": self.fixture_image is not None, "capture": self.capture, "adapter_errors": self.errors,
+                    "guide_test_available": self.fixture_image is not None, "capture": self.capture,
+                    "capture_revision": self.capture_revision, "adapter_errors": self.errors,
                     "companion_available": self.companion is not None and self.companion.backend is not None,
                     "analysis_available": self.human.analysis_backend is not None,
                     "plugins": [p.name for p in self.human.plugins],
@@ -150,13 +155,17 @@ class Dashboard:
                 raise ValueError("Wait for the guide sample test to finish")
             if body.get("consent") is not True:
                 raise ValueError("Explicit consent is required")
-            await self.human.acquire_capture("dashboard")
-            self.capture = True
-            return {"capture": True}
+            async with self._capture_lock:
+                await self.human.acquire_capture("dashboard")
+                self.capture = True
+                self.capture_revision += 1
+                return {"capture": True, "capture_revision": self.capture_revision}
         if op == "stop":
-            self.capture = False
-            await self.human.release_capture("dashboard", pause_when_idle=True)
-            return {"capture": False}
+            async with self._capture_lock:
+                await self.human.release_capture("dashboard", pause_when_idle=True)
+                self.capture = False
+                self.capture_revision += 1
+                return {"capture": False, "capture_revision": self.capture_revision}
         if op == "delete":
             await self.human.delete_data()
             return {"deleted": True}
@@ -224,6 +233,7 @@ def handler_for(app):
                 "/playground.js": "application/javascript",
                 "/observability.js": "application/javascript",
                 "/i18n.js": "application/javascript",
+                "/local-config.js": "application/javascript",
                 "/style.css": "text/css",
                 "/icon.svg": "image/svg+xml",
             }
@@ -231,6 +241,8 @@ def handler_for(app):
                 # The public site owns the shared client; the Python server only
                 # exposes this fixed allowlist, never arbitrary repository files.
                 asset = Path(__file__).parent.parent / "site" / self.path[1:]
+                if not asset.is_file():
+                    return self.respond(404, {"error": "Not found"})
                 return self.respond(200, asset.read_text(), static_types[self.path])
             if not self.allowed_host() or self.path != "/":
                 return self.respond(404, {"error": "Not found"})

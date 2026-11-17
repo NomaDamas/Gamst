@@ -7,8 +7,8 @@ const path = require('node:path');
   const pure = await import(pathToFileURL(path.resolve('site/playground.js')).href);
   const {
     MESSAGES, LOCALES, t, utf8Bytes, gaugeValues, newestObservationTimestamp,
-    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage,
-    buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta,
+    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage, captureSnapshotDecision, captureTransitionCanClear,
+    buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta, normalizeLocalModelConfig,
     sparklinePoints,
   } = pure;
 
@@ -40,6 +40,15 @@ const path = require('node:path');
   packet.observations['scene.faces'].fresh = true;
   packet.observations['audio.rms'].fresh = true;
   assert.equal(gaugeValues(packet, false).jawOpen, null, 'stopped gauges never invent values');
+  const malformed = { observations: {
+    'scene.faces': { fresh: true, timestamp_ms: 901 },
+    'scene.poses': { fresh: true, timestamp_ms: 901 },
+    'scene.person_tracks': { fresh: true, timestamp_ms: 901 },
+    'audio.rms': { fresh: true, timestamp_ms: 901 },
+    'speech.activity': { fresh: true, timestamp_ms: 901 },
+  } };
+  assert.doesNotThrow(() => gaugeValues(malformed, true), 'partial observations remain renderable');
+  assert.equal(gaugeValues(malformed, true).audioRms, null);
   console.log('Gauge mapping: bilateral blendshapes, audio, speech, stale and stopped states passed');
 
   assert.equal(newestObservationTimestamp(packet), 900);
@@ -52,6 +61,14 @@ const path = require('node:path');
   assert.equal(metrics.dropped, 3);
   assert.equal(packetMetrics({}, 100).ageMs, null);
   assert.equal(packetRate([0, 1000, 2000, 3000], 4000), .75);
+  const stalePaused = { capture_revision: 2, state: { paused: true } };
+  assert.deepEqual(captureSnapshotDecision(3, false, stalePaused), { accept: false, revision: 3, reason: "stale_revision" });
+  assert.deepEqual(captureSnapshotDecision(3, true, { capture_revision: 3, state: { paused: true } }), { accept: false, revision: 3, reason: "transition" });
+  assert.deepEqual(captureSnapshotDecision(2, false, { capture_revision: 3, state: { paused: true } }), { accept: true, revision: 3, running: false });
+  assert.deepEqual(captureSnapshotDecision(3, false, { capture_revision: 4 }), { accept: false, revision: 3, reason: "invalid_snapshot" });
+  assert.equal(captureTransitionCanClear(2, 1), false, 'old stop cannot clear newer start guard');
+  assert.equal(captureTransitionCanClear(2, 2), true, 'current transition clears its own guard');
+  console.log('Capture lifecycle: stale paused snapshots are ignored and current stop snapshots are accepted');
   assert.deepEqual(evidenceIds(packet), ['face-1', 'audio-1']);
   console.log('Packet metrics: UTF-8 bytes, newest age, cadence, drops and evidence ids passed');
 
@@ -92,6 +109,12 @@ const path = require('node:path');
   assert.throws(() => extractDelta({ error: { message: 'denied' } }), /denied/);
   assert.equal(chatEndpoint('https://api.openai.com/v1/'), 'https://api.openai.com/v1/chat/completions');
   assert.equal(chatEndpoint('http://127.0.0.1:9000/v1/chat/completions'), 'http://127.0.0.1:9000/v1/chat/completions');
+  assert.equal(normalizeLocalModelConfig(undefined), null, 'missing local config stays unavailable');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'https://proxy.nomadamas.org/v1', model: 'gpt-6.1-terra', apiKey: 'local-secret' }).reasoning_effort, 'low');
+  assert.equal(normalizeLocalModelConfig({ default: { endpoint: 'https://proxy.nomadamas.org/v1', model: 'gpt-6.1-terra', key: 'local-secret', reasoningEffort: 'high' } }).baseUrl, 'https://proxy.nomadamas.org/v1');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'https://proxy.nomadamas.org/v1', model: 'gpt-6.1-terra', apiKey: 'local-secret', reasoningEffort: 'medium' }).reasoning_effort, 'medium');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'https://proxy.nomadamas.org/v1', model: 'gpt-6.1-terra' }), null, 'partial config must not activate the shortcut');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'https://proxy.nomadamas.org/v1', model: 'gpt-6.1-terra', apiKey: 'local\nsecret' }), null, 'control characters must not enter config');
   console.log('SSE parser: fragmented CRLF events, comments, deltas, DONE and endpoint normalization passed');
 
   const keys = Object.keys(MESSAGES.en).sort();
@@ -102,6 +125,9 @@ const path = require('node:path');
   assert.equal(t('zh', 'response'), '响应');
   assert.equal(t('en', 'connectionLocal', { port: 8799 }), 'Local · 127.0.0.1:8799');
   const site = fs.readFileSync('site/index.html', 'utf8');
+  const app = fs.readFileSync('site/app.js', 'utf8');
+  const exampleConfig = fs.readFileSync('site/local-config.example.js', 'utf8');
+  const gitignore = fs.readFileSync('.gitignore', 'utf8');
   const local = fs.readFileSync('gamst/dashboard.html', 'utf8');
   for (const html of [site, local]) {
     for (const match of html.matchAll(/data-i18n="([^"]+)"/g)) assert(keys.includes(match[1]), `missing translation ${match[1]}`);
@@ -110,6 +136,26 @@ const path = require('node:path');
     assert(html.includes('@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'));
     assert(!html.includes('id="categoryCharts"'));
   }
+  assert(app.includes('for (const delegate of ["GPU", "CPU"])'), 'camera model loading must fall back from GPU to CPU');
+  assert(app.includes('state.faceModel = null;'), 'camera model failure must not tear down media ownership');
+  assert(app.includes('await $("video").play().catch(() => {})'), 'preview autoplay failure must not stop capture');
+  assert(app.includes('AudioContext startup is an optional input path'), 'audio startup failure must be isolated from camera capture');
+  assert(app.includes('if (generation === state.generation && state.active) showError("errorRequest", error);'), 'audio failure must be reported without stopping capture');
+  assert(app.includes('function controlValue(id, fallback = "")'), 'capture controls must tolerate a partially loaded demo shell');
+  assert(app.includes('Number.isFinite(rate) && rate > 0 ? rate : 4'), 'invalid or missing packet rate must use a safe capture interval');
+  assert(app.includes('if (!state.mute?.gain) throw new Error("Audio output control is unavailable")'), 'audio gain lifecycle must not dereference an absent gain node');
+  assert(app.includes('loadLocalMyProxyConfig'), 'demo must load optional local MyProxy config');
+  assert(app.includes('applyLocalMyProxyConfig'), 'demo must expose local MyProxy setup action');
+  assert(site.includes('id="useLocalMyProxy"'), 'public demo must expose local MyProxy button');
+  assert(local.includes('id="useLocalMyProxy"'), 'local dashboard must expose local MyProxy button');
+  assert(gitignore.split(/\r?\n/).includes('site/local-config.js'), 'actual local config must be ignored');
+  assert(exampleConfig.includes('baseUrl: "https://proxy.nomadamas.org/v1"'), 'tracked example must pin the local MyProxy endpoint');
+  assert(exampleConfig.includes('model: "gpt-6.1-terra"'), 'tracked example must use the Terra model id');
+  assert(exampleConfig.includes('reasoningEffort: "low"'), 'tracked example must default reasoning effort to low');
+  assert(exampleConfig.includes('apiKey: ""'), 'tracked example must contain no credential');
+  assert(!exampleConfig.includes('local-secret'), 'tracked example must not contain a real key');
+  assert(!app.includes('gpt-6.1-terra-low'), 'model/key values must remain local configuration, not client source');
+  assert(app.includes('if (config.reasoning_effort) requestBody.reasoning_effort = config.reasoning_effort;'), 'MyProxy requests must include reasoning effort only when configured');
   assert(local.includes('name="gamst-session-token" content="__SESSION_TOKEN__"'));
   assert(local.includes('src="/app.js"'));
   assert(!site.includes('name="gamst-session-token"'));

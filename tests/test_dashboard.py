@@ -68,6 +68,44 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.app.dispatch(body)
 
+    async def test_capture_revision_advances_with_start_and_stop(self):
+        before = await self.app.dispatch({"op": "state"})
+        self.assertEqual(before["capture_revision"], 0)
+        started = await self.app.dispatch({"op": "start", "consent": True})
+        self.assertEqual(started["capture_revision"], 1)
+        live = await self.app.dispatch({"op": "state"})
+        self.assertTrue(live["capture"])
+        self.assertEqual(live["capture_revision"], 1)
+        stopped = await self.app.dispatch({"op": "stop"})
+        self.assertEqual(stopped["capture_revision"], 2)
+        idle = await self.app.dispatch({"op": "state"})
+        self.assertFalse(idle["capture"])
+        self.assertEqual(idle["capture_revision"], 2)
+
+    async def test_capture_start_waits_for_inflight_stop(self):
+        await self.app.dispatch({"op": "start", "consent": True})
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.human.release_capture
+
+        async def delayed_release(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        from unittest.mock import patch
+        with patch.object(self.human, "release_capture", side_effect=delayed_release):
+            stopping = asyncio.create_task(self.app.dispatch({"op": "stop"}))
+            await entered.wait()
+            starting = asyncio.create_task(self.app.dispatch({"op": "start", "consent": True}))
+            await asyncio.sleep(0)
+            self.assertFalse(starting.done(), "start must wait behind the in-flight stop")
+            release.set()
+            await stopping
+            started = await starting
+        self.assertTrue(started["capture"])
+        self.assertTrue(self.app.capture)
+        await self.app.dispatch({"op": "stop"})
+
 
 class HTTPBoundaryTests(unittest.TestCase):
     def make_handler(self, host="localhost:8766", token="secret", path="/api"):
@@ -105,7 +143,6 @@ class HTTPBoundaryTests(unittest.TestCase):
         self.assertIn('<script type="module" src="/app.js">', handler.response[1])
         self.assertIn('id="panel-response"', handler.response[1])
         self.assertIn('id="featureSwitches"', handler.response[1])
-
 
 class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_does_not_wait_for_long_model_call(self):

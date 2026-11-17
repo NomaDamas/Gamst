@@ -150,8 +150,9 @@ class OpenEBProcess:
                 type(metadata['metadata']) is not dict or set(metadata['metadata'])!={'modality','timestamp_ms','subject_id','sample_rate','sensor'}):
             raise ValueError('capture frame layout mismatch')
         sensor_meta=metadata['metadata']['sensor']
-        if (type(sensor_meta) is not dict or set(sensor_meta)!={'source_id','sensor_id','sequence','coordinate_frame','calibration_id','channels','stream_epoch','capture_sequence'} or
-                type(sensor_meta['channels']) is not list or sensor_meta['channels']):
+        if (type(sensor_meta) is not dict or set(sensor_meta)!={'source_id','sensor_id','sequence','coordinate_frame','calibration_id','channels','stream_epoch','capture_sequence','clock_id','clock_epoch'} or
+                type(sensor_meta['channels']) is not list or sensor_meta['channels'] or
+                sensor_meta['clock_id'] is not None or sensor_meta['clock_epoch'] is not None):
             raise ValueError('capture sensor metadata mismatch')
         frame=decode_frame(metadata,data);sensor=frame.sensor;selected=self.selection
         if (frame.modality!='events' or frame.sample_rate is not None or frame.subject_id!=selected['subject_id'] or

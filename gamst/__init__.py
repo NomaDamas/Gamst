@@ -19,6 +19,11 @@ __all__ += ['MultimodalDecisionProvider']
 from .transcripts import transcript_capability
 __all__ += ['transcript_capability']
 
+from .contradictions import (contradiction_candidate, detect_contradictions,
+                             detect_contradiction_candidates)
+__all__ += ['contradiction_candidate', 'detect_contradictions',
+            'detect_contradiction_candidates']
+
 from .object_appearance import ObjectAppearancePipeline
 __all__ += ['ObjectAppearancePipeline']
 
@@ -57,3 +62,9 @@ from .openai_responses import OpenAIResponsesClient
 from .responses_evidence import ResponsesEvidenceSession
 from .responses_evidence_reader import read_responses_evidence
 __all__ += ['OpenAIResponsesClient', 'ResponsesEvidenceSession', 'read_responses_evidence']
+
+from .temporal_context import TemporalContextEngine
+from .context_memory import (CheckpointStore, ContextMemory, ContextMemoryEngine,
+                             MemoryContext, project_record, sync_records)
+__all__ += ['TemporalContextEngine', 'CheckpointStore', 'ContextMemory', 'ContextMemoryEngine',
+            'MemoryContext', 'project_record', 'sync_records']

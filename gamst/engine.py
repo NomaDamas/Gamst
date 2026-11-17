@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import math
 import re
 import uuid
@@ -14,6 +15,7 @@ from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata, identifier
 from .memory import ObjectMemory
+from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from dataclasses import asdict
 
@@ -70,6 +72,11 @@ class Gamst:
         self._capture_owners: set[str] = set()
         self._paused_before_capture = False
         self._session_id = uuid.uuid4().hex
+        # Portable temporal/context memory mirrors normalized envelopes only;
+        # raw media and provider payloads remain owned by Store/provider runtimes.
+        self.context_memory = ContextMemory(session_id=self._session_id,
+                                            max_bytes=min(max_payload_bytes, 4 * 1024 * 1024))
+        self.context_memory_drops = 0
         self._evaluation_snapshot_publishers = {}
         self._metric_directions = {}
         self.dropped_records = 0
@@ -182,6 +189,13 @@ class Gamst:
         if record.get("observation", {}).get("name") == TRANSCRIPT_OUTPUT:
             transcript = self.transcript_memory.prepare(record)
         stored = self.store.add(record)
+        try:
+            if stored:
+                sync_records(self.context_memory, (record,))
+        except (TypeError, ValueError, OverflowError):
+            # Memory is a bounded derived view. A malformed/oversized provider
+            # envelope must not roll back the canonical Store commit.
+            self.context_memory_drops += 1
         if transcript is not None and not stored:
             raise ValueError('transcript record exceeds storage capacity')
         if transcript is not None:
@@ -908,6 +922,22 @@ class Gamst:
         result['scope'] = 'retained_object_evidence'
         return result
 
+    async def get_context_memory(self, *, evidence_id=None, entity_id=None,
+                                 start_ms=None, end_ms=None, query_cutoff_ms=None,
+                                 limit=50, max_bytes=65536):
+        """Read the bounded normalized context mirror without exposing raw media."""
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self._bounded_query([], limit, max_bytes)
+        items = self.context_memory.retrieve(evidence_id=evidence_id,
+            entity_id=entity_id, start_ms=start_ms, end_ms=end_ms,
+            query_cutoff_ms=query_cutoff_ms, limit=limit)
+        result = self._bounded_query(items, limit, max_bytes)
+        result.update(scope='normalized_context_memory',
+                      dropped=self.context_memory_drops,
+                      session_id=self.context_memory.session_id)
+        return result
+
     async def get_state(self, subject_id="local-user"):
         self._prune()
         now = timestamp()
@@ -953,6 +983,87 @@ class Gamst:
                 "method": "arithmetic_mean_previous_retained_samples", "relative_change": (mean-base)/abs(base) if base else None}
         return {"status": "available" if metrics else "insufficient", "metrics": metrics,
                 "window_ms": duration, "interpretation": "observed_patterns_only"}
+
+    async def build_temporal_context(self, subject_id="local-user", window="1h", *, query_cutoff_ms=None, max_bytes=131072, context_view=None):
+        """Return a bounded timestamped event packet for temporal consumers.
+
+        This is additive; ``get_context`` remains the stable legacy snapshot API.
+        Records after the query cutoff are never eligible.
+        """
+        from .evaluation_snapshot import context_exclusion
+        from .temporal import TemporalAligner, TemporalEvent
+        from .contradictions import detect_contradictions
+        exclusion = context_exclusion(self, subject_id, context_view)
+        self._prune()
+        cutoff = timestamp(query_cutoff_ms)
+        start = cutoff - _window_ms(window)
+        # Context snapshots may collapse same-name observations to their latest
+        # value. Contradiction detection needs both cross-modal source records,
+        # so query the bounded signal history directly while retaining the same
+        # cutoff/exclusion policy.
+        records = [r for r in self.store.query(subject_id, start, cutoff,
+                                               "observation.signal", limit=64)
+                   if r.get("timestamp_ms", 0) <= cutoff
+                   and (exclusion is None or not (
+                       r.get("observation", {}).get("capability", {}).get("id") == exclusion[0]
+                       and r.get("models", [{}])[0].get("id") == exclusion[1]
+                       and r.get("models", [{}])[0].get("version") == exclusion[2]))]
+        aligner = TemporalAligner()
+        events = []
+        for record in records[:64]:
+            observation = record.get("observation", {})
+            ts = record.get("timestamp_ms")
+            if type(ts) is not int or not observation.get("name"):
+                continue
+            sensor = observation.get("sensor", {})
+            models = record.get("models", [])
+            model = models[0] if models and isinstance(models[0], dict) else {}
+            event = TemporalEvent(
+                event_id=record["id"], stream_id=str(sensor.get("source_id", "runtime")),
+                subject_id=subject_id, modality=str(observation.get("modality", "unknown")),
+                event_type=str(observation["name"]), source_clock=str(sensor.get("source_clock", "wall_ms")),
+                clock_id=str(sensor.get("clock_id", sensor.get("source_clock", "wall_ms"))),
+                clock_epoch=str(sensor.get("clock_epoch", "legacy")),
+                capture_timestamp_ms=ts, start_ms=int(observation.get("start_ms", ts)),
+                end_ms=int(observation.get("end_ms", ts)), sequence=record.get("sequence", 0),
+                provider=str(model.get("id", "unknown")), model_revision=str(model.get("version", "unknown")),
+                value=observation.get("value"), evidence_ids=(record["id"],),
+                uncertainty=record.get("quality"),
+                monotonic_timestamp_ms=sensor.get("monotonic_timestamp_ms"),
+                receive_timestamp_ms=record.get("received_timestamp_ms"),
+                processing_start_ms=record.get("processing_start_ms"),
+                processing_end_ms=record.get("processing_end_ms"),
+                gap=bool(record.get("gap", False)), revision=int(record.get("revision", 0)),
+                supersedes=record.get("supersedes"))
+            if aligner.accept(event) is not None:
+                events.append(event)
+        detection = detect_contradictions(events, query_cutoff_ms=cutoff,
+                                          now_ms=cutoff, aligner=aligner)
+        # A rejected relation is an explicit abstention: it keeps both source
+        # records inspectable without presenting unresolved evidence as a
+        # contradiction. TemporalPacket validates all relation provenance.
+        relations = list(detection["candidates"])
+        for item in detection["abstentions"]:
+            if len(relations) >= 64 or len(item.get("event_ids", [])) != 2:
+                continue
+            try:
+                left = next(event for event in events if event.event_id == item["event_ids"][0])
+                right = next(event for event in events if event.event_id == item["event_ids"][1])
+                rejected = aligner.materialize_relation(left, right, "contradiction",
+                                                        status="rejected")
+                rejected.update({"contradiction_status": "abstained",
+                                 "verification_status": "not_checked",
+                                 "deception_assessed": False,
+                                 "abstention_reason": item.get("reason", "unresolved"),
+                                 "uncertainty": item.get("uncertainty", {"status": "unresolved"})})
+                relations.append(rejected)
+            except (StopIteration, ValueError):
+                continue
+        packet = aligner.packet(cutoff, now_ms=cutoff, relations=relations[:64])
+        result = packet.as_dict()
+        if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > max_bytes:
+            raise ValueError("temporal context exceeds byte budget")
+        return result
 
     async def get_context(self, subject_id="local-user", window="1h", include=None, *, context_view=None):
         from .evaluation_snapshot import context_exclusion

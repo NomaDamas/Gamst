@@ -31,11 +31,18 @@ def _object(value, fields, *, required=()):
 
 
 def _sensor(value):
-    keys = {'source_id', 'sensor_id', 'sequence', 'coordinate_frame', 'channels',
-            'calibration_id', 'stream_epoch', 'capture_sequence'}
-    if type(value) is not dict or set(value) != keys or type(value['channels']) is not list or len(value['channels']) != 1:
+    # SensorMetadata gained explicit clock identity fields after the original
+    # separation v1 payload was published.  Accept the frozen v1 shape and the
+    # canonical clock-aware shape; both are still fully typed and bounded.
+    base_keys = {'source_id', 'sensor_id', 'sequence', 'coordinate_frame', 'channels',
+                 'calibration_id', 'stream_epoch', 'capture_sequence'}
+    clock_keys = {'clock_id', 'clock_epoch'}
+    if (type(value) is not dict or set(value) not in (base_keys, base_keys | clock_keys) or
+            type(value['channels']) is not list or len(value['channels']) != 1):
         return False
     data = dict(value); data['channels'] = tuple(data['channels'])
+    data.setdefault('clock_id', None)
+    data.setdefault('clock_epoch', None)
     SensorMetadata(**data)
     return value['stream_epoch'] is not None
 

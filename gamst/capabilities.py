@@ -160,6 +160,8 @@ class SensorMetadata:
     calibration_id: str | None = None
     stream_epoch: str | None = None
     capture_sequence: int | None = None
+    clock_id: str | None = None
+    clock_epoch: str | None = None
 
     def __post_init__(self):
         identifier(self.source_id, 'source_id')
@@ -168,7 +170,7 @@ class SensorMetadata:
             raise ValueError('sequence must be a nonnegative 64-bit integer')
         if self.capture_sequence is not None and (type(self.capture_sequence) is not int or not 0 <= self.capture_sequence <= 2**63-1):
             raise ValueError('capture_sequence must be a nonnegative 64-bit integer or None')
-        for key in ('coordinate_frame', 'calibration_id', 'stream_epoch'):
+        for key in ('coordinate_frame', 'calibration_id', 'stream_epoch', 'clock_id', 'clock_epoch'):
             if getattr(self, key) is not None:
                 identifier(getattr(self, key), key)
         if type(self.channels) is not tuple or len(self.channels) > 64:

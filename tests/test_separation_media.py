@@ -103,6 +103,15 @@ class PairWire(unittest.TestCase):
         head, pcm = request(); head['metadata']['sensor']['stream_epoch'] = None
         with self.assertRaises(ValueError): frame_binding(head, pcm, generation=0, config_id='test')
 
+    def test_clock_aware_sensor_metadata_roundtrips_without_accepting_unknown_fields(self):
+        from gamst.separation_metadata import _sensor
+        head, pcm = request()
+        head['metadata']['sensor'].update(clock_id='audio-clock', clock_epoch='epoch-1')
+        self.assertTrue(_sensor(head['metadata']['sensor']))
+        unknown = deepcopy(head)
+        unknown['metadata']['sensor']['clock_extra'] = 'reject'
+        self.assertFalse(_sensor(unknown['metadata']['sensor']))
+
     def test_closed_metadata_rejects_raw_arrays_and_unknown_nested_fields(self):
         variants = []
         for field in ('separation', 'window', 'prompt', 'model', 'media'):

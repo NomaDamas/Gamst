@@ -113,6 +113,17 @@ class RuntimeContracts(unittest.IsolatedAsyncioTestCase):
                 sensor=SensorMetadata(source, 'lepton', 1), timestamp_ms=1000))
         self.assertEqual(len(observation_packet(records, 1000)), 2)
 
+    async def test_temporal_context_preserves_sensor_clock_epoch(self):
+        sensor = SensorMetadata('camera1', 'lepton', 1, clock_id='worker-clock', clock_epoch='boot-1')
+        from gamst.schema import timestamp
+        now = timestamp()
+        await self.human.push_observation('thermal.roi', {'mean': 32, 'roi': {}}, sensor=sensor, timestamp_ms=now)
+        packet = await self.human.build_temporal_context(query_cutoff_ms=now)
+        event = packet['events'][0]
+        self.assertEqual(event['clock_id'], 'worker-clock')
+        self.assertEqual(event['clock_epoch'], 'boot-1')
+        self.assertEqual(event['evidence_state'], 'current')
+
     async def test_public_context_preserves_sources_and_providers(self):
         self.human.register_capability(thermal(id='thermal.other', provider='other.sensor'))
         for capability in ('thermal.roi', 'thermal.other'):

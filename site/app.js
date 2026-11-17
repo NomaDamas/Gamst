@@ -1,10 +1,22 @@
 import {
   LOCALES, t, utf8Bytes, gaugeValues, packetMetrics, packetRate, evidenceIds,
-  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta,
+  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, normalizeLocalModelConfig,
   sparklinePoints,
 } from "./playground.js";
 
 const $ = (id) => document.getElementById(id);
+// Controls are intentionally looked up at the point of use because the same
+// client is served by the static browser demo and the authenticated local
+// dashboard. A partially loaded/older page must not turn a missing control
+// into a capture failure (for example, `undefined.value`).
+function controlValue(id, fallback = "") {
+  const node = $(id);
+  return node && "value" in node ? node.value : fallback;
+}
+function setControlValue(id, value) {
+  const node = $(id);
+  if (node && "value" in node) node.value = value;
+}
 const sessionToken = document.querySelector('meta[name="gamst-session-token"]')?.content || "";
 const isLocal = Boolean(sessionToken && sessionToken !== "__SESSION_TOKEN__");
 const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -21,9 +33,10 @@ const state = {
   stream: null, audioContext: null, analyser: null, processor: null, source: null, mute: null,
   faceModel: null, poseModel: null, captureTimer: null, audioBuffer: [], audioSending: false,
   videoBusy: false, localController: null, localData: null, localReconnect: null,
+  localCaptureRevision: 0, localCaptureTransition: null, localCaptureTransitionId: 0,
   arrivals: [], droppedFrames: 0, histories: Object.fromEntries(GAUGE_NAMES.map((name) => [name, []])),
   metricHistory: [], audioTimeline: [], sceneTimeline: [], lastTimelineStamp: 0,
-  sending: false, chatController: null, featureSignature: "", guidePreview: null,
+  sending: false, chatController: null, featureSignature: "", guidePreview: null, localMyProxyConfig: null, localMyProxyActive: false,
 };
 let settingsTimer = null;
 
@@ -37,6 +50,49 @@ function removeStorage(kind, key) {
   try { (kind === "session" ? sessionStorage : localStorage).removeItem(STORAGE + key); } catch { /* no-op */ }
 }
 
+async function loadLocalMyProxyConfig() {
+  try {
+    const module = await import("./local-config.js");
+    return normalizeLocalModelConfig(module);
+  } catch {
+    // The file is intentionally optional and ignored by git. A missing local
+    // config is a normal state for public/demo deployments.
+    return null;
+  }
+}
+
+function updateLocalMyProxyButton() {
+  const button = $("useLocalMyProxy");
+  if (!button) return;
+  const available = Boolean(state.localMyProxyConfig);
+  button.disabled = !available;
+  button.title = available ? "" : t(state.locale, "localMyProxyUnavailable");
+}
+
+function applyLocalMyProxyConfig() {
+  const config = state.localMyProxyConfig;
+  if (!config) return showError("errorLocalMyProxy");
+  setControlValue("provider", "byok");
+  setControlValue("baseUrl", config.baseUrl);
+  setControlValue("model", config.model);
+  setControlValue("apiKey", config.apiKey);
+  state.localMyProxyActive = true;
+  if ($("rememberKey")) $("rememberKey").checked = false;
+  // Endpoint/model are harmless UI preferences; keep the credential in the
+  // session only so the local config never causes a persistent key write.
+  writeStorage("local", "baseUrl", config.baseUrl);
+  writeStorage("local", "model", config.model);
+  writeStorage("local", "provider", "byok");
+  writeStorage("local", "rememberKey", "false");
+  writeStorage("session", "apiKey", config.apiKey);
+  removeStorage("local", "apiKey");
+  updateProviderNotice();
+  renderResponseSetup(false);
+  $("settingsStatus").textContent = t(state.locale, "localMyProxyApplied");
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => { $("settingsStatus").textContent = ""; }, 2000);
+}
+
 try {
   const saved = localStorage.getItem("gamst.uiLanguage");
   if (LOCALES.includes(saved)) state.locale = saved;
@@ -45,12 +101,13 @@ try {
 function applyI18n() {
   document.documentElement.lang = state.locale;
   document.title = t(state.locale, "appTitle");
-  $("language").value = state.locale;
+  setControlValue("language", state.locale);
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(state.locale, node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(state.locale, node.dataset.i18nPlaceholder); });
   $("send").setAttribute("aria-label", t(state.locale, "send"));
   $("connectionLabel").textContent = isLocal ? t(state.locale, "connectionLocal", { port: location.port || "8766" }) : t(state.locale, "connectionBrowser");
   updateProviderNotice();
+  updateLocalMyProxyButton();
   renderPacket();
   updateCaptureUI();
   renderResponseSetup(false);
@@ -263,16 +320,16 @@ function drawGuides(data) {
   if (!width || !height) return;
   overlay.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const faces = observations["scene.faces"];
-  if (pressed("overlayFace") && faces?.fresh !== false && featureEnabled("mediapipe_face_landmarker")) {
-    for (const face of faces.value || []) {
+  if (pressed("overlayFace") && faces && faces.fresh !== false && featureEnabled("mediapipe_face_landmarker")) {
+    for (const face of Array.isArray(faces.value) ? faces.value : []) {
       const path = (face.landmarks || []).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => `M${(point.x * width).toFixed(1)} ${(point.y * height).toFixed(1)}h.01`).join(" ");
       if (path) overlay.append(makeSvg("path", { d: path, fill: "none", stroke: "#68ede4", "stroke-width": 1.6, "stroke-linecap": "round", opacity: .85 }));
     }
   }
   const poses = observations["scene.poses"];
-  if (poses?.fresh !== false && featureEnabled("mediapipe_pose_landmarker")) {
+  if (poses && poses.fresh !== false && featureEnabled("mediapipe_pose_landmarker")) {
     const links = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[28,30],[30,32]];
-    for (const [poseIndex, pose] of (poses.value || []).entries()) {
+    for (const [poseIndex, pose] of (Array.isArray(poses.value) ? poses.value : []).entries()) {
       const points = pose.landmarks || [];
       const visible = (point) => point && Number.isFinite(point.x) && Number.isFinite(point.y) && (point.visibility ?? 1) >= .5 && (point.presence ?? 1) >= .5;
       if (pressed("overlayBody")) {
@@ -301,8 +358,8 @@ function drawGuides(data) {
     }
   }
   const tracks = observations["scene.person_tracks"];
-  if (pressed("overlayPerson") && tracks?.fresh !== false && featureEnabled("opencv_hog_person")) {
-    for (const track of tracks.value || []) {
+  if (pressed("overlayPerson") && tracks && tracks.fresh !== false && featureEnabled("opencv_hog_person")) {
+    for (const track of Array.isArray(tracks.value) ? tracks.value : []) {
       if (!track.visible || !track.bbox) continue;
       const box = track.bbox;
       overlay.append(makeSvg("rect", { x: box.x * width, y: box.y * height, width: box.width * width, height: box.height * height, rx: 4, fill: "none", stroke: track.association_quality === "uncertain" ? "#ffd078" : "#66e5df", "stroke-width": 2 }));
@@ -321,15 +378,33 @@ async function api(body, options = {}) {
 }
 
 async function loadVisionModels(generation) {
-  const { FaceLandmarker, PoseLandmarker, FilesetResolver } = await import(MEDIAPIPE_URL);
-  const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
-  const [face, pose] = await Promise.all([
-    FaceLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" }, runningMode: "VIDEO", numFaces: 4, outputFaceBlendshapes: true }),
-    PoseLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: POSE_MODEL, delegate: "GPU" }, runningMode: "VIDEO", numPoses: 4 }),
-  ]);
-  if (generation !== state.generation) { face.close(); pose.close(); return; }
-  state.faceModel = face;
-  state.poseModel = pose;
+  // Camera ownership must not depend on optional CDN/model availability. A
+  // failed GPU delegate or offline model fetch used to bubble into
+  // beginCapture(), which stopped an otherwise valid camera immediately.
+  try {
+    const { FaceLandmarker, PoseLandmarker, FilesetResolver } = await import(MEDIAPIPE_URL);
+    const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
+    const create = async (Factory, modelAssetPath, extra) => {
+      for (const delegate of ["GPU", "CPU"]) {
+        try {
+          return await Factory.createFromOptions(vision, { baseOptions: { modelAssetPath, delegate }, ...extra });
+        } catch { /* try the portable CPU delegate before giving up */ }
+      }
+      return null;
+    };
+    const [face, pose] = await Promise.all([
+      create(FaceLandmarker, FACE_MODEL, { runningMode: "VIDEO", numFaces: 4, outputFaceBlendshapes: true }),
+      create(PoseLandmarker, POSE_MODEL, { runningMode: "VIDEO", numPoses: 4 }),
+    ]);
+    if (generation !== state.generation) { face?.close(); pose?.close(); return; }
+    state.faceModel = face;
+    state.poseModel = pose;
+  } catch {
+    // Perception is best effort in browser mode; retain the live media stream
+    // and continue publishing audio/text observations when models are absent.
+    state.faceModel = null;
+    state.poseModel = null;
+  }
 }
 
 function signal(name, value, stamp) {
@@ -393,13 +468,16 @@ function restartCaptureTimer() {
   clearInterval(state.captureTimer);
   state.captureTimer = null;
   if (!state.active) return;
-  const interval = 1000 / Number($("packetRate").value);
+  const rate = Number(controlValue("packetRate", "4"));
+  const interval = 1000 / (Number.isFinite(rate) && rate > 0 ? rate : 4);
   state.captureTimer = setInterval(isLocal ? localVideoTick : browserTick, interval);
   if (!isLocal) browserTick();
 }
 
 async function setupAudio(generation) {
-  state.audioContext = new AudioContext();
+  const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextCtor) throw new Error("Audio input is unavailable in this browser");
+  state.audioContext = new AudioContextCtor();
   await state.audioContext.resume();
   if (generation !== state.generation) return;
   state.source = state.audioContext.createMediaStreamSource(state.stream);
@@ -411,6 +489,7 @@ async function setupAudio(generation) {
   }
   state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
   state.mute = state.audioContext.createGain();
+  if (!state.mute?.gain) throw new Error("Audio output control is unavailable");
   state.mute.gain.value = 0;
   state.source.connect(state.processor);
   state.processor.connect(state.mute);
@@ -465,6 +544,8 @@ function releaseMedia() {
 }
 async function stopCapture(notify = true) {
   const wasActive = state.active;
+  const transitionId = isLocal && wasActive && notify ? ++state.localCaptureTransitionId : null;
+  if (transitionId !== null) state.localCaptureTransition = transitionId;
   state.active = false;
   releaseMedia();
   clearGuidePreview();
@@ -474,8 +555,12 @@ async function stopCapture(notify = true) {
   renderPacket();
   $("cameraOverlay").replaceChildren();
   if (isLocal && notify && wasActive) {
-    try { await api({ op: "stop" }); } catch (error) { showError("errorRequest", error); }
+    try {
+      const result = await api({ op: "stop" });
+      if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
+    } catch (error) { showError("errorRequest", error); }
   }
+  if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
 }
 
 async function beginCapture() {
@@ -484,20 +569,62 @@ async function beginCapture() {
   if (!pressed("inputCamera") && !pressed("inputMicrophone") && !pressed("inputText")) return showError("errorInput");
   const generation = ++state.generation;
   state.active = true;
+  const transitionId = isLocal ? ++state.localCaptureTransitionId : null;
+  if (transitionId !== null) state.localCaptureTransition = transitionId;
   clearGuidePreview();
   updateCaptureUI();
   setStatus("waitingModel");
   try {
-    if (isLocal) await api({ op: "start", consent: true });
+    if (isLocal) {
+      const result = await api({ op: "start", consent: true });
+      if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
+    }
+    if (generation !== state.generation || !state.active || (transitionId !== null && state.localCaptureTransition !== transitionId)) return;
+    // Keep the selected inputs in the beginCapture scope.  Previously these
+    // declarations lived inside the device block, while the status update
+    // below read them after the block; that ReferenceError entered the catch
+    // path and released a freshly granted camera immediately.
     const camera = pressed("inputCamera"), microphone = pressed("inputMicrophone");
     if (camera || microphone) {
       state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
       if (generation !== state.generation || !state.active) { state.stream?.getTracks().forEach((track) => track.stop()); return; }
+      // A browser or device can end a track independently of our start/stop
+      // controls. Treat that as a real capture stop, while the generation
+      // guard prevents cleanup from a superseded transition from racing the
+      // current stream.
+      for (const track of state.stream.getTracks()) {
+        track.addEventListener("ended", () => {
+          if (generation !== state.generation || !state.active) return;
+          stopCapture().catch((error) => showError("errorRequest", error));
+        }, { once: true });
+      }
       if (camera) {
         $("video").srcObject = state.stream;
-        await $("video").play();
+        // A browser autoplay policy must not revoke an already granted camera.
+        // The stream remains owned even when the preview element cannot play.
+        await $("video").play().catch(() => {});
       }
-      if (microphone) await setupAudio(generation);
+      if (microphone) {
+        // AudioContext startup is an optional input path. Browsers can reject
+        // it independently (autoplay policy, device contention, or an
+        // unsupported backend) after granting the camera. Keep the camera
+        // stream alive and report the audio-specific failure instead of
+        // tearing down the whole capture session.
+        try {
+          await setupAudio(generation);
+        } catch (error) {
+          state.processor?.disconnect();
+          state.processor = null;
+          state.source?.disconnect();
+          state.source = null;
+          state.analyser = null;
+          state.mute?.disconnect();
+          state.mute = null;
+          state.audioContext?.close().catch(() => {});
+          state.audioContext = null;
+          if (generation === state.generation && state.active) showError("errorRequest", error);
+        }
+      }
       if (camera && !isLocal) await loadVisionModels(generation);
     }
     if (generation !== state.generation || !state.active) return;
@@ -505,11 +632,21 @@ async function beginCapture() {
     restartCaptureTimer();
     updateCaptureUI();
     setStatus(camera || microphone ? "observing" : "noDevices");
-    if (isLocal) handleLocalState(await api({ op: "state" }));
+    if (isLocal) {
+      const data = await api({ op: "state" });
+      if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
+      handleLocalState(data);
+    }
   } catch (error) {
-    if (generation === state.generation || state.active) {
+    if (generation === state.generation) {
       await stopCapture(false);
-      if (isLocal) await api({ op: "stop" }).catch(() => {});
+      if (isLocal) {
+        try {
+          const result = await api({ op: "stop" });
+          if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
+        } catch { /* preserve the original capture error */ }
+      }
+      if (transitionId !== null && captureTransitionCanClear(state.localCaptureTransition, transitionId)) state.localCaptureTransition = null;
       showError("errorCapture", error);
       setStatus("stopped");
     }
@@ -552,7 +689,9 @@ function packetWithQuestion(question) {
 }
 
 function providerConfig() {
-  return { baseUrl: $("baseUrl").value.trim(), model: $("model").value.trim(), key: $("apiKey").value, provider: $("provider").value };
+  const baseUrl = controlValue("baseUrl").trim();
+  const model = controlValue("model").trim();
+  return { baseUrl, model, key: controlValue("apiKey"), provider: controlValue("provider", "byok"), reasoning_effort: state.localMyProxyActive && state.localMyProxyConfig?.baseUrl === baseUrl && state.localMyProxyConfig?.model === model ? state.localMyProxyConfig.reasoning_effort : undefined };
 }
 function updateProviderNotice() {
   const config = providerConfig();
@@ -601,10 +740,12 @@ async function streamBYOK(question, packet) {
   const config = providerConfig();
   const endpoint = chatEndpoint(config.baseUrl);
   state.chatController = new AbortController();
+  const requestBody = { model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3 };
+  if (config.reasoning_effort) requestBody.reasoning_effort = config.reasoning_effort;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.key}` },
-    body: JSON.stringify({ model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3 }),
+    body: JSON.stringify(requestBody),
     signal: state.chatController.signal,
   });
   if (!response.ok) {
@@ -635,7 +776,7 @@ async function streamBYOK(question, packet) {
 }
 
 async function sendQuestion() {
-  const question = $("question").value.trim();
+  const question = controlValue("question").trim();
   clearError();
   if (!question) return showError("emptyQuestion");
   selectTab("response");
@@ -656,7 +797,7 @@ async function sendQuestion() {
   $("responseText").textContent = "";
   $("responseText").classList.add("streaming");
   $("responseState").textContent = t(state.locale, "sending");
-  state.sentPacket = compactPacket(packetWithQuestion(question), Number($("byteBudget").value));
+  state.sentPacket = compactPacket(packetWithQuestion(question), Number(controlValue("byteBudget", "16384")));
   renderPacket();
   renderEvidence(state.sentPacket);
   try {
@@ -670,7 +811,7 @@ async function sendQuestion() {
       answer = await streamBYOK(question, state.sentPacket);
     }
     $("responseText").textContent = answer;
-    $("question").value = "";
+    setControlValue("question", "");
     setStatus("response");
   } catch (error) {
     if (error.name !== "AbortError") {
@@ -725,7 +866,7 @@ function renderLocalSettings(data) {
     }
   }
   $("asrLanguage").disabled = !data.asr?.available || state.active;
-  if (document.activeElement !== $("asrLanguage")) $("asrLanguage").value = data.asr?.language || "auto";
+  if (document.activeElement !== $("asrLanguage")) setControlValue("asrLanguage", data.asr?.language || "auto");
   $("sam3Status").textContent = data.sam3?.message || t(state.locale, "unavailable");
   $("testGuides").disabled = state.active || !data.guide_test_available;
   const vlm = data.vlm || {};
@@ -733,13 +874,19 @@ function renderLocalSettings(data) {
   $("vlmEnabled").disabled = !vlm.available;
   $("applyVlm").disabled = !vlm.available;
   $("testVlm").disabled = !vlm.available;
-  for (const [id, key] of [["vlmInterval", "interval"], ["vlmWindow", "window_seconds"], ["vlmFps", "sample_fps"]]) if (document.activeElement !== $(id) && vlm[key] !== undefined) $(id).value = vlm[key];
+  for (const [id, key] of [["vlmInterval", "interval"], ["vlmWindow", "window_seconds"], ["vlmFps", "sample_fps"]]) if (document.activeElement !== $(id) && vlm[key] !== undefined) setControlValue(id, vlm[key]);
   const option = $("localCompanionOption");
   option.disabled = !data.companion_available;
   option.textContent = `${t(state.locale, "localCompanion")}${data.companion_available ? "" : ` · ${t(state.locale, "unavailable")}`}`;
 }
 
 function handleLocalState(data) {
+  // A state poll can complete after a start/stop request that superseded it.
+  // Ignore all snapshots during the short transition and older revisions
+  // thereafter, otherwise a queued paused snapshot stops fresh camera tracks.
+  const decision = captureSnapshotDecision(state.localCaptureRevision, Boolean(state.localCaptureTransition), data);
+  if (!decision.accept) return;
+  state.localCaptureRevision = decision.revision;
   state.localData = data;
   const running = !data.state?.paused;
   if (state.active && !running) {
@@ -832,8 +979,8 @@ for (const button of document.querySelectorAll("[data-preset]")) {
     setPressed("overlayBody", preset.body);
     setPressed("overlayPerson", preset.person);
     const key = { clarify: "presetClarifyQuestion", hand: "presetHandQuestion", that: "presetThatQuestion", stale: "presetStaleQuestion" }[name];
-    $("question").value = t(state.locale, key);
-    $("question").focus();
+    setControlValue("question", t(state.locale, key));
+    $("question")?.focus();
     clearError();
   });
 }
@@ -866,20 +1013,22 @@ $("share").addEventListener("click", async () => {
   }
 });
 $("language").addEventListener("change", () => {
-  state.locale = LOCALES.includes($("language").value) ? $("language").value : "en";
+  const language = controlValue("language");
+  state.locale = LOCALES.includes(language) ? language : "en";
   try { localStorage.setItem("gamst.uiLanguage", state.locale); } catch { /* no-op */ }
   applyI18n();
 });
 $("configureModel").addEventListener("click", () => { $("modelSettings").open = true; $("baseUrl").focus(); });
 $("provider").addEventListener("change", () => { updateProviderNotice(); renderResponseSetup(false); });
-for (const id of ["baseUrl", "model", "apiKey"]) $(id).addEventListener("input", () => { updateProviderNotice(); renderResponseSetup(false); });
+for (const id of ["baseUrl", "model", "apiKey"]) $(id).addEventListener("input", () => { state.localMyProxyActive = false; updateProviderNotice(); renderResponseSetup(false); });
+$("useLocalMyProxy")?.addEventListener("click", applyLocalMyProxyConfig);
 $("saveSettings").addEventListener("click", () => {
   const config = providerConfig();
   writeStorage("local", "baseUrl", config.baseUrl);
   writeStorage("local", "model", config.model);
   writeStorage("local", "provider", config.provider);
-  writeStorage("local", "rate", $("packetRate").value);
-  writeStorage("local", "budget", $("byteBudget").value);
+  writeStorage("local", "rate", controlValue("packetRate", "4"));
+  writeStorage("local", "budget", controlValue("byteBudget", "16384"));
   if ($("rememberKey").checked) {
     writeStorage("local", "apiKey", config.key);
     removeStorage("session", "apiKey");
@@ -902,11 +1051,11 @@ $("localSettingsDialog").addEventListener("close", () => $("openLocalSettings").
 setPressed("vlmEnabled", false);
 bindToggle("vlmEnabled");
 $("asrLanguage").addEventListener("change", async () => {
-  try { await api({ op: "configure_asr", language: $("asrLanguage").value }); clearError(); } catch (error) { showError("errorRequest", error); }
+  try { await api({ op: "configure_asr", language: controlValue("asrLanguage", "auto") }); clearError(); } catch (error) { showError("errorRequest", error); }
 });
 $("applyVlm").addEventListener("click", async () => {
   try {
-    await api({ op: "configure_vlm", enabled: pressed("vlmEnabled"), interval: Number($("vlmInterval").value), window_seconds: Number($("vlmWindow").value), sample_fps: Number($("vlmFps").value) });
+    await api({ op: "configure_vlm", enabled: pressed("vlmEnabled"), interval: Number(controlValue("vlmInterval", "3")), window_seconds: Number(controlValue("vlmWindow", "4")), sample_fps: Number(controlValue("vlmFps", "2")) });
     clearError();
     handleLocalState(await api({ op: "state" }));
   } catch (error) { showError("errorRequest", error); }
@@ -944,15 +1093,15 @@ $("loadCapabilities").addEventListener("click", async () => {
 });
 
 function restoreSettings() {
-  $("baseUrl").value = readStorage("local", "baseUrl");
-  $("model").value = readStorage("local", "model");
+  setControlValue("baseUrl", readStorage("local", "baseUrl"));
+  setControlValue("model", readStorage("local", "model"));
   const remembered = readStorage("local", "rememberKey") === "true";
-  $("rememberKey").checked = remembered;
-  $("apiKey").value = remembered ? readStorage("local", "apiKey") : readStorage("session", "apiKey");
-  $("packetRate").value = readStorage("local", "rate") || "4";
-  $("byteBudget").value = readStorage("local", "budget") || "16384";
+  if ($("rememberKey")) $("rememberKey").checked = remembered;
+  setControlValue("apiKey", remembered ? readStorage("local", "apiKey") : readStorage("session", "apiKey"));
+  setControlValue("packetRate", readStorage("local", "rate") || "4");
+  setControlValue("byteBudget", readStorage("local", "budget") || "16384");
   const savedProvider = readStorage("local", "provider");
-  $("provider").value = isLocal && savedProvider !== "byok" ? "local" : "byok";
+  setControlValue("provider", isLocal && savedProvider !== "byok" ? "local" : "byok");
 }
 
 window.addEventListener("pagehide", () => {
@@ -964,6 +1113,10 @@ window.addEventListener("pagehide", () => {
 setInterval(() => renderMetrics(), 500);
 
 restoreSettings();
+loadLocalMyProxyConfig().then((config) => {
+  state.localMyProxyConfig = config;
+  updateLocalMyProxyButton();
+}).catch(() => updateLocalMyProxyButton());
 for (const id of ["openLocalSettings"]) $(id).hidden = !isLocal;
 $("localCompanionOption").hidden = !isLocal;
 applyI18n();

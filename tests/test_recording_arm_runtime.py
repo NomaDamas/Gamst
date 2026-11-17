@@ -20,7 +20,13 @@ class Arms(unittest.IsolatedAsyncioTestCase):
     async def test_actual_startup_and_owned_cleanup(self):
         with tempfile.TemporaryDirectory(dir='.') as tmp:
             root=Path(tmp).resolve();(root/'inputs').mkdir()
-            f=build_runtime_fixture(root/'inputs',count=20,duration_ns=2_000_000_000,task_snapshot_ns=1_500_000_000,dependency_evidence=self.dependencies)
+            # Mapping metadata is deliberately delayed below.  Keep a full
+            # second between the frozen snapshot and its deadline so the test
+            # exercises startup/cleanup ownership without making success
+            # depend on hosted-run scheduler jitter.  The runtime still
+            # enforces the declared deadline; this only gives the fixture a
+            # bounded admission margin after the clock anchor is established.
+            f=build_runtime_fixture(root/'inputs',count=20,duration_ns=2_000_000_000,task_snapshot_ns=1_000_000_000,dependency_evidence=self.dependencies)
             for invocation in (0,1,2,4):
                 i=await OwnedRuntimeInputs.open(str(f.root),expected_execution_sha256=f.execution_sha256s[invocation],invocation_ordinal=invocation)
                 d=i.receipt.declarations();a=await RecordingRuntimeArtifacts.open(root/f'arm-{invocation}',f.documents[f'invocations/{invocation:02}/execution.json'],budget=ArtifactBudget(),retain_evaluation_artifacts=True)
