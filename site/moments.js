@@ -178,6 +178,8 @@ export class PenDropDetector {
     if (this.downRun >= 2) {
       this.pending ||= { downward_started_ms: this.pending?.downward_started_ms ?? stamp - observation.interval_ms };
       this.pending.last_motion_ms = stamp;
+      this.pending.downward_speed_px_s = speed;
+      this.pending.moving_fraction = observation.moving_fraction;
     }
     if (!this.pending || stamp - this.pending.last_motion_ms > this.options.impactWindowMs) {
       this.pending = null;
@@ -190,7 +192,7 @@ export class PenDropDetector {
     const event = { type: "pen_drop", capture_ms: stamp, impact_boundary_ms: stamp,
       downward_started_ms: this.pending.downward_started_ms,
       audio_interval: [observation.audio_start_ms ?? stamp - 40, observation.audio_end_ms ?? stamp],
-      downward_speed_px_s: speed, moving_fraction: observation.moving_fraction, dbfs: observation.dbfs,
+      downward_speed_px_s: this.pending.downward_speed_px_s, moving_fraction: this.pending.moving_fraction, dbfs: observation.dbfs,
       spectral_flux: observation.spectral_flux };
     this.pending = null;
     this.downRun = 0;
@@ -304,10 +306,11 @@ const FRAME_BUFFER_SIZE = 48;
 
 const runtime = {
   active: false, generation: 0, sourceKind: null, sourceName: null, sourceEpoch: null, stream: null, objectUrl: null, replayFile: null,
-  videoCallback: null, framesSeen: 0, modelCalls: 0, moments: [], selectedMoment: null, sequence: 0,
+  videoCallback: null, fallbackCallback: null, framesSeen: 0, modelCalls: 0, moments: [], selectedMoment: null, sequence: 0,
   samples: [], nextSampleMs: 0, lastFrameMs: null, frameBuffer: [], frameCursor: 0,
   processCanvas: null, previousPixels: null, previousCentroid: null,
-  audioContext: null, audioSource: null, analyser: null, muteGain: null, audioSamples: null, audioSpectrum: null, previousSpectrum: null,
+  audioContext: null, audioSource: null, elementAudioSource: null, analyser: null, muteGain: null, audioSamples: null, audioSpectrum: null, previousSpectrum: null,
+  decodedAudio: null, previousDecodedSpectrum: null, frameStep: false, frameIndex: 0,
   poseModel: null, handModel: null, poseSegment: 0, lastPoseMs: null, handPath: [],
   handRaise: new HandRaiseDetector(), penDrop: new PenDropDetector(), swingPeak: new SwingPeakDetector(),
   quietControl: null, modelConfigLoaded: false,
@@ -345,18 +348,23 @@ async function loadOptionalProvider() {
   try {
     const module = await import("./local-config.js");
     const config = normalizeLocalModelConfig(module);
-    if (config) {
+    if (config && /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(config.baseUrl)) {
       $("providerUrl").value = config.baseUrl;
       $("providerModel").value = config.model;
       $("providerKey").value = config.apiKey;
-      setStatus("Local provider configuration loaded; replay remains sensor-only until a moment fires.");
+      setStatus("Loopback provider configuration loaded; replay remains sensor-only until a moment fires.");
     }
   } catch { /* Optional ignored local configuration. */ }
 }
 
 async function ensureAudio() {
-  if (runtime.analyser) {
-    await runtime.audioContext?.resume();
+  if (runtime.audioContext) {
+    runtime.audioSource?.disconnect();
+    const source = runtime.sourceKind === "camera" ? runtime.audioContext.createMediaStreamSource(runtime.stream) : (runtime.elementAudioSource ||= runtime.audioContext.createMediaElementSource($("video")));
+    runtime.audioSource = source;
+    source.connect(runtime.analyser);
+    runtime.previousSpectrum.fill(0);
+    await runtime.audioContext.resume();
     return;
   }
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -373,6 +381,7 @@ async function ensureAudio() {
   gain.connect(context.destination);
   runtime.audioContext = context;
   runtime.audioSource = source;
+  runtime.elementAudioSource = runtime.sourceKind === "replay" ? source : null;
   runtime.analyser = analyser;
   runtime.muteGain = gain;
   runtime.audioSamples = new Float32Array(analyser.fftSize);
@@ -381,7 +390,51 @@ async function ensureAudio() {
   await context.resume();
 }
 
+const DFT_SIZE = 512, DFT_BINS = 32;
+const DFT_COS = Array.from({ length: DFT_BINS }, (_, frequency) => Float64Array.from({ length: DFT_SIZE }, (_, index) => Math.cos(2 * Math.PI * frequency * index / DFT_SIZE)));
+const DFT_SIN = Array.from({ length: DFT_BINS }, (_, frequency) => Float64Array.from({ length: DFT_SIZE }, (_, index) => Math.sin(2 * Math.PI * frequency * index / DFT_SIZE)));
+
+async function prepareReplayAudio() {
+  runtime.decodedAudio = null;
+  runtime.previousDecodedSpectrum = new Float64Array(DFT_BINS);
+  if (!runtime.replayFile || !runtime.audioContext) return;
+  const bytes = await runtime.replayFile.arrayBuffer();
+  try { runtime.decodedAudio = await runtime.audioContext.decodeAudioData(bytes); }
+  catch { runtime.decodedAudio = null; }
+}
+
+function decodedAudioMeasurement(stamp) {
+  const buffer = runtime.decodedAudio;
+  if (!buffer) return null;
+  const data = buffer.getChannelData(0), rate = buffer.sampleRate;
+  const end = Math.max(0, Math.min(data.length, Math.round(stamp * rate / 1000)));
+  const rmsStart = Math.max(0, end - Math.round(.04 * rate));
+  let energy = 0;
+  for (let index = rmsStart; index < end; index += 1) energy += data[index] * data[index];
+  const rms = Math.sqrt(energy / Math.max(1, end - rmsStart));
+  const start = Math.max(0, end - DFT_SIZE);
+  const spectrum = new Float64Array(DFT_BINS);
+  for (let frequency = 0; frequency < DFT_BINS; frequency += 1) {
+    let real = 0, imaginary = 0;
+    for (let index = 0; index < DFT_SIZE; index += 1) {
+      const sample = data[start + index] || 0;
+      real += sample * DFT_COS[frequency][index];
+      imaginary -= sample * DFT_SIN[frequency][index];
+    }
+    spectrum[frequency] = Math.hypot(real, imaginary) / DFT_SIZE;
+  }
+  let flux = 0;
+  for (let index = 0; index < DFT_BINS; index += 1) flux += Math.max(0, spectrum[index] - runtime.previousDecodedSpectrum[index]);
+  runtime.previousDecodedSpectrum.set(spectrum);
+  return { valid: true, rms, dbfs: rms > 0 ? 20 * Math.log10(rms) : -100,
+    spectral_flux: flux, audio_start_ms: stamp - 40, audio_end_ms: stamp };
+}
+
 function audioMeasurement(stamp) {
+  if (runtime.sourceKind === "replay") {
+    const decoded = decodedAudioMeasurement(stamp);
+    if (decoded) return decoded;
+  }
   if (!runtime.analyser) return { valid: false, dbfs: NaN, rms: NaN, spectral_flux: NaN };
   runtime.analyser.getFloatTimeDomainData(runtime.audioSamples);
   runtime.analyser.getByteFrequencyData(runtime.audioSpectrum);
@@ -429,7 +482,8 @@ async function loadGeometryModels(generation) {
 
 function clearRuntimeMedia() {
   if (runtime.videoCallback && $("video").cancelVideoFrameCallback) $("video").cancelVideoFrameCallback(runtime.videoCallback);
-  runtime.videoCallback = null;
+  clearInterval(runtime.fallbackCallback);
+  runtime.videoCallback = runtime.fallbackCallback = null;
   runtime.stream?.getTracks().forEach((track) => track.stop());
   runtime.stream = null;
   if (runtime.objectUrl) URL.revokeObjectURL(runtime.objectUrl);
@@ -439,10 +493,8 @@ function clearRuntimeMedia() {
   $("video").srcObject = null;
   $("video").load();
   runtime.audioSource?.disconnect();
-  runtime.muteGain?.disconnect();
-  runtime.audioContext?.close().catch(() => {});
-  runtime.audioContext = runtime.audioSource = runtime.analyser = runtime.muteGain = null;
-  runtime.previousSpectrum = null;
+  runtime.audioSource = null;
+  runtime.previousSpectrum?.fill(0);
   closeModels();
 }
 
@@ -455,10 +507,14 @@ function resetRun() {
   runtime.samples = [];
   runtime.nextSampleMs = 0;
   runtime.lastFrameMs = null;
+  runtime.lastPresentedFrames = null;
   runtime.frameBuffer = [];
   runtime.frameCursor = 0;
   runtime.previousPixels = null;
   runtime.previousCentroid = null;
+  runtime.previousDecodedSpectrum?.fill(0);
+  runtime.frameStep = false;
+  runtime.frameIndex = 0;
   runtime.handPath = [];
   runtime.lastPoseMs = null;
   runtime.poseSegment += 1;
@@ -505,10 +561,12 @@ async function loadReplay(file) {
   runtime.sourceKind = "replay";
   runtime.sourceName = file.name;
   runtime.replayFile = file;
+  runtime.decodedAudio = null;
   runtime.objectUrl = URL.createObjectURL(file);
   $("video").src = runtime.objectUrl;
   $("video").muted = false;
   $("replayButton").disabled = false;
+  $("frameReplayButton").disabled = false;
   $("sourceLabel").textContent = `${file.name} · synthetic/file replay`;
   setStatus("Replay loaded. Press Replay; detection uses video motion and its audio lane.");
 }
@@ -518,9 +576,56 @@ async function startReplay() {
   try {
     await loadReplay(runtime.replayFile);
     await ensureAudio();
+    await prepareReplayAudio();
     await $("video").play();
     await beginProcessing("synthetic/file replay");
   } catch (error) { setStatus(`Replay failed: ${error.message}`, true); }
+}
+
+async function waitForMetadata() {
+  if ($("video").readyState >= 1) return;
+  await new Promise((resolve, reject) => {
+    $("video").addEventListener("loadedmetadata", resolve, { once: true });
+    $("video").addEventListener("error", () => reject(new Error("video metadata could not be decoded")), { once: true });
+  });
+}
+
+async function startFrameReplay() {
+  if (!runtime.replayFile) return;
+  try {
+    await loadReplay(runtime.replayFile);
+    await waitForMetadata();
+    await ensureAudio();
+    await prepareReplayAudio();
+    runtime.frameStep = true;
+    await beginProcessing("synthetic · 30 FPS frame-step replay");
+  } catch (error) { setStatus(`Frame-step replay failed: ${error.message}`, true); }
+}
+
+function processNextSeekedFrame() {
+  if (!runtime.active || !runtime.frameStep) return;
+  const video = $("video"), generation = runtime.generation;
+  const frameCount = Math.ceil(video.duration * 30);
+  if (runtime.frameIndex >= frameCount) {
+    runtime.active = false;
+    runtime.frameStep = false;
+    $("stopButton").disabled = true;
+    $("quietButton").disabled = true;
+    setStatus(`Replay complete · ${runtime.moments.length} moments · ${runtime.modelCalls} model calls`);
+    return;
+  }
+  const target = Math.min((runtime.frameIndex + .5) / 30, Math.max(0, video.duration - .001));
+  const advance = () => {
+    if (generation !== runtime.generation || !runtime.active) return;
+    processVideoFrame({ mediaTime: runtime.frameIndex / 30 });
+    runtime.frameIndex += 1;
+    setTimeout(processNextSeekedFrame, 1000 / 30);
+  };
+  if (Math.abs(video.currentTime - target) < .0001) advance();
+  else {
+    video.addEventListener("seeked", advance, { once: true });
+    video.currentTime = target;
+  }
 }
 
 async function beginProcessing(label) {
@@ -534,7 +639,8 @@ async function beginProcessing(label) {
   if (runtime.sourceKind === "replay") await ensureAudio();
   else await ensureAudio().catch(() => {});
   setStatus(runtime.sourceKind === "replay" ? "Catching at native replay fps · model fires only on a moment" : "Live sensors active · no event-triggered call while quiet");
-  scheduleVideoFrame();
+  if (runtime.frameStep) processNextSeekedFrame();
+  else scheduleVideoFrame();
 }
 
 function stopCapture() {
@@ -546,6 +652,7 @@ function stopCapture() {
   $("stopButton").disabled = true;
   $("quietButton").disabled = true;
   $("replayButton").disabled = !runtime.replayFile;
+  $("frameReplayButton").disabled = !runtime.replayFile;
   if ($("runStatus")) setStatus("Stopped. Choose a camera or replay input.");
 }
 
@@ -556,16 +663,22 @@ function replayTimestamp(metadata) {
 function scheduleVideoFrame() {
   if (!runtime.active) return;
   const video = $("video");
-  if (video.requestVideoFrameCallback) {
+  if (video.requestVideoFrameCallback && runtime.videoCallback === null) {
     runtime.videoCallback = video.requestVideoFrameCallback((now, metadata) => {
+      runtime.videoCallback = null;
+      runtime.lastPresentedFrames = metadata.presentedFrames ?? video.getVideoPlaybackQuality?.().totalVideoFrames ?? null;
       processVideoFrame(metadata);
       scheduleVideoFrame();
     });
-  } else {
-    runtime.videoCallback = requestAnimationFrame(() => {
-      if (video.readyState >= 2 && !video.paused) processVideoFrame({ mediaTime: video.currentTime });
-      scheduleVideoFrame();
-    });
+  }
+  if (runtime.fallbackCallback === null) {
+    runtime.fallbackCallback = setInterval(() => {
+      const presented = video.getVideoPlaybackQuality?.().totalVideoFrames ?? null;
+      if (video.readyState >= 2 && !video.paused && (presented === null || presented !== runtime.lastPresentedFrames)) {
+        runtime.lastPresentedFrames = presented;
+        processVideoFrame({ mediaTime: video.currentTime });
+      }
+    }, 16);
   }
 }
 
@@ -665,6 +778,8 @@ function processVideoFrame(metadata) {
       ...motion, ...audio, valid: motion.valid && audio.valid });
     if (impact) events.push(impact);
   }
+  if (runtime.sourceKind === "replay") $("geometryStatus").textContent = runtime.penDrop.baseline ? `impact armed · ${runtime.penDrop.downRun} downward` : "impact quiet baseline";
+  $("motionReadout").textContent = `dy ${motion.dy_pixels.toFixed(1)} px · moving ${(motion.moving_fraction * 100).toFixed(2)}% · flux ${Number.isFinite(audio.spectral_flux) ? audio.spectral_flux.toFixed(3) : "—"}`;
   for (const event of events) addCaughtMoment(event);
   if (runtime.handPath.length > 120) runtime.handPath.splice(0, runtime.handPath.length - 120);
   drawOverlay(stamp, frame);
@@ -876,6 +991,7 @@ function bindControls() {
   $("cameraButton").addEventListener("click", startCamera);
   $("replayInput").addEventListener("change", (event) => loadReplay(event.target.files?.[0]));
   $("replayButton").addEventListener("click", startReplay);
+  $("frameReplayButton").addEventListener("click", startFrameReplay);
   $("stopButton").addEventListener("click", stopCapture);
   $("quietButton").addEventListener("click", startQuietControl);
   $("pricePerCall").addEventListener("input", updateCounters);
@@ -886,6 +1002,8 @@ function bindControls() {
     if (!runtime.active) return;
     runtime.active = false;
     if (runtime.videoCallback && $("video").cancelVideoFrameCallback) $("video").cancelVideoFrameCallback(runtime.videoCallback);
+    clearInterval(runtime.fallbackCallback);
+    runtime.videoCallback = runtime.fallbackCallback = null;
     $("stopButton").disabled = true;
     $("quietButton").disabled = true;
     setStatus(`Replay complete · ${runtime.moments.length} moments · ${runtime.modelCalls} model calls`);

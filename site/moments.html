@@ -33,6 +33,7 @@
       <div class="input-bar" aria-label="Capture inputs">
         <label class="button secondary file-button" for="replayInput">Choose replay<input id="replayInput" type="file" accept="video/*" hidden></label>
         <button id="replayButton" class="button primary" type="button" disabled>▶ Replay</button>
+        <button id="frameReplayButton" class="button secondary" type="button" disabled title="Seek every original 30 FPS frame and align decoded audio by capture time">Step 30 FPS</button>
         <button id="cameraButton" class="button secondary" type="button">◉ Camera</button>
         <button id="stopButton" class="button quiet" type="button" disabled>■ Stop</button>
       </div>
@@ -52,7 +53,7 @@
         <p>Without a configured Gemini provider this lane shows samples only. A blank lane is not evidence of a model miss.</p>
       </section>
 
-      <div class="sensor-status"><span id="geometryStatus">geometry starts with camera</span><span id="audioReadout">audio waiting</span></div>
+      <div class="sensor-status"><span id="geometryStatus">geometry starts with camera</span><span id="motionReadout">ROI motion waiting</span><span id="audioReadout">audio waiting</span></div>
       <p class="run-status" id="runStatus" role="status">Choose a replay file for a camera-free run.</p>
     </section>
 
