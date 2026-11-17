@@ -232,9 +232,11 @@ def handler_for(app):
                 "/app.js": "application/javascript",
                 "/playground.js": "application/javascript",
                 "/observability.js": "application/javascript",
+                "/moments.js": "application/javascript",
                 "/i18n.js": "application/javascript",
                 "/local-config.js": "application/javascript",
                 "/style.css": "text/css",
+                "/moments.css": "text/css",
                 "/icon.svg": "image/svg+xml",
             }
             if self.allowed_host() and self.path in static_types:
@@ -244,9 +246,9 @@ def handler_for(app):
                 if not asset.is_file():
                     return self.respond(404, {"error": "Not found"})
                 return self.respond(200, asset.read_text(), static_types[self.path])
-            if not self.allowed_host() or self.path != "/":
+            if not self.allowed_host() or self.path not in {"/", "/moments"}:
                 return self.respond(404, {"error": "Not found"})
-            page = Path(__file__).with_name("dashboard.html").read_text()
+            page = Path(__file__).with_name("dashboard.html").read_text() if self.path == "/" else (Path(__file__).parent.parent / "site" / "moments.html").read_text()
             self.respond(200, page.replace("__SESSION_TOKEN__", app.token), "text/html")
 
         def do_POST(self):
