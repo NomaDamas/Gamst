@@ -1,12 +1,12 @@
 {
   "algorithm": "sha256",
-  "bench_head": "e1976e1061f5a04c6629ce2d473ec0660601c597",
+  "bench_head": "ee2ba10fdf17a2d6ad363653a157a3ffaec46a38",
   "bench_verified": true,
-  "core_head": "46a83b7959505bc741ce25e4c63b5eb36d1f6667",
+  "core_head": "2015c4436eb5427e146d0ca329d629d5dfa9f788",
   "crew_head": "fdf5322b1bc4c3de879c511a101bd2647087c6e7",
   "crew_verified": true,
-  "probe_core_head": "46a83b7959505bc741ce25e4c63b5eb36d1f6667",
-  "scope": "canonical-byte contract probe at current GAMST/Crew/bench implementation heads; not model or host acceptance",
+  "probe_core_head": "2015c4436eb5427e146d0ca329d629d5dfa9f788",
+  "scope": "canonical-byte contract probe at current GAMST/Crew/bench checkout heads; not model or host acceptance",
   "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
   "version": 1
 }

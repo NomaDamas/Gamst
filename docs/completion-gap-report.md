@@ -103,7 +103,7 @@ The prior implementation handoff used these exact commits:
 
 The current code-completable continuation is recorded separately:
 
-- GAMST `46a83b7` (issue-map refresh and current cross-repository evidence)
+- GAMST `46a83b7` (issue-map refresh and current cross-repository evidence; later `2015c44` is evidence-only metadata)
 - GamstCrew `fdf5322` (temporal normalization, sequence-gap visibility and abstaining contradiction candidates; based on `f8aa970`/`08dedcd`)
 - Gamst-bench `e1976e1` (complete temporal-field declarations in measured manifests)
 
@@ -163,8 +163,8 @@ numeric-finance acceptance gate remains open until an isolated rerun and the
 required host evidence are available.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the current implementation heads: GAMST `46a83b7`, Crew `fdf5322`, and
-bench `e1976e1`.
+the probe checkout heads: GAMST `2015c44`, Crew `fdf5322`, and
+bench `ee2ba10`; this documentation update itself is outside that probe.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical
