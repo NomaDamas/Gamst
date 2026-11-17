@@ -566,7 +566,7 @@ Issues: event gating [#286](https://github.com/NomaDamas/Gamst/issues/286) · re
 - **Matched systems:** full VLM, Gamst + LLM, Gamst + selective VLM + LLM, periodic VLM and native reference methods. Freeze checkpoint, consumer, hardware, prompts and input availability before comparing.
 - **Evidence:** published numbers, directly reproduced official scores and modified Gamst tracks remain separate. A native runner's successful exit is not an independently validated score.
 
-✅ Evaluation MCP, ten native execution recipes, dashboard and source-linked documentation are implemented in Gamst Bench.<br>
+✅ Evaluation MCP, 10 recipe records (6 executable, 4 reference-only), dashboard and source-linked documentation are implemented in Gamst Bench.<br>
 ⏳ GCP setup, data access, Gamst-specific model adapters, actual native runs, independent scoring and full cost/event-latency evidence remain pending. No superiority or completed long-duration acceptance is claimed.
 
 For this evaluation campaign, model execution and benchmark dataset downloads happen **on GCP only**. The local SDK/demo instructions elsewhere in this README describe product capabilities, not instructions to run the evaluation campaign locally.
