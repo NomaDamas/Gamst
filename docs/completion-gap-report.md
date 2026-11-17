@@ -98,7 +98,7 @@ remain separate.
 The active handoff uses these exact commits:
 
 - GAMST `feat/temporal-contract`: `71201fd`
-- GamstCrew `feat/runtime-pr`: `e9060ae` (serialized lifecycle plus shared-memory transport and lock/architecture validation)
+- GamstCrew `feat/runtime-pr`: `d98723d` (serialized lifecycle, shared-memory transport, lock/architecture validation, and JSON-safe socket fallback)
 - Gamst-bench `feat/temporal-metrics`: `715f8b8` (adapter failure diagnostics and fail-closed lifecycle)
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
@@ -139,7 +139,7 @@ is monitored as hosted scheduler timing evidence, not treated as a protocol
 failure or proof of production readiness.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the active handoff heads: GAMST `71201fd`, Crew `e9060ae`, and bench `715f8b8`.
+the active handoff heads: GAMST `71201fd`, Crew `d98723d`, and bench `715f8b8`.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical
