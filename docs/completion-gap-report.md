@@ -74,6 +74,15 @@ that do not require target hardware or measured model quality:
   CostBench aggregation and conservative default-selection reporting. Focused
   CostBench tests: `3 passed`; the commit is present on the repository's
   temporal-metrics lineage/main merge.
+- GAMST `5411978` + `006b407`: bounded atomic `CheckpointStore` persistence,
+  lineage verification and clear/load semantics are implemented and focused
+  tested. Provider/ObjectMemory integration remains separate.
+- GamstCrew `8651d62`: declarative OS profile catalog, five-state provider
+  compatibility reporting and no-install native diagnostics are implemented;
+  target-host acceptance remains explicitly unmeasured.
+- Gamst-bench `f6e0669` + `4a489a0`: exact row-only and empty-component cost
+  totals are attributed under `unattributed`; focused CostBench tests are
+  `5 passed`.
 
 These changes close the implementation portions of the corresponding child
 issues. They do not close the required target-host, matched B/C/D/E, durable
