@@ -83,10 +83,10 @@ Parent: `D-memory-context` (GAMST #318).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | bounded layers, evidence index and byte eviction implemented/tested; provider/ObjectMemory integration remains open |
+| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | bounded layers, evidence index, byte eviction, and normalized Core envelope integration implemented/tested (`17e0d30`); long-running/provider acceptance remains open |
 | D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | bounded delta generation/replay implemented and focused-tested; production compression policy remains open |
 | D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | bounded evidence retrieval with cutoff/entity/time filters implemented and focused-tested |
-| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | versioned lineage-checked checkpoint/resume plus bounded atomic `CheckpointStore` load/save/clear implemented and focused-tested; provider/ObjectMemory integration remains open |
+| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | versioned lineage-checked checkpoint/resume plus bounded atomic `CheckpointStore` load/save/clear and Core envelope wiring implemented and focused-tested (`17e0d30`); cross-process/long-running acceptance remains open |
 | D5 deterministic physics | bounded kinematics, trajectory hypotheses and physical uncertainty | held-out trajectory/contact evidence; calibrated claims only; synthetic futures isolated | deterministic `PhysicalState` provider emits bounded kinematics, covariance, trajectory hypotheses, contact/support/impact candidates and abstentions without calibration; focused provider tests pass; held-out/real-device acceptance remains open (GAMST #330) |
 
 ## Epic E — OS adaptation
