@@ -40,11 +40,11 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| A1 lifecycle | start/stop/readiness/health, owned process reap | repeated start/stop, readiness timeout and clean reap tests | foundation; pending production integration |
-| A2 crash isolation | child failure, cancellation and restart policy | failed provider cannot corrupt siblings; restart releases handles and queues | pending |
-| A3 registry and locks | provider descriptor, runtime lock/artifact/model/license hashes | launch refuses mismatched Python, lock, artifact or license metadata | partial |
+| A1 lifecycle | start/stop/readiness/health, owned process reap | repeated start/stop, readiness timeout and clean reap tests | implemented and focused-tested; production/host stress evidence remains open |
+| A2 crash isolation | child failure, cancellation and restart policy | failed provider cannot corrupt siblings; restart releases handles and queues | bounded crash telemetry and opt-in restart policy implemented/tested; host stress evidence remains open |
+| A3 registry and locks | provider descriptor, runtime lock/artifact/model/license hashes | launch refuses mismatched Python, lock, artifact or license metadata | metadata/Python/hash validation implemented/tested; real artifact/weight/license acceptance remains open |
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
-| A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | partial |
+| A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | Core bridge and revision metadata implemented/tested; full manager-owned bench acceptance remains open |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
 | A8 Playground/BYOK | OpenAI-compatible endpoint, model/key configuration, non-stream/SSE response and compact Context/evidence inspection | user-provided MyProxy endpoint/model/key; raw media remains excluded; errors are bounded and visible; no credentials or successful call are fabricated | GAMST #311; endpoint/credentials blocker remains |
 | A9 Playground capture lifecycle | operation-aware local start/stop snapshots and media ownership | stale paused snapshot cannot stop a current capture; genuine current stop still releases tracks | GAMST #332 under #311; implemented with revision/transition guards and focused browser helper regression |
@@ -58,7 +58,7 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
 | B1 packet contract | bounded packet, capture/receive/process times, source clock, evidence and revisions | schema round-trip and unknown-field rejection across all three repositories | foundation |
-| B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | Crew bounded-line hardening implemented (`a20854c`, `634fa2a`) with focused tests; full cross-repository execution/review open |
+| B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | bounded JSONL, size checks and handler/client timeouts implemented/tested (`a20854c`, `634fa2a`, `ba426e3`); full cross-repository execution/review open |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
 | B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | Core/Crew/bench verification, exact-byte probe, and live Crew→Core→bench adapter proof pass; host enforcement and independent production review remain open (#331) |
 | B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
@@ -70,10 +70,10 @@ materialization is GAMST #317.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| C1 clocks | source/monotonic/wall conversion, offset and drift calibration | calibration fixture reports sample count, residual and uncertainty | foundation; cross-runtime pending |
-| C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | partial |
-| C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | partial |
-| C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | partial; bench integration pending |
+| C1 clocks | source/monotonic/wall conversion, offset and drift calibration | calibration fixture reports sample count, residual and uncertainty | calibrated offset/drift engine implemented/tested (`8ad9788`); cross-runtime calibration remains open |
+| C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | interval/overlap and relation candidates implemented/tested; cross-runtime metrics remain open |
+| C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | revision-aware current/last-seen state implemented/tested |
+| C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | internal evidence watermark implemented/tested; bench integration evidence remains open |
 | C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | GAMST #328; Core candidate/abstention foundation `68cfb0d`; bench metrics and independent review open |
 | C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | Core `TemporalContextEngine` materialization + calibrated overlap implemented and focused-tested; cross-runtime metrics/review remain open |
 
@@ -83,7 +83,7 @@ Parent: `D-memory-context` (GAMST #318).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | `ContextMemory` layers implemented and focused-tested; integration with Engine/ObjectMemory remains open |
+| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | bounded layers, evidence index and byte eviction implemented/tested; provider/ObjectMemory integration remains open |
 | D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | bounded delta generation/replay implemented and focused-tested; production compression policy remains open |
 | D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | bounded evidence retrieval with cutoff/entity/time filters implemented and focused-tested |
 | D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | versioned lineage-checked checkpoint/resume plus bounded atomic `CheckpointStore` load/save/clear implemented and focused-tested; provider/ObjectMemory integration remains open |
@@ -97,10 +97,10 @@ Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314; Crew #10).
 |---|---|---|---|
 | E1 macOS Apple Silicon | MLX/MPS/ONNX/llama.cpp and CPU fallback | one-command lightweight profile with pinned revisions on target Mac | pending real run |
 | E2 Linux CUDA | containers, CUDA, TensorRT/ORT/vLLM/Triton/Ray candidates | same packet contract on real target hardware | pending host |
-| E3 Linux CPU | no-CUDA profile and native dependency diagnostics | profile refuses unsupported acceleration and completes CPU smoke | GAMST #323; missing |
-| E4 Windows | CPU/ORT/DirectML/llama.cpp profile | clean install and provider compatibility report on Windows host | GAMST #324; missing |
-| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | GAMST #325; missing |
-| E6 compatibility matrix | available/installed/runtime-compatible/weight-ready/benchmark-accepted states | every provider reports all five states and license gate | partial |
+| E3 Linux CPU | no-CUDA profile and native dependency diagnostics | profile refuses unsupported acceleration and completes CPU smoke | declarative profile and diagnostics implemented/focused-tested; target-host CPU smoke remains open (#323) |
+| E4 Windows | CPU/ORT/DirectML/llama.cpp profile | clean install and provider compatibility report on Windows host | declarative profile and compatibility reporting implemented; Windows acceptance remains open (#324) |
+| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | declarative profile implemented; Jetson acceptance remains open (#325) |
+| E6 compatibility matrix | available/installed/runtime-compatible/weight-ready/benchmark-accepted states | every provider reports all five states and license gate | explicit five-state catalog and install/native diagnostics implemented/tested (`8651d62`); real host/weight/license acceptance remains open |
 
 ## Epic F — benchmark and default selection
 
