@@ -119,6 +119,7 @@ const path = require('node:path');
   assert.equal(t('zh', 'response'), '响应');
   assert.equal(t('en', 'connectionLocal', { port: 8799 }), 'Local · 127.0.0.1:8799');
   const site = fs.readFileSync('site/index.html', 'utf8');
+  const app = fs.readFileSync('site/app.js', 'utf8');
   const local = fs.readFileSync('gamst/dashboard.html', 'utf8');
   for (const html of [site, local]) {
     for (const match of html.matchAll(/data-i18n="([^"]+)"/g)) assert(keys.includes(match[1]), `missing translation ${match[1]}`);
@@ -127,6 +128,11 @@ const path = require('node:path');
     assert(html.includes('@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'));
     assert(!html.includes('id="categoryCharts"'));
   }
+  assert(app.includes('for (const delegate of ["GPU", "CPU"])'), 'camera model loading must fall back from GPU to CPU');
+  assert(app.includes('state.faceModel = null;'), 'camera model failure must not tear down media ownership');
+  assert(app.includes('await $("video").play().catch(() => {})'), 'preview autoplay failure must not stop capture');
+  assert(app.includes('AudioContext startup is an optional input path'), 'audio startup failure must be isolated from camera capture');
+  assert(app.includes('if (generation === state.generation && state.active) showError("errorRequest", error);'), 'audio failure must be reported without stopping capture');
   assert(local.includes('name="gamst-session-token" content="__SESSION_TOKEN__"'));
   assert(local.includes('src="/app.js"'));
   assert(!site.includes('name="gamst-session-token"'));

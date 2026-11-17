@@ -322,15 +322,33 @@ async function api(body, options = {}) {
 }
 
 async function loadVisionModels(generation) {
-  const { FaceLandmarker, PoseLandmarker, FilesetResolver } = await import(MEDIAPIPE_URL);
-  const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
-  const [face, pose] = await Promise.all([
-    FaceLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" }, runningMode: "VIDEO", numFaces: 4, outputFaceBlendshapes: true }),
-    PoseLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: POSE_MODEL, delegate: "GPU" }, runningMode: "VIDEO", numPoses: 4 }),
-  ]);
-  if (generation !== state.generation) { face.close(); pose.close(); return; }
-  state.faceModel = face;
-  state.poseModel = pose;
+  // Camera ownership must not depend on optional CDN/model availability. A
+  // failed GPU delegate or offline model fetch used to bubble into
+  // beginCapture(), which stopped an otherwise valid camera immediately.
+  try {
+    const { FaceLandmarker, PoseLandmarker, FilesetResolver } = await import(MEDIAPIPE_URL);
+    const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
+    const create = async (Factory, modelAssetPath, extra) => {
+      for (const delegate of ["GPU", "CPU"]) {
+        try {
+          return await Factory.createFromOptions(vision, { baseOptions: { modelAssetPath, delegate }, ...extra });
+        } catch { /* try the portable CPU delegate before giving up */ }
+      }
+      return null;
+    };
+    const [face, pose] = await Promise.all([
+      create(FaceLandmarker, FACE_MODEL, { runningMode: "VIDEO", numFaces: 4, outputFaceBlendshapes: true }),
+      create(PoseLandmarker, POSE_MODEL, { runningMode: "VIDEO", numPoses: 4 }),
+    ]);
+    if (generation !== state.generation) { face?.close(); pose?.close(); return; }
+    state.faceModel = face;
+    state.poseModel = pose;
+  } catch {
+    // Perception is best effort in browser mode; retain the live media stream
+    // and continue publishing audio/text observations when models are absent.
+    state.faceModel = null;
+    state.poseModel = null;
+  }
 }
 
 function signal(name, value, stamp) {
@@ -502,6 +520,10 @@ async function beginCapture() {
       if (Number.isFinite(result.capture_revision)) state.localCaptureRevision = Math.max(state.localCaptureRevision, result.capture_revision);
     }
     if (generation !== state.generation || !state.active || (transitionId !== null && state.localCaptureTransition !== transitionId)) return;
+    // Keep the selected inputs in the beginCapture scope.  Previously these
+    // declarations lived inside the device block, while the status update
+    // below read them after the block; that ReferenceError entered the catch
+    // path and released a freshly granted camera immediately.
     const camera = pressed("inputCamera"), microphone = pressed("inputMicrophone");
     if (camera || microphone) {
       state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
@@ -518,9 +540,31 @@ async function beginCapture() {
       }
       if (camera) {
         $("video").srcObject = state.stream;
-        await $("video").play();
+        // A browser autoplay policy must not revoke an already granted camera.
+        // The stream remains owned even when the preview element cannot play.
+        await $("video").play().catch(() => {});
       }
-      if (microphone) await setupAudio(generation);
+      if (microphone) {
+        // AudioContext startup is an optional input path. Browsers can reject
+        // it independently (autoplay policy, device contention, or an
+        // unsupported backend) after granting the camera. Keep the camera
+        // stream alive and report the audio-specific failure instead of
+        // tearing down the whole capture session.
+        try {
+          await setupAudio(generation);
+        } catch (error) {
+          state.processor?.disconnect();
+          state.processor = null;
+          state.source?.disconnect();
+          state.source = null;
+          state.analyser = null;
+          state.mute?.disconnect();
+          state.mute = null;
+          state.audioContext?.close().catch(() => {});
+          state.audioContext = null;
+          if (generation === state.generation && state.active) showError("errorRequest", error);
+        }
+      }
       if (camera && !isLocal) await loadVisionModels(generation);
     }
     if (generation !== state.generation || !state.active) return;
