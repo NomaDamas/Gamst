@@ -8,7 +8,7 @@ const path = require('node:path');
   const {
     MESSAGES, LOCALES, t, utf8Bytes, gaugeValues, newestObservationTimestamp,
     packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage, captureSnapshotDecision, captureTransitionCanClear,
-    buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta,
+    buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta, normalizeLocalModelConfig,
     sparklinePoints,
   } = pure;
 
@@ -109,6 +109,11 @@ const path = require('node:path');
   assert.throws(() => extractDelta({ error: { message: 'denied' } }), /denied/);
   assert.equal(chatEndpoint('https://api.openai.com/v1/'), 'https://api.openai.com/v1/chat/completions');
   assert.equal(chatEndpoint('http://127.0.0.1:9000/v1/chat/completions'), 'http://127.0.0.1:9000/v1/chat/completions');
+  assert.equal(normalizeLocalModelConfig(undefined), null, 'missing local config stays unavailable');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'http://127.0.0.1:9000/v1', model: 'gpt-6.1-terra-low', apiKey: 'local-secret' }).apiKey, 'local-secret');
+  assert.equal(normalizeLocalModelConfig({ default: { endpoint: 'http://127.0.0.1:9000/v1', model: 'gpt-6.1-terra-low', key: 'local-secret' } }).baseUrl, 'http://127.0.0.1:9000/v1');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'http://127.0.0.1:9000/v1', model: 'gpt-6.1-terra-low' }), null, 'partial config must not activate the shortcut');
+  assert.equal(normalizeLocalModelConfig({ baseUrl: 'http://127.0.0.1:9000/v1', model: 'gpt-6.1-terra-low', apiKey: 'local\nsecret' }), null, 'control characters must not enter config');
   console.log('SSE parser: fragmented CRLF events, comments, deltas, DONE and endpoint normalization passed');
 
   const keys = Object.keys(MESSAGES.en).sort();
@@ -120,6 +125,8 @@ const path = require('node:path');
   assert.equal(t('en', 'connectionLocal', { port: 8799 }), 'Local · 127.0.0.1:8799');
   const site = fs.readFileSync('site/index.html', 'utf8');
   const app = fs.readFileSync('site/app.js', 'utf8');
+  const exampleConfig = fs.readFileSync('site/local-config.example.js', 'utf8');
+  const gitignore = fs.readFileSync('.gitignore', 'utf8');
   const local = fs.readFileSync('gamst/dashboard.html', 'utf8');
   for (const html of [site, local]) {
     for (const match of html.matchAll(/data-i18n="([^"]+)"/g)) assert(keys.includes(match[1]), `missing translation ${match[1]}`);
@@ -136,6 +143,14 @@ const path = require('node:path');
   assert(app.includes('function controlValue(id, fallback = "")'), 'capture controls must tolerate a partially loaded demo shell');
   assert(app.includes('Number.isFinite(rate) && rate > 0 ? rate : 4'), 'invalid or missing packet rate must use a safe capture interval');
   assert(app.includes('if (!state.mute?.gain) throw new Error("Audio output control is unavailable")'), 'audio gain lifecycle must not dereference an absent gain node');
+  assert(app.includes('loadLocalMyProxyConfig'), 'demo must load optional local MyProxy config');
+  assert(app.includes('applyLocalMyProxyConfig'), 'demo must expose local MyProxy setup action');
+  assert(site.includes('id="useLocalMyProxy"'), 'public demo must expose local MyProxy button');
+  assert(local.includes('id="useLocalMyProxy"'), 'local dashboard must expose local MyProxy button');
+  assert(gitignore.split(/\r?\n/).includes('site/local-config.js'), 'actual local config must be ignored');
+  assert(exampleConfig.includes('apiKey: ""'), 'tracked example must contain no credential');
+  assert(!exampleConfig.includes('local-secret'), 'tracked example must not contain a real key');
+  assert(!app.includes('gpt-6.1-terra-low'), 'model/key values must remain local configuration, not client source');
   assert(local.includes('name="gamst-session-token" content="__SESSION_TOKEN__"'));
   assert(local.includes('src="/app.js"'));
   assert(!site.includes('name="gamst-session-token"'));

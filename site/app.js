@@ -1,6 +1,6 @@
 import {
   LOCALES, t, utf8Bytes, gaugeValues, packetMetrics, packetRate, evidenceIds,
-  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear,
+  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, normalizeLocalModelConfig,
   sparklinePoints,
 } from "./playground.js";
 
@@ -36,7 +36,7 @@ const state = {
   localCaptureRevision: 0, localCaptureTransition: null, localCaptureTransitionId: 0,
   arrivals: [], droppedFrames: 0, histories: Object.fromEntries(GAUGE_NAMES.map((name) => [name, []])),
   metricHistory: [], audioTimeline: [], sceneTimeline: [], lastTimelineStamp: 0,
-  sending: false, chatController: null, featureSignature: "", guidePreview: null,
+  sending: false, chatController: null, featureSignature: "", guidePreview: null, localMyProxyConfig: null,
 };
 let settingsTimer = null;
 
@@ -48,6 +48,48 @@ function writeStorage(kind, key, value) {
 }
 function removeStorage(kind, key) {
   try { (kind === "session" ? sessionStorage : localStorage).removeItem(STORAGE + key); } catch { /* no-op */ }
+}
+
+async function loadLocalMyProxyConfig() {
+  try {
+    const module = await import("./local-config.js");
+    return normalizeLocalModelConfig(module);
+  } catch {
+    // The file is intentionally optional and ignored by git. A missing local
+    // config is a normal state for public/demo deployments.
+    return null;
+  }
+}
+
+function updateLocalMyProxyButton() {
+  const button = $("useLocalMyProxy");
+  if (!button) return;
+  const available = Boolean(state.localMyProxyConfig);
+  button.disabled = !available;
+  button.title = available ? "" : t(state.locale, "localMyProxyUnavailable");
+}
+
+function applyLocalMyProxyConfig() {
+  const config = state.localMyProxyConfig;
+  if (!config) return showError("errorLocalMyProxy");
+  setControlValue("provider", "byok");
+  setControlValue("baseUrl", config.baseUrl);
+  setControlValue("model", config.model);
+  setControlValue("apiKey", config.apiKey);
+  if ($("rememberKey")) $("rememberKey").checked = false;
+  // Endpoint/model are harmless UI preferences; keep the credential in the
+  // session only so the local config never causes a persistent key write.
+  writeStorage("local", "baseUrl", config.baseUrl);
+  writeStorage("local", "model", config.model);
+  writeStorage("local", "provider", "byok");
+  writeStorage("local", "rememberKey", "false");
+  writeStorage("session", "apiKey", config.apiKey);
+  removeStorage("local", "apiKey");
+  updateProviderNotice();
+  renderResponseSetup(false);
+  $("settingsStatus").textContent = t(state.locale, "localMyProxyApplied");
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => { $("settingsStatus").textContent = ""; }, 2000);
 }
 
 try {
@@ -64,6 +106,7 @@ function applyI18n() {
   $("send").setAttribute("aria-label", t(state.locale, "send"));
   $("connectionLabel").textContent = isLocal ? t(state.locale, "connectionLocal", { port: location.port || "8766" }) : t(state.locale, "connectionBrowser");
   updateProviderNotice();
+  updateLocalMyProxyButton();
   renderPacket();
   updateCaptureUI();
   renderResponseSetup(false);
@@ -973,6 +1016,7 @@ $("language").addEventListener("change", () => {
 $("configureModel").addEventListener("click", () => { $("modelSettings").open = true; $("baseUrl").focus(); });
 $("provider").addEventListener("change", () => { updateProviderNotice(); renderResponseSetup(false); });
 for (const id of ["baseUrl", "model", "apiKey"]) $(id).addEventListener("input", () => { updateProviderNotice(); renderResponseSetup(false); });
+$("useLocalMyProxy")?.addEventListener("click", applyLocalMyProxyConfig);
 $("saveSettings").addEventListener("click", () => {
   const config = providerConfig();
   writeStorage("local", "baseUrl", config.baseUrl);
@@ -1064,6 +1108,10 @@ window.addEventListener("pagehide", () => {
 setInterval(() => renderMetrics(), 500);
 
 restoreSettings();
+loadLocalMyProxyConfig().then((config) => {
+  state.localMyProxyConfig = config;
+  updateLocalMyProxyButton();
+}).catch(() => updateLocalMyProxyButton());
 for (const id of ["openLocalSettings"]) $(id).hidden = !isLocal;
 $("localCompanionOption").hidden = !isLocal;
 applyI18n();

@@ -233,6 +233,7 @@ def handler_for(app):
                 "/playground.js": "application/javascript",
                 "/observability.js": "application/javascript",
                 "/i18n.js": "application/javascript",
+                "/local-config.js": "application/javascript",
                 "/style.css": "text/css",
                 "/icon.svg": "image/svg+xml",
             }
@@ -240,6 +241,8 @@ def handler_for(app):
                 # The public site owns the shared client; the Python server only
                 # exposes this fixed allowlist, never arbitrary repository files.
                 asset = Path(__file__).parent.parent / "site" / self.path[1:]
+                if not asset.is_file():
+                    return self.respond(404, {"error": "Not found"})
                 return self.respond(200, asset.read_text(), static_types[self.path])
             if not self.allowed_host() or self.path != "/":
                 return self.respond(404, {"error": "Not found"})
