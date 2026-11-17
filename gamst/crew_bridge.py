@@ -1,6 +1,6 @@
 """Optional bridge from GAMST to a running GamstCrew Unix packet runtime."""
 from __future__ import annotations
-import asyncio, json, uuid
+import asyncio, json, math, uuid
 from .temporal import TemporalEvent
 
 class CrewBridge:
@@ -8,8 +8,9 @@ class CrewBridge:
                  timeout_s: float = 30.0):
         if type(max_line) is not int or max_line < 1:
             raise ValueError('max_line must be a positive integer')
-        if type(timeout_s) not in (int, float) or timeout_s <= 0:
-            raise ValueError('timeout_s must be positive')
+        if (type(timeout_s) not in (int, float) or not math.isfinite(float(timeout_s))
+                or not 0 < timeout_s <= 600):
+            raise ValueError('timeout_s must be finite and between 0 and 600 seconds')
         self.socket_path, self.max_line, self.timeout_s = socket_path, max_line, float(timeout_s)
     async def submit(self, event: TemporalEvent):
         request_id = uuid.uuid4().hex

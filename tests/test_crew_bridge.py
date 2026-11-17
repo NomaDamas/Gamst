@@ -11,6 +11,13 @@ else:
 def event():
     return TemporalEvent('e','s','u','vision','event','wall','clock-1','epoch-1',1,1,1,1,'fixture','1',{'x':1})
 
+
+class BridgeValidation(unittest.TestCase):
+    def test_timeout_is_finite_and_bounded(self):
+        for value in (0, -1, float('nan'), float('inf'), 601):
+            with self.assertRaises(ValueError):
+                CrewBridge('/tmp/unused', timeout_s=value)
+
 @unittest.skipIf(JsonlUnixServer is None, 'optional GamstCrew integration is not installed')
 class Bridge(unittest.IsolatedAsyncioTestCase):
     async def test_submit_roundtrip(self):
