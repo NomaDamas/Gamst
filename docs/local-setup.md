@@ -6,6 +6,20 @@ gamst packages multimodal context for your existing agent. Installing it does no
 
 Requirements: Python 3.10+, approximately 3 GB for model artifacts plus Python dependencies, and free memory for concurrent inference. The tested host has 32 GB RAM. Other platforms can use the SDK and perception backends with a separately supplied compatible model server; the installer currently bundles a VLM runner only for macOS ARM64.
 
+The source checkout also exposes the approved one-command surface:
+
+```bash
+gamst install          # explicit, pinned model/artifact download
+gamst run --language ko
+```
+
+`gamst install` dispatches to this checkout's `scripts/local_models.py` and
+never writes outside `.local-models`. `gamst run` dispatches to
+`scripts/run_local.py`; it never installs models or downloads dependencies
+implicitly. A wheel that does not contain the development scripts reports an
+actionable error and leaves the environment unchanged. Use the scripts
+directly when a different isolated runtime or provider profile is required.
+
 ```bash
 git clone https://github.com/NomaDamas/Gamst.git
 cd Gamst
