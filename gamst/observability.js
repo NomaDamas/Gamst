@@ -23,14 +23,15 @@
       this.observations=observations;this.live=live;
       const t=(ko,en)=>this.locale==='en'?en:this.locale==='zh'?({'몸 움직임':'身体动作','전체':'全部','표정 움직임':'面部动作','상대 점수 비중':'相对分数占比','최대 점수':'最高分','모델 출력':'模型输出','관측값':'观察值','점수 합계 기준 비중 · ':'总分占比 · ','시계열':'时间线','관측 / 분류 모델 입력 대기':'等待观察或分类输出','중립':'中性','기쁨':'高兴','분노':'愤怒','슬픔':'悲伤'}[ko]||en):ko;
       const groups=[];
-      for(const [name,o] of Object.entries(observations)){
+      for(const [name,o] of Object.entries(observations||{})){
+        if(!o || typeof o !== 'object') continue;
         if(name.startsWith('classification.')&&o.value?.labels)groups.push([name,o.value.labels,o,'model']);
       }
       // A measured expression profile is available even without a classifier.
-      const face=observations['scene.faces'];
-      for(const [i,f] of (face?.value||[]).entries())if(f.blendshapes)groups.push([t('표정 움직임','Facial movement')+' · '+(i+1),f.blendshapes,face,'measurement']);
-      const body=observations['scene.poses'];
-      for(const pose of body?.value||[]){if(!pose.track_id||pose.association_quality==='uncertain')continue;const scores={};for(const [key,value] of Object.entries(pose.geometry||{}))if(typeof value==='boolean')scores[key.replaceAll('_',' ')]=Number(value);if(Object.keys(scores).length)groups.push([t('몸 움직임','Body movement')+' · '+pose.track_id,scores,body,'measurement'])}
+      const face=(observations||{})['scene.faces'];
+      for(const [i,f] of (Array.isArray(face?.value)?face.value:[]).entries())if(f&&f.blendshapes)groups.push([t('표정 움직임','Facial movement')+' · '+(i+1),f.blendshapes,face,'measurement']);
+      const body=(observations||{})['scene.poses'];
+      for(const pose of (Array.isArray(body?.value)?body.value:[])){if(!pose||!pose.track_id||pose.association_quality==='uncertain')continue;const scores={};for(const [key,value] of Object.entries(pose.geometry||{}))if(typeof value==='boolean')scores[key.replaceAll('_',' ')]=Number(value);if(Object.keys(scores).length)groups.push([t('몸 움직임','Body movement')+' · '+pose.track_id,scores,body,'measurement'])}
       const nodes=[],names=[],labelOptions=new Map();
       for(const [name,scores,obs,kind] of groups.slice(0,16)){
         const all=Object.entries(scores).filter(([k,v])=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1).sort((a,b)=>b[1]-a[1]);
@@ -57,7 +58,7 @@
         });section.append(graph,el('small',`${(span/1000).toFixed(1)}s · ${history.length} samples`));nodes.push(section);names.push(name)
       }
       // Arbitrary scalar sensors retain their own units rather than becoming percentages.
-      const scalars=Object.entries(observations).filter(([name,o])=>typeof o.value==='number'&&Number.isFinite(o.value)).slice(0,12);
+      const scalars=Object.entries(observations||{}).filter(([name,o])=>o&&typeof o==='object'&&typeof o.value==='number'&&Number.isFinite(o.value)).slice(0,12);
       for(const [name,o] of scalars){const key='scalar:'+name,h=this.history.get(key)||[];if(live&&this.last.get(key)!==o.timestamp_ms){h.push({time:o.timestamp_ms,value:o.value});if(h.length>60)h.shift();this.history.set(key,h);this.last.set(key,o.timestamp_ms)}const section=el('section');section.style.cssText='padding:12px 0;border-bottom:1px solid #e7e7ed';section.append(el('strong',root.observationTitle(name,this.locale)+' · '+o.value.toFixed(3)));const min=Math.min(...h.map(p=>p.value),o.value),max=Math.max(...h.map(p=>p.value),o.value),span=Math.max(1,(h.at(-1)?.time||0)-(h[0]?.time||0));const graph=document.createElementNS('http://www.w3.org/2000/svg','svg'),line=document.createElementNS('http://www.w3.org/2000/svg','polyline');graph.setAttribute('viewBox','0 0 300 40');graph.style.cssText='display:block;width:100%;height:40px';line.setAttribute('fill','none');line.setAttribute('stroke','#516bd1');line.setAttribute('stroke-width','1.5');line.setAttribute('points',h.map(p=>`${(p.time-h[0].time)/span*300},${max===min?20:38-(p.value-min)/(max-min)*36}`).join(' '));graph.append(line);section.append(graph,el('small',`min ${min.toFixed(3)} · max ${max.toFixed(3)}`));nodes.push(section);names.push(key)}
       if(!nodes.length){this.history.clear();this.last.clear();this.nav.hidden=true;this.detailNav.hidden=true;this.plot.replaceChildren(el('div',t('관측 / 분류 모델 입력 대기','Waiting for observations / classifier output')));return}
       const activeKeys=new Set([...groups.map(g=>g[0]),...scalars.map(([n])=>'scalar:'+n)]);
