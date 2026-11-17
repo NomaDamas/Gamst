@@ -144,7 +144,6 @@ class HTTPBoundaryTests(unittest.TestCase):
         self.assertIn('id="panel-response"', handler.response[1])
         self.assertIn('id="featureSwitches"', handler.response[1])
 
-
 class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_does_not_wait_for_long_model_call(self):
         from gamst.companion import Companion
