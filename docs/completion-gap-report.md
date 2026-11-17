@@ -4,7 +4,7 @@
 The approved workflow was executed through foundation implementation, targeted verification, PR creation and manual review. The Epic 0 correctness gate is now closed; repository-wide production merge remains gated by the open A–F acceptance work documented below.
 
 - The fresh Epic 0 review was completed by the independent Astra reviewer against `c950a57` and returned **APPROVE** for Epic 0.
-- PR gate APIs remain incomplete for some repositories, and no PR was merged.
+- Code-completable PRs for GAMST, GamstCrew and Gamst-bench are merged; production acceptance remains gated by the open A–F evidence below.
 
 Unimplemented approved-plan gaps remain explicit above. They are not marked complete and must be resumed after reviewer/CI access is fixed.
 
@@ -105,7 +105,7 @@ The current code-completable continuation is recorded separately:
 
 - GAMST `46a83b7` (issue-map refresh and current cross-repository evidence; later `2015c44` is evidence-only metadata)
 - GamstCrew `fdf5322` (temporal normalization, sequence-gap visibility and abstaining contradiction candidates; based on `f8aa970`/`08dedcd`)
-- Gamst-bench `e1976e1` (complete temporal-field declarations in measured manifests)
+- Gamst-bench `e1976e1`, now included in merged `main` `f32cf4c` (complete temporal-field declarations in measured manifests and current bench runtime/docs)
 
 The current GAMST branch also contains docs-only Alpamayo2 cross-repository
 issue linkage at `2fe9cbe`; the checksum probe below is intentionally scoped to
@@ -163,8 +163,8 @@ numeric-finance acceptance gate remains open until an isolated rerun and the
 required host evidence are available.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the probe checkout heads: GAMST `2015c44`, Crew `fdf5322`, and
-bench `ee2ba10`; this documentation update itself is outside that probe.
+the probe checkout heads: GAMST `fecfba9`, Crew `fdf5322`, and
+bench `f32cf4c`; this documentation update itself is outside that probe.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical
