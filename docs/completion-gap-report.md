@@ -55,6 +55,31 @@ acceptance, and full temporal/physics/provenance evidence remain open.
 
 ## Current handoff (2026-11-17)
 
+## Code-completable continuation (2026-11-17)
+
+The follow-on implementation goal completed the code and focused-test slices
+that do not require target hardware or measured model quality:
+
+- GAMST `8ad9788`: `TemporalContextEngine` and bounded `ContextMemory`, with
+  clock calibration, relation candidates, revisions, cutoff eligibility,
+  current/last-seen state, delta replay, evidence retrieval and lineage-checked
+  checkpoint/resume. Focused temporal/memory/physics tests: `32 passed`.
+- GAMST `1335a35`: Playground malformed-observation guards, invalid local
+  snapshot rejection and media-track-ended cleanup. `node
+  tests/dashboard_ui_test.cjs` and `git diff --check` pass.
+- GamstCrew `be3b319` + `ba426e3`: runtime diagnostics/profile validation and
+  bounded Unix transport handler/client timeouts. Crew focused suite: `39
+  passed` in the dependency-complete environment.
+- Gamst-bench `63189ca` (equivalent local cherry-pick `d12161e`): exact-decimal
+  CostBench aggregation and conservative default-selection reporting. Focused
+  CostBench tests: `3 passed`; the commit is present on the repository's
+  temporal-metrics lineage/main merge.
+
+These changes close the implementation portions of the corresponding child
+issues. They do not close the required target-host, matched B/C/D/E, durable
+store, full Crew-manager-to-bench execution, or independent broader-review
+gates listed below.
+
 The active handoff uses these exact commits:
 
 - GAMST `feat/temporal-contract`: `c950a573944c85264f6d046d0bf112b5d50dd0df`
