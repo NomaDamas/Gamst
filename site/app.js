@@ -5,6 +5,18 @@ import {
 } from "./playground.js";
 
 const $ = (id) => document.getElementById(id);
+// Controls are intentionally looked up at the point of use because the same
+// client is served by the static browser demo and the authenticated local
+// dashboard. A partially loaded/older page must not turn a missing control
+// into a capture failure (for example, `undefined.value`).
+function controlValue(id, fallback = "") {
+  const node = $(id);
+  return node && "value" in node ? node.value : fallback;
+}
+function setControlValue(id, value) {
+  const node = $(id);
+  if (node && "value" in node) node.value = value;
+}
 const sessionToken = document.querySelector('meta[name="gamst-session-token"]')?.content || "";
 const isLocal = Boolean(sessionToken && sessionToken !== "__SESSION_TOKEN__");
 const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -46,7 +58,7 @@ try {
 function applyI18n() {
   document.documentElement.lang = state.locale;
   document.title = t(state.locale, "appTitle");
-  $("language").value = state.locale;
+  setControlValue("language", state.locale);
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(state.locale, node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(state.locale, node.dataset.i18nPlaceholder); });
   $("send").setAttribute("aria-label", t(state.locale, "send"));
@@ -412,13 +424,16 @@ function restartCaptureTimer() {
   clearInterval(state.captureTimer);
   state.captureTimer = null;
   if (!state.active) return;
-  const interval = 1000 / Number($("packetRate").value);
+  const rate = Number(controlValue("packetRate", "4"));
+  const interval = 1000 / (Number.isFinite(rate) && rate > 0 ? rate : 4);
   state.captureTimer = setInterval(isLocal ? localVideoTick : browserTick, interval);
   if (!isLocal) browserTick();
 }
 
 async function setupAudio(generation) {
-  state.audioContext = new AudioContext();
+  const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextCtor) throw new Error("Audio input is unavailable in this browser");
+  state.audioContext = new AudioContextCtor();
   await state.audioContext.resume();
   if (generation !== state.generation) return;
   state.source = state.audioContext.createMediaStreamSource(state.stream);
@@ -430,6 +445,7 @@ async function setupAudio(generation) {
   }
   state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
   state.mute = state.audioContext.createGain();
+  if (!state.mute?.gain) throw new Error("Audio output control is unavailable");
   state.mute.gain.value = 0;
   state.source.connect(state.processor);
   state.processor.connect(state.mute);
@@ -629,7 +645,7 @@ function packetWithQuestion(question) {
 }
 
 function providerConfig() {
-  return { baseUrl: $("baseUrl").value.trim(), model: $("model").value.trim(), key: $("apiKey").value, provider: $("provider").value };
+  return { baseUrl: controlValue("baseUrl").trim(), model: controlValue("model").trim(), key: controlValue("apiKey"), provider: controlValue("provider", "byok") };
 }
 function updateProviderNotice() {
   const config = providerConfig();
@@ -712,7 +728,7 @@ async function streamBYOK(question, packet) {
 }
 
 async function sendQuestion() {
-  const question = $("question").value.trim();
+  const question = controlValue("question").trim();
   clearError();
   if (!question) return showError("emptyQuestion");
   selectTab("response");
@@ -733,7 +749,7 @@ async function sendQuestion() {
   $("responseText").textContent = "";
   $("responseText").classList.add("streaming");
   $("responseState").textContent = t(state.locale, "sending");
-  state.sentPacket = compactPacket(packetWithQuestion(question), Number($("byteBudget").value));
+  state.sentPacket = compactPacket(packetWithQuestion(question), Number(controlValue("byteBudget", "16384")));
   renderPacket();
   renderEvidence(state.sentPacket);
   try {
@@ -747,7 +763,7 @@ async function sendQuestion() {
       answer = await streamBYOK(question, state.sentPacket);
     }
     $("responseText").textContent = answer;
-    $("question").value = "";
+    setControlValue("question", "");
     setStatus("response");
   } catch (error) {
     if (error.name !== "AbortError") {
@@ -802,7 +818,7 @@ function renderLocalSettings(data) {
     }
   }
   $("asrLanguage").disabled = !data.asr?.available || state.active;
-  if (document.activeElement !== $("asrLanguage")) $("asrLanguage").value = data.asr?.language || "auto";
+  if (document.activeElement !== $("asrLanguage")) setControlValue("asrLanguage", data.asr?.language || "auto");
   $("sam3Status").textContent = data.sam3?.message || t(state.locale, "unavailable");
   $("testGuides").disabled = state.active || !data.guide_test_available;
   const vlm = data.vlm || {};
@@ -810,7 +826,7 @@ function renderLocalSettings(data) {
   $("vlmEnabled").disabled = !vlm.available;
   $("applyVlm").disabled = !vlm.available;
   $("testVlm").disabled = !vlm.available;
-  for (const [id, key] of [["vlmInterval", "interval"], ["vlmWindow", "window_seconds"], ["vlmFps", "sample_fps"]]) if (document.activeElement !== $(id) && vlm[key] !== undefined) $(id).value = vlm[key];
+  for (const [id, key] of [["vlmInterval", "interval"], ["vlmWindow", "window_seconds"], ["vlmFps", "sample_fps"]]) if (document.activeElement !== $(id) && vlm[key] !== undefined) setControlValue(id, vlm[key]);
   const option = $("localCompanionOption");
   option.disabled = !data.companion_available;
   option.textContent = `${t(state.locale, "localCompanion")}${data.companion_available ? "" : ` · ${t(state.locale, "unavailable")}`}`;
@@ -915,8 +931,8 @@ for (const button of document.querySelectorAll("[data-preset]")) {
     setPressed("overlayBody", preset.body);
     setPressed("overlayPerson", preset.person);
     const key = { clarify: "presetClarifyQuestion", hand: "presetHandQuestion", that: "presetThatQuestion", stale: "presetStaleQuestion" }[name];
-    $("question").value = t(state.locale, key);
-    $("question").focus();
+    setControlValue("question", t(state.locale, key));
+    $("question")?.focus();
     clearError();
   });
 }
@@ -949,7 +965,8 @@ $("share").addEventListener("click", async () => {
   }
 });
 $("language").addEventListener("change", () => {
-  state.locale = LOCALES.includes($("language").value) ? $("language").value : "en";
+  const language = controlValue("language");
+  state.locale = LOCALES.includes(language) ? language : "en";
   try { localStorage.setItem("gamst.uiLanguage", state.locale); } catch { /* no-op */ }
   applyI18n();
 });
@@ -961,8 +978,8 @@ $("saveSettings").addEventListener("click", () => {
   writeStorage("local", "baseUrl", config.baseUrl);
   writeStorage("local", "model", config.model);
   writeStorage("local", "provider", config.provider);
-  writeStorage("local", "rate", $("packetRate").value);
-  writeStorage("local", "budget", $("byteBudget").value);
+  writeStorage("local", "rate", controlValue("packetRate", "4"));
+  writeStorage("local", "budget", controlValue("byteBudget", "16384"));
   if ($("rememberKey").checked) {
     writeStorage("local", "apiKey", config.key);
     removeStorage("session", "apiKey");
@@ -985,11 +1002,11 @@ $("localSettingsDialog").addEventListener("close", () => $("openLocalSettings").
 setPressed("vlmEnabled", false);
 bindToggle("vlmEnabled");
 $("asrLanguage").addEventListener("change", async () => {
-  try { await api({ op: "configure_asr", language: $("asrLanguage").value }); clearError(); } catch (error) { showError("errorRequest", error); }
+  try { await api({ op: "configure_asr", language: controlValue("asrLanguage", "auto") }); clearError(); } catch (error) { showError("errorRequest", error); }
 });
 $("applyVlm").addEventListener("click", async () => {
   try {
-    await api({ op: "configure_vlm", enabled: pressed("vlmEnabled"), interval: Number($("vlmInterval").value), window_seconds: Number($("vlmWindow").value), sample_fps: Number($("vlmFps").value) });
+    await api({ op: "configure_vlm", enabled: pressed("vlmEnabled"), interval: Number(controlValue("vlmInterval", "3")), window_seconds: Number(controlValue("vlmWindow", "4")), sample_fps: Number(controlValue("vlmFps", "2")) });
     clearError();
     handleLocalState(await api({ op: "state" }));
   } catch (error) { showError("errorRequest", error); }
@@ -1027,15 +1044,15 @@ $("loadCapabilities").addEventListener("click", async () => {
 });
 
 function restoreSettings() {
-  $("baseUrl").value = readStorage("local", "baseUrl");
-  $("model").value = readStorage("local", "model");
+  setControlValue("baseUrl", readStorage("local", "baseUrl"));
+  setControlValue("model", readStorage("local", "model"));
   const remembered = readStorage("local", "rememberKey") === "true";
-  $("rememberKey").checked = remembered;
-  $("apiKey").value = remembered ? readStorage("local", "apiKey") : readStorage("session", "apiKey");
-  $("packetRate").value = readStorage("local", "rate") || "4";
-  $("byteBudget").value = readStorage("local", "budget") || "16384";
+  if ($("rememberKey")) $("rememberKey").checked = remembered;
+  setControlValue("apiKey", remembered ? readStorage("local", "apiKey") : readStorage("session", "apiKey"));
+  setControlValue("packetRate", readStorage("local", "rate") || "4");
+  setControlValue("byteBudget", readStorage("local", "budget") || "16384");
   const savedProvider = readStorage("local", "provider");
-  $("provider").value = isLocal && savedProvider !== "byok" ? "local" : "byok";
+  setControlValue("provider", isLocal && savedProvider !== "byok" ? "local" : "byok");
 }
 
 window.addEventListener("pagehide", () => {
