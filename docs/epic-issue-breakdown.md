@@ -75,7 +75,7 @@ materialization is GAMST #317.
 | C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | partial |
 | C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | partial; bench integration pending |
 | C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | GAMST #328; Core candidate/abstention foundation `68cfb0d`; bench metrics and independent review open |
-| C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | missing |
+| C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | Core `TemporalContextEngine` materialization + calibrated overlap implemented and focused-tested; cross-runtime metrics/review remain open |
 
 ## Epic D — memory and context
 
@@ -83,10 +83,10 @@ Parent: `D-memory-context` (GAMST #318).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | GAMST #319; partial |
-| D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | GAMST #320; missing as epic-level gate |
-| D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | GAMST #321; partial |
-| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | GAMST #322; missing |
+| D1 state layers | current state, recent timeline and episodic memory | bounded retention, expiry and provenance are independently inspectable | `ContextMemory` layers implemented and focused-tested; integration with Engine/ObjectMemory remains open |
+| D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | bounded delta generation/replay implemented and focused-tested; production compression policy remains open |
+| D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | bounded evidence retrieval with cutoff/entity/time filters implemented and focused-tested |
+| D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | versioned lineage-checked checkpoint/resume implemented and focused-tested; durable store integration remains open |
 | D5 deterministic physics | bounded kinematics, trajectory hypotheses and physical uncertainty | held-out trajectory/contact evidence; calibrated claims only; synthetic futures isolated | GAMST #330; partial implementation, acceptance open |
 
 ## Epic E — OS adaptation
