@@ -36,15 +36,26 @@ class ContextMemory:
         self._revision = 0
 
     def _check_size(self) -> None:
+        # Retention is bounded across every index.  Previously only episodic
+        # entries were evicted, allowing non-episodic evidence and current
+        # state to grow without limit.
         while True:
             payload = json.dumps(self.snapshot(), ensure_ascii=False, sort_keys=True,
                                  separators=(",", ":")).encode()
-            if len(payload) <= self.max_bytes or not self.episodic_memory:
-                return
-            old = self.episodic_memory.popleft()
-            evidence_id = old.get("evidence_id")
-            if evidence_id:
-                self._evidence.pop(evidence_id, None)
+            if len(payload) <= self.max_bytes:
+                break
+            if self.episodic_memory:
+                self.episodic_memory.popleft()
+            elif self.recent_timeline:
+                self.recent_timeline.popleft()
+            elif self.current_state:
+                self.current_state.popitem(last=False)
+            else:
+                break
+        retained = list(self.recent_timeline) + list(self.episodic_memory) + list(self.current_state.values())
+        self._evidence = OrderedDict(
+            (item["evidence_id"], item) for item in retained if item.get("evidence_id")
+        )
 
     def append(self, event: dict[str, Any], *, entity_id: str | None = None,
                episodic: bool = False) -> dict[str, Any]:

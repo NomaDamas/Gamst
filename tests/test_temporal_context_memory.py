@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from gamst.context_memory import ContextMemory
@@ -37,6 +38,12 @@ class TemporalContextTests(unittest.TestCase):
 
 
 class ContextMemoryTests(unittest.TestCase):
+    def test_memory_bound_evicts_non_episodic_evidence(self):
+        memory = ContextMemory(session_id="bounded", max_recent=64, max_episodic=64, max_bytes=700)
+        for index in range(20):
+            memory.append({"event_id": f"evt-{index}", "value": "x" * 160})
+        self.assertLessEqual(len(json.dumps(memory.snapshot(), sort_keys=True).encode()), 700)
+        self.assertLessEqual(len(memory._evidence), len(memory.recent_timeline) + len(memory.episodic_memory) + len(memory.current_state))
     def test_layers_delta_replay_and_cutoff_retrieval(self):
         memory = ContextMemory(session_id="s", max_recent=8)
         first = memory.append({"event_id": "a", "timestamp_ms": 10, "value": 1},
