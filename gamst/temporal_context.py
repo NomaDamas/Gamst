@@ -117,9 +117,12 @@ class TemporalContextEngine:
                 if left.modality == right.modality:
                     continue
                 overlap = self._overlap(left, right, max_gap_ms)
-                if overlap <= 0:
+                ls, le = self._interval(left)
+                rs, re = self._interval(right)
+                near = min(abs(le - rs), abs(re - ls)) <= max_gap_ms
+                if overlap <= 0 and not near:
                     continue
-                relation = "temporal_overlap"
+                relation = "temporal_overlap" if overlap > 0 else "temporal_proximity"
                 result.append(self.relation(left, right, relation,
                                              max_gap_ms=max_gap_ms))
                 if len(result) >= self.max_relations:

@@ -64,6 +64,9 @@ class ContextMemoryTests(unittest.TestCase):
         replay.replay(delta)
         self.assertEqual([x["event_id"] for x in replay.recent_timeline], ["a", "b"])
         self.assertEqual([x["event_id"] for x in memory.retrieve(query_cutoff_ms=10)], ["a"])
+        self.assertEqual([x["event_id"] for x in memory.retrieve(entity_id="thing")], ["a"])
+        memory.append({"event_id": "untimed"})
+        self.assertEqual([x["event_id"] for x in memory.retrieve(query_cutoff_ms=100)], ["b", "a"])
 
     def test_checkpoint_lineage_and_resume(self):
         memory = ContextMemory(session_id="s")

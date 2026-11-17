@@ -71,6 +71,8 @@ class ContextMemory:
         item = _json(event)
         item.setdefault("session_id", self.session_id)
         item.setdefault("stored_at_ms", int(time.time() * 1000))
+        if entity_id is not None:
+            item.setdefault("entity_id", str(entity_id))
         evidence_id = item.get("evidence_id") or item.get("event_id")
         # Delta replay and provider retries are idempotent by evidence ID.
         prior = self._evidence.get(evidence_id)
@@ -139,8 +141,11 @@ class ContextMemory:
                 continue
             if end_ms is not None and (not isinstance(timestamp, int) or timestamp > end_ms):
                 continue
-            if query_cutoff_ms is not None and isinstance(timestamp, int) and timestamp > query_cutoff_ms:
-                continue
+            if query_cutoff_ms is not None:
+                # A causality watermark cannot prove an untimestamped record
+                # was known in time; fail closed instead of returning it.
+                if type(timestamp) is not int or timestamp > query_cutoff_ms:
+                    continue
             result.append(deepcopy(item))
             if len(result) >= limit:
                 break
