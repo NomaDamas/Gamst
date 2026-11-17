@@ -1,11 +1,11 @@
 {
   "algorithm": "sha256",
-  "bench_head": "ee2ba10fdf17a2d6ad363653a157a3ffaec46a38",
+  "bench_head": "f32cf4cc0fcc5f2768fc1d945669b03403283a45",
   "bench_verified": true,
-  "core_head": "2015c4436eb5427e146d0ca329d629d5dfa9f788",
+  "core_head": "fecfba9b854515849a9cfe87c87aabaa16d030d1",
   "crew_head": "fdf5322b1bc4c3de879c511a101bd2647087c6e7",
   "crew_verified": true,
-  "probe_core_head": "2015c4436eb5427e146d0ca329d629d5dfa9f788",
+  "probe_core_head": "fecfba9b854515849a9cfe87c87aabaa16d030d1",
   "scope": "canonical-byte contract probe at current GAMST/Crew/bench checkout heads; not model or host acceptance",
   "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
   "version": 1
