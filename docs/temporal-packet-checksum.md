@@ -31,13 +31,13 @@ The GAMST implementation and focused tests are present here. A reproducible
 cross-repository probe is available at
 `scripts/verify_cross_repo_checksum.py`. The current probe evidence is recorded
 in [`evidence/cross-repo-checksum-2026-11-17.json`](evidence/cross-repo-checksum-2026-11-17.json):
-GAMST `17e0d30df2dab07855fa136e559aec8268bfad2e`, Crew
-`d98723d95ac25c27c9a2575d7a45c68db3957e6d`, and bench
-`715f8b8605ce5ba793e0158c67a6120be12e9c61` all verified the Core-produced
+GAMST `2015c4436eb5427e146d0ca329d629d5dfa9f788`, Crew
+`fdf5322b1bc4c3de879c511a101bd2647087c6e7`, and bench
+`ee2ba10fdf17a2d6ad363653a157a3ffaec46a38` all verified the Core-produced
 envelope and the shared digest is
 `6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
-This probe is scoped to the current GAMST implementation head `50bc7f9`; later
-GAMST documentation-only commits do not change the packet implementation.
+This probe is scoped to these exact implementation heads; later documentation-only
+commits do not change the packet implementation.
 It proves canonical-byte agreement and closes the wire-compatibility
 portion of #331. Full runtime-manager→bench execution, target-host acceptance,
 and independent review remain open; this does not establish model, host,
