@@ -14,6 +14,16 @@ class CliLocalCommands(unittest.TestCase):
             cli.main()
         dispatch.assert_called_once_with("install", ["status"])
 
+    def test_bare_install_selects_the_explicit_installer_action(self):
+        completed = types.SimpleNamespace(returncode=0)
+        with patch("gamst.cli.subprocess.run", return_value=completed) as run:
+            cli._dispatch_local_command("install", [])
+        run.assert_called_once_with(
+            [sys.executable, str(cli._LOCAL_COMMANDS["install"]), "install"],
+            cwd=str(cli._CHECKOUT_ROOT),
+            check=False,
+        )
+
     def test_run_is_an_explicit_dispatch_and_forwards_flags(self):
         with patch.object(cli, "_dispatch_local_command") as dispatch, patch.object(
             sys, "argv", ["gamst", "run", "--language", "ko"]

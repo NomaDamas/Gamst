@@ -28,9 +28,15 @@ def _dispatch_local_command(command, extra):
             f"gamst {command} requires the checkout helper {script}; "
             "use the source checkout or run the documented setup command."
         )
+    forwarded = list(extra)
+    # The approved user-facing form is ``gamst install``.  The underlying
+    # script also exposes status/remove/profile actions, so preserve an
+    # explicit action while defaulting the bare command to its install action.
+    if command == "install" and (not forwarded or forwarded[0].startswith("-")):
+        forwarded.insert(0, "install")
     try:
         result = subprocess.run(
-            [sys.executable, str(script), *extra],
+            [sys.executable, str(script), *forwarded],
             cwd=str(_CHECKOUT_ROOT),
             check=False,
         )
