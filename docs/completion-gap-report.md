@@ -143,6 +143,19 @@ snapshot; production deadline enforcement and assertions are unchanged. This
 is monitored as hosted scheduler timing evidence, not treated as a protocol
 failure or proof of production readiness.
 
+The latest local full GAMST run completed with `1728 passed, 11 skipped, 1
+failed` and `809 subtests passed`. The single failure was
+`test_actual_twenty_recording_collector_and_financial_finalizer`, invocation
+44. Its retained artifacts classify the child failure as `timeout`: the source
+captured 2 of 3 declared frames, the task receipt has `failure_reason=timeout`,
+and the child summary has `failure_counts.timeout=1`; the native hello was
+verified and the native process was reaped with return code 1. This is the same
+cumulative host scheduling/resource behavior seen in the earlier numeric
+finance runs. No timeout or assertion was relaxed, and no protocol failure is
+claimed. The retained run directory is local diagnostic output only; the
+numeric-finance acceptance gate remains open until an isolated rerun and the
+required host evidence are available.
+
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
 the active implementation handoff heads: GAMST `915f18c`, Crew `d98723d`, and
 bench `715f8b8`.

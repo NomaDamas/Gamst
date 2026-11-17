@@ -56,14 +56,15 @@ cannot close a required acceptance gate by themselves.
 
 ## Review and merge gate
 
-The required independent review for the Epic 0 scope was rerun against the
-current GAMST head `c950a57` and returned **APPROVE** for that scope. Hosted
-evidence includes motion-provider runs `43898470715` and `43899185401` plus
-Python 3.10–3.13 checks. This closes the Epic 0 correctness gate only. The
-repository-wide production merge gate remains open because resource limits lack
-real stress evidence, full runtime-manager→bench execution is open, B/C/D/E are
-unmeasured, and Linux/CUDA, Windows and Jetson acceptance hosts are unavailable.
-No PR may merge on the basis of the Epic 0 approval alone.
+The required independent Astra-medium review of the implementation handoff
+`915f18c`/`d98723d`/`715f8b8` returned **APPROVE** after the exact-head metadata
+correction. It covers the implementation handoff and focused evidence; later
+GAMST commits are documentation-only. The earlier Epic 0 approval at `c950a57`
+remains separately scoped. The repository-wide production merge gate remains
+open because resource limits lack real stress evidence, full runtime-manager→
+bench execution is open, B/C/D/E are unmeasured, and Linux/CUDA, Windows and
+Jetson acceptance hosts are unavailable. No PR may merge on the basis of these
+implementation approvals alone.
 
 ## Temporal cutoff wording
 
