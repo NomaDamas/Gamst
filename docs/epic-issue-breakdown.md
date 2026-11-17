@@ -60,7 +60,7 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | B1 packet contract | bounded packet, capture/receive/process times, source clock, evidence and revisions | schema round-trip and unknown-field rejection across all three repositories | foundation |
 | B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | Crew bounded-line hardening implemented (`a20854c`, `634fa2a`) with focused tests; full cross-repository execution/review open |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
-| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | Core/Crew/bench verification and exact-byte probe pass at current heads; full runtime-manager→bench execution and review open (#331) |
+| B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | Core/Crew/bench verification, exact-byte probe, and live Crew→Core→bench adapter proof pass; host enforcement and independent production review remain open (#331) |
 | B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
 
 ## Epic C — temporal and multimodal fusion
@@ -111,10 +111,10 @@ Parent: `F-benchmark` (Gamst-bench #1/#3–#9 and GAMST #293/#300/#307/#308).
 | F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | partial; integration pending |
 | F2 temporal metrics | capture time, age, detection, cutoff, stale, drops, recovery and escalation | collector emits metrics and scorer consumes them | partial; scorer integration pending |
 | F3 matched B/C/D/E | same held-out inputs, consumer, prompt and context contract; distinct E checkpoint | all arms have complete scored traces and denominators | unmeasured smoke only |
-| F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | Gamst-bench #6; missing |
+| F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | exact-decimal aggregation and unknown-cost handling implemented in bench `4a489a0`, focused tests 5/5; measured host/resource/energy rows remain open (Gamst-bench #6) |
 | F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | Gamst-bench #7; pending real host |
 | F6 Linux acceptance | real Linux/CUDA matched runs | no synthetic or Mac substitution | pending real host |
-| F7 runtime trace handoff | real Crew Core provider execution through the bench JSONL adapter | live manager-owned lifecycle, temporal packet/checksum/provenance retention and explicit failure categories | Gamst-bench #9 under #1; design frozen in `docs/GAMSTCREW_RUNTIME_ADAPTER.md`, implementation pending |
+| F7 runtime trace handoff | real Crew Core provider execution through the bench JSONL adapter | live manager-owned lifecycle, temporal packet/checksum/provenance retention and explicit failure categories | implemented by the live Crew→CoreProvider→GAMST Core→bench JSONL adapter; focused integration tests 4/4; target-host acceptance and independent production review remain open (Gamst-bench #9 under #1) |
 
 ## Exhaustive issue crosswalk
 
@@ -130,7 +130,7 @@ facets of the same epic and are linked in the issue bodies.
 | C temporal/fusion | #297, #306, #312, #317, #328 | #11 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
 | D memory/physics | #318–#322, #330 | #11 | #1 | memory and measured physics acceptance open |
 | E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
-| F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#9 | runtime adapter design frozen; live execution, matched real B/C/D/E and CostBench open |
+| F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#9 | live adapter and CostBench code slices implemented; matched real B/C/D/E, resource/energy measurements, Mac/Linux comparison and default promotion remain open |
 
 Optional research issues #285–#292 remain linked from README and are not used
 to satisfy a required acceptance gate. They cover intermediate fusion,
