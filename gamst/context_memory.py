@@ -183,6 +183,53 @@ ContextMemoryEngine = ContextMemory
 MemoryContext = ContextMemory
 
 
+def project_record(record: dict[str, Any], *, session_id: str | None = None) -> dict[str, Any]:
+    """Project a retained GAMST envelope into the portable memory contract.
+
+    The projection deliberately excludes raw media and keeps only bounded
+    normalized observation metadata plus evidence lineage.  It is the bridge
+    used by the Core runtime; provider-specific payloads remain in the Store.
+    """
+    if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+        raise ValueError("record must be a retained GAMST envelope")
+    observation = record.get("observation")
+    if not isinstance(observation, dict):
+        raise ValueError("record observation must be an object")
+    event: dict[str, Any] = {
+        "event_id": record["id"],
+        "evidence_id": record["id"],
+        "timestamp_ms": record.get("timestamp_ms"),
+        "type": record.get("type"),
+        "name": observation.get("name"),
+        "modality": observation.get("modality"),
+        "value": observation.get("value"),
+        "session_id": session_id or record.get("session_id"),
+        "source_record_type": record.get("type"),
+    }
+    entity_id = observation.get("entity_id") or observation.get("track_id")
+    if entity_id is not None:
+        event["entity_id"] = str(entity_id)
+    if record.get("evidence"):
+        event["lineage"] = [{"record_id": item.get("record_id")}
+                             for item in record["evidence"] if isinstance(item, dict)]
+    # Fail before mutating memory if a provider returned non-JSON or raw data.
+    return _json(event)
+
+
+def sync_records(memory: ContextMemory, records: Iterable[dict[str, Any]], *,
+                 episodic_types: tuple[str, ...] = ("observation.event", "human.inference")) -> int:
+    """Idempotently import retained Core envelopes into ContextMemory."""
+    if not isinstance(memory, ContextMemory):
+        raise TypeError("memory must be a ContextMemory")
+    count = 0
+    for record in records:
+        projected = project_record(record, session_id=memory.session_id)
+        memory.append(projected, entity_id=projected.get("entity_id"),
+                      episodic=projected.get("type") in episodic_types)
+        count += 1
+    return count
+
+
 class CheckpointStore:
     """Atomic, bounded JSON checkpoint storage for :class:`ContextMemory`.
 

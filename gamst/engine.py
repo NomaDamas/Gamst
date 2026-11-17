@@ -15,6 +15,7 @@ from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata, identifier
 from .memory import ObjectMemory
+from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from dataclasses import asdict
 
@@ -71,6 +72,11 @@ class Gamst:
         self._capture_owners: set[str] = set()
         self._paused_before_capture = False
         self._session_id = uuid.uuid4().hex
+        # Portable temporal/context memory mirrors normalized envelopes only;
+        # raw media and provider payloads remain owned by Store/provider runtimes.
+        self.context_memory = ContextMemory(session_id=self._session_id,
+                                            max_bytes=min(max_payload_bytes, 4 * 1024 * 1024))
+        self.context_memory_drops = 0
         self._evaluation_snapshot_publishers = {}
         self._metric_directions = {}
         self.dropped_records = 0
@@ -183,6 +189,13 @@ class Gamst:
         if record.get("observation", {}).get("name") == TRANSCRIPT_OUTPUT:
             transcript = self.transcript_memory.prepare(record)
         stored = self.store.add(record)
+        try:
+            if stored:
+                sync_records(self.context_memory, (record,))
+        except (TypeError, ValueError, OverflowError):
+            # Memory is a bounded derived view. A malformed/oversized provider
+            # envelope must not roll back the canonical Store commit.
+            self.context_memory_drops += 1
         if transcript is not None and not stored:
             raise ValueError('transcript record exceeds storage capacity')
         if transcript is not None:
@@ -907,6 +920,22 @@ class Gamst:
         result = self._bounded_query(items, limit, max_bytes)
         result['possibly_more'] = len(items) == 100
         result['scope'] = 'retained_object_evidence'
+        return result
+
+    async def get_context_memory(self, *, evidence_id=None, entity_id=None,
+                                 start_ms=None, end_ms=None, query_cutoff_ms=None,
+                                 limit=50, max_bytes=65536):
+        """Read the bounded normalized context mirror without exposing raw media."""
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        self._bounded_query([], limit, max_bytes)
+        items = self.context_memory.retrieve(evidence_id=evidence_id,
+            entity_id=entity_id, start_ms=start_ms, end_ms=end_ms,
+            query_cutoff_ms=query_cutoff_ms, limit=limit)
+        result = self._bounded_query(items, limit, max_bytes)
+        result.update(scope='normalized_context_memory',
+                      dropped=self.context_memory_drops,
+                      session_id=self.context_memory.session_id)
         return result
 
     async def get_state(self, subject_id="local-user"):

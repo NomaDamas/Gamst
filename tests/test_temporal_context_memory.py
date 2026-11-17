@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 
-from gamst.context_memory import CheckpointStore, ContextMemory
+from gamst.context_memory import CheckpointStore, ContextMemory, project_record, sync_records
 from gamst.temporal import TemporalEvent
 from gamst.temporal_context import TemporalContextEngine
 
@@ -39,6 +39,22 @@ class TemporalContextTests(unittest.TestCase):
 
 
 class ContextMemoryTests(unittest.TestCase):
+    def test_core_envelope_projection_and_idempotent_sync(self):
+        memory = ContextMemory(session_id="core")
+        records = [{
+            "id": "r1", "type": "observation.event", "timestamp_ms": 11,
+            "observation": {"name": "object_state_change", "modality": "vision",
+                            "entity_id": "track-1", "value": {"state": "stopped"}},
+            "evidence": [{"record_id": "frame-1"}],
+        }]
+        projected = project_record(records[0], session_id="core")
+        self.assertEqual(projected["entity_id"], "track-1")
+        self.assertEqual(projected["lineage"], [{"record_id": "frame-1"}])
+        self.assertEqual(sync_records(memory, records), 1)
+        self.assertEqual(sync_records(memory, records), 1)
+        self.assertEqual(len(memory.recent_timeline), 1)
+        self.assertEqual(memory.retrieve(entity_id="track-1")[0]["event_id"], "r1")
+
     def test_memory_bound_evicts_non_episodic_evidence(self):
         memory = ContextMemory(session_id="bounded", max_recent=64, max_episodic=64, max_bytes=700)
         for index in range(20):
