@@ -25,7 +25,14 @@ class CrewBridge:
             raise TimeoutError('Crew transport connection timed out') from exc
         try:
             writer.write(raw); await asyncio.wait_for(writer.drain(), timeout=self.timeout_s)
-            response = await asyncio.wait_for(reader.readline(), timeout=self.timeout_s)
+            try:
+                response = await asyncio.wait_for(
+                    reader.readuntil(b'\n'), timeout=self.timeout_s
+                )
+            except asyncio.IncompleteReadError as exc:
+                raise ValueError('truncated Crew response') from exc
+            except asyncio.LimitOverrunError as exc:
+                raise ValueError('Crew response exceeds byte budget') from exc
             if len(response) > self.max_line: raise ValueError('Crew response exceeds byte budget')
             result = json.loads(
                 response,
