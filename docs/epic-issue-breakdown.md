@@ -44,7 +44,7 @@ GamstCrew). The missing resource child is tracked in GAMST #315 and Crew #8.
 | A2 crash isolation | child failure, cancellation and restart policy | failed provider cannot corrupt siblings; restart releases handles and queues | bounded crash telemetry and opt-in restart policy implemented/tested; host stress evidence remains open |
 | A3 registry and locks | provider descriptor, runtime lock/artifact/model/license hashes | launch refuses mismatched Python, lock, artifact or license metadata | metadata/Python/hash validation implemented/tested; real artifact/weight/license acceptance remains open |
 | A4 resource allocation | CPU/RAM/VRAM/GPU reservation, admission, fairness and telemetry | overcommit is rejected; release after crash; telemetry is in benchmark ledger | GAMST #315; accounting foundation exists; host enforcement and stress evidence open (#329) |
-| A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | Core bridge and revision metadata implemented/tested; full manager-owned bench acceptance remains open |
+| A5 provider integration | real GAMST Core provider bridge and revision pin | Crew CI runs the same pinned Core contract without optional-package skip | Core bridge and revision metadata implemented/tested; manager-wide close lifecycle and full manager-owned bench acceptance remain open (`f8aa970`, `08dedcd`) |
 | A6 launcher | `gamst install`/`gamst run`, diagnostics and profile selection | deterministic local launch and actionable preflight errors | foundation |
 | A8 Playground/BYOK | OpenAI-compatible endpoint, model/key configuration, non-stream/SSE response and compact Context/evidence inspection | user-provided MyProxy endpoint/model/key; raw media remains excluded; errors are bounded and visible; no credentials or successful call are fabricated | GAMST #311; endpoint/credentials blocker remains |
 | A9 Playground capture lifecycle | operation-aware local start/stop snapshots and media ownership | stale paused snapshot cannot stop a current capture; genuine current stop still releases tracks | GAMST #332 under #311; implemented with revision/transition guards and focused browser helper regression |
@@ -70,11 +70,11 @@ materialization is GAMST #317.
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| C1 clocks | source/monotonic/wall conversion, offset and drift calibration | calibration fixture reports sample count, residual and uncertainty | calibrated offset/drift engine implemented/tested (`8ad9788`); cross-runtime calibration remains open |
-| C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | interval/overlap and relation candidates implemented/tested; cross-runtime metrics remain open |
+| C1 clocks | source/monotonic/wall conversion, offset and drift calibration | calibration fixture reports sample count, residual and uncertainty | Core calibrated offset/drift engine and Crew `normalize_timestamp()` implemented/tested (`8ad9788`, `fdf5322`); cross-runtime calibration remains open |
+| C2 intervals | event start/end, overlap and AV offset compensation | known offset/drift fixtures reproduce expected relations | interval/overlap and provenance-bearing relation candidates implemented/tested in Core and Crew; cross-runtime metrics remain open |
 | C3 revisions | current, last-seen, stale/fresh and revision lineage | late revision cannot overwrite newer state; evidence lineage remains intact | revision-aware current/last-seen state implemented/tested |
 | C4 internal cutoff invariant | query-time evidence consistency only | post-cutoff evidence cannot support an answer; this is not user-input truncation | internal evidence watermark implemented/tested; bench integration evidence remains open |
-| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | GAMST #328; Core candidate/abstention foundation `68cfb0d`; bench metrics and independent review open |
+| C5 contradictions | cross-modal disagreement and abstention | contradiction is emitted with both evidence IDs and uncertainty | GAMST #328; Core candidate/abstention foundation `68cfb0d` and Crew abstaining candidate `fdf5322`; bench metrics and independent review open |
 | C6 relations | overlap/causal/association relation materialization and metrics | relation schema preserves source clocks, calibration state and lineage | Core `TemporalContextEngine` materialization + calibrated overlap implemented and focused-tested; cross-runtime metrics/review remain open |
 
 ## Epic D — memory and context
@@ -108,7 +108,7 @@ Parent: `F-benchmark` (Gamst-bench #1/#3–#9 and GAMST #293/#300/#307/#308).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | frozen manifest digest/provenance validation is implemented in bench collection/evaluation and focused-tested; real measured manifests remain open |
+| F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | frozen digest/provenance and complete temporal-field declaration validation implemented/tested in bench (`e1976e1`); real measured manifests remain open |
 | F2 temporal metrics | capture time, age, detection, cutoff, stale, drops, recovery and escalation | collector emits metrics and scorer consumes them | collector/scorer integration is implemented and focused-tested; matched real-run denominators remain open |
 | F3 matched B/C/D/E | same held-out inputs, consumer, prompt and context contract; distinct E checkpoint | all arms have complete scored traces and denominators | unmeasured smoke only |
 | F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | exact-decimal aggregation and unknown-cost handling implemented in bench `4a489a0`, focused tests 5/5; measured host/resource/energy rows remain open (Gamst-bench #6) |
