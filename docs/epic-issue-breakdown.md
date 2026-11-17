@@ -129,7 +129,7 @@ facets of the same epic and are linked in the issue bodies.
 | B transport | #295, #299, #316, #327 | #11, #9 | #1 | packet foundation; checksum/shared-memory/transport hardening open |
 | C temporal/fusion | #297, #306, #312, #317, #328 | #11 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
 | D memory/physics | #318–#322, #330 | #11 | #1 | memory and measured physics acceptance open |
-| E OS adaptation | #298, #301, #302, #309, #314, #323–#325, #333–#338 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open; Alpamayo2 Edge remains optional and unaccepted |
+| E OS adaptation | #298, #301, #302, #309, #314, #323–#325, #333–#338 | #11, #2–#7, #10, #13 | #1, #5–#7, #10 | real Mac/Linux/Windows/Jetson hosts open; Alpamayo2 Edge remains optional and unaccepted |
 | F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#9 | live adapter and CostBench code slices implemented; matched real B/C/D/E, resource/energy measurements, Mac/Linux comparison and default promotion remain open |
 
 Optional research issues #285–#292 remain linked from README and are not used
@@ -142,6 +142,8 @@ discovery/license child #337, Jetson profile child #334, temporal/physics
 provenance child #336, Crew runtime child #338, and benchmark child #335.
 These issues extend the approved edge/physics plan; they do not close the
 existing Jetson or production acceptance gates without a real target host.
+The corresponding repository-local integration issues are GamstCrew #13 and
+Gamst-bench #10.
 
 ## Cross-epic order and blockers
 
