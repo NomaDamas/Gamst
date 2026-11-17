@@ -5,6 +5,9 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 import hashlib
 import json
+import os
+from pathlib import Path
+import tempfile
 import time
 from typing import Any, Iterable
 
@@ -160,4 +163,76 @@ class ContextMemory:
 
 ContextMemoryEngine = ContextMemory
 MemoryContext = ContextMemory
+
+
+class CheckpointStore:
+    """Atomic, bounded JSON checkpoint storage for :class:`ContextMemory`.
+
+    The store is deliberately a small adapter around the existing checkpoint
+    contract. It does not make a provider's model state durable and it never
+    treats a missing file as an empty session; callers must choose whether to
+    create a new session. Session IDs are hashed for filenames so arbitrary
+    user IDs cannot escape the configured root.
+    """
+
+    def __init__(self, root: str | os.PathLike[str], *, max_bytes: int = 4 * 1024 * 1024):
+        if type(max_bytes) is not int or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.max_bytes = max_bytes
+
+    def _path(self, session_id: str) -> Path:
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 128:
+            raise ValueError("session_id must be a bounded string")
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+        return self.root / f"{digest}.json"
+
+    def save(self, memory: ContextMemory) -> dict[str, Any]:
+        if not isinstance(memory, ContextMemory):
+            raise TypeError("memory must be a ContextMemory")
+        checkpoint = memory.checkpoint()
+        encoded = json.dumps(checkpoint, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
+        if len(encoded) > self.max_bytes:
+            raise ValueError("checkpoint exceeds store byte budget")
+        target = self._path(memory.session_id)
+        fd, temporary = tempfile.mkstemp(prefix=".checkpoint-", suffix=".tmp", dir=self.root)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
+        return checkpoint
+
+    def load(self, session_id: str, **kwargs) -> ContextMemory | None:
+        path = self._path(session_id)
+        try:
+            encoded = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        if len(encoded) > self.max_bytes:
+            raise ValueError("checkpoint exceeds store byte budget")
+        try:
+            checkpoint = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("checkpoint is not valid JSON") from exc
+        if checkpoint.get("session_id") != session_id:
+            raise ValueError("checkpoint session mismatch")
+        return ContextMemory.resume(checkpoint, **kwargs)
+
+    def clear(self, session_id: str) -> bool:
+        path = self._path(session_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 

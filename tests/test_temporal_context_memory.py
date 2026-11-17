@@ -1,7 +1,8 @@
 import json
+import tempfile
 import unittest
 
-from gamst.context_memory import ContextMemory
+from gamst.context_memory import CheckpointStore, ContextMemory
 from gamst.temporal import TemporalEvent
 from gamst.temporal_context import TemporalContextEngine
 
@@ -67,6 +68,19 @@ class ContextMemoryTests(unittest.TestCase):
         checkpoint["lineage"] = "bad"
         with self.assertRaises(ValueError):
             ContextMemory.resume(checkpoint)
+
+    def test_checkpoint_store_is_atomic_bounded_and_clearable(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CheckpointStore(root, max_bytes=4096)
+            memory = ContextMemory(session_id="stable")
+            memory.append({"event_id": "a", "timestamp_ms": 1}, episodic=True)
+            saved = store.save(memory)
+            resumed = store.load("stable")
+            self.assertEqual(resumed.snapshot(), memory.snapshot())
+            self.assertEqual(saved["lineage"], resumed.checkpoint()["lineage"])
+            self.assertIsNone(store.load("missing"))
+            self.assertTrue(store.clear("stable"))
+            self.assertFalse(store.clear("stable"))
 
 
 if __name__ == "__main__":

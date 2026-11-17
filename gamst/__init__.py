@@ -64,5 +64,5 @@ from .responses_evidence_reader import read_responses_evidence
 __all__ += ['OpenAIResponsesClient', 'ResponsesEvidenceSession', 'read_responses_evidence']
 
 from .temporal_context import TemporalContextEngine
-from .context_memory import ContextMemory, ContextMemoryEngine, MemoryContext
-__all__ += ['TemporalContextEngine', 'ContextMemory', 'ContextMemoryEngine', 'MemoryContext']
+from .context_memory import CheckpointStore, ContextMemory, ContextMemoryEngine, MemoryContext
+__all__ += ['TemporalContextEngine', 'CheckpointStore', 'ContextMemory', 'ContextMemoryEngine', 'MemoryContext']

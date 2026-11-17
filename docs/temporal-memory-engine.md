@@ -11,6 +11,12 @@ uncalibrated clocks remain explicitly uncalibrated and never become facts.
 count and byte budgets. Deltas are deterministic and replayable, and
 checkpoints include a SHA-256 lineage over the state they contain.
 
+`CheckpointStore` is the optional durable boundary. It writes a bounded,
+lineage-checked JSON checkpoint through an fsync-and-rename sequence, scopes
+filenames to a hash of the session ID, and exposes explicit load/clear
+semantics. It persists context state only; model weights and provider process
+state remain runtime-owned.
+
 `query_cutoff_ms` is an internal evidence-causality watermark. It excludes
 evidence captured after the query time from support and retrieval. It never
 truncates, rewrites, or removes the user's query or user-visible context.
