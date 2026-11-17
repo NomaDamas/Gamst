@@ -215,9 +215,10 @@ answer. Served locally, the same UI uses the full stack (ASR, VLM, Companion).
 For a local-only MyProxy shortcut, copy
 [`site/local-config.example.js`](site/local-config.example.js) to
 `site/local-config.js`, then fill `baseUrl`, `model`, and `apiKey` locally. The
-actual file is ignored by git. Reload the Playground and use **Use local
-MyProxy** in Model settings; it fills the current page and keeps the key in
-session storage only. No endpoint, model, or key is committed by this
+actual file is ignored by git; the example pins `https://proxy.nomadamas.org/v1`,
+`gpt-6.1-terra`, and `reasoningEffort: "low"`. Reload the Playground and use
+**Use local MyProxy** in Model settings; it fills the current page and keeps the
+key in session storage only. No endpoint, model, or key is committed by this
 repository.
 
 Optional voice emotion: run `sh scripts/setup_voice.sh`, then restart the local
