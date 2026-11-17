@@ -175,3 +175,24 @@ This records verification only. It does not close any open A–F child:
 full runtime-manager→bench execution, host-enforced resource limits, real
 Mac/Linux/CUDA/Windows/Jetson acceptance, matched measured B/C/D/E, CostBench,
 default selection, and independent approval remain open.
+
+## Latest continuation heads
+
+After the benchmark coverage update was merged, the checksum probe was rerun
+against GAMST `b0c329d703e4a616cdfeff60f9b6c341d0e99ad5`, GamstCrew
+`e86481719d0f6479df08272acca182d487908cb2`, and the merged Gamst-bench main
+`576494b9dd9bf9469f3145ac7c571b776312195b`. The shared digest stayed
+`6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
+GAMST PR #341's browser ownership/audio lifecycle fixes and Crew PR #15's
+launcher preflight are implementation changes only; real devices, CUDA,
+matched benchmark quality/cost and production readiness remain open.
+
+The subsequent B2 transport hardening was reviewed and merged in GamstCrew PR
+#16 (`e864817`). Crew commits `6bc27e8`, `b803a41` and `85c8fff` enforce
+bounded request correlation, strict JSON decoding, bounded protocol errors and
+validated line limits. GAMST Core bridge commits `5b39250`, `471e8f8`,
+`1ec1bbe` and `8edb96d` propagate and validate the same request ID, timeout,
+truncation and 256-byte minimum line-bound contract. Focused transport,
+bridge, CLI and capture validation currently passes; this remains contract
+evidence and does not close target-host, matched benchmark, or production
+review gates.

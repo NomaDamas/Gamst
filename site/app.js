@@ -1,6 +1,6 @@
 import {
   LOCALES, t, utf8Bytes, gaugeValues, packetMetrics, packetRate, evidenceIds,
-  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, normalizeLocalModelConfig,
+  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, captureGenerationOwnsMedia, normalizeLocalModelConfig,
   sparklinePoints,
 } from "./playground.js";
 
@@ -121,7 +121,7 @@ function showError(key, error) {
   $("error").textContent = t(state.locale, key, { message });
 }
 function clearError() { $("error").textContent = ""; }
-function pressed(id) { return $(id).getAttribute("aria-pressed") === "true"; }
+function pressed(id) { return $(id)?.getAttribute("aria-pressed") === "true"; }
 function setPressed(id, value) { $(id).setAttribute("aria-pressed", String(Boolean(value))); }
 function bindToggle(id, onChange) {
   $(id).addEventListener("click", () => {
@@ -402,6 +402,8 @@ async function loadVisionModels(generation) {
   } catch {
     // Perception is best effort in browser mode; retain the live media stream
     // and continue publishing audio/text observations when models are absent.
+    // A stale generation must not clear models installed by a newer capture.
+    if (generation !== state.generation) return;
     state.faceModel = null;
     state.poseModel = null;
   }
@@ -477,25 +479,39 @@ function restartCaptureTimer() {
 async function setupAudio(generation) {
   const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("Audio input is unavailable in this browser");
-  state.audioContext = new AudioContextCtor();
-  await state.audioContext.resume();
-  if (generation !== state.generation) return;
-  state.source = state.audioContext.createMediaStreamSource(state.stream);
-  if (!isLocal) {
-    state.analyser = state.audioContext.createAnalyser();
-    state.analyser.fftSize = 2048;
-    state.source.connect(state.analyser);
-    return;
-  }
-  state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
-  state.mute = state.audioContext.createGain();
-  if (!state.mute?.gain) throw new Error("Audio output control is unavailable");
-  state.mute.gain.value = 0;
-  state.source.connect(state.processor);
-  state.processor.connect(state.mute);
-  state.mute.connect(state.audioContext.destination);
-  const rate = state.audioContext.sampleRate;
-  state.processor.onaudioprocess = (event) => {
+  const audioContext = new AudioContextCtor();
+  let source = null, analyser = null, processor = null, mute = null;
+  const cleanup = () => {
+    if (processor) { processor.onaudioprocess = null; processor.disconnect(); }
+    source?.disconnect();
+    analyser?.disconnect();
+    mute?.disconnect();
+    audioContext.close().catch(() => {});
+  };
+  try {
+    await audioContext.resume();
+    if (generation !== state.generation || !state.active) { cleanup(); return; }
+    source = audioContext.createMediaStreamSource(state.stream);
+    if (!isLocal) {
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      if (generation !== state.generation || !state.active) { cleanup(); return; }
+      state.audioContext = audioContext;
+      state.source = source;
+      state.analyser = analyser;
+      return;
+    }
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+    mute = audioContext.createGain();
+    const gain = mute?.gain;
+    if (!gain) throw new Error("Audio output control is unavailable");
+    gain.value = 0;
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(audioContext.destination);
+    const rate = audioContext.sampleRate;
+    processor.onaudioprocess = (event) => {
     if (!state.active || generation !== state.generation) return;
     state.audioBuffer.push(...event.inputBuffer.getChannelData(0));
     if (state.audioBuffer.length > rate * 2) {
@@ -516,7 +532,16 @@ async function setupAudio(generation) {
       state.audioSending = true;
       api({ op: "audio", samples, sample_rate: 16000 }).catch((error) => { state.droppedFrames++; showError("errorRequest", error); }).finally(() => { state.audioSending = false; });
     }
-  };
+    };
+    if (generation !== state.generation || !state.active) { cleanup(); return; }
+    state.audioContext = audioContext;
+    state.source = source;
+    state.processor = processor;
+    state.mute = mute;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 function releaseMedia() {
@@ -586,13 +611,17 @@ async function beginCapture() {
     // path and released a freshly granted camera immediately.
     const camera = pressed("inputCamera"), microphone = pressed("inputMicrophone");
     if (camera || microphone) {
-      state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
-      if (generation !== state.generation || !state.active) { state.stream?.getTracks().forEach((track) => track.stop()); return; }
+      // Do not publish the result into shared state until this request still
+      // owns the active capture. A late old request must never overwrite a
+      // newer stream before its generation guard runs.
+      const stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
+      if (!captureGenerationOwnsMedia(state.generation, generation, state.active)) { stream.getTracks().forEach((track) => track.stop()); return; }
+      state.stream = stream;
       // A browser or device can end a track independently of our start/stop
       // controls. Treat that as a real capture stop, while the generation
       // guard prevents cleanup from a superseded transition from racing the
       // current stream.
-      for (const track of state.stream.getTracks()) {
+      for (const track of stream.getTracks()) {
         track.addEventListener("ended", () => {
           if (generation !== state.generation || !state.active) return;
           stopCapture().catch((error) => showError("errorRequest", error));

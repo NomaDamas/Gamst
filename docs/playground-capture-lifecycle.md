@@ -21,6 +21,12 @@ snapshot. The client records the revision acknowledged by its current start.
 - A failed start remains visible as a bounded capture error; it must not be
   disguised as a successful camera session.
 
+Browser media acquisition follows the same ownership rule even though it is
+not part of the local dashboard revision stream. `getUserMedia()` can resolve
+after a stop or a newer start. The result stays local until its capture
+generation is checked; a stale result is stopped immediately and cannot
+overwrite the current stream reference.
+
 The revision is lifecycle metadata only. It does not alter capture timestamps,
 evidence IDs, packet contents, privacy consent or provider behavior.
 

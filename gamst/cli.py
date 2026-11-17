@@ -2,6 +2,49 @@
 import argparse
 import asyncio
 import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+_CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_LOCAL_COMMANDS = {
+    "install": _CHECKOUT_ROOT / "scripts" / "local_models.py",
+    "run": _CHECKOUT_ROOT / "scripts" / "run_local.py",
+}
+
+
+def _dispatch_local_command(command, extra):
+    """Run an explicitly requested checkout-owned local command.
+
+    ``gamst run`` never installs or downloads anything implicitly.  The
+    installer is a separate, explicit command and both commands fail with a
+    useful message when the source checkout helpers are not present (for
+    example, in a wheel that intentionally omits the development scripts).
+    """
+    script = _LOCAL_COMMANDS[command]
+    if not script.is_file():
+        raise SystemExit(
+            f"gamst {command} requires the checkout helper {script}; "
+            "use the source checkout or run the documented setup command."
+        )
+    forwarded = list(extra)
+    # The approved user-facing form is ``gamst install``.  The underlying
+    # script also exposes status/remove/profile actions, so preserve an
+    # explicit action while defaulting the bare command to its install action.
+    if command == "install" and (not forwarded or forwarded[0].startswith("-")):
+        forwarded.insert(0, "install")
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), *forwarded],
+            cwd=str(_CHECKOUT_ROOT),
+            check=False,
+        )
+    except OSError as exc:
+        raise SystemExit(f"unable to start gamst {command}: {exc}") from exc
+    if result.returncode:
+        raise SystemExit(result.returncode)
+    return result.returncode
 
 
 async def demo():
@@ -25,14 +68,15 @@ async def demo():
 
 def main():
     parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
-    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket"])
+    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run"])
     args, extra = parser.parse_known_args()
     if args.command == "demo":
         if extra:
             parser.error("demo accepts no extra arguments")
         asyncio.run(demo())
+    elif args.command in _LOCAL_COMMANDS:
+        _dispatch_local_command(args.command, extra)
     else:
-        import sys
         sys.argv = [sys.argv[0]] + extra
         if args.command == "mcp":
             from .mcp import main as run

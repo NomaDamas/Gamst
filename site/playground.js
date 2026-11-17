@@ -166,6 +166,13 @@ export function captureTransitionCanClear(activeTransition, completedTransition)
   return activeTransition === completedTransition;
 }
 
+// A getUserMedia() promise may resolve after stopCapture() or a newer start.
+// Keep the acquired stream local until this ownership check passes so a stale
+// result cannot replace the current stream reference.
+export function captureGenerationOwnsMedia(currentGeneration, captureGeneration, active) {
+  return Boolean(active) && captureGeneration === currentGeneration;
+}
+
 export function evidenceIds(packet) {
   return [...new Set(Object.values(packet?.observations || {}).map((observation) => observation?.evidence_id).filter((id) => typeof id === "string" && id))].slice(0, 32);
 }
