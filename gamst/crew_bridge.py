@@ -47,7 +47,13 @@ class CrewBridge:
             result.pop('request_id', None)
             return result
         finally:
-            writer.close(); await writer.wait_closed()
+            writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=self.timeout_s)
+            except asyncio.TimeoutError:
+                # The request/response deadline is already bounded; a stalled
+                # close must not keep the bridge coroutine alive indefinitely.
+                pass
 
 
 def _unique_object(pairs):
