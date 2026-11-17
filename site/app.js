@@ -488,29 +488,30 @@ async function setupAudio(generation) {
     mute?.disconnect();
     audioContext.close().catch(() => {});
   };
-  await audioContext.resume();
-  if (generation !== state.generation || !state.active) { cleanup(); return; }
-  source = audioContext.createMediaStreamSource(state.stream);
-  if (!isLocal) {
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
+  try {
+    await audioContext.resume();
     if (generation !== state.generation || !state.active) { cleanup(); return; }
-    state.audioContext = audioContext;
-    state.source = source;
-    state.analyser = analyser;
-    return;
-  }
-  processor = audioContext.createScriptProcessor(4096, 1, 1);
-  mute = audioContext.createGain();
-  const gain = mute?.gain;
-  if (!gain) { cleanup(); throw new Error("Audio output control is unavailable"); }
-  gain.value = 0;
-  source.connect(processor);
-  processor.connect(mute);
-  mute.connect(audioContext.destination);
-  const rate = audioContext.sampleRate;
-  processor.onaudioprocess = (event) => {
+    source = audioContext.createMediaStreamSource(state.stream);
+    if (!isLocal) {
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      if (generation !== state.generation || !state.active) { cleanup(); return; }
+      state.audioContext = audioContext;
+      state.source = source;
+      state.analyser = analyser;
+      return;
+    }
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+    mute = audioContext.createGain();
+    const gain = mute?.gain;
+    if (!gain) throw new Error("Audio output control is unavailable");
+    gain.value = 0;
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(audioContext.destination);
+    const rate = audioContext.sampleRate;
+    processor.onaudioprocess = (event) => {
     if (!state.active || generation !== state.generation) return;
     state.audioBuffer.push(...event.inputBuffer.getChannelData(0));
     if (state.audioBuffer.length > rate * 2) {
@@ -531,12 +532,16 @@ async function setupAudio(generation) {
       state.audioSending = true;
       api({ op: "audio", samples, sample_rate: 16000 }).catch((error) => { state.droppedFrames++; showError("errorRequest", error); }).finally(() => { state.audioSending = false; });
     }
-  };
-  if (generation !== state.generation || !state.active) { cleanup(); return; }
-  state.audioContext = audioContext;
-  state.source = source;
-  state.processor = processor;
-  state.mute = mute;
+    };
+    if (generation !== state.generation || !state.active) { cleanup(); return; }
+    state.audioContext = audioContext;
+    state.source = source;
+    state.processor = processor;
+    state.mute = mute;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 function releaseMedia() {
