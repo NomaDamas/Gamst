@@ -740,7 +740,7 @@ async function streamBYOK(question, packet) {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.key}` },
-    body: JSON.stringify({ model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3 }),
+    body: JSON.stringify({ model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3, reasoning_effort: config.reasoning_effort || "low" }),
     signal: state.chatController.signal,
   });
   if (!response.ok) {

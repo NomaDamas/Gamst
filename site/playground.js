@@ -79,8 +79,10 @@ export function normalizeLocalModelConfig(value) {
   const baseUrl = typeof source.baseUrl === "string" ? source.baseUrl.trim() : typeof source.endpoint === "string" ? source.endpoint.trim() : "";
   const model = typeof source.model === "string" ? source.model.trim() : "";
   const apiKey = typeof source.apiKey === "string" ? source.apiKey : typeof source.key === "string" ? source.key : "";
-  if (!baseUrl || !model || !apiKey || /[\u0000-\u001f\u007f]/.test(baseUrl) || /[\u0000-\u001f\u007f]/.test(model) || /[\u0000-\u001f\u007f]/.test(apiKey)) return null;
-  return Object.freeze({ baseUrl, model, apiKey });
+  const configuredReasoning = source.reasoningEffort ?? source.reasoning_effort;
+  const reasoningEffort = typeof configuredReasoning === "string" ? configuredReasoning.trim().toLowerCase() : "low";
+  if (!baseUrl || !model || !apiKey || !["low", "medium", "high"].includes(reasoningEffort) || /[\u0000-\u001f\u007f]/.test(baseUrl) || /[\u0000-\u001f\u007f]/.test(model) || /[\u0000-\u001f\u007f]/.test(apiKey)) return null;
+  return Object.freeze({ baseUrl, model, apiKey, reasoning_effort: reasoningEffort });
 }
 
 export function utf8Bytes(value) {
