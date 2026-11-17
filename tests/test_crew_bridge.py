@@ -16,7 +16,8 @@ class Bridge(unittest.IsolatedAsyncioTestCase):
     async def test_submit_roundtrip(self):
         async def handler(request):
             self.assertEqual(request['op'], 'submit')
-            return {'accepted': True, 'event_id': request['packet']['event_id']}
+            return {'accepted': True, 'event_id': request['packet']['event_id'],
+                    'request_id': request['request_id']}
         server = JsonlUnixServer(handler)
         await server.start()
         try:
