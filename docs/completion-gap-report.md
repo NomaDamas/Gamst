@@ -95,11 +95,16 @@ CheckpointStore and the live Crew→Core→bench adapter are implemented and
 focused-tested; their provider/ObjectMemory and real-host acceptance gates
 remain separate.
 
-The active handoff uses these exact commits:
+The active implementation handoff uses these exact commits:
 
 - GAMST `feat/temporal-contract`: `915f18c` (Core envelope integration, demo hardening, and Alpamayo2 Edge issue/documentation handoff)
 - GamstCrew `feat/runtime-pr`: `d98723d` (serialized lifecycle, shared-memory transport, lock/architecture validation, and JSON-safe socket fallback)
 - Gamst-bench `feat/temporal-metrics`: `715f8b8` (adapter failure diagnostics and fail-closed lifecycle)
+
+The current GAMST branch also contains docs-only Alpamayo2 cross-repository
+issue linkage at `2fe9cbe`; the checksum probe below is intentionally scoped to
+the implementation handoff at `915f18c` and is not a claim about that later
+documentation commit.
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
@@ -139,7 +144,8 @@ is monitored as hosted scheduler timing evidence, not treated as a protocol
 failure or proof of production readiness.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the active handoff heads: GAMST `915f18c`, Crew `d98723d`, and bench `715f8b8`.
+the active implementation handoff heads: GAMST `915f18c`, Crew `d98723d`, and
+bench `715f8b8`.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical

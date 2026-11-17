@@ -7,5 +7,5 @@
   "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
   "version": 1,
   "probe_core_head": "915f18c55db3dfe4626df3e2cb479a40e2cf9b72",
-  "scope": "canonical-byte contract probe; not model or host acceptance"
+  "scope": "canonical-byte contract probe at implementation handoff 915f18c; later GAMST docs-only commits are outside probe scope; not model or host acceptance"
 }
