@@ -25,13 +25,17 @@ class ContextMemory:
     """
 
     def __init__(self, *, session_id: str = "session", max_recent: int = 256,
-                 max_episodic: int = 1024, max_bytes: int = 4 * 1024 * 1024):
+                 max_episodic: int = 1024, max_current: int = 256,
+                 max_bytes: int = 4 * 1024 * 1024):
         if not isinstance(session_id, str) or not session_id or len(session_id) > 128:
             raise ValueError("session_id must be a bounded string")
         if any(type(v) is not int or v < 1 for v in (max_recent, max_episodic, max_bytes)):
             raise ValueError("memory bounds must be positive integers")
         self.session_id = session_id
-        self.max_recent, self.max_episodic, self.max_bytes = max_recent, max_episodic, max_bytes
+        if type(max_current) is not int or max_current < 1:
+            raise ValueError("max_current must be a positive integer")
+        self.max_recent, self.max_episodic = max_recent, max_episodic
+        self.max_current, self.max_bytes = max_current, max_bytes
         self.current_state: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.recent_timeline: deque[dict[str, Any]] = deque(maxlen=max_recent)
         self.episodic_memory: deque[dict[str, Any]] = deque(maxlen=max_episodic)
@@ -77,6 +81,9 @@ class ContextMemory:
         self._evidence[evidence_id] = item
         if entity_id is not None:
             self.current_state[str(entity_id)] = item
+            self.current_state.move_to_end(str(entity_id))
+            while len(self.current_state) > self.max_current:
+                self.current_state.popitem(last=False)
         if episodic:
             self.episodic_memory.append(item)
         self._revision += 1
@@ -109,6 +116,10 @@ class ContextMemory:
             self.append(item)
         for entity_id, item in delta.get("current_state", {}).items():
             self.current_state[str(entity_id)] = _json(item)
+            self.current_state.move_to_end(str(entity_id))
+        while len(self.current_state) > self.max_current:
+            self.current_state.popitem(last=False)
+        self._check_size()
 
     apply_delta = replay
 
@@ -151,6 +162,8 @@ class ContextMemory:
             raise ValueError("memory checkpoint lineage mismatch")
         memory = cls(session_id=checkpoint["session_id"], **kwargs)
         memory.current_state.update(_json(state.get("current_state", {})))
+        while len(memory.current_state) > memory.max_current:
+            memory.current_state.popitem(last=False)
         memory.recent_timeline.extend(_json(state.get("recent_timeline", [])))
         memory.episodic_memory.extend(_json(state.get("episodic_memory", [])))
         for item in list(memory.recent_timeline) + list(memory.episodic_memory):

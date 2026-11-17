@@ -45,6 +45,12 @@ class ContextMemoryTests(unittest.TestCase):
             memory.append({"event_id": f"evt-{index}", "value": "x" * 160})
         self.assertLessEqual(len(json.dumps(memory.snapshot(), sort_keys=True).encode()), 700)
         self.assertLessEqual(len(memory._evidence), len(memory.recent_timeline) + len(memory.episodic_memory) + len(memory.current_state))
+    def test_current_state_count_is_bounded(self):
+        memory = ContextMemory(session_id="bounded-state", max_current=2)
+        for index in range(5):
+            memory.append({"event_id": f"evt-{index}"}, entity_id=f"entity-{index}")
+        self.assertEqual(list(memory.current_state), ["entity-3", "entity-4"])
+        self.assertLessEqual(len(memory._evidence), 2 + memory.max_recent + memory.max_episodic)
     def test_layers_delta_replay_and_cutoff_retrieval(self):
         memory = ContextMemory(session_id="s", max_recent=8)
         first = memory.append({"event_id": "a", "timestamp_ms": 10, "value": 1},
