@@ -22,10 +22,24 @@ GAMST gives agents a shared layer for observing behavior, tracking changes, and 
 
 ## 🗂️ Contents
 
-[🌱 Context layer](#overview) · [✨ Capabilities](#capabilities) · [🚀 Quick start](#quick-start) · [🏠 Complete local stack](#local-stack)<br>
-[🐍 Python SDK](#python-sdk) · [🔌 Context MCP](#mcp) · [🎥 Vision & voice](#perception) · [🤝 Companion](#companion) · [🌐 Integrations](#integrations)<br>
-[🖥️ Playground](#dashboard-guide) · [🗄️ Retention](#retention) · [🧩 Optional providers](#providers) · [🔬 Research & roadmap](#research) · [📊 Benchmarking](#benchmarking)<br>
-[🔒 Privacy](#privacy) · [🧪 Validation](#validation) · [📚 Documentation](#documentation) · [📄 License](#license)
+- [🌱 Context layer](#overview)
+- [✨ Capabilities](#capabilities)
+- [🚀 Quick start](#quick-start)
+- [🏠 Complete local stack](#local-stack)
+- [🐍 Python SDK](#python-sdk)
+- [🔌 Context MCP](#mcp)
+- [🎥 Vision & voice](#perception)
+- [🤝 Companion](#companion)
+- [🌐 Integrations](#integrations)
+- [🖥️ Playground](#dashboard-guide)
+- [🗄️ Retention](#retention)
+- [🧩 Optional providers](#providers)
+- [🔬 Research & roadmap](#research)
+- [📊 Benchmarking](#benchmarking)
+- [🔒 Privacy](#privacy)
+- [🧪 Validation](#validation)
+- [📚 Documentation](#documentation)
+- [📄 License](#license)
 
 <a id="overview"></a>
 ## 🌱 A context layer for an ecosystem of tools
