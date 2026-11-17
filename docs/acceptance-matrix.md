@@ -20,7 +20,7 @@ This matrix is subordinate to `docs/approved-plan.md`. A row is not complete unt
 | P2-1 | B/C/D/E | Gamst-bench | Frozen matched runs, same consumer/prompt/input availability | pending |
 | P2-2 | Temporal fusion | GAMST | AV offset/drift, interval relations, state/revisions, cutoff and contradiction metrics | calibrated relation/revision/contradiction foundations implemented and focused-tested; cross-runtime metrics/host evidence open |
 | P2-3 | Physics context | GAMST | Kinematics, trajectories, contacts, cross-modal impacts, uncertainty | deterministic provider implemented/focused-tested with calibration abstention; held-out/device acceptance and runtime wiring open |
-| P2-4 | Review | All | PR review by approved reviewer, findings fixed, then merge | Prior Astra-medium approval covers `50bc7f9`/`d98723d`/`715f8b8`; fresh review is required for current heads `c2a9a0a`/`fdf5322`/`e1976e1`. Host, matched measurement and broader production gates remain open |
+| P2-4 | Review | All | PR review by approved reviewer, findings fixed, then merge | Prior Astra-medium approval covers `50bc7f9`/`d98723d`/`715f8b8`; fresh review is required for current heads `46a83b7`/`fdf5322`/`e1976e1`. Host, matched measurement and broader production gates remain open |
 | P3-1 | Completeness | All | Compare code/docs/issues to approved plan; zero unexplained gaps | implementation/documentation audit refreshed; host/reviewer/quality gates remain explicitly tracked |
 
 ## Evidence rules
