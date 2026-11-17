@@ -121,7 +121,7 @@ function showError(key, error) {
   $("error").textContent = t(state.locale, key, { message });
 }
 function clearError() { $("error").textContent = ""; }
-function pressed(id) { return $(id).getAttribute("aria-pressed") === "true"; }
+function pressed(id) { return $(id)?.getAttribute("aria-pressed") === "true"; }
 function setPressed(id, value) { $(id).setAttribute("aria-pressed", String(Boolean(value))); }
 function bindToggle(id, onChange) {
   $(id).addEventListener("click", () => {
@@ -402,6 +402,8 @@ async function loadVisionModels(generation) {
   } catch {
     // Perception is best effort in browser mode; retain the live media stream
     // and continue publishing audio/text observations when models are absent.
+    // A stale generation must not clear models installed by a newer capture.
+    if (generation !== state.generation) return;
     state.faceModel = null;
     state.poseModel = null;
   }
@@ -477,26 +479,38 @@ function restartCaptureTimer() {
 async function setupAudio(generation) {
   const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("Audio input is unavailable in this browser");
-  state.audioContext = new AudioContextCtor();
-  await state.audioContext.resume();
-  if (generation !== state.generation) return;
-  state.source = state.audioContext.createMediaStreamSource(state.stream);
+  const audioContext = new AudioContextCtor();
+  let source = null, analyser = null, processor = null, mute = null;
+  const cleanup = () => {
+    if (processor) { processor.onaudioprocess = null; processor.disconnect(); }
+    source?.disconnect();
+    analyser?.disconnect();
+    mute?.disconnect();
+    audioContext.close().catch(() => {});
+  };
+  await audioContext.resume();
+  if (generation !== state.generation || !state.active) { cleanup(); return; }
+  source = audioContext.createMediaStreamSource(state.stream);
   if (!isLocal) {
-    state.analyser = state.audioContext.createAnalyser();
-    state.analyser.fftSize = 2048;
-    state.source.connect(state.analyser);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    if (generation !== state.generation || !state.active) { cleanup(); return; }
+    state.audioContext = audioContext;
+    state.source = source;
+    state.analyser = analyser;
     return;
   }
-  state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
-  state.mute = state.audioContext.createGain();
-  const gain = state.mute?.gain;
-  if (!gain) throw new Error("Audio output control is unavailable");
+  processor = audioContext.createScriptProcessor(4096, 1, 1);
+  mute = audioContext.createGain();
+  const gain = mute?.gain;
+  if (!gain) { cleanup(); throw new Error("Audio output control is unavailable"); }
   gain.value = 0;
-  state.source.connect(state.processor);
-  state.processor.connect(state.mute);
-  state.mute.connect(state.audioContext.destination);
-  const rate = state.audioContext.sampleRate;
-  state.processor.onaudioprocess = (event) => {
+  source.connect(processor);
+  processor.connect(mute);
+  mute.connect(audioContext.destination);
+  const rate = audioContext.sampleRate;
+  processor.onaudioprocess = (event) => {
     if (!state.active || generation !== state.generation) return;
     state.audioBuffer.push(...event.inputBuffer.getChannelData(0));
     if (state.audioBuffer.length > rate * 2) {
@@ -518,6 +532,11 @@ async function setupAudio(generation) {
       api({ op: "audio", samples, sample_rate: 16000 }).catch((error) => { state.droppedFrames++; showError("errorRequest", error); }).finally(() => { state.audioSending = false; });
     }
   };
+  if (generation !== state.generation || !state.active) { cleanup(); return; }
+  state.audioContext = audioContext;
+  state.source = source;
+  state.processor = processor;
+  state.mute = mute;
 }
 
 function releaseMedia() {
