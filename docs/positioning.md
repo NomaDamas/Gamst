@@ -14,6 +14,15 @@ expensive models: it decides **when** to look, **which moment** to send,
 Omni models solve "show me and I understand". GAMST solves "out of 24 hours,
 which seconds should I show, and what was true at that second".
 
+## Project scope (owner statement, 2026-11-18)
+
+GAMST delivers context so that an LLM or VLM does **not** have to run
+inference repeatedly to perceive, see and decide in real time. Perception is
+continuous and cheap; model inference is occasional and grounded. Omni models,
+streaming VLMs and commercial realtime APIs (Gemini Live, OpenAI Realtime) are
+consumers in the LLM position, never the perception layer.
+
+
 ## The three things that do not disappear as models improve
 
 | Axis | Omni / end-to-end model | GAMST | Evidence in this repository |
@@ -109,3 +118,34 @@ the target hardware with arms A (continuous VLM), B (perception + text LLM),
 C (GAMST selective VLM), D (periodic VLM) and E (small streaming VLM) using the
 same VLM, prompt and consumer model. The 2026-11-16 smoke only proves the
 execution path.
+
+## How GAMST can win on existing benchmarks (and where it cannot)
+
+Official leaderboards rank *models*. GAMST enters each benchmark as the
+*system around the same model*. The comparison that matters is therefore
+"model alone at fixed sampling" versus "same model fed by GAMST", read as a
+quality–cost–latency Pareto curve, not a single score. Expected direction of
+advantage per benchmark, with the mechanism that produces it:
+
+| Benchmark | What it scores | GAMST mechanism | Expected effect | Risk |
+|---|---|---|---|---|
+| FastBench (timed QA, proactive frame) | Answer correct **and in time** after a brief event | Onset detection at sensor rate pins the event frame; VLM is called on that frame instead of the next scheduled sample | Lower time-to-detect, same or fewer VLM calls | Trigger miss → no frame → wrong/absent answer |
+| OmniPro Online (proactive, ±3 s tolerance) | F1 of *when* the system speaks | The Decision Router's EMIT/ESCALATE is exactly the proactive trigger; audio VAD + visual change gate it | Higher Online F1 at a fraction of calls versus 1 FPS polling | False alerts/hour if thresholds are loose |
+| SPOT-Bench (when to speak) | Abstain vs intervene timing | `insufficient_evidence` / abstain path, freshness gating | Better abstention precision | Needs Jev/rules tuned on real traces |
+| OVO-Bench (current / last-seen / future) | State at query time vs past evidence | Temporal contract: current vs last_seen, stale flags, query cutoff | Fewer stale-state errors with identical VLM | Backward-tracing questions may need more frames than GAMST retained |
+| StreamArena continuous (memory, tool use) | Long-horizon recall and proactive answers | Bounded temporal memory + evidence IDs replace re-watching | Lower cost per question; recall parity | Memory compaction can drop needed detail |
+| StreamingBench proactive / Inf-Streams | Long sessions, resource stability | Bounded queues, drops visible, no KV growth | Stable RSS/VRAM over hours | Quality ceiling is the backbone model's |
+| VSAS-Bench | Streaming accuracy/latency/consistency | Same as above | — | Official runner not released |
+
+The honest claim shape is: *with the same backbone, GAMST reaches the model's
+published score at N× lower whole-pipeline cost and lower time-to-detect, and
+never exceeds the backbone's accuracy ceiling.* Where GAMST loses, it loses on
+recall when the cheap trigger misses; that number must be reported.
+
+## Halo product: what to show next week
+
+"Moment Catcher" (above) plus one twist: run the **same camera feed** into a
+commercial realtime session (Gemini Live, 1 FPS by spec) and into GAMST +
+Gemini Flash-Lite side by side. Show three counters live: frames seen, model
+calls, dollars. Drop a pen. One side missed it; one side has a thumbnail with a
+timestamp and an evidence id. That is the whole pitch, and it is measurable.
