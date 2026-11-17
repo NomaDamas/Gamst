@@ -89,13 +89,15 @@ that do not require target hardware or measured model quality:
   `5 passed`.
 
 These changes close the implementation portions of the corresponding child
-issues. They do not close the required target-host, matched B/C/D/E, durable
-store, full Crew-manager-to-bench execution, or independent broader-review
-gates listed below.
+issues. They do not close the required target-host, matched B/C/D/E, resource
+stress, or independent broader-review gates listed below. The durable
+CheckpointStore and the live Crew→Core→bench adapter are implemented and
+focused-tested; their provider/ObjectMemory and real-host acceptance gates
+remain separate.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `63bc58c62a9f1824d3073319b526fd6bc4c4eaa7`
+- GAMST `feat/temporal-contract`: implementation `9a1d117`; status docs `76de4dd`
 - GamstCrew `feat/runtime-pr`: `8651d625adab03a4fa84a0c1f6f2e68176d35656`
 - Gamst-bench `feat/temporal-metrics`: `4a489a083d145c10fa47378121678701e018cf34`
 
@@ -107,26 +109,23 @@ Local validation at this handoff is:
 
 - GAMST temporal/contradiction/core/capability focused suite: `55 passed, 19
   subtests passed`; recording-runtime narrow suite: `4 passed`.
-- GamstCrew CI-equivalent environment: `35/35` tests passed; host-limit seam
-  tests are contract fixtures and real host enforcement/stress evidence remain
-  open.
+- GamstCrew CI-equivalent environment: `41/41` tests passed with the GAMST SDK
+  import path; the dependency-free local run requires the SDK for the one real
+  Core-provider test. Host-limit seam tests are contract fixtures and real host
+  enforcement/stress evidence remain open.
 - Gamst-bench dependency-complete environment: checksum/provenance focused
   tests `46` passed and the full suite had `71` passes plus one expected
   system-environment MCP import failure; prior dependency-complete CI was
   `67/67`, with `17/17` Vitest, `npm run results:check`, and `npm run build`
   passing.
 
-The B4 checksum slice now exists in all three branches: GAMST canonical
-packet SHA-256 (`429440a`), Crew strict EventPacket verification, bounded
-transport and explicit host-limit seam (`f357789`), and bench collector
-verification/three-repository provenance (`d943660`). The current bench head
-`9f450f3` adds the docs-first Crew runtime adapter contract; it contains no
-runtime adapter implementation yet.
-Focused Crew checksum/transport/host tests are `35/35`; bench full validation is
-`72 passed, 1 skipped, 4 subtests` (the skip reports an unavailable MCP
-dependency). This is implementation evidence only: the exact-byte Core→Crew→
-bench contract probe passes, while full runtime-manager/benchmark execution and
-independent review remain open, so the B4/#331 acceptance gates remain open.
+The B4 checksum slice exists in all three branches: GAMST canonical packet
+SHA-256, Crew strict EventPacket verification, bounded transport and explicit
+host-limit seam, and bench collector verification/three-repository provenance.
+The live Crew→Core→GAMST→bench JSONL adapter has four focused integration tests;
+the exact-byte contract probe passes. This is implementation evidence only:
+real host enforcement, matched benchmark measurements and independent review
+remain open.
 
 Motion-provider CI status: the original c965c63 run `43867261850` recorded one
 real `test_actual_startup_and_owned_cleanup` timeout with child evidence and
