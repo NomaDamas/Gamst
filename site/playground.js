@@ -78,7 +78,7 @@ export function normalizeLocalModelConfig(value) {
   if (!source || typeof source !== "object" || Array.isArray(source)) return null;
   const baseUrl = typeof source.baseUrl === "string" ? source.baseUrl.trim() : typeof source.endpoint === "string" ? source.endpoint.trim() : "";
   const model = typeof source.model === "string" ? source.model.trim() : "";
-  const apiKey = typeof source.apiKey === "string" ? source.apiKey : typeof source.key === "string" ? source.key : "";
+  const apiKey = typeof source.apiKey === "string" ? source.apiKey.trim() : typeof source.key === "string" ? source.key.trim() : "";
   const configuredReasoning = source.reasoningEffort ?? source.reasoning_effort;
   const reasoningEffort = typeof configuredReasoning === "string" ? configuredReasoning.trim().toLowerCase() : "low";
   if (!baseUrl || !model || !apiKey || !["low", "medium", "high"].includes(reasoningEffort) || /[\u0000-\u001f\u007f]/.test(baseUrl) || /[\u0000-\u001f\u007f]/.test(model) || /[\u0000-\u001f\u007f]/.test(apiKey)) return null;
