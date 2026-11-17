@@ -97,9 +97,9 @@ remain separate.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: implementation `9a1d117`; status docs `76de4dd`
-- GamstCrew `feat/runtime-pr`: `8651d625adab03a4fa84a0c1f6f2e68176d35656`
-- Gamst-bench `feat/temporal-metrics`: `4a489a083d145c10fa47378121678701e018cf34`
+- GAMST `feat/temporal-contract`: `71201fd`
+- GamstCrew `feat/runtime-pr`: `e9060ae` (serialized lifecycle plus shared-memory transport and lock/architecture validation)
+- Gamst-bench `feat/temporal-metrics`: `715f8b8` (adapter failure diagnostics and fail-closed lifecycle)
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
@@ -138,11 +138,11 @@ snapshot; production deadline enforcement and assertions are unchanged. This
 is monitored as hosted scheduler timing evidence, not treated as a protocol
 failure or proof of production readiness.
 
-The exact-byte probe in `scripts/verify_cross_repo_checksum.py` ran successfully
-against GAMST probe source `3a8a08c`, Crew `f357789`, and bench `d943660`; the
-subsequent GAMST docs/evidence refresh is `53ba2ea`. It recorded Core→Crew→bench
-verification, the shared SHA-256 digest, and exact repository heads in
-`docs/evidence/cross-repo-checksum-2026-11-16.json`. This closes the canonical
+The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
+the active handoff heads: GAMST `71201fd`, Crew `e9060ae`, and bench `715f8b8`.
+It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
+repository heads in
+`docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical
 wire compatibility portion of #331, while the full runtime-manager/benchmark
 execution, host enforcement and independent-review portions remain open.
 

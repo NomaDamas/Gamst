@@ -61,7 +61,7 @@ Parent: `B-context-transport` (GAMST #295/#299). The checksum child is GAMST
 | B2 Unix transport | bounded JSONL or MessagePack request/response | size checked before allocation, correlation ID and timeout enforced | bounded JSONL, size checks and handler/client timeouts implemented/tested (`a20854c`, `634fa2a`, `ba426e3`); full cross-repository execution/review open |
 | B3 backpressure | bounded queues, drop accounting and cancellation | no unbounded queue; every drop has a reason and sequence range | foundation |
 | B4 checksum | canonical bytes, algorithm/version and SHA-256 integrity | tampered packet rejected and counted; legacy version behavior explicit | Core/Crew/bench verification, exact-byte probe, and live Crew→Core→bench adapter proof pass; host enforcement and independent production review remain open (#331) |
-| B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | optional/pending; GAMST #327 |
+| B5 shared memory | Linux/CUDA optional zero-copy path | same packet digest/timestamps as socket path; fallback remains valid | bounded `SharedPacket` transport with exact length/SHA-256 verification and close/unlink ownership implemented and portable-tested in Crew `e44ce77`; CUDA zero-copy and host performance acceptance remain open (#327) |
 
 ## Epic C — temporal and multimodal fusion
 
@@ -87,7 +87,7 @@ Parent: `D-memory-context` (GAMST #318).
 | D2 compression | loss-bounded history compression and delta updates | delta replay equals full snapshot within declared loss/byte bound | bounded delta generation/replay implemented and focused-tested; production compression policy remains open |
 | D3 retrieval | evidence and source retrieval by time/entity/evidence ID | retrieval never returns unowned or post-cutoff evidence | bounded evidence retrieval with cutoff/entity/time filters implemented and focused-tested |
 | D4 session resume | durable checkpoint, restart and clear/delete semantics | resumed state has identical lineage and no stale cross-session leakage | versioned lineage-checked checkpoint/resume plus bounded atomic `CheckpointStore` load/save/clear implemented and focused-tested; provider/ObjectMemory integration remains open |
-| D5 deterministic physics | bounded kinematics, trajectory hypotheses and physical uncertainty | held-out trajectory/contact evidence; calibrated claims only; synthetic futures isolated | GAMST #330; partial implementation, acceptance open |
+| D5 deterministic physics | bounded kinematics, trajectory hypotheses and physical uncertainty | held-out trajectory/contact evidence; calibrated claims only; synthetic futures isolated | deterministic `PhysicalState` provider emits bounded kinematics, covariance, trajectory hypotheses, contact/support/impact candidates and abstentions without calibration; focused provider tests pass; held-out/real-device acceptance remains open (GAMST #330) |
 
 ## Epic E — OS adaptation
 
@@ -108,13 +108,13 @@ Parent: `F-benchmark` (Gamst-bench #1/#3–#9 and GAMST #293/#300/#307/#308).
 
 | Child | Scope | Acceptance gate | Status |
 |---|---|---|---|
-| F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | partial; integration pending |
-| F2 temporal metrics | capture time, age, detection, cutoff, stale, drops, recovery and escalation | collector emits metrics and scorer consumes them | partial; scorer integration pending |
+| F1 manifest binding | frozen runtime/provider/model/license/OS/dependency/input manifest | measured run refuses missing or mismatched manifest digest | frozen manifest digest/provenance validation is implemented in bench collection/evaluation and focused-tested; real measured manifests remain open |
+| F2 temporal metrics | capture time, age, detection, cutoff, stale, drops, recovery and escalation | collector emits metrics and scorer consumes them | collector/scorer integration is implemented and focused-tested; matched real-run denominators remain open |
 | F3 matched B/C/D/E | same held-out inputs, consumer, prompt and context contract; distinct E checkpoint | all arms have complete scored traces and denominators | unmeasured smoke only |
 | F4 CostBench | Static, Fast Event, Cross-modal, Semantic Change and Resilience | event P/R/F1, association, latency, calls, resource, energy, cost/hour and Pareto report | exact-decimal aggregation and unknown-cost handling implemented in bench `4a489a0`, focused tests 5/5; measured host/resource/energy rows remain open (Gamst-bench #6) |
 | F5 default selection | Mac measured comparison and rejected-candidate report | no default promotion without target-Mac evidence; CUDA cannot promote Mac | Gamst-bench #7; pending real host |
 | F6 Linux acceptance | real Linux/CUDA matched runs | no synthetic or Mac substitution | pending real host |
-| F7 runtime trace handoff | real Crew Core provider execution through the bench JSONL adapter | live manager-owned lifecycle, temporal packet/checksum/provenance retention and explicit failure categories | implemented by the live Crew→CoreProvider→GAMST Core→bench JSONL adapter; focused integration tests 4/4; target-host acceptance and independent production review remain open (Gamst-bench #9 under #1) |
+| F7 runtime trace handoff | real Crew Core provider execution through the bench JSONL adapter | live manager-owned lifecycle, temporal packet/checksum/provenance retention and explicit failure categories | implemented by the live Crew→CoreProvider→GAMST Core→bench JSONL adapter; lifecycle/failure diagnostics and focused integration tests 7/7; target-host acceptance and independent production review remain open (Gamst-bench #9 under #1) |
 
 ## Exhaustive issue crosswalk
 

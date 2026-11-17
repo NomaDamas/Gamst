@@ -29,13 +29,14 @@ selected and are re-emitted with the current checksum when serialized.
 
 The GAMST implementation and focused tests are present here. A reproducible
 cross-repository probe is available at
-`scripts/verify_cross_repo_checksum.py`. On 2026-11-16 it used GAMST
-`3a8a08ccbb8376c200b2171adeeb0d3bf0c6cfc3`, Crew
-`f357789199579943205d9453c01aa9a80e05c41b`, and bench
-`d943660a2f1aaeaeb78c9daf80192ebfc0edf409`; Crew and bench both verified the
-Core-produced envelope and the shared digest was
+`scripts/verify_cross_repo_checksum.py`. The current probe evidence is recorded
+in [`evidence/cross-repo-checksum-2026-11-17.json`](evidence/cross-repo-checksum-2026-11-17.json):
+GAMST `71201fd8184e0aea6f446ea634a1c9a1a3c5d1be`, Crew
+`d98723d95ac25c27c9a2575d7a45c68db3957e6d`, and bench
+`715f8b8605ce5ba793e0158c67a6120be12e9c61` all verified the Core-produced
+envelope and the shared digest is
 `6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
 This proves canonical-byte agreement and closes the wire-compatibility
-portion of #331. Full runtime-manager→bench execution and independent review
-remain open; this does not establish model, host, benchmark, or production
-readiness.
+portion of #331. Full runtime-manager→bench execution, target-host acceptance,
+and independent review remain open; this does not establish model, host,
+benchmark, or production readiness.
