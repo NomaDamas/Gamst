@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--language', help='Pin speech recognition language, e.g. ko; default auto')
+    parser.add_argument('--companion', choices=('local', 'gemini-flash', 'gemini-live'), default='local',
+                        help='Companion consumer; Gemini choices send text/context to the configured Google provider')
     parser.add_argument('--stop', action='store_true', help='Stop only the verified launcher belonging to this checkout')
     parser.add_argument('--plugins-config', help='Explicit JSON file for additional perception plugins')
     parser.add_argument('--without-voice-emotion', action='store_true', help='Skip an installed voice classifier')
@@ -80,8 +82,13 @@ def main():
                 time.sleep(1)
         else:
             raise RuntimeError('VLM startup timed out')
-        env = dict(os.environ, GAMST_COMPANION_URL='http://127.0.0.1:18767/v1/chat/completions',
-                   GAMST_COMPANION_MODEL='local-vlm', MPLCONFIGDIR=str(logs/'matplotlib'))
+        env = dict(os.environ, MPLCONFIGDIR=str(logs/'matplotlib'))
+        if args.companion == 'local':
+            env.update(GAMST_COMPANION_PROVIDER='local',
+                       GAMST_COMPANION_URL='http://127.0.0.1:18767/v1/chat/completions',
+                       GAMST_COMPANION_MODEL='local-vlm')
+        else:
+            env['GAMST_COMPANION_PROVIDER'] = args.companion
         # Companion remains optional. No automatic reasoning/emotion classification.
         app = start([sys.executable, '-m', 'gamst.dashboard', '--face-model', models/'face_landmarker.task',
             '--asr-model', models/'whisper-small', '--vad-model', models/'silero_vad.jit',

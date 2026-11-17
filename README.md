@@ -335,6 +335,10 @@ No weights are bundled or automatically downloaded. Native capture uses `Capture
 <a id="companion"></a>
 ## 🤝 Context-aware Companion
 
+| Consumer provider | Selection | Setup |
+| --- | --- | --- |
+| Gemini Flash / Gemini Live | `--companion gemini-flash` / `--companion gemini-live` | [Gemini endpoints, Vertex, privacy and limits](docs/gemini-providers.md) |
+
 Configure an actual chat-completions server and installed model:
 
 ```bash
