@@ -99,7 +99,7 @@ Parent: `E-os-adaptation` (GAMST #298/#301/#302/#309/#314; Crew #10).
 | E2 Linux CUDA | containers, CUDA, TensorRT/ORT/vLLM/Triton/Ray candidates | same packet contract on real target hardware | pending host |
 | E3 Linux CPU | no-CUDA profile and native dependency diagnostics | profile refuses unsupported acceleration and completes CPU smoke | declarative profile and diagnostics implemented/focused-tested; target-host CPU smoke remains open (#323) |
 | E4 Windows | CPU/ORT/DirectML/llama.cpp profile | clean install and provider compatibility report on Windows host | declarative profile and compatibility reporting implemented; Windows acceptance remains open (#324) |
-| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | declarative profile implemented; Jetson acceptance remains open (#325) |
+| E5 Jetson/ARM | TensorRT/ORT/GStreamer/V4L2 edge profile | real Jetson acceptance; not inferred from macOS/Linux | declarative profile implemented; Jetson acceptance remains open (#325); Alpamayo2 Edge follow-up is tracked in #333 with children #334/#335/#336/#337/#338 |
 | E6 compatibility matrix | available/installed/runtime-compatible/weight-ready/benchmark-accepted states | every provider reports all five states and license gate | explicit five-state catalog and install/native diagnostics implemented/tested (`8651d62`); real host/weight/license acceptance remains open |
 
 ## Epic F — benchmark and default selection
@@ -129,13 +129,19 @@ facets of the same epic and are linked in the issue bodies.
 | B transport | #295, #299, #316, #327 | #11, #9 | #1 | packet foundation; checksum/shared-memory/transport hardening open |
 | C temporal/fusion | #297, #306, #312, #317, #328 | #11 | #1, #3 | clocks/relation foundation; contradiction and cross-runtime evidence open |
 | D memory/physics | #318–#322, #330 | #11 | #1 | memory and measured physics acceptance open |
-| E OS adaptation | #298, #301, #302, #309, #314, #323–#325 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open |
+| E OS adaptation | #298, #301, #302, #309, #314, #323–#325, #333–#338 | #11, #2–#7, #10 | #1, #5–#7 | real Mac/Linux/Windows/Jetson hosts open; Alpamayo2 Edge remains optional and unaccepted |
 | F benchmark/default | #293, #300, #307, #308 | #11 | #1, #3–#9 | live adapter and CostBench code slices implemented; matched real B/C/D/E, resource/energy measurements, Mac/Linux comparison and default promotion remain open |
 
 Optional research issues #285–#292 remain linked from README and are not used
 to satisfy a required acceptance gate. They cover intermediate fusion,
 retrieval embeddings, event-gated streaming, streaming arm E, physics/world
 models, embodied handoff and optional provider acceptance.
+
+The Alpamayo2 Edge provider follow-up is tracked as GAMST #333 with the
+discovery/license child #337, Jetson profile child #334, temporal/physics
+provenance child #336, Crew runtime child #338, and benchmark child #335.
+These issues extend the approved edge/physics plan; they do not close the
+existing Jetson or production acceptance gates without a real target host.
 
 ## Cross-epic order and blockers
 

@@ -21,7 +21,7 @@ linked issue.
 | Rules/decision provider routing | `docs/approved-plan.md` § Decision Router | GAMST #285, #294 | calibrated decision traces and abstention behavior | optional provider roadmap |
 | Deterministic physical context | `docs/approved-plan.md` § physics; `docs/physical-state.md` | GAMST #290, #330 and the physics provider tests | kinematics, covariance, trajectory hypotheses, contact/impact alignment; abstain without calibration | bounded deterministic `PhysicalState` implementation and focused tests exist; held-out/device acceptance evidence remains open |
 | Synthetic world-model separation | `docs/approved-plan.md` § physics | GAMST #290 | generated futures labeled synthetic and excluded from evidence/ground truth | policy documented |
-| OS adaptation | `docs/approved-plan.md` § OS matrix | GAMST #298, #301, #302, #309, #314, #323–#325; Crew #2–#10 | five-state compatibility matrix and host evidence per OS | declarative macOS/Linux/Windows/Jetson catalogs, five-state provider status and install/native diagnostics implemented/tested (`8651d62`); real host acceptance remains unavailable |
+| OS adaptation | `docs/approved-plan.md` § OS matrix | GAMST #298, #301, #302, #309, #314, #323–#325, #333–#338; Crew #2–#10 | five-state compatibility matrix and host evidence per OS | declarative macOS/Linux/Windows/Jetson catalogs, five-state provider status and install/native diagnostics implemented/tested (`8651d62`); Alpamayo2 Edge is tracked as an optional Jetson/physics provider follow-up; real host acceptance remains unavailable |
 | Benchmark adapter and frozen manifests | `docs/approved-plan.md` § benchmark; bench `docs/ADAPTERS.md` | GAMST #300, #307; bench #1, #3, #7 | exact manifest digest, same input/consumer/prompt, complete denominators | manifest binding, temporal scorer and live Crew adapter are implemented/focused-tested; real B/C/D/E remain open |
 | CostBench and default selection | `docs/approved-plan.md` § CostBench | bench #6, #7; GAMST #293, #308 | matched held-out quality/latency/resource/cost and independent assessment | exact-decimal aggregation including absent/empty component attribution and conservative default gate implemented/tested (`4a489a0`); matched evidence remains unmeasured and no default promotion is allowed |
 | Open-source integration candidates | `docs/approved-plan.md` § OS/runtime matrix | GAMST #294, #298, #302 | compatibility is recorded per profile; no tool is treated as universal fix | documented |
@@ -40,7 +40,7 @@ The tracked issue roots are:
   #328; Crew #11.
 - **Epic D — memory/context:** GAMST #318–#322, #330; Crew #11.
 - **Epic E — OS adaptation:** GAMST #298, #301, #302, #309, #314,
-  #323–#325; Crew #11/#2–#7/#10.
+  #323–#325, #333–#338; Crew #11/#2–#7/#10.
 - **Epic F — benchmark/default selection:** GAMST #300, #307, #308, #311;
   GamstCrew #11; Gamst-bench #1, #3–#9.
 

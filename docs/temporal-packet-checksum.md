@@ -31,7 +31,7 @@ The GAMST implementation and focused tests are present here. A reproducible
 cross-repository probe is available at
 `scripts/verify_cross_repo_checksum.py`. The current probe evidence is recorded
 in [`evidence/cross-repo-checksum-2026-11-17.json`](evidence/cross-repo-checksum-2026-11-17.json):
-GAMST `71201fd8184e0aea6f446ea634a1c9a1a3c5d1be`, Crew
+GAMST `17e0d30df2dab07855fa136e559aec8268bfad2e`, Crew
 `d98723d95ac25c27c9a2575d7a45c68db3957e6d`, and bench
 `715f8b8605ce5ba793e0158c67a6120be12e9c61` all verified the Core-produced
 envelope and the shared digest is
