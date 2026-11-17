@@ -1,6 +1,6 @@
 import {
   LOCALES, t, utf8Bytes, gaugeValues, packetMetrics, packetRate, evidenceIds,
-  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, normalizeLocalModelConfig,
+  compactPacket, buildChatMessages, chatEndpoint, createSSEParser, extractDelta, captureSnapshotDecision, captureTransitionCanClear, captureGenerationOwnsMedia, normalizeLocalModelConfig,
   sparklinePoints,
 } from "./playground.js";
 
@@ -489,8 +489,9 @@ async function setupAudio(generation) {
   }
   state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
   state.mute = state.audioContext.createGain();
-  if (!state.mute?.gain) throw new Error("Audio output control is unavailable");
-  state.mute.gain.value = 0;
+  const gain = state.mute?.gain;
+  if (!gain) throw new Error("Audio output control is unavailable");
+  gain.value = 0;
   state.source.connect(state.processor);
   state.processor.connect(state.mute);
   state.mute.connect(state.audioContext.destination);
@@ -586,13 +587,17 @@ async function beginCapture() {
     // path and released a freshly granted camera immediately.
     const camera = pressed("inputCamera"), microphone = pressed("inputMicrophone");
     if (camera || microphone) {
-      state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
-      if (generation !== state.generation || !state.active) { state.stream?.getTracks().forEach((track) => track.stop()); return; }
+      // Do not publish the result into shared state until this request still
+      // owns the active capture. A late old request must never overwrite a
+      // newer stream before its generation guard runs.
+      const stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
+      if (!captureGenerationOwnsMedia(state.generation, generation, state.active)) { stream.getTracks().forEach((track) => track.stop()); return; }
+      state.stream = stream;
       // A browser or device can end a track independently of our start/stop
       // controls. Treat that as a real capture stop, while the generation
       // guard prevents cleanup from a superseded transition from racing the
       // current stream.
-      for (const track of state.stream.getTracks()) {
+      for (const track of stream.getTracks()) {
         track.addEventListener("ended", () => {
           if (generation !== state.generation || !state.active) return;
           stopCapture().catch((error) => showError("errorRequest", error));

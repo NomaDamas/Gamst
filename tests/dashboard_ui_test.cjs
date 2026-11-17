@@ -7,7 +7,7 @@ const path = require('node:path');
   const pure = await import(pathToFileURL(path.resolve('site/playground.js')).href);
   const {
     MESSAGES, LOCALES, t, utf8Bytes, gaugeValues, newestObservationTimestamp,
-    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage, captureSnapshotDecision, captureTransitionCanClear,
+    packetMetrics, packetRate, evidenceIds, compactPacket, contextMessage, captureSnapshotDecision, captureTransitionCanClear, captureGenerationOwnsMedia,
     buildChatMessages, SYSTEM_PROMPT, chatEndpoint, createSSEParser, extractDelta, normalizeLocalModelConfig,
     sparklinePoints,
   } = pure;
@@ -68,6 +68,9 @@ const path = require('node:path');
   assert.deepEqual(captureSnapshotDecision(3, false, { capture_revision: 4 }), { accept: false, revision: 3, reason: "invalid_snapshot" });
   assert.equal(captureTransitionCanClear(2, 1), false, 'old stop cannot clear newer start guard');
   assert.equal(captureTransitionCanClear(2, 2), true, 'current transition clears its own guard');
+  assert.equal(captureGenerationOwnsMedia(2, 1, true), false, 'late media from an old capture cannot claim ownership');
+  assert.equal(captureGenerationOwnsMedia(2, 2, false), false, 'media acquired after stop cannot claim ownership');
+  assert.equal(captureGenerationOwnsMedia(2, 2, true), true, 'current active capture owns its media result');
   console.log('Capture lifecycle: stale paused snapshots are ignored and current stop snapshots are accepted');
   assert.deepEqual(evidenceIds(packet), ['face-1', 'audio-1']);
   console.log('Packet metrics: UTF-8 bytes, newest age, cadence, drops and evidence ids passed');
@@ -141,9 +144,12 @@ const path = require('node:path');
   assert(app.includes('await $("video").play().catch(() => {})'), 'preview autoplay failure must not stop capture');
   assert(app.includes('AudioContext startup is an optional input path'), 'audio startup failure must be isolated from camera capture');
   assert(app.includes('if (generation === state.generation && state.active) showError("errorRequest", error);'), 'audio failure must be reported without stopping capture');
+  assert(app.includes('const stream = await navigator.mediaDevices.getUserMedia'), 'media acquisition must remain local until ownership is checked');
+  assert(app.includes('if (!captureGenerationOwnsMedia(state.generation, generation, state.active))'), 'late media must be stopped before shared stream assignment');
   assert(app.includes('function controlValue(id, fallback = "")'), 'capture controls must tolerate a partially loaded demo shell');
   assert(app.includes('Number.isFinite(rate) && rate > 0 ? rate : 4'), 'invalid or missing packet rate must use a safe capture interval');
-  assert(app.includes('if (!state.mute?.gain) throw new Error("Audio output control is unavailable")'), 'audio gain lifecycle must not dereference an absent gain node');
+  assert(app.includes('const gain = state.mute?.gain;'), 'audio gain lifecycle must snapshot an optional gain node');
+  assert(app.includes('if (!gain) throw new Error("Audio output control is unavailable")'), 'audio gain lifecycle must not dereference an absent gain node');
   assert(app.includes('loadLocalMyProxyConfig'), 'demo must load optional local MyProxy config');
   assert(app.includes('applyLocalMyProxyConfig'), 'demo must expose local MyProxy setup action');
   assert(site.includes('id="useLocalMyProxy"'), 'public demo must expose local MyProxy button');
