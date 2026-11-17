@@ -95,16 +95,22 @@ CheckpointStore and the live Crew→Core→bench adapter are implemented and
 focused-tested; their provider/ObjectMemory and real-host acceptance gates
 remain separate.
 
-The active implementation handoff uses these exact commits:
+The prior implementation handoff used these exact commits:
 
 - GAMST `feat/temporal-contract`: `915f18c` (Core envelope integration, demo hardening, and Alpamayo2 Edge issue/documentation handoff)
 - GamstCrew `feat/runtime-pr`: `d98723d` (serialized lifecycle, shared-memory transport, lock/architecture validation, and JSON-safe socket fallback)
 - Gamst-bench `feat/temporal-metrics`: `715f8b8` (adapter failure diagnostics and fail-closed lifecycle)
 
+The current code-completable continuation is recorded separately:
+
+- GAMST `c2a9a0a` (issue-map refresh and current cross-repository evidence)
+- GamstCrew `fdf5322` (temporal normalization, sequence-gap visibility and abstaining contradiction candidates; based on `f8aa970`/`08dedcd`)
+- Gamst-bench `e1976e1` (complete temporal-field declarations in measured manifests)
+
 The current GAMST branch also contains docs-only Alpamayo2 cross-repository
 issue linkage at `2fe9cbe`; the checksum probe below is intentionally scoped to
-the current GAMST implementation head `50bc7f9` and is not a claim about that later
-documentation commit.
+the exact implementation heads recorded in the 2026-11-17 evidence file and is
+not a model or host acceptance claim.
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
@@ -157,8 +163,8 @@ numeric-finance acceptance gate remains open until an isolated rerun and the
 required host evidence are available.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the active implementation handoff heads: GAMST `50bc7f9`, Crew `d98723d`, and
-bench `715f8b8`.
+the current implementation heads: GAMST `c2a9a0a`, Crew `fdf5322`, and
+bench `e1976e1`.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in
 `docs/evidence/cross-repo-checksum-2026-11-17.json`. This closes the canonical

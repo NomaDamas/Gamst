@@ -56,10 +56,10 @@ cannot close a required acceptance gate by themselves.
 
 ## Review and merge gate
 
-The required independent Astra-medium review of the implementation handoff
+The required independent Astra-medium review of the prior implementation handoff
 `50bc7f9`/`d98723d`/`715f8b8` returned **APPROVE** after the exact-head metadata
 correction. It covers the implementation handoff and focused evidence; later
-GAMST commits are documentation-only. The earlier Epic 0 approval at `c950a57`
+GAMST/Crew/bench commits require a fresh exact-head review. The earlier Epic 0 approval at `c950a57`
 remains separately scoped. The repository-wide production merge gate remains
 open because resource limits lack real stress evidence, full runtime-manager→
 bench execution is open, B/C/D/E are unmeasured, and Linux/CUDA, Windows and
