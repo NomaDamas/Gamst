@@ -60,20 +60,24 @@ acceptance, and full temporal/physics/provenance evidence remain open.
 The follow-on implementation goal completed the code and focused-test slices
 that do not require target hardware or measured model quality:
 
-- GAMST `8ad9788`: `TemporalContextEngine` and bounded `ContextMemory`, with
+- GAMST `5411978` + `5c688a2`: `TemporalContextEngine` and bounded `ContextMemory`, with
   clock calibration, relation candidates, revisions, cutoff eligibility,
-  current/last-seen state, delta replay, evidence retrieval and lineage-checked
-  checkpoint/resume. Focused temporal/memory/physics tests: `32 passed`.
+  current/last-seen state, delta replay, evidence retrieval, byte-bounded
+  eviction and lineage-checked checkpoint/resume. The atomic `CheckpointStore`
+  adds hashed session paths, fsync/rename, load and clear semantics. Focused
+  temporal/memory/physics tests: `34 passed` (memory-specific: `6 passed`).
 - GAMST `1335a35`: Playground malformed-observation guards, invalid local
   snapshot rejection and media-track-ended cleanup. `node
   tests/dashboard_ui_test.cjs` and `git diff --check` pass.
-- GamstCrew `be3b319` + `ba426e3`: runtime diagnostics/profile validation and
-  bounded Unix transport handler/client timeouts. Crew focused suite: `39
-  passed` in the dependency-complete environment.
-- Gamst-bench `63189ca` (equivalent local cherry-pick `d12161e`): exact-decimal
-  CostBench aggregation and conservative default-selection reporting. Focused
-  CostBench tests: `3 passed`; the commit is present on the repository's
-  temporal-metrics lineage/main merge.
+- GamstCrew `be3b319` + `ba426e3` + `8651d62`: runtime diagnostics, provider
+  hash/Python validation, bounded Unix transport timeouts, explicit OS profile
+  catalog, five-state compatibility reporting and install/native diagnostics.
+  Crew suite: `41 passed` with the GAMST SDK import path available; the
+  dependency-free local run skips only the optional Core-provider import.
+- Gamst-bench `4a489a0` (including `f6e0669` and `63189ca`): exact-decimal
+  CostBench aggregation, empty/absent component attribution and conservative
+  default-selection reporting. Focused CostBench tests: `5 passed`; live
+  Crew→Core→GAMST→bench adapter tests: `4 passed`.
 - GAMST `5411978` + `006b407`: bounded atomic `CheckpointStore` persistence,
   lineage verification and clear/load semantics are implemented and focused
   tested. Provider/ObjectMemory integration remains separate.
@@ -91,9 +95,9 @@ gates listed below.
 
 The active handoff uses these exact commits:
 
-- GAMST `feat/temporal-contract`: `c950a573944c85264f6d046d0bf112b5d50dd0df`
-- GamstCrew `feat/runtime-pr`: `f357789199579943205d9453c01aa9a80e05c41b`
-- Gamst-bench `feat/temporal-metrics`: `3ae70cb` (live Crew bench execution evidence and CI-isolated runtime checkout)
+- GAMST `feat/temporal-contract`: `63bc58c62a9f1824d3073319b526fd6bc4c4eaa7`
+- GamstCrew `feat/runtime-pr`: `8651d625adab03a4fa84a0c1f6f2e68176d35656`
+- Gamst-bench `feat/temporal-metrics`: `4a489a083d145c10fa47378121678701e018cf34`
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
 required Python 3.10–3.13 and motion-provider job. The historical timeout is
