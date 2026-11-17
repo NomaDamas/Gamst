@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio, json, math, uuid
 from .temporal import TemporalEvent
 
+MIN_LINE_BYTES = 256
+
 class CrewBridge:
     def __init__(self, socket_path: str, *, max_line: int = 131072,
                  timeout_s: float = 30.0):
-        if type(max_line) is not int or max_line < 1:
-            raise ValueError('max_line must be a positive integer')
+        if type(max_line) is not int or not MIN_LINE_BYTES <= max_line <= 131072:
+            raise ValueError(
+                f'max_line must be an integer from {MIN_LINE_BYTES} to 131072'
+            )
         if (type(timeout_s) not in (int, float) or not math.isfinite(float(timeout_s))
                 or not 0 < timeout_s <= 600):
             raise ValueError('timeout_s must be finite and between 0 and 600 seconds')

@@ -20,6 +20,10 @@ class BridgeValidation(unittest.TestCase):
 
 @unittest.skipIf(JsonlUnixServer is None, 'optional GamstCrew integration is not installed')
 class Bridge(unittest.IsolatedAsyncioTestCase):
+    def test_bridge_line_bound_matches_crew_server(self):
+        with self.assertRaises(ValueError):
+            CrewBridge('/tmp/gamst-test.sock', max_line=255)
+
     async def test_submit_roundtrip(self):
         async def handler(request):
             self.assertEqual(request['op'], 'submit')
