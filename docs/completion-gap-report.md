@@ -179,8 +179,8 @@ default selection, and independent approval remain open.
 ## Latest continuation heads
 
 After the benchmark coverage update was merged, the checksum probe was rerun
-against GAMST `20b294f61338411d7f9ed6d49c60d0ff57ff446a`, GamstCrew
-`e0d2de1efc17dfa9cacd504657b4867a50a2a170`, and the merged Gamst-bench main
+against GAMST `526b69dd694ca065c94ab8a2a3b652215fd4707d`, GamstCrew
+`b803a414216427862f5046c7a237b0674526417f`, and the merged Gamst-bench main
 `576494b9dd9bf9469f3145ac7c571b776312195b`. The shared digest stayed
 `6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
 GAMST PR #341's browser ownership/audio lifecycle fixes and Crew PR #15's

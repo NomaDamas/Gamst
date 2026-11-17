@@ -5,8 +5,8 @@ plan. It describes the provider and environment selected by configuration; a
 provider entry or passing fixture does not claim that weights, hardware,
 quality, latency, or production acceptance has been measured.
 
-The current cross-repository probe heads are GAMST `20b294f`, GamstCrew
-`e0d2de1`, and Gamst-bench `576494b`. The probe proves packet/checksum
+The current cross-repository probe heads are GAMST `526b69d`, GamstCrew
+`b803a41`, and Gamst-bench `576494b`. The probe proves packet/checksum
 compatibility only.
 
 | Sensory area | Current model/provider | Isolated runtime and profile | Configuration and artifact rules | Current evidence and remaining gate |
