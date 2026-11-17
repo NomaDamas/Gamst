@@ -6,6 +6,6 @@
   "crew_verified": true,
   "sha256": "6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63",
   "version": 1,
-  "probe_core_head": "1d00d98ad5d21c436f0b6848db4b351e55497075",
+  "probe_core_head": "915f18c55db3dfe4626df3e2cb479a40e2cf9b72",
   "scope": "canonical-byte contract probe; not model or host acceptance"
 }
