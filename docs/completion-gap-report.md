@@ -103,7 +103,7 @@ The active implementation handoff uses these exact commits:
 
 The current GAMST branch also contains docs-only Alpamayo2 cross-repository
 issue linkage at `2fe9cbe`; the checksum probe below is intentionally scoped to
-the implementation handoff at `915f18c` and is not a claim about that later
+the current GAMST implementation head `50bc7f9` and is not a claim about that later
 documentation commit.
 
 The GAMST hosted runs `43898470715` and `43899185401` for `c950a57` passed every
@@ -157,7 +157,7 @@ numeric-finance acceptance gate remains open until an isolated rerun and the
 required host evidence are available.
 
 The exact-byte probe in `scripts/verify_cross_repo_checksum.py` was rerun against
-the active implementation handoff heads: GAMST `915f18c`, Crew `d98723d`, and
+the active implementation handoff heads: GAMST `50bc7f9`, Crew `d98723d`, and
 bench `715f8b8`.
 It recorded Core→Crew→bench verification, the shared SHA-256 digest, and exact
 repository heads in

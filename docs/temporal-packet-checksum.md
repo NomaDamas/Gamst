@@ -36,7 +36,7 @@ GAMST `17e0d30df2dab07855fa136e559aec8268bfad2e`, Crew
 `715f8b8605ce5ba793e0158c67a6120be12e9c61` all verified the Core-produced
 envelope and the shared digest is
 `6048cd0cda6b935d1a6a138737ec5c2f011f42fa9333819504475a529384ab63`.
-This probe is scoped to the implementation handoff at `915f18c`; later
+This probe is scoped to the current GAMST implementation head `50bc7f9`; later
 GAMST documentation-only commits do not change the packet implementation.
 It proves canonical-byte agreement and closes the wire-compatibility
 portion of #331. Full runtime-manager→bench execution, target-host acceptance,
