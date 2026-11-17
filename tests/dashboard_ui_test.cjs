@@ -40,6 +40,15 @@ const path = require('node:path');
   packet.observations['scene.faces'].fresh = true;
   packet.observations['audio.rms'].fresh = true;
   assert.equal(gaugeValues(packet, false).jawOpen, null, 'stopped gauges never invent values');
+  const malformed = { observations: {
+    'scene.faces': { fresh: true, timestamp_ms: 901 },
+    'scene.poses': { fresh: true, timestamp_ms: 901 },
+    'scene.person_tracks': { fresh: true, timestamp_ms: 901 },
+    'audio.rms': { fresh: true, timestamp_ms: 901 },
+    'speech.activity': { fresh: true, timestamp_ms: 901 },
+  } };
+  assert.doesNotThrow(() => gaugeValues(malformed, true), 'partial observations remain renderable');
+  assert.equal(gaugeValues(malformed, true).audioRms, null);
   console.log('Gauge mapping: bilateral blendshapes, audio, speech, stale and stopped states passed');
 
   assert.equal(newestObservationTimestamp(packet), 900);
@@ -56,6 +65,7 @@ const path = require('node:path');
   assert.deepEqual(captureSnapshotDecision(3, false, stalePaused), { accept: false, revision: 3, reason: "stale_revision" });
   assert.deepEqual(captureSnapshotDecision(3, true, { capture_revision: 3, state: { paused: true } }), { accept: false, revision: 3, reason: "transition" });
   assert.deepEqual(captureSnapshotDecision(2, false, { capture_revision: 3, state: { paused: true } }), { accept: true, revision: 3, running: false });
+  assert.deepEqual(captureSnapshotDecision(3, false, { capture_revision: 4 }), { accept: false, revision: 3, reason: "invalid_snapshot" });
   assert.equal(captureTransitionCanClear(2, 1), false, 'old stop cannot clear newer start guard');
   assert.equal(captureTransitionCanClear(2, 2), true, 'current transition clears its own guard');
   console.log('Capture lifecycle: stale paused snapshots are ignored and current stop snapshots are accepted');

@@ -264,16 +264,16 @@ function drawGuides(data) {
   if (!width || !height) return;
   overlay.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const faces = observations["scene.faces"];
-  if (pressed("overlayFace") && faces?.fresh !== false && featureEnabled("mediapipe_face_landmarker")) {
-    for (const face of faces.value || []) {
+  if (pressed("overlayFace") && faces && faces.fresh !== false && featureEnabled("mediapipe_face_landmarker")) {
+    for (const face of Array.isArray(faces.value) ? faces.value : []) {
       const path = (face.landmarks || []).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => `M${(point.x * width).toFixed(1)} ${(point.y * height).toFixed(1)}h.01`).join(" ");
       if (path) overlay.append(makeSvg("path", { d: path, fill: "none", stroke: "#68ede4", "stroke-width": 1.6, "stroke-linecap": "round", opacity: .85 }));
     }
   }
   const poses = observations["scene.poses"];
-  if (poses?.fresh !== false && featureEnabled("mediapipe_pose_landmarker")) {
+  if (poses && poses.fresh !== false && featureEnabled("mediapipe_pose_landmarker")) {
     const links = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[28,30],[30,32]];
-    for (const [poseIndex, pose] of (poses.value || []).entries()) {
+    for (const [poseIndex, pose] of (Array.isArray(poses.value) ? poses.value : []).entries()) {
       const points = pose.landmarks || [];
       const visible = (point) => point && Number.isFinite(point.x) && Number.isFinite(point.y) && (point.visibility ?? 1) >= .5 && (point.presence ?? 1) >= .5;
       if (pressed("overlayBody")) {
@@ -302,8 +302,8 @@ function drawGuides(data) {
     }
   }
   const tracks = observations["scene.person_tracks"];
-  if (pressed("overlayPerson") && tracks?.fresh !== false && featureEnabled("opencv_hog_person")) {
-    for (const track of tracks.value || []) {
+  if (pressed("overlayPerson") && tracks && tracks.fresh !== false && featureEnabled("opencv_hog_person")) {
+    for (const track of Array.isArray(tracks.value) ? tracks.value : []) {
       if (!track.visible || !track.bbox) continue;
       const box = track.bbox;
       overlay.append(makeSvg("rect", { x: box.x * width, y: box.y * height, width: box.width * width, height: box.height * height, rx: 4, fill: "none", stroke: track.association_quality === "uncertain" ? "#ffd078" : "#66e5df", "stroke-width": 2 }));
@@ -506,6 +506,16 @@ async function beginCapture() {
     if (camera || microphone) {
       state.stream = await navigator.mediaDevices.getUserMedia({ video: camera ? { width: { ideal: 640 }, height: { ideal: 360 } } : false, audio: microphone });
       if (generation !== state.generation || !state.active) { state.stream?.getTracks().forEach((track) => track.stop()); return; }
+      // A browser or device can end a track independently of our start/stop
+      // controls. Treat that as a real capture stop, while the generation
+      // guard prevents cleanup from a superseded transition from racing the
+      // current stream.
+      for (const track of state.stream.getTracks()) {
+        track.addEventListener("ended", () => {
+          if (generation !== state.generation || !state.active) return;
+          stopCapture().catch((error) => showError("errorRequest", error));
+        }, { once: true });
+      }
       if (camera) {
         $("video").srcObject = state.stream;
         await $("video").play();

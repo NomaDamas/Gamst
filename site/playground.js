@@ -81,9 +81,12 @@ function averageBlendshape(shapes, names) {
 
 export function gaugeValues(packet, live = true) {
   const observations = packet?.observations || {};
-  const usable = (name) => live && observations[name]?.fresh !== false && Number.isFinite(observations[name]?.timestamp_ms);
+  const usable = (name) => {
+    const observation = observations[name];
+    return live && observation && typeof observation === "object" && observation.fresh !== false && Number.isFinite(observation.timestamp_ms);
+  };
   const faceObservation = observations["scene.faces"];
-  const face = live && faceObservation?.fresh !== false ? faceObservation?.value?.[0] : null;
+  const face = live && faceObservation && typeof faceObservation === "object" && faceObservation.fresh !== false && Array.isArray(faceObservation.value) ? faceObservation.value[0] : null;
   const shapes = face?.blendshapes || {};
   const first = (names) => {
     for (const name of names) if (Number.isFinite(shapes[name])) return shapes[name];
@@ -129,6 +132,9 @@ export function packetRate(arrivalTimes, now = Date.now(), windowMs = 4000) {
 }
 
 export function captureSnapshotDecision(currentRevision, transitionActive, data) {
+  if (!data || typeof data !== "object" || !data.state || typeof data.state !== "object") {
+    return { accept: false, revision: currentRevision, reason: "invalid_snapshot" };
+  }
   const revision = Number(data?.capture_revision);
   if (transitionActive) return { accept: false, revision: currentRevision, reason: "transition" };
   if (Number.isFinite(revision) && revision < currentRevision) {
