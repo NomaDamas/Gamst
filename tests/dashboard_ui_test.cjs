@@ -155,7 +155,7 @@ const path = require('node:path');
   assert(exampleConfig.includes('apiKey: ""'), 'tracked example must contain no credential');
   assert(!exampleConfig.includes('local-secret'), 'tracked example must not contain a real key');
   assert(!app.includes('gpt-6.1-terra-low'), 'model/key values must remain local configuration, not client source');
-  assert(app.includes('reasoning_effort: config.reasoning_effort || "low"'), 'MyProxy requests must use the configured low reasoning effort by default');
+  assert(app.includes('if (config.reasoning_effort) requestBody.reasoning_effort = config.reasoning_effort;'), 'MyProxy requests must include reasoning effort only when configured');
   assert(local.includes('name="gamst-session-token" content="__SESSION_TOKEN__"'));
   assert(local.includes('src="/app.js"'));
   assert(!site.includes('name="gamst-session-token"'));

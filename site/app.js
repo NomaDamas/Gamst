@@ -36,7 +36,7 @@ const state = {
   localCaptureRevision: 0, localCaptureTransition: null, localCaptureTransitionId: 0,
   arrivals: [], droppedFrames: 0, histories: Object.fromEntries(GAUGE_NAMES.map((name) => [name, []])),
   metricHistory: [], audioTimeline: [], sceneTimeline: [], lastTimelineStamp: 0,
-  sending: false, chatController: null, featureSignature: "", guidePreview: null, localMyProxyConfig: null,
+  sending: false, chatController: null, featureSignature: "", guidePreview: null, localMyProxyConfig: null, localMyProxyActive: false,
 };
 let settingsTimer = null;
 
@@ -76,6 +76,7 @@ function applyLocalMyProxyConfig() {
   setControlValue("baseUrl", config.baseUrl);
   setControlValue("model", config.model);
   setControlValue("apiKey", config.apiKey);
+  state.localMyProxyActive = true;
   if ($("rememberKey")) $("rememberKey").checked = false;
   // Endpoint/model are harmless UI preferences; keep the credential in the
   // session only so the local config never causes a persistent key write.
@@ -688,7 +689,9 @@ function packetWithQuestion(question) {
 }
 
 function providerConfig() {
-  return { baseUrl: controlValue("baseUrl").trim(), model: controlValue("model").trim(), key: controlValue("apiKey"), provider: controlValue("provider", "byok") };
+  const baseUrl = controlValue("baseUrl").trim();
+  const model = controlValue("model").trim();
+  return { baseUrl, model, key: controlValue("apiKey"), provider: controlValue("provider", "byok"), reasoning_effort: state.localMyProxyActive && state.localMyProxyConfig?.baseUrl === baseUrl && state.localMyProxyConfig?.model === model ? state.localMyProxyConfig.reasoning_effort : undefined };
 }
 function updateProviderNotice() {
   const config = providerConfig();
@@ -737,10 +740,12 @@ async function streamBYOK(question, packet) {
   const config = providerConfig();
   const endpoint = chatEndpoint(config.baseUrl);
   state.chatController = new AbortController();
+  const requestBody = { model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3 };
+  if (config.reasoning_effort) requestBody.reasoning_effort = config.reasoning_effort;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.key}` },
-    body: JSON.stringify({ model: config.model, messages: buildChatMessages(question, packet), stream: true, temperature: .3, reasoning_effort: config.reasoning_effort || "low" }),
+    body: JSON.stringify(requestBody),
     signal: state.chatController.signal,
   });
   if (!response.ok) {
@@ -1015,7 +1020,7 @@ $("language").addEventListener("change", () => {
 });
 $("configureModel").addEventListener("click", () => { $("modelSettings").open = true; $("baseUrl").focus(); });
 $("provider").addEventListener("change", () => { updateProviderNotice(); renderResponseSetup(false); });
-for (const id of ["baseUrl", "model", "apiKey"]) $(id).addEventListener("input", () => { updateProviderNotice(); renderResponseSetup(false); });
+for (const id of ["baseUrl", "model", "apiKey"]) $(id).addEventListener("input", () => { state.localMyProxyActive = false; updateProviderNotice(); renderResponseSetup(false); });
 $("useLocalMyProxy")?.addEventListener("click", applyLocalMyProxyConfig);
 $("saveSettings").addEventListener("click", () => {
   const config = providerConfig();
