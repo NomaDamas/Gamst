@@ -67,7 +67,7 @@ def tool_definitions() -> list[dict]:
         ("get_features", "Runtime model switches shared with dashboard settings.", {}, ()),
         ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
         ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
-        ("configure_vlm", "Set temporal VLM sampling. Returns effective FPS after frame budget cap. Does not start capture.", {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60}, "window_seconds": {"type": "number", "minimum": 1, "maximum": 30}, "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
+        ("get_semantic_state", "Read bounded short-term semantic state updates. This is read-only and never triggers a model call.", {"subject_id": SUBJECT, "window": WINDOW, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}, ()),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
@@ -155,6 +155,10 @@ class MCPServer:
         if name == "get_stream_status":
             from .media import media_router
             return media_router(self.human).status()
+        if name == "list_decision_modules":
+            return await self.human.list_decision_modules()
+        if name == "get_semantic_state":
+            return await self.human.get_semantic_state(**args)
         if name == "list_decision_modules":
             return await self.human.list_decision_modules()
         if name == "decide_multimodal":

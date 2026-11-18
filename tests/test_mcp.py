@@ -60,6 +60,26 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         await self.request("delete_data", {"subject_id": "alice"})
         self.assertEqual(await self.human.get_history(subject_id="alice"), [])
 
+    async def test_semantic_state_chain_is_bounded_and_mcp_read_only(self):
+        import time
+        now = int(time.time() * 1000)
+        first = await self.human.push_semantic_state(
+            {"phase": "preparing"}, subject_id="alice", timestamp_ms=now - 1000,
+            evidence_ids=["frame-1"], sources=["video"])
+        second = await self.human.push_semantic_state(
+            {"phase": "acting"}, subject_id="alice", timestamp_ms=now,
+            events=[{"type": "throw", "at_ms": now}], evidence_ids=["frame-2"],
+            sources=["video", "audio"])
+        self.assertEqual(first["state"]["phase"], "preparing")
+        chain = await self.human.get_semantic_state("alice", window="5s")
+        self.assertEqual([x["state"]["phase"] for x in chain["updates"]], ["preparing", "acting"])
+        response = await self.request("get_semantic_state", {"subject_id": "alice", "window": "5s"})
+        self.assertFalse(response["isError"], response)
+        payload = json.loads(response["content"][0]["text"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["updates"][1]["evidence_ids"], ["frame-2"])
+        self.assertEqual(len(chain["updates"]), 2)
+
     async def test_invalid_rpc(self):
         for request in ([], {}, {"jsonrpc": "1.0", "method": "ping"},
                         {"jsonrpc": "2.0", "method": "ping", "id": None},
