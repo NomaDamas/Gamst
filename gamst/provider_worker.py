@@ -17,12 +17,13 @@ def _construct(profile, config):
     elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)
+    elif profile == 'streamingvlm.local':
+        from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
+        backend = OpenAIStreamingBackend(config['endpoint'], config['model'], config['revision'], config.get('api_key_env'))
+        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
         provider = SmolVLMContext.from_local(**config)
-    elif profile == 'food.segformer_b0':
-        from .providers.food import FoodContext
-        provider = FoodContext.from_local(**config)
     elif profile == 'visual_microphone.phase':
         from .providers.visual_microphone_context import VisualMicrophoneContext
         provider = VisualMicrophoneContext(**config)

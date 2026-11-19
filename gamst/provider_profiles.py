@@ -24,12 +24,12 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
-    if profile == 'orbslam3.monocular':
-        from .providers.orbslam_context import ORBSLAMContext
-        return ORBSLAMContext.capability(**config)
-    if profile == 'smolvlm2.500m.local':
-        from .providers.smolvlm_context import SmolVLMContext
-        return SmolVLMContext.capability(**config)
+    if profile == 'streamingvlm.local':
+        from .providers.streaming_semantic import StreamingSemanticContext
+        required={'endpoint','model','revision'}
+        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env'}:
+            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env')
+        return StreamingSemanticContext.capability(**config)
     if profile == 'food.segformer_b0':
         from .providers.food import FoodContext
         return FoodContext.capability(**config)

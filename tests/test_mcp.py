@@ -94,7 +94,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update["state"]["video_state"]["phase"], "impact_after_motion")
         self.assertIn("audio.impact", [s["name"] for s in update["state"]["fusion"]["signals"]])
         context = await self.human.get_context(window="5s")
-        self.assertEqual(context["semantic_state_chain"]["count"], 1)
+        self.assertEqual(context["semantic_state_chain"]["count"], 2)
 
     async def test_invalid_rpc(self):
         for request in ([], {}, {"jsonrpc": "1.0", "method": "ping"},

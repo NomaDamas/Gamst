@@ -75,10 +75,13 @@ model. GAMST does not run a hidden trigger model and does not replace the
 strong VLM/LLM's semantic understanding.
 
 The central promise is **continuous observation, temporal sensor fusion,
-event-driven model routing, evidence-backed context, and semantic episode
-construction**. High-frequency input is preserved; the runtime converts it into
-low-token context that an agent can use without repeatedly asking a VLM to
-re-understand the same scene.
+event-driven Context, evidence-backed state, and semantic episode construction**.
+High-frequency input is preserved; the runtime converts it into low-token Context
+that an agent can use without repeatedly asking a VLM to re-understand the same
+scene. The selected small streaming-video profile is the official StreamingVLM
+implementation (MIT, pinned upstream revision); its checkpoint must be hosted
+explicitly by the operator. GAMST does not bundle weights or pretend a generic
+chat endpoint is streaming-KV inference.
 
 **Application examples:** AI companions; travel assistants describing surroundings;
 interview or interrogation-session transcription and timeline review; health and

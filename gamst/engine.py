@@ -989,10 +989,15 @@ class Gamst:
             sources=["video"], model_id=model_id, model_version=model_version)
 
     async def observe_perception_signal(self, signal):
-        """Merge a validated plugin signal into the fusion view."""
+        """Merge a validated plugin signal into fusion and the state chain."""
         self._check()
         self.semantic_fusion.observe_signal(signal)
-        return self.semantic_fusion.snapshot(timestamp_ms=signal.get("timestamp_ms", timestamp()))
+        ts = signal.get("timestamp_ms", timestamp())
+        fusion = self.semantic_fusion.snapshot(timestamp_ms=ts)
+        return await self.push_semantic_state(
+            {"fusion": fusion}, subject_id=signal.get("subject_id", "local-user"),
+            timestamp_ms=ts, evidence_ids=fusion["evidence_ids"],
+            sources=fusion["modalities"], model_id="gamst.semantic_fusion", model_version="1")
 
     @staticmethod
     def _models_for(records, defaults):
