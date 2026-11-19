@@ -4,9 +4,9 @@
 
 <img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
 
-### Real-time multimodal context for your LLM or VLM.
+### Continuous multimodal observation and decision context for agents.
 
-Turn speech, voice activity, facial movement, and surroundings into bounded, timestamped context for your existing AI agent.
+Turn high-frequency vision, sound, physical, environmental, and spatial streams into time-aligned state, semantic episodes, and bounded decisions for your existing AI agent. GAMST keeps observing continuously, fuses evidence across time, and invokes an expensive VLM or LLM only when the world changes or the evidence is insufficient.
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
@@ -16,7 +16,7 @@ Turn speech, voice activity, facial movement, and surroundings into bounded, tim
 
 ---
 
-GAMST gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The product's core is context delivery; Companion replies are optional.
+GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
 **Status: v0.3 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and the GAMST Playground (browser + local). See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
@@ -35,6 +35,7 @@ GAMST gives agents a shared layer for observing behavior, tracking changes, and 
 - [🗄️ Retention](#retention)
 - [🧩 Optional providers](#providers)
 - [🔬 Research & roadmap](#research)
+- [🧭 Product direction](docs/product-direction.md)
 - [📊 Benchmarking](#benchmarking)
 - [🔒 Privacy](#privacy)
 - [🧪 Validation](#validation)
@@ -44,9 +45,40 @@ GAMST gives agents a shared layer for observing behavior, tracking changes, and 
 <a id="overview"></a>
 ## 🌱 A context layer for an ecosystem of tools
 
-Connect vision, voice and other perception tools once; reuse their timestamped
-observations in dashboards, LLM/VLM prompts, MCP agents and streaming applications.
-Models, transports and consuming applications can evolve independently.
+Connect high-frequency vision, sound, physical, environmental, and spatial
+perception tools once; reuse their timestamped observations, cross-modal events,
+semantic episodes, and bounded decisions in dashboards, LLM/VLM prompts, MCP
+agents, realtime sessions, and streaming applications. Models, transports, and
+consuming applications can evolve independently.
+
+GAMST is not a raw-media relay and not a model that thinks about every frame.
+It is a temporal observation runtime:
+
+```text
+camera 30–120 Hz · audio 16 kHz · IMU/force/tactile 100–1000 Hz
+        ↓
+high-frequency modality plugins
+- tracking · geometry · physics · audio features · ASR · OCR
+        ↓
+GAMST signals + short-term semantic state chain
+- current state · state transitions · episode memory · evidence IDs
+        ↓
+MCP Context requested by the application
+        ↓
+strong VLM/LLM fuses selected frames, audio/text and state chain
+        ↓
+agent answer or action
+```
+
+Application-owned rules may choose when to request Context or call the strong
+model. GAMST does not run a hidden trigger model and does not replace the
+strong VLM/LLM's semantic understanding.
+
+The central promise is **continuous observation, temporal sensor fusion,
+event-driven model routing, evidence-backed context, and semantic episode
+construction**. High-frequency input is preserved; the runtime converts it into
+low-token context that an agent can use without repeatedly asking a VLM to
+re-understand the same scene.
 
 **Application examples:** AI companions; travel assistants describing surroundings;
 interview or interrogation-session transcription and timeline review; health and
@@ -78,7 +110,60 @@ implementation, not a fork or endorsement of those projects.
 | 🔎 **Statement Consistency** | Conflicting assertions and possible contradictions | Structured claim comparison; optional model candidates with exact source excerpts |
 | 🧠 **Temporal Memory** | Current state, history, context | SQLite storage, configurable retention, evidence inspection |
 | 🤝 **Agent Responses** | Suggested next action or generated reply | Context-aware Companion using a configured local or authorized remote provider |
-| 🎥 **Perception Plugins** | Video/audio measurements and transcripts | OpenCV, MediaPipe, Silero VAD, faster-whisper adapters |
+| 🧭 **Temporal Fusion & State Chain** | Time-aligned state, semantic episodes, evidence and bounded context | Freshness watermarks, physical-state precomputation, deterministic rules, optional multimodal observation plugin |
+| 🎥 **Perception Plugins** | High-frequency vision/audio/physical measurements and semantic windows | OpenCV, MediaPipe, Silero VAD, faster-whisper, depth, tracking and pluggable workers |
+
+### Why GAMST exists
+
+Realtime APIs provide a low-latency, bidirectional interaction channel. Media
+pipelines move bytes, robotics stacks run control loops, and strong VLMs/LLMs
+interpret selected evidence. GAMST sits between those layers and the agent: it
+aligns multirate streams, computes state and physical relations, preserves
+evidence, and builds a short-term semantic state chain. An MCP client or
+application requests that Context and owns the heavy-model prompt and trigger.
+GAMST itself does not secretly invoke a strong model.
+
+GAMST is for teams whose systems observe continuously, combine several
+asynchronous modalities, care about short-lived events, and must change an
+agent's action from that evidence. A single-image caption, one-shot transcript,
+or ordinary chatbot is intentionally outside this target.
+
+The reusable boundary is the common temporal contract, not a list of sensors:
+
+```text
+Signal → Observation → Track/State → Event → Episode → Decision → Action context
+```
+
+Vision and sound are both high-frequency streams. Their useful submodalities
+include tracking, optical flow, pose, gaze, depth, segmentation, OCR, VAD,
+partial ASR, sound events, speaker activity, direction, prosody, vibration and
+cross-modal timing. Additional physical, environmental, and spatial modalities
+include IMU, force/torque, tactile, vibration, radar/CSI, thermal, pressure,
+flow, temperature, gas, calibration, and mapped coordinates. GAMST combines
+these only where their timing and evidence explain a state or event that a
+single modality cannot establish.
+
+The product claim is measurable rather than absolute: on a declared task and
+sensor set, compare VLM-only, always-on small streaming VLM, and GAMST hybrid
+routing on event recall, miss rate, detection latency, p95 answer-ready latency,
+VLM tokens/cost, drops, and task quality. GAMST must preserve critical-event
+quality while reducing unnecessary semantic inference.
+
+The first Halo should show a high-frequency, multimodal game or sports episode,
+such as a table-tennis rally: ball and racket trajectories, impact timing,
+player pose, sound onsets, spatial relations, and a semantic rally summary.
+Fast state estimation and action timing run below the semantic layer. A bounded
+semantic state chain keeps current state, episode transitions and evidence IDs;
+application-owned rules decide when an MCP client asks an LLM/VLM for deeper
+interpretation. This demonstrates continuous physical observation, semantic
+understanding over time, selective reasoning, and an agent-visible action
+without claiming that a language model is the motor controller.
+
+The first practical customers are teams building embodied agents, interactive
+robotics, sports and game agents, multimodal field systems, and perception
+infrastructure. GAMST is valuable when each team would otherwise rebuild clock
+alignment, bounded queues, gap handling, cross-modal events, episode memory,
+evidence provenance, model routing, replay, and latency/cost/quality evaluation.
 
 <a id="quick-start"></a>
 ## 🚀 Quick start
@@ -547,6 +632,9 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 <a id="research"></a>
 ## 🔬 Research basis & roadmap
 
+The product boundary, Halo direction, customer fit, competitive position and
+code roadmap are recorded in [Product direction](docs/product-direction.md).
+
 Defaults stay lightweight and local; higher-accuracy models are opt-in extras with pinned revisions and licenses. The full per-modality comparison, evidence links and Jev-style decision-model notes are in **[research basis and roadmap](docs/research-roadmap.md)**.
 
 | Area | Default | Optional (implemented adapter) | Basis |
@@ -558,7 +646,6 @@ Defaults stay lightweight and local; higher-accuracy models are opt-in extras wi
 | ASR / VAD / tagging | Qwen3-ASR, Silero, YAMNet | Moonshine v2, TEN-VAD, CED-Tiny (GPL, opt-in) | Edge latency, noisy-speech PR, AudioSet mAP |
 | Physics | — | Deterministic physical state (kinematics, trajectory envelopes, contacts, cross-modal impacts) | Precompute before learned world models |
 
-**How fusion works today.** Each specialist emits timestamped typed observations; GAMST selects fresh evidence and hands it to the LLM or decision provider. This is *decision-level late fusion mediated by language* ([Baltrušaitis et al., TPAMI 2019](https://ieeexplore.ieee.org/document/8269806)): modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry.
 
 **How fusion works today.** Each specialist emits timestamped typed observations; GAMST aligns fresh evidence, computes deterministic state/physics where supported, and updates a bounded semantic state chain. An optional `decision.multimodal` plugin structures retained observations but does not invoke a strong model. An MCP client or application requests Context and owns any LLM/VLM trigger and prompt. This is modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry before learned fusion.
 
@@ -617,12 +704,16 @@ The streaming refactor is covered by **150 Python tests** plus dashboard/categor
 | Guide | Contents |
 | --- | --- |
 | [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
+| [Product direction](docs/product-direction.md) | Product boundary, Halo, customers, competitive edge and code roadmap |
+| [Positioning](docs/positioning.md) | Why GAMST exists, realtime/omni comparison and measurable Halo |
+| [Multimodal decisions](docs/multimodal-decision.md) | Rules and Jev-style decision provider contract |
 | [Predictions & feedback](docs/predictions.md) | Target registration, outcomes, held-out calibration |
 | [Model reasoning](docs/reasoning.md) | Local/provider analysis and citation validation |
 | [Companion](docs/companion.md) | Context-aware conversations |
 | [Tracking](docs/tracking.md) | Stream-local association and ambiguity |
 | [Media bridges](docs/integrations.md) | External streams, clocks, PCM conversion |
 | [Evaluation](docs/evaluation.md) | Hardware checks and evaluation gates |
+| [Product direction](docs/product-direction.md) | Product boundary, competitive edge, Halo, customers and code roadmap |
 | [Completion audit](docs/completion-audit.md) | Implemented, missing, and unverified requirements |
 | [GitHub publishing](docs/github-push.md) | Publish the delivery bundle from a connected host |
 
