@@ -560,7 +560,7 @@ Defaults stay lightweight and local; higher-accuracy models are opt-in extras wi
 
 **How fusion works today.** Each specialist emits timestamped typed observations; GAMST selects fresh evidence and hands it to the LLM or decision provider. This is *decision-level late fusion mediated by language* ([Baltrušaitis et al., TPAMI 2019](https://ieeexplore.ieee.org/document/8269806)): modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry.
 
-**Future work** (milestone [Roadmap: fusion & streaming research](https://github.com/NomaDamas/Gamst/milestone/1), label `roadmap`):
+**How fusion works today.** Each specialist emits timestamped typed observations; GAMST aligns fresh evidence, computes deterministic state/physics where supported, and updates a bounded semantic state chain. An optional `decision.multimodal` plugin structures retained observations but does not invoke a strong model. An MCP client or application requests Context and owns any LLM/VLM trigger and prompt. This is modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry before learned fusion.
 
 1. Calibrate the learned decision provider on GAMST traces (coverage-risk, abstention precision) — [#285](https://github.com/NomaDamas/Gamst/issues/285).
 2. Event-gated hybrid streaming with heartbeat fallback ([StreamMind, ICCV 2025](https://openaccess.thecvf.com/content/ICCV2025/html/Ding_StreamMind_Unlocking_Full_Frame_Rate_Streaming_Video_Dialogue_through_Event-Gated_ICCV_2025_paper.html); [Dispider, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Qian_Dispider_Enabling_Video_LLMs_with_Active_Real-Time_Interaction_via_Disentangled_CVPR_2025_paper.html)).
