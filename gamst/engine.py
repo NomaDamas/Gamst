@@ -15,6 +15,7 @@ from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata, identifier
 from .memory import ObjectMemory
+from .semantic_fusion import SemanticStateFusion
 from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
@@ -74,6 +75,7 @@ class Gamst:
         self._paused_before_capture = False
         self._session_id = uuid.uuid4().hex
         self.semantic_states = SemanticStateChain(retention_ms=min(self.store.retention_ms, 300_000))
+        self.semantic_fusion = SemanticStateFusion()
         # Portable temporal/context memory mirrors normalized envelopes only;
         # raw media and provider payloads remain owned by Store/provider runtimes.
         self.context_memory = ContextMemory(session_id=self._session_id,
@@ -972,6 +974,25 @@ class Gamst:
         now = timestamp()
         return self.semantic_states.get(subject_id,
             start_ms=max(0, now - _window_ms(window)), end_ms=now, limit=limit)
+
+    async def observe_semantic_video_state(self, state, *, subject_id="local-user",
+                                           timestamp_ms=None, evidence_ids=None,
+                                           model_id="streaming_vlm", model_version="unverified"):
+        """Record a streaming-video semantic state; model execution is external."""
+        self._check()
+        ts = timestamp(timestamp_ms)
+        self.semantic_fusion.observe_video_state(state, timestamp_ms=ts,
+            evidence_ids=evidence_ids or [], model_id=model_id, model_version=model_version)
+        return await self.push_semantic_state(
+            {"video_state": state, "fusion": self.semantic_fusion.snapshot(timestamp_ms=ts)},
+            subject_id=subject_id, timestamp_ms=ts, evidence_ids=evidence_ids,
+            sources=["video"], model_id=model_id, model_version=model_version)
+
+    async def observe_perception_signal(self, signal):
+        """Merge a validated plugin signal into the fusion view."""
+        self._check()
+        self.semantic_fusion.observe_signal(signal)
+        return self.semantic_fusion.snapshot(timestamp_ms=signal.get("timestamp_ms", timestamp()))
 
     @staticmethod
     def _models_for(records, defaults):
