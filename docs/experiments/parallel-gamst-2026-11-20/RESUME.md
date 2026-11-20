@@ -22,11 +22,12 @@
 | 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | 🔶 | `VERIFY.md`: RF-DETR/YOLOE/pose/hand/face/CED/TEN-VAD/diarization/ASR 완료. SAM 실패(SAM3 내부 tracker 오류), VDA 실행 완료(53.5% drop), FactorizePhys pulse output 미확정. 공식 패키지 비교 일부 남음 |
 | 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ✅ | 커밋 ee2bf22, tests/test_watch.py 4개 통과 |
 | 8 | jev 연결: Watch 등록, 조정 제안 | ✅ | jev tool call 확인. MOT17에서 첫 subject 오류를 수정하고 재실행: Watch 생성·C-local/C-Gemini 경로 동작 |
-| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | PR #23. 단독/부분 stack 검증 완료. SAM 실패와 shared GPU KV 여유 문제 기록 |
-| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | 서버 2개 동시 기동 확인. SAM/ASR KV 조정 후 전체 stack smoke 남음 |
+| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | ✅ | PR #23. full concurrent smoke에서 shared rings/clock/1Hz monitor/worker isolation 확인. 실패 worker는 결과에 남김 |
+| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | 🔶 | `PARALLEL_SMOKE.md`: 60초 clip, wall RTF 1.0438. RF-DETR/audio/pose/hand/face/diar 성공; SAM/ASR/FactorizePhys 실패 또는 미완, VDA/YOLOE/semantic drop 큼 |
 | 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ✅ | `MOT17_RESULTS.md`; 두 시퀀스 실행 완료 |
-| 13 | 평가: RepCount (횟수) | ⏳ | |
-| 14 | 평가: MCD-rPPG (심박) | ⏳ | |
+| 12 | 평가: StreamArena (말과 기억) | ⏳ | admission 88개, 데이터 준비 완료 |
+| 13 | 평가: RepCount (횟수) | ⏳ | 데이터 준비 완료 |
+| 14 | 평가: MCD-rPPG (심박) | ⏳ | 데이터 준비 완료 |
 | 15 | 점프, "사람 + 소리" 확률 구름: 직접 촬영 필요 | ⏳ | 사용자 촬영 대기 |
 | 16 | 결과 보고 + 직접 써보기(데모) + VM 정지 + PR 머지 | ⏳ | |
 
