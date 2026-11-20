@@ -1,6 +1,6 @@
 # RESUME: parallel GAMST experiment (2026-11-20 ~)
 
-이 파일은 중단되었다가 다시 시작할 때 읽는 파일입니다. 작업 단계마다 갱신합니다.
+이 파일은 중단되었다가 다시 시작할 때 읽는 파일입니다. 작업 단계마다 갱신합니다. **처음 읽는 사람(다른 모델 포함)은 `HANDOFF.md`를 먼저 읽으세요.**
 
 - **원문 계획:** `PLAN.md` (수정 금지)
 - **브랜치:** `feat/parallel-gamst-experiment` (GAMST, base `feat/temporal-contract`)
@@ -18,11 +18,11 @@
 | 2 | GitHub 이슈 생성 + draft PR | ✅ | 이슈 #351, PR #352 |
 | 3 | GPU 할당 신청: RTX PRO 6000 1장 (안 되면 H100 1장) | ✅ | 온디맨드 RTX·H100 거절, **Spot RTX PRO 6000 1장 승인** |
 | 4 | jev decision 모델 딥리서치 → SOTA 선정·고정 | ✅ | Qwen3.8-27B-FP8 (`JEV_DECISION_MODEL.md`) |
-| 5 | 모델별 SOTA 재확인 (rPPG, 말하는 사람 찾기 등) 및 버전 고정 | ⏳ | |
-| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | ⏳ | 실패하면 공식 패키지나 상용 API로 대체하고 비용을 표시 |
-| 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ⏳ | |
-| 8 | jev 연결: Watch 등록, 조정 제안 | ⏳ | |
-| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | ⏳ | |
+| 5 | 모델별 SOTA 재확인 (rPPG, 말하는 사람 찾기 등) 및 버전 고정 | 🔶 | ASR=Qwen3-ASR-1.7B@7278e1e, SAM3.1@daa6319, VDA-L@7aafbcb, RF-DETR Large, YOLOE-26x, rPPG=FactorizePhys 후보, ASD=TalkNet 검증 후 LR-ASD 판단 |
+| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | ⏳ | 실패하면 공식 패키지나 상용 API로 대체하고 비용을 표시. VLM·jev 서버 동시 기동은 확인 |
+| 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ✅ | 커밋 ee2bf22, tests/test_watch.py 4개 통과 |
+| 8 | jev 연결: Watch 등록, 조정 제안 | ⏳ | jev 서버(:8001) 도구 호출 확인. 루프는 미구현 |
+| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | 코드 작성(media_bus, media_source, parallel, parallel_worker). VM 실행 전, 커밋 전 |
 | 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | |
 | 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ⏳ | |
 | 12 | 평가: StreamArena (말과 기억) | ⏳ | |
@@ -38,18 +38,11 @@
 - 예산 가드: `gamst-bench-guard` $300
 - `GPUS_ALL_REGIONS` 한도 = 1
 
-**VM**
-- `gamst-hf-bench` (asia-northeast3-b, g2-standard-8, L4): **TERMINATED**
-- 데이터 디스크: `/mnt/ssd`(= `/srv`, pd-ssd 450GB)
-- 설치된 모델:
-  - Qwen3.5-9B@c202236
-  - Qwen3-VL-8B (BF16, FP8)
-  - Qwen2.5-VL-3B
-  - StreamingVLM
-- 설치된 실행 환경:
-  - venv-vllm34 (vllm 0.34.0, transformers 5.22.2)
-  - venv-vllm (vllm 0.11.0)
-  - venv-svlm
+**VM** (자세한 내용은 HANDOFF.md §4)
+- `gamst-par` (asia-northeast3-a, g4-standard-48, RTX PRO 6000 96GB, **Spot**): RUNNING (2026-11-20 11:5x UTC부터)
+- 데이터 디스크: `gamst-par-data` → `/srv` (스냅샷 `gamst-hf-data-2026-11-20`에서 복원)
+- `gamst-hf-bench` (L4): TERMINATED. 원래 디스크 `gamst-hf-data`는 삭제(스냅샷만 남김)
+- 모델별 환경: `/srv/envs/{sam31,vda,det,torch28,asr,mp,audio}`, LLM 서버용 `/srv/venv-vllm34`
 
 **Vertex 모델**
 - C-Gemini: `gemini-3.8-flash` (GA, global; 2026-11-20 호출 확인)
@@ -77,4 +70,5 @@
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더
-- **실행 스크립트·원시 결과:** Gamst-bench `experiments/parallel-gamst-2026-11-20/` (만들 예정)
+- **실행 스크립트·원시 결과:** Gamst-bench `experiments/parallel-gamst-2026-11-20/` (브랜치 `feat/parallel-gamst-experiment`)
+- **병렬 실행 코드:** GamstCrew `gamstcrew/parallel*.py`, `media_*.py`

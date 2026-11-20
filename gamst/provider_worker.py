@@ -123,9 +123,9 @@ def _construct(profile, config):
     elif profile == 'rfdetr.trajectories':
         from .providers.detection_trajectories import RFDETRTrajectories
         provider = RFDETRTrajectories.from_local(**config)
-    elif profile == 'rfdetr.nano':
+    elif profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
-        provider = RFDETRObjects.from_local(**config)
+        provider = RFDETRObjects.from_local(**config, variant=profile.split('.')[1])
     elif profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         provider = AudioProsody(**config)

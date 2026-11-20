@@ -178,12 +178,12 @@ def capability(profile, config):
         args = configuration(config)
         return RFDETRTrajectories.capability('1.12.1.eager.sha256.'+args['sha256'],
             **{k:v for k,v in args.items() if k not in ('path','sha256')})
-    if profile == 'rfdetr.nano':
+    if profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         import re
         if not isinstance(config.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', config['sha256']):
             raise ValueError('RF-DETR needs a lowercase checkpoint SHA256')
-        return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'])
+        return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'], variant=profile.split('.')[1])
     if profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         return AudioProsody.capability(window_ms=config.get('window_ms', 80))
