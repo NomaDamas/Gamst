@@ -81,7 +81,7 @@ class Discovery(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _read(path, 'a'*64, 7)
             with self.assertRaises(ValueError):
-                _read(Path(root)/'missing', digest)
+                _read(Path(root)/'missing', digest, 7)
 
 
 @unittest.skipIf(np is None, 'optional numpy unavailable')

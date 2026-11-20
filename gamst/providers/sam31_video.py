@@ -366,7 +366,9 @@ def load_worker(config):
         raise RuntimeError('selected SAM3.1 CUDA device unavailable')
     from sam3.model_builder import build_sam3_multiplex_video_predictor
     predictor = build_sam3_multiplex_video_predictor(checkpoint_path=str(checkpoint),
-        max_num_objects=args['max_objects'], multiplex_count=args['max_objects'],
+        # The released sam3.1_multiplex checkpoint is built for 16-object multiplex buckets
+        # (mask_tokens 48 = 16 x 3); the reported object count stays bounded by max_objects.
+        max_num_objects=16, multiplex_count=16,
         use_fa3=False, use_rope_real=True, compile=False, warm_up=False,
         session_expiration_sec=0, async_loading_frames=False)
     return SAM31VideoContext(_NativeSAM31(predictor), artifact_verified=True, **args)

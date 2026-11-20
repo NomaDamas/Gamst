@@ -27,8 +27,8 @@ def capability(profile, config):
     if profile == 'streamingvlm.local':
         from .providers.streaming_semantic import StreamingSemanticContext
         required={'endpoint','model','revision'}
-        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env'}:
-            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env')
+        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env','request_options','max_tokens'}:
+            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env/request_options/max_tokens')
         return StreamingSemanticContext.capability(**config)
     if profile == 'food.segformer_b0':
         from .providers.food import FoodContext
@@ -111,9 +111,9 @@ def capability(profile, config):
             raise ValueError('OCR requires local detector/recognizer paths and hashes, optional language/max_regions')
         return PPOCRContext.capability(config['det_sha256'],config['rec_sha256'],
             language=config.get('language','en'),max_regions=config.get('max_regions',16))
-    if profile == 'video_depth_anything.small':
+    if profile in ('video_depth_anything.small', 'video_depth_anything.large'):
         from .providers.video_depth import VideoDepthAnythingContext, configuration
-        args = configuration(config)
+        args = configuration({**config, 'variant': profile.rsplit('.', 1)[1]})
         return VideoDepthAnythingContext.capability(**args)
     if profile == 'sam3.1.video':
         from .providers.sam31_video import SAM31VideoContext, configuration
@@ -167,8 +167,8 @@ def capability(profile, config):
     if profile == 'qwen3.asr':
         from .qwen_artifact import artifact_version
         from .providers.qwen_asr import QwenStreamingASR
-        if set(config) != {'path', 'files'} or type(config['path']) is not str:
-            raise ValueError('qwen3.asr requires only local path and file hashes')
+        if not {'path', 'files'} <= set(config) or set(config)-{'path', 'files', 'gpu_memory_utilization', 'language', 'max_model_len'} or type(config['path']) is not str:
+            raise ValueError('qwen3.asr requires local path and file hashes, optional gpu_memory_utilization/language/max_model_len')
         return QwenStreamingASR.capability(artifact_version(config['files']))
     if profile == 'rfdetr.compensated_trajectories':
         from .providers.compensated_trajectories import CompensatedTrajectories
@@ -178,12 +178,33 @@ def capability(profile, config):
         args = configuration(config)
         return RFDETRTrajectories.capability('1.12.1.eager.sha256.'+args['sha256'],
             **{k:v for k,v in args.items() if k not in ('path','sha256')})
-    if profile == 'rfdetr.nano':
+    if profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         import re
         if not isinstance(config.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', config['sha256']):
             raise ValueError('RF-DETR needs a lowercase checkpoint SHA256')
-        return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'])
+        return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'], variant=profile.split('.')[1])
+    if profile == 'factorizephys.local':
+        from .providers.factorizephys_context import FactorizePhysContext
+        if not {'source_dir', 'checkpoint_path', 'checkpoint_sha256'} <= set(config) or set(config)-{'source_dir', 'checkpoint_path', 'checkpoint_sha256', 'device', 'history_s'}:
+            raise ValueError('factorizephys.local requires source_dir, checkpoint_path, checkpoint_sha256 and optional device/history_s')
+        return FactorizePhysContext.capability(checkpoint_sha256=config['checkpoint_sha256'],
+            device=config.get('device', 'cuda'), history_s=config.get('history_s', 30))
+    if profile == 'ced.onnx':
+        from .providers.ced_events import CEDEvents
+        allowed = {'path', 'labels_path', 'sha256', 'labels_sha256', 'model', 'threads', 'window_ms',
+                   'hop_ms', 'top_k', 'score_threshold'}
+        if not {'path', 'labels_path', 'sha256', 'labels_sha256'} <= set(config) or set(config)-allowed:
+            raise ValueError('ced.onnx requires path, labels_path, sha256, labels_sha256 and optional model/threads/window_ms/hop_ms/top_k/score_threshold')
+        model = config.get('model', 'tiny')
+        return CEDEvents.capability(model=model,
+            version=CEDEvents.artifact_version(model, config['sha256'], config['labels_sha256']),
+            window_ms=config.get('window_ms', 5000), hop_ms=config.get('hop_ms', 1000))
+    if profile == 'ten_vad.native':
+        from .providers.ten_vad import TENActivity as TenVAD
+        if not {'path', 'sha256'} <= set(config) or set(config)-{'path', 'sha256', 'hop_ms', 'start_threshold', 'stop_threshold'}:
+            raise ValueError('ten_vad.native requires path, sha256 and optional hop_ms/start_threshold/stop_threshold')
+        return TenVAD.capability(TenVAD.artifact_version(config['sha256']), hop_ms=config.get('hop_ms', 16))
     if profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         return AudioProsody.capability(window_ms=config.get('window_ms', 80))

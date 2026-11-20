@@ -21,7 +21,8 @@ from ..plugins import _pcm_floats
 
 CED_SOURCE_REVISION = '4b2149dc9ba1ed25c6348083f82dba03f00a5022'
 CED_LICENSE = 'GPL-3.0 upstream CED code; optional extra only; model/data/runtime terms separate'
-CED_MODEL_IDS = {'tiny': 'mispeech/ced-tiny', 'mini': 'mispeech/ced-mini'}
+CED_MODEL_IDS = {'tiny': 'mispeech/ced-tiny', 'mini': 'mispeech/ced-mini',
+                 'small': 'mispeech/ced-small', 'base': 'mispeech/ced-base'}
 
 
 def _sha256(path):
@@ -71,12 +72,34 @@ class _CEDONNXRuntime:
         self.session = self.frontend = self.torch = None
 
 
+class _CEDWaveformRuntime:
+    """Authors' Hugging Face ONNX export: ``waveform`` [B, samples] -> [B, 527] probabilities.
+
+    The mel frontend is inside the graph. Measured against the authors' PyTorch
+    model on real audio (experiment VERIFY.md): same top labels, max |diff| 0.031.
+    """
+    def __init__(self, session):
+        self.session, self.closed = session, False
+
+    def classify(self, waveform):
+        if self.closed:
+            raise RuntimeError('CED runtime is closed')
+        output = self.session.run(None, {'waveform': waveform[None, :]})
+        if len(output) != 1 or output[0].shape != (1, 527):
+            raise ValueError('CED ONNX must return one [1, 527] probability output')
+        return output[0][0]
+
+    def close(self):
+        self.closed = True
+        self.session = None
+
+
 class CEDEvents:
     """Trailing CED windows with non-exclusive AudioSet event candidates."""
     def __init__(self, classifier, labels, *, model, version, window_ms=5000,
                  hop_ms=1000, top_k=8, score_threshold=.05, channel=None):
         if model not in CED_MODEL_IDS:
-            raise ValueError("model must be 'tiny' or 'mini'")
+            raise ValueError(f"model must be one of {sorted(CED_MODEL_IDS)}")
         if type(window_ms) is not int or not 1000 <= window_ms <= 10000:
             raise ValueError('window_ms must be 1000..10000')
         if type(hop_ms) is not int or not 20 <= hop_ms <= window_ms:
@@ -109,7 +132,7 @@ class CEDEvents:
     @staticmethod
     def capability(*, model, version, window_ms=5000, hop_ms=1000):
         if model not in CED_MODEL_IDS:
-            raise ValueError("model must be 'tiny' or 'mini'")
+            raise ValueError(f"model must be one of {sorted(CED_MODEL_IDS)}")
         identifier(version, 'model version')
         if type(window_ms) is not int or not 1000 <= window_ms <= 10000:
             raise ValueError('window_ms must be 1000..10000')
@@ -125,7 +148,7 @@ class CEDEvents:
     @staticmethod
     def artifact_version(model, sha256, labels_sha256):
         if model not in CED_MODEL_IDS:
-            raise ValueError("model must be 'tiny' or 'mini'")
+            raise ValueError(f"model must be one of {sorted(CED_MODEL_IDS)}")
         for value in (sha256, labels_sha256):
             if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value):
                 raise ValueError('supply lowercase CED ONNX and label SHA256 values')
@@ -148,10 +171,12 @@ class CEDEvents:
         return path, labels_path, _labels(labels_path), version
 
     @classmethod
-    def from_local(cls, path, labels_path, sha256, labels_sha256, model='tiny', **kwargs):
-        """Load an official local CED ONNX export without hub/network APIs."""
+    def from_local(cls, path, labels_path, sha256, labels_sha256, model='tiny', threads=1, **kwargs):
+        """Load a local CED ONNX export (official ``feats`` graph or the authors' ``waveform`` graph)."""
         path, labels_path, labels, version = cls.verify_local(
             path, labels_path, sha256, labels_sha256, model)
+        if type(threads) is not int or not 1 <= threads <= 16:
+            raise ValueError('threads must be 1..16')
         try:
             import numpy as np
             import onnxruntime as ort
@@ -160,16 +185,20 @@ class CEDEvents:
         except ImportError as exc:
             raise RuntimeError('Install the optional CED runtime (numpy, onnxruntime, torch, torchaudio)') from exc
         options = ort.SessionOptions()
-        options.intra_op_num_threads = options.inter_op_num_threads = 1
+        options.intra_op_num_threads, options.inter_op_num_threads = threads, 1
         try:
             session = ort.InferenceSession(str(path), sess_options=options,
                 providers=['CPUExecutionProvider'])
-            frontend = torch.nn.Sequential(
-                audio_transforms.MelSpectrogram(f_min=0, sample_rate=16000,
-                    win_length=512, center=False, n_fft=512, f_max=8000,
-                    hop_length=160, n_mels=64),
-                audio_transforms.AmplitudeToDB(top_db=120))
-            runtime = _CEDONNXRuntime(session, frontend, torch)
+            inputs = [item.name for item in session.get_inputs()]
+            if inputs == ['waveform']:
+                runtime = _CEDWaveformRuntime(session)
+            else:
+                frontend = torch.nn.Sequential(
+                    audio_transforms.MelSpectrogram(f_min=0, sample_rate=16000,
+                        win_length=512, center=False, n_fft=512, f_max=8000,
+                        hop_length=160, n_mels=64),
+                    audio_transforms.AmplitudeToDB(top_db=120))
+                runtime = _CEDONNXRuntime(session, frontend, torch)
             return cls(runtime, labels, model=model, version=version, **kwargs)
         except (OSError, RuntimeError) as exc:
             raise RuntimeError('CED ONNX runtime/model loading failed; use the official feats export') from exc
