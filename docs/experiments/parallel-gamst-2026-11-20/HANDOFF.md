@@ -257,7 +257,12 @@
   - MOT17-09: GAMST 0.649/0.963, B 0.703/0.712, C-local 0.687/0.721, C-Gemini 0.649/0.963 (precision/recall).
   - MOT17-04: GAMST 0.742/0.972, B 0.782/0.936, C-local 0.742/0.972, C-Gemini 0.742/0.972.
   - jev가 첫 Watch에 잘못된 subject를 만들었고, 명시적 검증 후 재시도하여 최종 결과를 냈습니다.
-- 아직 남은 핵심: RepCount/MCD-rPPG의 B/C 평가, StreamArena B/C 평가, official-package 직접 비교, 전체 stack smoke, hands-on demo, VM 정지와 PR merge.
+ - 남은 범위: 사용자 직접 촬영이 필요한 점프/사람+소리 확률 구름, SAM3.1 내부 오류 해결, 공식 패키지 직접 비교 일부.
+- 최종 평가 완료: MOT17 2 sequences, StreamArena 88개 B/C arms, RepCountA 151개, MCD-rPPG 40개. 수치는 Gamst-bench `FINAL_REPORT.md`와 `REMAINING_RESULTS.md`.
+- hands-on MCP Watch demo 완료: alarm 1건, evidence contribution 1.0 확인.
+- VM `gamst-par`는 최종 작업 후 TERMINATED.
+- PR은 draft 상태로 남겨 실패 모델과 blocker를 검토할 수 있게 했습니다. 자동 merge하지 않았습니다.
+
 
 
 ## 6. 다음 할 일 (순서대로)

@@ -25,11 +25,11 @@
 | 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | ✅ | PR #23. full concurrent smoke에서 shared rings/clock/1Hz monitor/worker isolation 확인. 실패 worker는 결과에 남김 |
 | 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | 🔶 | `PARALLEL_SMOKE.md`: 60초 clip, wall RTF 1.0438. RF-DETR/audio/pose/hand/face/diar 성공; SAM/ASR/FactorizePhys 실패 또는 미완, VDA/YOLOE/semantic drop 큼 |
 | 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ✅ | `MOT17_RESULTS.md`; 두 시퀀스 실행 완료 |
-| 12 | 평가: StreamArena (말과 기억) | ⏳ | admission 88개, 데이터 준비 완료 |
-| 13 | 평가: RepCount (횟수) | ⏳ | 데이터 준비 완료. VM subset 실행은 installed `lance` API가 기존 script와 달라 중단; 재개 시 Lance API 버전/호출 수정 필요 |
-| 14 | 평가: MCD-rPPG (심박) | ⏳ | 데이터 준비 완료 |
+| 12 | 평가: StreamArena (말과 기억) | ✅ | 88개 admission. B 7/88, C-local 0/88, C-Gemini 3/88. Judge=`gemini-3.8-flash`, Pro 재호출 없음 |
+| 13 | 평가: RepCount (횟수) | ✅ | 151개 complete real-data artifact: pose native MAE 4.404/OBO 0.437, pose 1Hz MAE 10.868/OBO 0.172 |
+| 14 | 평가: MCD-rPPG (심박) | ✅ | 40개: POS MAE 19.09 bpm, ±5 bpm 0.45; 1Hz MAE 86.06 bpm |
 | 15 | 점프, "사람 + 소리" 확률 구름: 직접 촬영 필요 | ⏳ | 사용자 촬영 대기 |
-| 16 | 결과 보고 + 직접 써보기(데모) + VM 정지 + PR 머지 | ⏳ | |
+| 16 | 결과 보고 + 직접 써보기(데모) + VM 정지 + PR 머지 | 🔶 | demo 완료, VM `gamst-par` TERMINATED. 최종 보고서와 PR ready/merge 정리 중 |
 
 ## 2. 현재 자원 (마지막 갱신: 2026-11-20)
 
