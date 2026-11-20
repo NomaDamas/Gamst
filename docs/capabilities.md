@@ -106,3 +106,85 @@ GAMST는 이렇게 계산합니다.
 | 영상(rPPG) + 마이크(호흡음) | 심박·호흡을 두 경로로 측정해 신뢰도 상승 | 주파수 일치 검사 | ③ |
 
 검증도 같은 원칙을 따릅니다. 실제 촬영 또는 공개 실데이터만 쓰고, 정답은 실측값(줄자, 스톱워치, 센서 기록) 또는 사람 라벨로 둡니다. 합성 데이터는 쓰지 않습니다.
+
+## 능력 정의서 (구현 계약)
+
+아래는 위 합의를 GAMST 코드로 옮긴 계약입니다. 각 능력은 등록 가능한 `CapabilitySpec`을 가진 provider입니다. 픽셀은 받지 않고, light model이 낸 구조화된 값만 받습니다. 결과는 `push_observation`으로 Context와 관측 메모리에 들어갑니다. 사건(`value.events`)은 MCP `get_observation_page(events_only=true)`로 나중에 다시 꺼낼 수 있습니다. 이것이 "기억"입니다.
+
+### 공통 규칙
+
+- 입력마다 `SensorMetadata`(source, sensor, sequence, stream_epoch)가 있어야 합니다.
+- 시각과 sequence는 엄격히 증가해야 합니다.
+- `max_gap_ms`보다 큰 공백이 생기면 상태를 초기화합니다. 공백을 건너 측정하지 않기 위해서입니다.
+- 강한 VLM이나 LLM 호출은 provider가 결정하지 않습니다. 애플리케이션이 사건을 보고 결정합니다.
+
+### Count: 반복 횟수 — `gamst/providers/repetition.py`
+
+| 항목 | 내용 |
+|---|---|
+| capability | `temporal.repetition_count`, 출력 `temporal.repetitions` (video 또는 imu) |
+| 입력 (light model) | 프레임마다 고정 길이 벡터 `{"channels": [...]}`. 예: MediaPipe Pose 33점 × (x, y), optical flow 요약, IMU 3축 |
+| 수학 | 창(기본 20초) 안에서 채널별로 추세를 빼고 에너지가 가장 큰 채널을 고릅니다. 자기상관의 첫 피크로 주기 T를 구하고, 0.6T 이상 떨어진 피크를 반복 1회로 확정합니다. 피크는 반 주기만큼 미래 샘플이 들어와야 확정합니다. 스트림이 끝날 때는 `finish()`로 남은 피크를 확정합니다. |
+| 출력 | `count`, `status` (warmup / idle / counting / finished), `period_s`, `periodicity` |
+| 사건 | `{"event":"repetition","index":n,"timestamp_ms":t,"period_s":T}` |
+| MCP로 묻기 | "지금까지 몇 번?" → 마지막 `count`<br>"마지막 반복은 언제?" → 마지막 repetition 사건의 `timestamp_ms` |
+| 실데이터 기준선 | RepCountA test 151개: 원본 속도 MAE 0.429 / OBO 0.437, 1 Hz에서는 MAE 0.736 / OBO 0.172 (`Gamst-bench/capability_lab/RESULTS.md`) |
+
+### ② 순간 포착 + 물리: 점프 — `gamst/providers/flight.py`
+
+| 항목 | 내용 |
+|---|---|
+| capability | `physics.flight` (camera 모드는 video, imu 모드는 imu) |
+| 입력 (light model) | camera 모드: `{"foot_height_m", "body_height_m"}` (위쪽이 +인 미터 단위, pose 또는 depth)<br>imu 모드: `{"accel_g"}` (몸에 단 가속도 크기) |
+| 수학 | 접촉 변화는 연속 2샘플로 확정합니다.<br>camera 모드는 공중 구간의 발 높이에 포물선을 맞춰 0이 되는 두 시각을 이륙·착지로 잡습니다. 그래서 프레임 간격보다 정밀하고, 맞춘 포물선에서 중력 가속도도 함께 나옵니다.<br>포물선이 맞지 않으면 문턱 교차를 선형 보간합니다.<br>h = g·T²/8, rise = 골반(정점) − 골반(이륙), 여기에 설정 편향 `calibration_offset_m`을 더합니다. |
+| 출력 | `state` (warmup / grounded / airborne), `clearance_m` |
+| 사건 | `{"event":"jump","takeoff_ms","landing_ms","flight_s","height_flight_m","rise_m","apex_ms","timing_method","fitted_gravity_m_s2"}`<br>체공 시간이 허용 범위를 벗어나면 `contact_change_rejected` |
+| MCP로 묻기 | "방금 점프 몇 cm?", "오늘 최고 점프는?", "체공 시간은?" |
+| 실데이터 기준선 | JumpMetric 145회 (Kinect 30 Hz) 기준. 편향 보정은 다른 피험자 데이터로만 했습니다.<br>· provider rise: MAE 34 mm, ±50 mm 안 79 %<br>· provider flight: MAE 36 mm, ±50 mm 안 81 %<br>· 1 Hz 관찰자: 점프를 한 번도 검출하지 못함 (0/145)<br>· 포물선 보정 적용 비율 98.6 % |
+
+### ③ 리듬: 심박·호흡·떨림 — `gamst/providers/rhythm.py`
+
+| 항목 | 내용 |
+|---|---|
+| capability | `temporal.rhythm.{heart, breath, tremor, custom}`, 출력 `temporal.rhythm` |
+| 입력 (light model) | `{"value"}` (가슴 움직임, IMU, 밝기 등 스칼라) 또는 `{"rgb"}` (얼굴 피부 평균색. MediaPipe face 박스 안쪽에서 측정) |
+| 수학 | rgb 입력은 POS 투영으로 맥파 신호를 만듭니다. 추세를 뺀 뒤 대역 안에서 Goertzel 전력을 스캔해 피크 주파수를 찾고, 그 순도(purity)를 함께 냅니다.<br>대역: heart 0.7–3 Hz, breath 0.1–0.5 Hz, tremor 3–12 Hz. |
+| 출력 | `status` (warmup / measuring / undersampled / no_rhythm), `frequency_hz`, `per_minute`, `purity`, `sample_rate_hz`, `band_hz` |
+| 언더샘플링 | 샘플링률이 대역 상한의 2.5배보다 낮으면 숫자를 내지 않고 `undersampled`라고 답합니다. 1 FPS 관찰자가 맥박을 볼 수 없다는 사실을 그대로 보고하는 것입니다. |
+| 사건 | 임계값(`above_per_minute`, `below_per_minute`)을 넘거나 돌아올 때 `rate_above` / `rate_back_below` / `rate_below` / `rate_back_above`. 히스테리시스는 분당 3회입니다. |
+| MCP로 묻기 | "지금 심박?", "호흡이 언제 20회를 넘었어?" |
+| 실데이터 기준선 | MCD-rPPG 폰 영상 40개: ±5 bpm 안 50 %. 1 Hz에서는 원리적으로 불가능 (0 %). |
+
+### ① 확률 구름: 사용자 규칙 — `gamst/providers/risk_field.py`
+
+| 항목 | 내용 |
+|---|---|
+| capability | `rule.risk_field.{rule_id}`, 출력 `rule.risk`. 규칙의 sha256이 버전에 들어갑니다. |
+| 입력 (light model) | `{"points": [[x,y],...], "signals": {"audio.boiling": 0.9}}`<br>· points: 추적된 사람의 발 위치 (정규화 좌표)<br>· signals: 다른 light model의 점수 (YAMNet / CED 소리 사건, 온도 등) |
+| 규칙 | zone(정규화 사각형)과 evidence 항목:<br>· `presence`: zone, weight, sigma<br>· `signal`: 신호 이름, weight<br>그 밖에 bias, tau_s, gain, on, off |
+| 수학 | L ← e^(−dt/τ)·L + gain·(Σ wᵢ·eᵢ − bias)·dt, p = σ(L)<br>presence 근거는 zone까지 거리의 가우시안이고, zone 안이면 1입니다.<br>알람은 p ≥ on에서 켜지고, p ≤ off에서 꺼집니다. |
+| "A이고 B" 규칙 작성법 | 항목 하나의 weight는 bias보다 작게, 두 항목의 합은 bias보다 크게 잡습니다. 예: weight 0.3 + 0.3, bias 0.35. |
+| 출력 | `risk` (보정되지 않은 0~1 점수. GAMST는 보정 없는 "확률" 표기를 거부하므로 확률이라 부르지 않음), `alarm`, `log_odds`, `contributions` (항목별 기여도), `rule_sha256` |
+| 사건 | `alarm_on` (`because`: 기여도 상위 항목), `alarm_off` |
+| MCP로 묻기 | "오늘 위험 알람 몇 번?", "제일 오래 켜진 건 언제?", "왜 켜졌어?" (`because`) |
+| 실데이터 기준선 | MOT17-09 낮 장면: 프레임 재현율 0.86, 정밀도 0.73.<br>MOT17-04 밤 장면: 재현율 0.21 (병목은 경량 사람 검출기). |
+
+### 기억 — 공통 기반
+
+| 항목 | 내용 |
+|---|---|
+| 저장 | 위 provider의 관측을 `push_observation`으로 저장합니다. 사건은 `value.events`에 시각과 근거를 담아 남깁니다. 원본 영상은 저장하지 않습니다. |
+| 조회 | MCP `get_observation_page(capability_id, events_only=true)`: 사건만 수집 순서대로<br>MCP `get_observations(capability_id)`: 최신 상태<br>MCP `get_semantic_state`: 상태 체인 |
+| 한계 | 기억은 light model이 놓친 사건을 만들어낼 수 없습니다. 검출 품질이 곧 기억의 품질입니다. |
+
+### 실제 검증 합격선 (촬영 전에 미리 정함)
+
+| 능력 | 정답 (실측) | 합격선 |
+|---|---|---|
+| 점프 | 줄자·벽 마킹(최고 도달점) 또는 검증된 앱·포스플레이트 | 같은 환경의 다른 세션으로 편향을 보정한 뒤 MAE ≤ 4 cm. 같은 영상을 1 FPS로 넣었을 때 점프가 검출되지 않아야 함 |
+| Count | 사람이 센 횟수 (두 사람이 독립적으로 세서 일치한 값) | 10세트 이상에서 ±1회 정확 ≥ 80 % |
+| 심박 | 가슴 스트랩 또는 손가락 산소포화도계 (같은 60초 구간) | 안정 시 ±5 bpm 안 ≥ 80 % |
+| 호흡 | 사람이 센 호흡 수 (60초) | ±2회/분 안 ≥ 80 % |
+| 확률 구름 | 사람이 영상에 단 "조건 충족" 시각 | 두 조건이 모두 충족될 때 1초 안에 알람 ≥ 90 %. 조건 하나만 충족될 때 알람 0회. 깜빡임(토글 수)은 정답 전환 수의 1.5배 이하 |
+| 기억 | 사람 라벨 사건 목록 | 횟수 완전 일치. "마지막 시각"은 ±0.5초 안 |
+| 동전 회전 (Halo) | 240fps 슬로모션에서 사람이 센 회전 수 | 스핀의 80 % 이상에서 정확히 일치 |
