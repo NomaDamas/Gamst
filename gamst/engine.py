@@ -19,6 +19,7 @@ from .semantic_fusion import SemanticStateFusion
 from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
+from .watch import WatchManager
 from dataclasses import asdict
 
 
@@ -97,6 +98,10 @@ class Gamst:
         # It is registered lazily so discovery of unrelated capabilities stays
         # backward compatible and never loads a model or starts a sensor.
         self._multimodal_decision = None
+        # Owner-declared Watches are the only alarm path; there is no hidden trigger.
+        self.watches = WatchManager(
+            lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
+            timestamp)
 
     def _register_evaluation_observer(self, observer):
         from .recording_scope import evaluation_owner
@@ -212,6 +217,8 @@ class Gamst:
                 queue.get_nowait()
                 self.dropped_records += 1
             queue.put_nowait(deepcopy(record))
+        if stored:
+            self.watches.observe(record)
         return record
 
     def _record(self, kind, subject, ts, **kwargs):
@@ -1242,6 +1249,7 @@ class Gamst:
         deleted = self.store.delete(subject_id)
         self.object_memory.clear(subject_id)
         self.transcript_memory.clear(subject_id)
+        self.watches.clear_subject(subject_id)
         reset_error = None
         try:
             await self._reset_plugins()

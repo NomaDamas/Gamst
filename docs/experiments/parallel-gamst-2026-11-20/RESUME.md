@@ -15,9 +15,9 @@
 | # | 항목 | 상태 | 메모 |
 |---|---|---|---|
 | 1 | 계획 원문 문서화 (`PLAN.md`) | ✅ | |
-| 2 | GitHub 이슈 생성 + draft PR | ⏳ | |
-| 3 | GPU 할당 신청: RTX PRO 6000 1장 (안 되면 H100 1장) | ⏳ | 결제나 업그레이드가 필요하면 사용자에게 보고 |
-| 4 | jev decision 모델 딥리서치 → SOTA 선정·고정 | ⏳ | |
+| 2 | GitHub 이슈 생성 + draft PR | ✅ | 이슈 #351, PR #352 |
+| 3 | GPU 할당 신청: RTX PRO 6000 1장 (안 되면 H100 1장) | ✅ | 온디맨드 RTX·H100 거절, **Spot RTX PRO 6000 1장 승인** |
+| 4 | jev decision 모델 딥리서치 → SOTA 선정·고정 | ✅ | Qwen3.8-27B-FP8 (`JEV_DECISION_MODEL.md`) |
 | 5 | 모델별 SOTA 재확인 (rPPG, 말하는 사람 찾기 등) 및 버전 고정 | ⏳ | |
 | 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | ⏳ | 실패하면 공식 패키지나 상용 API로 대체하고 비용을 표시 |
 | 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ⏳ | |
@@ -68,6 +68,12 @@
 ## 3. 결정 기록 (원문 계획과 다른 점, 확정된 세부)
 - 2026-11-20: Qwen3.5-9B를 스트리밍 VLM으로 확정했습니다. Qwen 공식 카드 기준 VideoMME(자막 없음) 78.4로 Qwen3-VL-30B-A3B(73.3)보다 높습니다.
 - 2026-11-20: C-Gemini 모델은 `gemini-3.8-flash`입니다(사용자 지정, Pro 아님).
+- 2026-11-20 GPU 할당 결과:
+  - RTX PRO 6000 온디맨드(asia-northeast3): 자동 거절
+  - H100(us-central1): 자동 거절
+  - **RTX PRO 6000 Spot(asia-northeast3) 1장: 승인**
+  - 결정: 승인된 Spot RTX PRO 6000 96GB 1장(g4-standard-48, asia-northeast3-a)으로 모든 모델을 병렬 실행합니다. Spot은 선점될 수 있으므로 모든 작업은 재개 가능하게(JSONL append, done-id skip) 만듭니다. 성능(모델 구성) 타협은 없습니다.
+- 2026-11-20 jev decision 모델 딥리서치 결과 → **Qwen3.8-27B-FP8** (`Qwen/Qwen3.8-27B-FP8@c3a462c`, Apache-2.0, 2026-08 출시, 멀티모달). 근거는 `JEV_DECISION_MODEL.md`에 있습니다.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더
