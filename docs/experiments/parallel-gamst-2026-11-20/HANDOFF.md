@@ -244,6 +244,22 @@
 - 어댑터 수정 (커밋 전): RF-DETR에 variant 지원 추가(`rfdetr.large` 프로필)
   - 파일: `gamst/providers/detection.py`, `provider_profiles.py`, `provider_worker.py`
 
+## 5.5 현재까지의 실제 검증 결과
+
+- `VERIFY.md`에 solo 결과를 기록했습니다.
+- 성공: RF-DETR Large, YOLOE-26x, MediaPipe pose/hand/face, CED-Base, TEN-VAD, Nemotron diarization, Qwen3-ASR.
+- 제한/실패:
+  - SAM 3.1: 공식 16-object multiplex 구조로 로드되지만 실제 tracker에서 `vision_feat=[5184,0,256]` 오류가 반복됩니다. 실패로 기록합니다.
+  - VDA-L: 89.7ms/frame, 53.5% drop. 실행은 되지만 1배 realtime 전체 프레임 처리는 안 됩니다.
+  - FactorizePhys: 공식 checkpoint/strict=False graph는 로드됐지만 Haar face window가 부족해 pulse 결과 확정 전입니다.
+  - Qwen3.5 semantic: JSON schema 출력은 정상. 6프레임/3초 cadence solo에서 drop 2.5%, 호출 p95 4.86초로 실시간 응답 자체는 느립니다.
+- MOT17 평가 완료. 상세: Gamst-bench `MOT17_RESULTS.md`.
+  - MOT17-09: GAMST 0.649/0.963, B 0.703/0.712, C-local 0.687/0.721, C-Gemini 0.649/0.963 (precision/recall).
+  - MOT17-04: GAMST 0.742/0.972, B 0.782/0.936, C-local 0.742/0.972, C-Gemini 0.742/0.972.
+  - jev가 첫 Watch에 잘못된 subject를 만들었고, 명시적 검증 후 재시도하여 최종 결과를 냈습니다.
+- 아직 남은 핵심: RepCount/MCD-rPPG의 B/C 평가, StreamArena B/C 평가, official-package 직접 비교, 전체 stack smoke, hands-on demo, VM 정지와 PR merge.
+
+
 ## 6. 다음 할 일 (순서대로)
 
 **1. 가중치 받기**
