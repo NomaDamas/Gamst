@@ -188,7 +188,8 @@ def load_worker(config):
         if head.is_fused or hasattr(head,'lrpc') or head.embed != 512:
             raise ValueError('unfused promptable512-dimensional YOLOE head required')
         parameters = list(model.model.parameters())
-        if not 0 < sum(p.numel() for p in parameters) <= 80000000:
+        # Bound covers the largest official promptable checkpoint (YOLOE-26x-seg).
+        if not 0 < sum(p.numel() for p in parameters) <= 160000000:
             raise ValueError('YOLOE parameter count exceeds selected runtime limit')
         if any(not torch.isfinite(p).all() for p in parameters):
             raise ValueError('nonfinite YOLOE model parameters')

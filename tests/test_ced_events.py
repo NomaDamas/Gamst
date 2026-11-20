@@ -145,7 +145,7 @@ class CEDAudio(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
                 CEDEvents.verify_local(model, label_file, model_hash, label_hash, 'tiny')
             with self.assertRaises(ValueError):
-                CEDEvents.artifact_version('base', model_hash, label_hash)
+                CEDEvents.artifact_version('huge', model_hash, label_hash)
 
 
 if __name__ == '__main__':

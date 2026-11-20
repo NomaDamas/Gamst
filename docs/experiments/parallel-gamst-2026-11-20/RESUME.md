@@ -67,6 +67,16 @@
   - **RTX PRO 6000 Spot(asia-northeast3) 1장: 승인**
   - 결정: 승인된 Spot RTX PRO 6000 96GB 1장(g4-standard-48, asia-northeast3-a)으로 모든 모델을 병렬 실행합니다. Spot은 선점될 수 있으므로 모든 작업은 재개 가능하게(JSONL append, done-id skip) 만듭니다. 성능(모델 구성) 타협은 없습니다.
 - 2026-11-20 jev decision 모델 딥리서치 결과 → **Qwen3.8-27B-FP8** (`Qwen/Qwen3.8-27B-FP8@c3a462c`, Apache-2.0, 2026-08 출시, 멀티모달). 근거는 `JEV_DECISION_MODEL.md`에 있습니다.
+- 2026-11-20 어댑터 능력 상향/수정 (모두 GAMST `feat/parallel-gamst-experiment`):
+  - RF-DETR: Nano 전용 → variant 지원, 실험은 **Large** (`rfdetr.large`). 단독 실측: 24fps 실시간, 평균 7.9ms/프레임, p95 지연 9.9ms, GPU 910MiB, 드롭 0.4%(시작 직후).
+  - Video Depth Anything: Small 전용 → **Large** 허용. Large 가중치는 CC-BY-NC-4.0(비상업 연구용)이며 capability license에 표기. torch 2.1.1 고정은 Blackwell(sm_120)에서 돌지 않아 torch 2.8.0/cu128로 변경. fp16(공식 데모 기본값) 옵션 추가.
+  - CED: tiny/mini → **base** 허용. Zenodo 체크포인트 403 → 저자 HF `mispeech/ced-base@db3e14a` ONNX(waveform 입력) 사용. 저자 PyTorch 모델과 같은 실제 음성 5초 비교: 상위 2개 라벨 동일, 최대 확률 차이 0.031.
+  - Qwen3-ASR: 공식 HF 리비전이 2개 shard로 배포되어 번들 검증기가 shard+index를 받도록 확장. vLLM 메모리 비율 하드코딩(0.5) → 설정값(병렬용 0.07).
+  - StreamingVLM(semantic) 어댑터: `interpretation="untrusted_semantic_hypothesis"`가 GAMST 스키마에 없는 값이라 생성 자체가 실패하던 기존 버그 → `semantic_description`으로 수정. Qwen3.5용 요청 옵션(thinking 끔, JSON 출력) 추가.
+  - rPPG: **FactorizePhys**(NeurIPS 2024) provider 신규(`factorizephys_context.py`). 공식 rPPG-Toolbox 모델·추론 설정·후처리를 그대로 호출. 차이: 얼굴 검출은 공식 옵션 중 "HC"(Haar) 사용(공식 설정의 YOLO5Face 가중치가 배포되지 않음).
+  - CED, TEN-VAD, FactorizePhys를 worker 프로필로 등록(`ced.onnx`, `ten_vad.native`, `factorizephys.local`).
+- 2026-11-20 말하는 사람 찾기(ASD): 기존 TalkNet 어댑터는 얼굴 crop+음성 짝 입력(`gtav001-paired-input`)이 필요해 범용 worker로 바로 못 붙음. 얼굴 crop 공급 경로를 만든 뒤 TalkNet 검증 → LR-ASD 교체 여부 판단 (미완).
+- 2026-11-20 VM 환경 보강: mediapipe용 `libgles2 libegl1`, sam31 `setuptools<81`(pkg_resources), vda `easydict xformers 0.0.32.post2`, det `ultralytics/CLIP@7ffa84b`.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더

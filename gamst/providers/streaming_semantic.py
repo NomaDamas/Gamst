@@ -33,7 +33,8 @@ class OpenAIStreamingBackend:
     claim that a generic chat endpoint implements KV-cache streaming semantics.
     """
 
-    def __init__(self, endpoint: str, model: str, revision: str, api_key_env: str | None = None):
+    def __init__(self, endpoint: str, model: str, revision: str, api_key_env: str | None = None,
+                 request_options: dict | None = None, max_tokens: int = 256):
         parsed = urlparse(endpoint)
         if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
             raise ValueError("streaming VLM endpoint must be local")
@@ -42,6 +43,14 @@ class OpenAIStreamingBackend:
             self.endpoint += "/chat/completions"
         self.model_id, self.model_version = model, revision
         self.api_key = os.environ.get(api_key_env) if api_key_env else None
+        # Server-specific request fields, e.g. {"chat_template_kwargs": {"enable_thinking": false},
+        # "response_format": {"type": "json_object"}} for a Qwen3.5 vLLM server.
+        options = dict(request_options or {})
+        if set(options) & {"model", "messages"}:
+            raise ValueError("request_options cannot override model or messages")
+        if type(max_tokens) is not int or not 16 <= max_tokens <= 4096:
+            raise ValueError("max_tokens must be 16..4096")
+        self.request_options, self.max_tokens = options, max_tokens
 
     def predict(self, frames, timestamps_ms, previous_state):
         import cv2
@@ -56,7 +65,7 @@ class OpenAIStreamingBackend:
             content.append({"type": "image_url", "image_url": {
                 "url": "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")}})
         body = json.dumps({"model": self.model_id, "messages":[{"role":"user","content":content}],
-                           "temperature":0, "max_tokens":256}).encode()
+                           "temperature":0, "max_tokens":self.max_tokens, **self.request_options}).encode()
         headers={"Content-Type":"application/json"}
         if self.api_key: headers["Authorization"]="Bearer "+self.api_key
         request=urllib.request.Request(self.endpoint, data=body, headers=headers)
@@ -105,10 +114,13 @@ class StreamingSemanticContext:
             "vision.streaming_semantic", "vision.semantic_state", "video",
             "streamingvlm.local", "1", (
                 OutputField("state", "object"),
+                OutputField("events", "array"),
+                OutputField("summary", "string"),
+                OutputField("evidence_ids", "array"),
                 OutputField("window", "object"),
                 OutputField("model", "object"),
             ), "window", window_ms=10000, freshness_ms=2000,
-            stateful=True, interpretation="untrusted_semantic_hypothesis",
+            stateful=True, interpretation="semantic_description",
             devices=(config.get("device", "cuda"),),
             sensor_requirements=("uint8-bgr-camera", "capture-time-source-metadata"),
             license="adapter:Apache-2.0;model:verify-separately")
