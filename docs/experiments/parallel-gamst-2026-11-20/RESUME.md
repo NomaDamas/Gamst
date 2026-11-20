@@ -26,7 +26,7 @@
 | 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | 🔶 | `PARALLEL_SMOKE.md`: 60초 clip, wall RTF 1.0438. RF-DETR/audio/pose/hand/face/diar 성공; SAM/ASR/FactorizePhys 실패 또는 미완, VDA/YOLOE/semantic drop 큼 |
 | 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ✅ | `MOT17_RESULTS.md`; 두 시퀀스 실행 완료 |
 | 12 | 평가: StreamArena (말과 기억) | ⏳ | admission 88개, 데이터 준비 완료 |
-| 13 | 평가: RepCount (횟수) | ⏳ | 데이터 준비 완료 |
+| 13 | 평가: RepCount (횟수) | ⏳ | 데이터 준비 완료. VM subset 실행은 installed `lance` API가 기존 script와 달라 중단; 재개 시 Lance API 버전/호출 수정 필요 |
 | 14 | 평가: MCD-rPPG (심박) | ⏳ | 데이터 준비 완료 |
 | 15 | 점프, "사람 + 소리" 확률 구름: 직접 촬영 필요 | ⏳ | 사용자 촬영 대기 |
 | 16 | 결과 보고 + 직접 써보기(데모) + VM 정지 + PR 머지 | ⏳ | |
