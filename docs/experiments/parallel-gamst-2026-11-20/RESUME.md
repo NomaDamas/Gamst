@@ -19,13 +19,12 @@
 | 3 | GPU 할당 신청: RTX PRO 6000 1장 (안 되면 H100 1장) | ✅ | 온디맨드 RTX·H100 거절, **Spot RTX PRO 6000 1장 승인** |
 | 4 | jev decision 모델 딥리서치 → SOTA 선정·고정 | ✅ | Qwen3.8-27B-FP8 (`JEV_DECISION_MODEL.md`) |
 | 5 | 모델별 SOTA 재확인 (rPPG, 말하는 사람 찾기 등) 및 버전 고정 | 🔶 | ASR=Qwen3-ASR-1.7B@7278e1e, SAM3.1@daa6319, VDA-L@7aafbcb, RF-DETR Large, YOLOE-26x, rPPG=FactorizePhys 후보, ASD=TalkNet 검증 후 LR-ASD 판단 |
-| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | 🔶 | `VERIFY.md`: RF-DETR/YOLOE/pose/hand/face/CED/TEN-VAD/diarization 완료. SAM/VDA/FactorizePhys/ASR/semantic 재측정 중. 공식 패키지 직접 비교는 남음 |
+| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | 🔶 | `VERIFY.md`: RF-DETR/YOLOE/pose/hand/face/CED/TEN-VAD/diarization/ASR 완료. SAM 실패(SAM3 내부 tracker 오류), VDA 실행 완료(53.5% drop), FactorizePhys pulse output 미확정. 공식 패키지 비교 일부 남음 |
 | 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ✅ | 커밋 ee2bf22, tests/test_watch.py 4개 통과 |
-| 8 | jev 연결: Watch 등록, 조정 제안 | 🔶 | jev 서버(:8001) 도구 호출과 MOT17 create_watch 경로 구현. 전체 평가에서 검증 남음 |
-| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | PR #23. RF-DETR 단독 실행 확인. shared-memory reader cleanup 수정. 전체 stack은 예산 재조정 중 |
-| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | 모든 서버/worker 동시 smoke는 SAM·VDA 메모리/ASR KV 문제 해결 후 실행 |
-| 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ⏳ | |
-| 12 | 평가: StreamArena (말과 기억) | ⏳ | |
+| 8 | jev 연결: Watch 등록, 조정 제안 | ✅ | jev tool call 확인. MOT17에서 첫 subject 오류를 수정하고 재실행: Watch 생성·C-local/C-Gemini 경로 동작 |
+| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | PR #23. 단독/부분 stack 검증 완료. SAM 실패와 shared GPU KV 여유 문제 기록 |
+| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | 서버 2개 동시 기동 확인. SAM/ASR KV 조정 후 전체 stack smoke 남음 |
+| 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ✅ | `MOT17_RESULTS.md`; 두 시퀀스 실행 완료 |
 | 13 | 평가: RepCount (횟수) | ⏳ | |
 | 14 | 평가: MCD-rPPG (심박) | ⏳ | |
 | 15 | 점프, "사람 + 소리" 확률 구름: 직접 촬영 필요 | ⏳ | 사용자 촬영 대기 |
@@ -87,6 +86,12 @@
   - VDA-L은 Blackwell xformers flash 커널 오류로 xformers 제거. solo 약 99ms/프레임, stack 예산 8GiB.
   - FactorizePhys는 공식 inference의 strict=False(FSAM train-only keys)와 Haar face backend를 사용. ASR는 official 2-shard bundle + max_model_len=8192.
 - 2026-11-20 데이터 업로드/준비: MOT17, RepCount, MCD-rPPG가 GCS `parallel-2026-11-20/data/`에 있고 VM `/srv/data`로 복사 완료. StreamArena admission 88개, 합계 약 95.4분.
+- 2026-11-20 MOT17 평가 완료:
+  - 결과 문서: Gamst-bench `MOT17_RESULTS.md`.
+  - MOT17-09: GAMST RiskField P/R 0.649/0.963, B 0.703/0.712, C-local 0.687/0.721, C-Gemini 0.649/0.963.
+  - MOT17-04: GAMST RiskField 0.742/0.972, B 0.782/0.936, C-local 0.742/0.972, C-Gemini 0.742/0.972.
+  - C-local/C-Gemini 모두 실제 Watch alarm + MCP timeline을 사용했습니다. 첫 jev subject 오류는 explicit validation 후 재실행했습니다.
+- 2026-11-20 SAM 3.1 재검증 확정 실패: 공식 checkpoint 구조(`multiplex_count=16`)로 로드·propagation 시작은 되지만 실제 프레임에서 SAM3 내부 `vision_feat`가 `[5184, 0, 256]`이 되어 tracker가 실패합니다. 공식 코드/가중치와 Blackwell에서 재현되었습니다. 결과는 실패로 보고합니다.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더
