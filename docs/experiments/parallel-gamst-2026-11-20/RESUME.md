@@ -19,11 +19,11 @@
 | 3 | GPU 할당 신청: RTX PRO 6000 1장 (안 되면 H100 1장) | ✅ | 온디맨드 RTX·H100 거절, **Spot RTX PRO 6000 1장 승인** |
 | 4 | jev decision 모델 딥리서치 → SOTA 선정·고정 | ✅ | Qwen3.8-27B-FP8 (`JEV_DECISION_MODEL.md`) |
 | 5 | 모델별 SOTA 재확인 (rPPG, 말하는 사람 찾기 등) 및 버전 고정 | 🔶 | ASR=Qwen3-ASR-1.7B@7278e1e, SAM3.1@daa6319, VDA-L@7aafbcb, RF-DETR Large, YOLOE-26x, rPPG=FactorizePhys 후보, ASD=TalkNet 검증 후 LR-ASD 판단 |
-| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | ⏳ | 실패하면 공식 패키지나 상용 API로 대체하고 비용을 표시. VLM·jev 서버 동시 기동은 확인 |
+| 6 | 실제 가중치 검증: Qwen3.5-9B, Qwen3-ASR, SAM 3.1, RF-DETR, Video Depth Anything, rPPG, CED, 화자 분리, 말하는 사람 찾기, 자세·손 | 🔶 | `VERIFY.md`: RF-DETR/YOLOE/pose/hand/face/CED/TEN-VAD/diarization 완료. SAM/VDA/FactorizePhys/ASR/semantic 재측정 중. 공식 패키지 직접 비교는 남음 |
 | 7 | GAMST MCP Watch 도구 구현: create, update, delete, list + 알림 + 시간 Context | ✅ | 커밋 ee2bf22, tests/test_watch.py 4개 통과 |
-| 8 | jev 연결: Watch 등록, 조정 제안 | ⏳ | jev 서버(:8001) 도구 호출 확인. 루프는 미구현 |
-| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | 코드 작성(media_bus, media_source, parallel, parallel_worker). VM 실행 전, 커밋 전 |
-| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | |
+| 8 | jev 연결: Watch 등록, 조정 제안 | 🔶 | jev 서버(:8001) 도구 호출과 MOT17 create_watch 경로 구현. 전체 평가에서 검증 남음 |
+| 9 | GamstCrew 병렬 구성: 모델별 격리, GPU 메모리 예산, 공유 프레임과 시계, 실시간 감시 | 🔶 | PR #23. RF-DETR 단독 실행 확인. shared-memory reader cleanup 수정. 전체 stack은 예산 재조정 중 |
+| 10 | 큰 GPU에서 모든 모델 동시 기동 + 실시간 계수 측정 | ⏳ | 모든 서버/worker 동시 smoke는 SAM·VDA 메모리/ASR KV 문제 해결 후 실행 |
 | 11 | 평가 B / C-local / C-Gemini(3.8 flash): MOT17 확률 구름 | ⏳ | |
 | 12 | 평가: StreamArena (말과 기억) | ⏳ | |
 | 13 | 평가: RepCount (횟수) | ⏳ | |
@@ -77,6 +77,16 @@
   - CED, TEN-VAD, FactorizePhys를 worker 프로필로 등록(`ced.onnx`, `ten_vad.native`, `factorizephys.local`).
 - 2026-11-20 말하는 사람 찾기(ASD): 기존 TalkNet 어댑터는 얼굴 crop+음성 짝 입력(`gtav001-paired-input`)이 필요해 범용 worker로 바로 못 붙음. 얼굴 crop 공급 경로를 만든 뒤 TalkNet 검증 → LR-ASD 교체 여부 판단 (미완).
 - 2026-11-20 VM 환경 보강: mediapipe용 `libgles2 libegl1`, sam31 `setuptools<81`(pkg_resources), vda `easydict xformers 0.0.32.post2`, det `ultralytics/CLIP@7ffa84b`.
+- 2026-11-20 단독 검증 측정은 Gamst-bench `VERIFY.md`에 기록했습니다. 확인된 실측:
+  - RF-DETR Large: 24fps 실시간, 7.9ms/프레임, p95 9.9ms, 드롭 0.4%, GPU 910MiB.
+  - YOLOE-26x: 12.0ms/프레임, p95 16.9ms, 드롭 0.5%, GPU 1.71GiB.
+  - Pose heavy: 32.3ms/프레임, p95 91.6ms, CPU, 드롭 8.3%; Hand 9.8ms/프레임; Face 5.7ms/프레임.
+  - CED-Base, TEN-VAD, Nemotron diarization: 각각 0% 드롭; CED 4.0ms/100ms block, TEN-VAD 0.27ms/32ms, diarization 1.5ms/80ms.
+  - Qwen3.5 semantic은 8프레임/2초 설정에서 평균 호출 약 2.6초라 20% 드롭 → 6프레임/3초 설정으로 변경. 이는 **모델을 순차로 돌린 폴백이 아니라**, 병렬 스트림에서 VLM 자체의 cadence를 낮춘 설정입니다.
+  - SAM3.1은 checkpoint가 16-object multiplex 구조라 `multiplex_count=16`으로 수정. solo에서 8.7GiB 이상 사용 → stack 예산 12GiB.
+  - VDA-L은 Blackwell xformers flash 커널 오류로 xformers 제거. solo 약 99ms/프레임, stack 예산 8GiB.
+  - FactorizePhys는 공식 inference의 strict=False(FSAM train-only keys)와 Haar face backend를 사용. ASR는 official 2-shard bundle + max_model_len=8192.
+- 2026-11-20 데이터 업로드/준비: MOT17, RepCount, MCD-rPPG가 GCS `parallel-2026-11-20/data/`에 있고 VM `/srv/data`로 복사 완료. StreamArena admission 88개, 합계 약 95.4분.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더

@@ -167,8 +167,8 @@ def capability(profile, config):
     if profile == 'qwen3.asr':
         from .qwen_artifact import artifact_version
         from .providers.qwen_asr import QwenStreamingASR
-        if not {'path', 'files'} <= set(config) or set(config)-{'path', 'files', 'gpu_memory_utilization', 'language'} or type(config['path']) is not str:
-            raise ValueError('qwen3.asr requires local path and file hashes, optional gpu_memory_utilization/language')
+        if not {'path', 'files'} <= set(config) or set(config)-{'path', 'files', 'gpu_memory_utilization', 'language', 'max_model_len'} or type(config['path']) is not str:
+            raise ValueError('qwen3.asr requires local path and file hashes, optional gpu_memory_utilization/language/max_model_len')
         return QwenStreamingASR.capability(artifact_version(config['files']))
     if profile == 'rfdetr.compensated_trajectories':
         from .providers.compensated_trajectories import CompensatedTrajectories

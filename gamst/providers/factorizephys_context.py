@@ -82,7 +82,11 @@ class FactorizePhysContext:
         state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         if all(key.startswith('module.') for key in state):
             state = {key[7:]: value for key, value in state.items()}
-        model.load_state_dict(state, strict=True)
+        # Official inference (FactorizePhysTrainer) loads with strict=False: the FSAM training-time
+        # factorization weights are present but unused when MD_FSAM is False. Accept exactly that.
+        result = model.load_state_dict(state, strict=False)
+        if result.missing_keys or any(not k.startswith('rppg_head.fsam.') for k in result.unexpected_keys):
+            raise ValueError('FactorizePhys checkpoint does not match the official inference graph')
         model = model.to(device).eval()
         cascade = cv2.CascadeClassifier(str(cascade_file))
         if cascade.empty():
