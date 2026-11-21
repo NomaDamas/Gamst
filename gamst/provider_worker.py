@@ -17,12 +17,14 @@ def _construct(profile, config):
     elif profile == 'orbslam3.monocular':
         from .providers.orbslam_context import ORBSLAMContext
         provider = ORBSLAMContext.from_local(**config)
+    elif profile == 'streamingvlm.local':
+        from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
+        backend = OpenAIStreamingBackend(config['endpoint'], config['model'], config['revision'], config.get('api_key_env'),
+                                         config.get('request_options'), config.get('max_tokens', 256))
+        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
         provider = SmolVLMContext.from_local(**config)
-    elif profile == 'food.segformer_b0':
-        from .providers.food import FoodContext
-        provider = FoodContext.from_local(**config)
     elif profile == 'visual_microphone.phase':
         from .providers.visual_microphone_context import VisualMicrophoneContext
         provider = VisualMicrophoneContext(**config)
@@ -77,9 +79,9 @@ def _construct(profile, config):
     elif profile == 'ppocr.mobile':
         from .providers.ocr import PPOCRContext
         provider = PPOCRContext.from_local(**config)
-    elif profile == 'video_depth_anything.small':
+    elif profile in ('video_depth_anything.small', 'video_depth_anything.large'):
         from .providers.video_depth import load_worker
-        provider = load_worker(config)
+        provider = load_worker({**config, 'variant': profile.rsplit('.', 1)[1]})
     elif profile == 'sam3.1.video':
         from .providers.sam31_video import load_worker
         provider = load_worker(config)
@@ -122,9 +124,27 @@ def _construct(profile, config):
     elif profile == 'rfdetr.trajectories':
         from .providers.detection_trajectories import RFDETRTrajectories
         provider = RFDETRTrajectories.from_local(**config)
-    elif profile == 'rfdetr.nano':
+    elif profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
-        provider = RFDETRObjects.from_local(**config)
+        provider = RFDETRObjects.from_local(**config, variant=profile.split('.')[1])
+    elif profile == 'object.events':
+        from .providers.object_events import ObjectEventReducer
+        provider = ObjectEventReducer(**config)
+    elif profile == 'angular.motion':
+        from .providers.angular_motion import AngularMotionCounter
+        provider = AngularMotionCounter(**config)
+    elif profile == 'audio.context':
+        from .providers.audio_context import AudioContext
+        provider = AudioContext(**config)
+    elif profile == 'factorizephys.local':
+        from .providers.factorizephys_context import FactorizePhysContext
+        provider = FactorizePhysContext.from_local(**config)
+    elif profile == 'ced.onnx':
+        from .providers.ced_events import CEDEvents
+        provider = CEDEvents.from_local(**config)
+    elif profile == 'ten_vad.native':
+        from .providers.ten_vad import TENActivity
+        provider = TENActivity.from_local(**config)
     elif profile == 'audio.prosody':
         from .providers.prosody import AudioProsody
         provider = AudioProsody(**config)

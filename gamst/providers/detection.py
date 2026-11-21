@@ -34,18 +34,25 @@ class RFDETRObjects:
         self.counter, self.closed = 0, False
         self.reset()
 
+    VARIANTS = {'nano': 'RFDETRNano', 'small': 'RFDETRSmall', 'medium': 'RFDETRMedium',
+                'base': 'RFDETRBase', 'large': 'RFDETRLarge'}
+
     @staticmethod
-    def capability(version='installed'):
+    def capability(version='installed', variant='nano'):
+        if variant not in RFDETRObjects.VARIANTS:
+            raise ValueError('unsupported RF-DETR variant')
         return CapabilitySpec('vision.rfdetr.objects', 'vision.objects', 'video',
-            'rfdetr.nano', version, (OutputField('objects', 'array'),
+            'rfdetr.'+variant, version, (OutputField('objects', 'array'),
             OutputField('summary', 'object')), 'frame', stateful=True,
             reset_on_gap=True, freshness_ms=1000, devices=('cpu', 'cuda', 'mps'),
             sensor_requirements=('uint8-bgr-camera', 'normalized-image-coordinate-frame'),
             license='Apache-2.0', interpretation='estimate')
 
     @classmethod
-    def from_local(cls, path, *, sha256, device='cpu', **kwargs):
+    def from_local(cls, path, *, sha256, device='cpu', variant='nano', **kwargs):
         """Explicit local loading only; checkpoint digest is required provenance."""
+        if variant not in cls.VARIANTS:
+            raise ValueError('unsupported RF-DETR variant')
         path = Path(path).expanduser().resolve()
         if not path.is_file() or not isinstance(sha256, str) or not re.fullmatch('[0-9a-f]{64}', sha256):
             raise ValueError('existing checkpoint and lowercase SHA256 required')
@@ -62,10 +69,10 @@ class RFDETRObjects:
             installed = version('rfdetr')
             if installed != '1.12.1':
                 raise RuntimeError('RF-DETR adapter requires validated rfdetr==1.12.1')
-            from rfdetr import RFDETRNano
+            import rfdetr
         except ImportError as exc:
             raise RuntimeError('Install gamst-sdk[detection] in a dedicated runtime') from exc
-        model = RFDETRNano(pretrain_weights=str(path), device=device)
+        model = getattr(rfdetr, cls.VARIANTS[variant])(pretrain_weights=str(path), device=device)
         # An inference-only snapshot folds supported operations without compile
         # caches or CUDA graph side effects. Release the training/source model.
         predictor = model.inference(compile=False)

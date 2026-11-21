@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f4f6">
+  <meta name="gamst-session-token" content="__SESSION_TOKEN__">
+  <meta name="description" content="GAMST Moment Catcher: continuous sensor measurements, frozen evidence and event-triggered VLM descriptions.">
+  <title>GAMST · Moment Catcher</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/moments.css">
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" integrity="sha384-pv/a53slpd9r+c7gv5R/Yx+690OjBKfh44t0YEEQi74uhGupAjv0NpiHrzlmhiVn" crossorigin="anonymous">
+</head>
+<body>
+<a class="skip-link" href="#moments">Skip to Moment Catcher</a>
+<div class="moments-shell">
+  <header class="topbar moments-topbar">
+    <div class="wordmark" aria-label="GAMST">GAMST<span class="wordmark-dot">·</span><span class="wordmark-sub">MOMENT CATCHER</span></div>
+    <div class="connection-pill"><span class="status-dot"></span><span id="artifactLabel">waiting for input</span></div>
+    <div class="moment-principle">Continuous sensors <span>→</span> occasional models</div>
+    <a class="button quiet" href="/">Playground ↗</a>
+  </header>
+
+  <main class="moments-layout" id="moments">
+    <section class="moment-column live-column" aria-labelledby="liveTitle">
+      <div class="column-heading">
+        <div><span class="eyebrow">01 · NATIVE RATE</span><h1 id="liveTitle">Catch the frame.</h1></div>
+        <span class="rate-chip" id="nativeFps">native fps</span>
+      </div>
+      <p class="column-intro">Cheap motion, geometry and audio measurements run on every frame. Observations are measurements, never emotion or intent.</p>
+
+      <div class="input-bar" aria-label="Capture inputs">
+        <label class="button secondary file-button" for="replayInput">Choose replay<input id="replayInput" type="file" accept="video/*" hidden></label>
+        <button id="replayButton" class="button primary" type="button" disabled>▶ Replay</button>
+        <button id="frameReplayButton" class="button secondary" type="button" disabled title="Seek every original 30 FPS frame and align decoded audio by capture time">Step 30 FPS</button>
+        <button id="cameraButton" class="button secondary" type="button">◉ Camera</button>
+        <button id="stopButton" class="button quiet" type="button" disabled>■ Stop</button>
+      </div>
+      <p class="source-label" id="sourceLabel">No source selected</p>
+
+      <div class="moment-stage" id="momentStage">
+        <video id="video" playsinline></video>
+        <canvas id="overlay" class="sampling-overlay" aria-label="Actual 1 FPS sample instants and full-rate playhead"></canvas>
+        <div class="stage-empty" id="stageEmpty"><div class="stage-reticle" aria-hidden="true"><span></span><span></span><span></span><span></span></div><strong>Replay a file or start the camera</strong><small>The original frame is retained only when a sensor rule fires.</small></div>
+        <div class="stage-topline"><span class="stage-chip">FULL-RATE SENSOR VIEW</span><span class="stage-chip">1 FPS GRID</span></div>
+      </div>
+      <div class="sample-grid" id="sampleGrid"><span class="sample-pulse"></span><strong>1 FPS sampling grid</strong><span>vertical playhead sweeps each second; flashes are actual captured samples</span></div>
+
+      <section class="sampled-panel" aria-labelledby="sampledTitle">
+        <div class="panel-title"><div><span class="eyebrow">OPTIONAL COMPARISON</span><h2 id="sampledTitle">Gemini Live (1 FPS)</h2></div><span id="sampleTime">no sample yet</span></div>
+        <div class="sampled-content"><img id="sampledFrame" alt="Most recent actual 1 FPS sample" hidden><div id="samplePlaceholder" class="sample-placeholder">Sampled frames appear here. Placeholder only: no network request and no inferred model observation.</div></div>
+        <p>Without a configured Gemini provider this lane shows samples only. A blank lane is not evidence of a model miss.</p>
+      </section>
+
+      <div class="sensor-status"><span id="geometryStatus">geometry starts with camera</span><span id="motionReadout">ROI motion waiting</span><span id="audioReadout">audio waiting</span></div>
+      <p class="run-status" id="runStatus" role="status">Choose a replay file for a camera-free run.</p>
+    </section>
+
+    <section class="moment-column caught-column" aria-labelledby="caughtTitle">
+      <div class="column-heading">
+        <div><span class="eyebrow">02 · EVIDENCE</span><h2 id="caughtTitle">Moments caught</h2></div>
+        <span class="count-chip" id="momentCount">0 caught</span>
+      </div>
+      <p class="column-intro">Frozen at the measured onset, impact-adjacent boundary or peak interval endpoint. Each answer stays pinned to this exact evidence.</p>
+      <div id="emptyMoments" class="empty-moments"><span>⌁</span><strong>No moments yet</strong><p>Quiet input makes no event-triggered model call. A replay needs its audio lane for pen-drop impact detection.</p></div>
+      <div id="momentsList" class="moments-list" aria-live="polite"></div>
+    </section>
+
+    <aside class="moment-column signal-column" aria-labelledby="signalTitle">
+      <div class="column-heading"><div><span class="eyebrow">03 · ESCALATION</span><h2 id="signalTitle">What the model saw</h2></div></div>
+      <div class="counters" aria-label="Live counters">
+        <article><small>FRAMES SEEN</small><strong id="framesSeen">0</strong><span>native sensor callbacks</span></article>
+        <article><small>MODEL CALLS</small><strong id="modelCalls">0</strong><span>event-triggered requests</span></article>
+        <article><small>EST. COST</small><strong id="estimatedCost">unknown</strong><span>user price × calls</span></article>
+      </div>
+      <label class="price-field"><span>Per-call price input (USD)</span><input id="pricePerCall" type="number" min="0" step="any" placeholder="unknown"></label>
+      <p class="cost-note">Estimate only, from your input; not measured billing. Blank stays unknown.</p>
+
+      <section class="answer-panel" aria-labelledby="answerTitle">
+        <div class="panel-title"><h3 id="answerTitle">Evidence-pinned answer</h3><span>VLM · once / moment</span></div>
+        <code id="answerMeta">No moment selected</code>
+        <p id="answerText">Select a caught moment to inspect its evidence-pinned answer.</p>
+      </section>
+
+      <details class="provider-panel">
+        <summary>VLM provider &amp; escalation</summary>
+        <div class="provider-fields">
+          <label><span>OpenAI-compatible base URL</span><input id="providerUrl" type="url" value="http://127.0.0.1:18767/v1" spellcheck="false"></label>
+          <label><span>Model</span><input id="providerModel" type="text" value="local-vlm" spellcheck="false"></label>
+          <label><span>API key (optional for local)</span><input id="providerKey" type="password" autocomplete="off"></label>
+          <label class="describe-toggle"><input id="describeMoments" type="checkbox" checked><span>Describe each caught moment once</span></label>
+        </div>
+        <p>The frozen thumbnail and measurement JSON go to this provider only after a rule fires. The 1 FPS placeholder never calls the network.</p>
+      </details>
+
+      <section class="control-panel" aria-labelledby="controlTitle">
+        <div class="panel-title"><h3 id="controlTitle">30-second no-event control</h3><span>heartbeat: none</span></div>
+        <button id="quietButton" class="button secondary full-width" type="button" disabled>Start 30 s control</button>
+        <p id="quietResult">No control run</p>
+      </section>
+
+      <details class="threshold-panel">
+        <summary>Frozen detector policy</summary>
+        <dl>
+          <div><dt>Hand raise</dt><dd>visibility ≥ .6; 3-frame re-arm; 2 of 3 raised; first crossing retained; 1 s cooldown</dd></div>
+          <div><dt>Impact candidate</dt><dd>5 s quiet baseline; median + 6 MAD; 2 downward frames; audio within 120 ms; +12 dB and spectral flux</dd></div>
+          <div><dt>Swing peak</dt><dd>finite-difference px/s; 2 of 3 entry; 3-frame exit; 1.5 s cap; clean segments only</dd></div>
+        </dl>
+        <p>Browser providers: MediaPipe Tasks Vision 0.10.14 VIDEO, one pose/hand; changed-pixel ROI flow; 2048-sample audio energy/flux. Replay artifacts are synthetic/file runs; live artifacts are smoke, not measured trials.</p>
+      </details>
+
+      <section class="log-panel" aria-labelledby="logTitle"><div class="panel-title"><h3 id="logTitle">Run observations</h3><span>catches, gaps &amp; possible false triggers</span></div><ol id="runLog"><li>No attempts recorded.</li></ol></section>
+    </aside>
+  </main>
+</div>
+<script type="module" src="/moments.js"></script>
+</body>
+</html>

@@ -15,8 +15,11 @@ from .storage import Store
 from .plugins import PerceptionPlugin
 from .capabilities import CapabilityRegistry, SensorMetadata, identifier
 from .memory import ObjectMemory
+from .semantic_fusion import SemanticStateFusion
+from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
+from .watch import WatchManager
 from dataclasses import asdict
 
 
@@ -72,6 +75,8 @@ class Gamst:
         self._capture_owners: set[str] = set()
         self._paused_before_capture = False
         self._session_id = uuid.uuid4().hex
+        self.semantic_states = SemanticStateChain(retention_ms=min(self.store.retention_ms, 300_000))
+        self.semantic_fusion = SemanticStateFusion()
         # Portable temporal/context memory mirrors normalized envelopes only;
         # raw media and provider payloads remain owned by Store/provider runtimes.
         self.context_memory = ContextMemory(session_id=self._session_id,
@@ -93,6 +98,12 @@ class Gamst:
         # It is registered lazily so discovery of unrelated capabilities stays
         # backward compatible and never loads a model or starts a sensor.
         self._multimodal_decision = None
+        from .voice_backend import RealtimeVoiceConfig
+        self.voice_backend = RealtimeVoiceConfig()
+        # Owner-declared Watches are the only alarm path; there is no hidden trigger.
+        self.watches = WatchManager(
+            lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
+            timestamp)
 
     def _register_evaluation_observer(self, observer):
         from .recording_scope import evaluation_owner
@@ -208,6 +219,8 @@ class Gamst:
                 queue.get_nowait()
                 self.dropped_records += 1
             queue.put_nowait(deepcopy(record))
+        if stored:
+            self.watches.observe(record)
         return record
 
     def _record(self, kind, subject, ts, **kwargs):
@@ -952,6 +965,49 @@ class Gamst:
             "storage": self.store.status(), "signals": latest, "dropped_records": self.dropped_records, "plugin_errors": deepcopy(self.plugin_errors)})
         return result
 
+    async def push_semantic_state(self, state, *, subject_id="local-user",
+                                  timestamp_ms=None, events=None, evidence_ids=None,
+                                  sources=None, model_id="semantic_state.rules",
+                                  model_version="1"):
+        """Append a bounded state-chain update; never calls a heavy model."""
+        self._check()
+        item = self.semantic_states.append(subject_id, timestamp_ms=timestamp_ms,
+            state=state, events=events, evidence_ids=evidence_ids, sources=sources,
+            model_id=model_id, model_version=model_version)
+        return item
+
+    async def get_semantic_state(self, subject_id="local-user", *, window="5m",
+                                 limit=32):
+        """Read short-term semantic state updates without triggering inference."""
+        self._check()
+        now = timestamp()
+        return self.semantic_states.get(subject_id,
+            start_ms=max(0, now - _window_ms(window)), end_ms=now, limit=limit)
+
+    async def observe_semantic_video_state(self, state, *, subject_id="local-user",
+                                           timestamp_ms=None, evidence_ids=None,
+                                           model_id="streaming_vlm", model_version="unverified"):
+        """Record a streaming-video semantic state; model execution is external."""
+        self._check()
+        ts = timestamp(timestamp_ms)
+        self.semantic_fusion.observe_video_state(state, timestamp_ms=ts,
+            evidence_ids=evidence_ids or [], model_id=model_id, model_version=model_version)
+        return await self.push_semantic_state(
+            {"video_state": state, "fusion": self.semantic_fusion.snapshot(timestamp_ms=ts)},
+            subject_id=subject_id, timestamp_ms=ts, evidence_ids=evidence_ids,
+            sources=["video"], model_id=model_id, model_version=model_version)
+
+    async def observe_perception_signal(self, signal):
+        """Merge a validated plugin signal into fusion and the state chain."""
+        self._check()
+        self.semantic_fusion.observe_signal(signal)
+        ts = signal.get("timestamp_ms", timestamp())
+        fusion = self.semantic_fusion.snapshot(timestamp_ms=ts)
+        return await self.push_semantic_state(
+            {"fusion": fusion}, subject_id=signal.get("subject_id", "local-user"),
+            timestamp_ms=ts, evidence_ids=fusion["evidence_ids"],
+            sources=fusion["modalities"], model_id="gamst.semantic_fusion", model_version="1")
+
     @staticmethod
     def _models_for(records, defaults):
         models = {(m["id"], m["version"]): m for record in records for m in record["models"]}
@@ -1077,10 +1133,11 @@ class Gamst:
                    if r.get("observation", {}).get("name") != TRANSCRIPT_OUTPUT]
         result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
             evidence=[{"record_id": r["id"]} for r in events])
-        result["models"] = self._models_for(records, result["models"])
         from .context import observation_packet
         result.update({"observations": observation_packet(records, now),
                        "transcripts": self.transcript_memory.snapshot(subject_id, now_ms=now, start_ms=start),
+                       "semantic_state_chain": self.semantic_states.get(subject_id,
+                           start_ms=start, end_ms=now, limit=32),
                        "context_policy": {"raw_media_included": False, "hypotheses_verified": False, "freshness_ms": 5000},
                        "summary": {"event_counts": counts, "event_count": total_events,
                                    "evidence_count": len(events), "max_evidence_per_event_type": 8,
@@ -1194,6 +1251,7 @@ class Gamst:
         deleted = self.store.delete(subject_id)
         self.object_memory.clear(subject_id)
         self.transcript_memory.clear(subject_id)
+        self.watches.clear_subject(subject_id)
         reset_error = None
         try:
             await self._reset_plugins()
