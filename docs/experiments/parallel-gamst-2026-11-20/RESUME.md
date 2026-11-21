@@ -93,6 +93,8 @@
   - MOT17-04: GAMST RiskField 0.742/0.972, B 0.782/0.936, C-local 0.742/0.972, C-Gemini 0.742/0.972.
   - C-local/C-Gemini 모두 실제 Watch alarm + MCP timeline을 사용했습니다. 첫 jev subject 오류는 explicit validation 후 재실행했습니다.
 - 2026-11-20 SAM 3.1 재검증 확정 실패: 공식 checkpoint 구조(`multiplex_count=16`)로 로드·propagation 시작은 되지만 실제 프레임에서 SAM3 내부 `vision_feat`가 `[5184, 0, 256]`이 되어 tracker가 실패합니다. 공식 코드/가중치와 Blackwell에서 재현되었습니다. 결과는 실패로 보고합니다.
+- 2026-11-22 추가 범위 결정: RelateAnything은 현재 도입하지 않습니다. RF-DETR/YOLOE box+track+GAMST temporal state로 가능한 관계/zone 조건은 기존 perception에서 처리하고, holding/riding/on 등 필요 시 Issue #353의 별도 provider로 검토합니다.
+- 2026-11-22 추가 구현: `audio.context` provider와 기본 disabled realtime voice backend metadata 설정. full-duplex 자체는 이번 범위가 아니며, raw audio 대신 VAD/silence/AEC/CED/diarization/DOA 가능값/prosody/ASR를 Context로 전달합니다. 관련 Issue #354.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더

@@ -267,6 +267,12 @@
 
 ## 6. 다음 할 일 (순서대로)
 
+- 2026-11-22 범위 수정:
+  - RelateAnything은 현재 구현에서 제외했습니다. 기존 RF-DETR/YOLOE box + track + GAMST temporal state로 zone/near/entered 조건을 처리하고, holding/riding 같은 관계가 실제로 필요할 때만 별도 provider로 검토합니다.
+  - Qwen3.5-9B-VL은 open-weight semantic consumer로 유지합니다. 매 frame sensor가 아니라 bounded Context/질문/Watch 해석에 사용합니다.
+  - full-duplex 대화 자체는 이번 범위에서 제외했습니다. 대신 `audio.context` provider가 speech activity, silence, barge-in/double-talk 가능값, AEC residual, CED events, speaker turn, DOA 가능값, prosody, ASR transcript를 raw audio 없이 Context로 합칩니다.
+  - realtime voice backend는 기본 disabled인 metadata configuration만 추가했습니다. enable해도 network/mic/full-duplex가 자동 시작되지 않습니다. Issue #354.
+  - RelateAnything 검토/비도입 결정은 Issue #353.
 **1. 가중치 받기**
 - VM에서 `fetch_weights.sh` 결과를 확인합니다.
 - sha256을 `stack.json`과 `RESUME.md`에 기록합니다.
