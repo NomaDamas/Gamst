@@ -127,6 +127,9 @@ def _construct(profile, config):
     elif profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         provider = RFDETRObjects.from_local(**config, variant=profile.split('.')[1])
+    elif profile == 'object.events':
+        from .providers.object_events import ObjectEventReducer
+        provider = ObjectEventReducer(**config)
     elif profile == 'angular.motion':
         from .providers.angular_motion import AngularMotionCounter
         provider = AngularMotionCounter(**config)

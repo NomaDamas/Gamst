@@ -51,3 +51,23 @@ RF-DETR / YOLOE / pose / audio workers
 ```
 
 A relation such as “person entered the doorway” is temporal state, not a one-frame VLM claim. A future relation provider may produce “person holding cup” observations, but it must remain inside the same perception boundary and include model provenance, score semantics, evidence IDs and realtime measurements.
+
+## General object rotation and toss events
+
+`vision.object_rotation` (`AngularMotionCounter`) accepts an object track,
+ROI center and corresponding feature points. It emits phase, full-turn count,
+angular velocity, direction and feature agreement confidence. It is not
+coin-specific: the same contract serves coins, wheels, tires, fans and tools.
+
+`vision.object_events` (`ObjectEventReducer`) consumes track support/contact,
+vertical velocity and optional semantic face labels:
+
+```text
+held -> released -> airborne -> caught = one completed toss
+heads -> tails / tails -> heads = one face flip
+```
+
+It emits timestamped toss/face-change events and counts. Qwen3.5-VL may supply
+the optional object/face semantic label; it does not count every frame. Optical
+flow/feature phase and the reducer do. A full coin demo still needs a capture
+UI and real-video smoke run on the local Mac.
