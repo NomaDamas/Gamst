@@ -78,6 +78,12 @@ def tool_definitions() -> list[dict]:
         ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
         ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
         ("get_semantic_state", "Read bounded short-term semantic state updates. This is read-only and never triggers a model call.", {"subject_id": SUBJECT, "window": WINDOW, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}, ()),
+        ("get_voice_backend_status", "Read optional realtime voice backend configuration. Disabled by default; reading status never opens a network connection or microphone.", {}, ()),
+        ("configure_voice_backend", "Enable or disable an explicitly configured realtime voice consumer. This only stores validated provider metadata; it never starts full-duplex capture or spends API credits.",
+         {"enabled": {"type": "boolean"}, "provider": {"type": "string", "enum": ["none", "openai", "gemini", "custom"]},
+          "endpoint": {"type": "string", "minLength": 1, "maxLength": 2048}, "model": {"type": "string", "minLength": 1, "maxLength": 256},
+          "api_key_env": {"type": "string", "minLength": 1, "maxLength": 128}, "context_only": {"type": "boolean"}},
+         ("enabled", "provider", "context_only")),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
@@ -209,6 +215,13 @@ class MCPServer:
             raise ValueError("start_ms must not exceed end_ms")
         if name in WATCH_TOOLS:
             return await self._watch_tool(name, args)
+        if name in ("get_voice_backend_status", "configure_voice_backend"):
+            from .voice_backend import RealtimeVoiceConfig
+            if name == "get_voice_backend_status":
+                return self.human.voice_backend.status()
+            config = RealtimeVoiceConfig(**args)
+            self.human.voice_backend = config
+            return config.status()
         if name == "get_stream_status":
             from .media import media_router
             return media_router(self.human).status()

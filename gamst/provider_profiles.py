@@ -184,6 +184,12 @@ def capability(profile, config):
         if not isinstance(config.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', config['sha256']):
             raise ValueError('RF-DETR needs a lowercase checkpoint SHA256')
         return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'], variant=profile.split('.')[1])
+    if profile == 'audio.context':
+        from .providers.audio_context import AudioContext
+        if set(config) - {'max_gap_ms', 'source_revision'}:
+            raise ValueError('audio.context accepts optional max_gap_ms/source_revision')
+        return AudioContext(max_gap_ms=config.get('max_gap_ms', 2000),
+                            source_revision=config.get('source_revision', 'local-audio-context-v1')).spec
     if profile == 'factorizephys.local':
         from .providers.factorizephys_context import FactorizePhysContext
         if not {'source_dir', 'checkpoint_path', 'checkpoint_sha256'} <= set(config) or set(config)-{'source_dir', 'checkpoint_path', 'checkpoint_sha256', 'device', 'history_s'}:

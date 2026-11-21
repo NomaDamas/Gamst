@@ -98,6 +98,8 @@ class Gamst:
         # It is registered lazily so discovery of unrelated capabilities stays
         # backward compatible and never loads a model or starts a sensor.
         self._multimodal_decision = None
+        from .voice_backend import RealtimeVoiceConfig
+        self.voice_backend = RealtimeVoiceConfig()
         # Owner-declared Watches are the only alarm path; there is no hidden trigger.
         self.watches = WatchManager(
             lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),

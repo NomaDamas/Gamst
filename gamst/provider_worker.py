@@ -127,6 +127,9 @@ def _construct(profile, config):
     elif profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         provider = RFDETRObjects.from_local(**config, variant=profile.split('.')[1])
+    elif profile == 'audio.context':
+        from .providers.audio_context import AudioContext
+        provider = AudioContext(**config)
     elif profile == 'factorizephys.local':
         from .providers.factorizephys_context import FactorizePhysContext
         provider = FactorizePhysContext.from_local(**config)
