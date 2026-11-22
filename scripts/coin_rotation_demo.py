@@ -92,6 +92,7 @@ def main():
     roi = previous_gray = previous_points = None
     sequence = 0
     started = time.monotonic()
+    epoch_ms = time.time_ns() // 1_000_000
     next_semantic = 0.0
     measured_frames = 0
     last_value = None
@@ -102,7 +103,7 @@ def main():
             if not ok:
                 break
             elapsed = time.monotonic() - started
-            now_ms = int(elapsed * 1000)
+            now_ms = epoch_ms + int(elapsed * 1000)
             detected = None
             if args.no_semantic:
                 detected = (*test_roi, 1.0) if roi is None else None
@@ -119,6 +120,7 @@ def main():
             if detected is not None:
                 x, y, w, h, _confidence = detected
                 roi = (x, y, w, h)
+                corners = np.float32([[x, y], [x+w, y], [x+w, y+h], [x, y+h]]).reshape(-1, 1, 2)
                 gray_now = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 mask = np.zeros(gray_now.shape, np.uint8)
                 mask[y:y+h, x:x+w] = 255
@@ -144,11 +146,12 @@ def main():
                                 keep = mask.reshape(-1).astype(bool)
                                 current_points = new[keep]
                                 inliers = int(keep.sum())
-                                corners = np.float32([[x,y],[x+w,y],[x+w,y+h],[x,y+h]]).reshape(-1,1,2)
                                 moved = cv2.transform(corners, transform).reshape(-1,2)
                                 x0,y0 = np.floor(moved.min(axis=0)).astype(int)
                                 x1,y1 = np.ceil(moved.max(axis=0)).astype(int)
                                 roi = (int(x0), int(y0), max(20,int(x1-x0)), max(20,int(y1-y0)))
+                                corners = moved.reshape(-1, 1, 2)
+                                x, y, w, h = roi
                                 previous_points = current_points
                 if current_points is not None and len(current_points) >= 4 and inliers >= 4:
                     sensor = SensorMetadata(source_id="mac-camera", sensor_id="rotation-demo", sequence=sequence,
@@ -164,7 +167,8 @@ def main():
                     sequence += 1
                     measured_frames += 1
                     cv2.rectangle(frame, (x,y), (x+w,y+h), (255,180,0), 2)
-                    cv2.polylines(frame, [np.int32(current_points).reshape(-1,1,2)], False, (0,220,0), 1)
+                    for px, py in np.int32(current_points):
+                        cv2.circle(frame, (int(px), int(py)), 2, (0, 220, 0), -1)
                     cv2.putText(frame, f"rotation={last_value['rotation_count']:.2f} turns phase={last_value['phase_degrees']:.0f} deg", (20,35), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,0), 2)
                     cv2.putText(frame, f"confidence={last_value['confidence']:.2f} inliers={inliers} points={len(current_points)}", (20,65), cv2.FONT_HERSHEY_SIMPLEX, .6, (0,255,255), 2)
                 else:
