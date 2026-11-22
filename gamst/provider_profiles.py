@@ -184,6 +184,23 @@ def capability(profile, config):
         if not isinstance(config.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', config['sha256']):
             raise ValueError('RF-DETR needs a lowercase checkpoint SHA256')
         return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'], variant=profile.split('.')[1])
+    if profile == 'object.rotations':
+        from .providers.object_rotation_bank import ObjectRotationBank
+        allowed = {'max_tracks', 'max_gap_ms', 'min_radius', 'max_points', 'min_quality', 'history_s'}
+        if set(config) - allowed:
+            raise ValueError('object.rotations accepts max_tracks and AngularMotionCounter options')
+        return ObjectRotationBank(**config).spec
+    if profile == 'object.events':
+        from .providers.object_events import ObjectEventReducer
+        allowed = {'max_gap_ms', 'min_release_speed', 'min_airborne_ms', 'face_confidence', 'stable_face_frames'}
+        if set(config) - allowed:
+            raise ValueError('object.events accepts max_gap_ms/min_release_speed/min_airborne_ms/face_confidence/stable_face_frames')
+        return ObjectEventReducer(**config).spec
+    if profile == 'angular.motion':
+        from .providers.angular_motion import AngularMotionCounter
+        if set(config) - {'max_gap_ms', 'min_radius', 'max_points', 'min_quality', 'history_s'}:
+            raise ValueError('angular.motion accepts max_gap_ms/min_radius/max_points/min_quality/history_s')
+        return AngularMotionCounter(**config).spec
     if profile == 'audio.context':
         from .providers.audio_context import AudioContext
         if set(config) - {'max_gap_ms', 'source_revision'}:
