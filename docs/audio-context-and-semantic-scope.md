@@ -56,35 +56,16 @@ RF-DETR / YOLOE / pose / audio workers
   -> optional answer/notification consumer
 ```
 
-A relation such as “person entered the doorway” is temporal state, not a
-one-frame VLM claim. The coin WOW path is:
+## Coin WOW UseCase boundary
 
-```text
-light multi-object detector/tracker
-  -> Qwen semantic object/perception labels
-  -> per-track AngularMotionCounter + ObjectEventReducer
-  -> GAMST Context: turns, tosses, flips, confidence
-```
+The coin demo is an **application/demo composition**, not a new GAMST core
+provider. It may combine existing detector/tracker, OpenCV optical flow and
+timeseries/repetition utilities in a demo process, while Qwen3.5-VL supplies
+low-rate semantic perception (object label, rotating state, toss boundary and
+optional face label).
 
-RelateAnything is excluded from the current implementation. Existing boxes,
-tracks, geometry and temporal reducers are sufficient for the first demo.
+The demo must not claim that an arbitrary moving contour is a coin. Without a
+semantic object result it stays in an unknown/waiting state. The existing
+GAMST core structures remain unchanged.
 
-## General object rotation and toss events
-
-`vision.object_rotation` (`AngularMotionCounter`) accepts an object track,
-ROI center and corresponding feature points. It emits phase, full-turn count,
-angular velocity, direction and feature agreement confidence. It is not
-coin-specific: the same contract serves coins, wheels, tires, fans and tools.
-
-`vision.object_events` (`ObjectEventReducer`) consumes track support/contact,
-vertical velocity and optional semantic face labels:
-
-```text
-held -> released -> airborne -> caught = one completed toss
-heads -> tails / tails -> heads = one face flip
-```
-
-It emits timestamped toss/face-change events and counts. Qwen3.5-VL may supply
-the optional object/face semantic label; it does not count every frame. Optical
-flow/feature phase and the reducer do. A full coin demo still needs a capture
-UI and real-video smoke run on the local Mac.
+RelateAnything is excluded from the demo and current GAMST implementation.
