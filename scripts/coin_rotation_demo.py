@@ -96,10 +96,10 @@ def main():
                 break
             elapsed = time.monotonic() - started
             now_ms = int(elapsed * 1000)
-            detected = None
             if args.no_semantic:
-                detected = (*test_roi, 1.0)
-                status = "unknown-object mechanical rotation test"
+                detected = (*test_roi, 1.0) if roi is None else None
+                if detected is not None:
+                    status = "unknown-object mechanical rotation test"
             elif elapsed >= next_semantic:
                 detected = semantic_detect(frame, args.vlm_endpoint, args.vlm_model, args.target)
                 next_semantic = elapsed + args.semantic_interval
@@ -109,7 +109,7 @@ def main():
                     status = f"Waiting for semantic {args.target} detection..."
                 else:
                     status = f"Semantic scene target: {args.target} ({detected[4]:.2f})"
-            if detected is not None and (roi is None or args.no_semantic or elapsed >= next_semantic - args.semantic_interval):
+            if detected is not None:
                 x, y, w, h, _confidence = detected
                 roi = (x, y, w, h)
                 gray_now = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -122,25 +122,41 @@ def main():
             if roi is not None:
                 x, y, w, h = roi
                 current_points = None
+                inliers = 0
                 if previous_points is not None and len(previous_points) >= 4:
-                    nxt, flow_status, _ = cv2.calcOpticalFlowPyrLK(previous_gray, gray,
-                        previous_points.reshape(-1, 1, 2), None, winSize=(21, 21), maxLevel=3,
+                    nxt, flow_status, _ = cv2.calcOpticalFlowPyrLK(
+                        previous_gray, gray, previous_points.reshape(-1, 1, 2), None,
+                        winSize=(21, 21), maxLevel=3,
                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, .01))
                     if nxt is not None:
                         valid = flow_status.reshape(-1).astype(bool)
-                        current_points = nxt.reshape(-1, 2)[valid]
-                        previous_points = previous_points[valid]
-                if current_points is not None and len(current_points) >= 4:
+                        old = previous_points[valid]
+                        new = nxt.reshape(-1, 2)[valid]
+                        if len(old) >= 4:
+                            transform, mask = cv2.estimateAffinePartial2D(old, new, method=cv2.RANSAC,
+                                                                          ransacReprojThreshold=3.0)
+                            if transform is not None and mask is not None:
+                                keep = mask.reshape(-1).astype(bool)
+                                current_points = new[keep]
+                                inliers = int(keep.sum())
+                                corners = np.float32([[x,y],[x+w,y],[x+w,y+h],[x,y+h]]).reshape(-1,1,2)
+                                moved = cv2.transform(corners, transform).reshape(-1,2)
+                                x0,y0 = np.floor(moved.min(axis=0)).astype(int)
+                                x1,y1 = np.ceil(moved.max(axis=0)).astype(int)
+                                roi = (int(x0), int(y0), max(20,int(x1-x0)), max(20,int(y1-y0)))
+                                previous_points = current_points
+                if current_points is not None and len(current_points) >= 4 and inliers >= 4:
                     sensor = SensorMetadata(source_id="mac-camera", sensor_id="rotation-demo", sequence=sequence,
                                             stream_epoch="coin-demo")
-                    last_value = provider.process(InputFrame({"track_id":"semantic-object","center":[x+w/2,y+h/2],
-                        "points":current_points.tolist(),"feature_scores":[1.0]*len(current_points)},"video",now_ms,sensor=sensor))
+                    last_value = provider.process(InputFrame({"track_id": "unknown-object", "center": [x+w/2,y+h/2],
+                        "points": current_points.tolist(), "feature_scores": [1.0] * len(current_points)},
+                        "video", now_ms, sensor=sensor))
                     sequence += 1
                     measured_frames += 1
                     cv2.rectangle(frame, (x,y), (x+w,y+h), (255,180,0), 2)
                     cv2.polylines(frame, [np.int32(current_points).reshape(-1,1,2)], False, (0,220,0), 1)
                     cv2.putText(frame, f"rotation={last_value['rotation_count']:.2f} turns phase={last_value['phase_degrees']:.0f} deg", (20,35), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,0), 2)
-                    cv2.putText(frame, f"confidence={last_value['confidence']:.2f} points={len(current_points)}", (20,65), cv2.FONT_HERSHEY_SIMPLEX, .6, (0,255,255), 2)
+                    cv2.putText(frame, f"confidence={last_value['confidence']:.2f} inliers={inliers} points={len(current_points)}", (20,65), cv2.FONT_HERSHEY_SIMPLEX, .6, (0,255,255), 2)
                 else:
                     roi = previous_points = None
                     status = "Object lost; waiting for semantic detection" if not args.no_semantic else "Object lost; mechanical test waiting"
