@@ -41,16 +41,33 @@ Default:
 
 Supported provider labels: `openai`, `gemini`, `custom`. The configuration is a transport boundary only. A product/application must supply the actual realtime client, playback reference, consent, billing guard, and privacy policy before enabling it.
 
-## Semantic flow
+## Semantic perception flow
+
+Qwen3.5-9B-VL is a **GAMST perception-layer model** in this UseCase. It is
+not the final answer pipeline and does not count every camera frame. It runs at
+low cadence or at event boundaries to label objects, identify semantic actions,
+and provide optional heads/tails or rotating-state evidence.
 
 ```text
 RF-DETR / YOLOE / pose / audio workers
   -> typed GAMST observations
-  -> temporal Context and Watch
-  -> Qwen3.5-VL only for semantic question/Watch interpretation
+  -> Qwen3.5-VL semantic perception when needed
+  -> GAMST temporal Context and Watch
+  -> optional answer/notification consumer
 ```
 
-A relation such as “person entered the doorway” is temporal state, not a one-frame VLM claim. A future relation provider may produce “person holding cup” observations, but it must remain inside the same perception boundary and include model provenance, score semantics, evidence IDs and realtime measurements.
+A relation such as “person entered the doorway” is temporal state, not a
+one-frame VLM claim. The coin WOW path is:
+
+```text
+light multi-object detector/tracker
+  -> Qwen semantic object/perception labels
+  -> per-track AngularMotionCounter + ObjectEventReducer
+  -> GAMST Context: turns, tosses, flips, confidence
+```
+
+RelateAnything is excluded from the current implementation. Existing boxes,
+tracks, geometry and temporal reducers are sufficient for the first demo.
 
 ## General object rotation and toss events
 
