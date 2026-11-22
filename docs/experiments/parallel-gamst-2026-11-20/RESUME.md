@@ -95,6 +95,8 @@
 - 2026-11-20 SAM 3.1 재검증 확정 실패: 공식 checkpoint 구조(`multiplex_count=16`)로 로드·propagation 시작은 되지만 실제 프레임에서 SAM3 내부 `vision_feat`가 `[5184, 0, 256]`이 되어 tracker가 실패합니다. 공식 코드/가중치와 Blackwell에서 재현되었습니다. 결과는 실패로 보고합니다.
 - 2026-11-22 추가 범위 결정: RelateAnything은 현재 도입하지 않습니다. RF-DETR/YOLOE box+track+GAMST temporal state로 가능한 관계/zone 조건은 기존 perception에서 처리하고, holding/riding/on 등 필요 시 Issue #353의 별도 provider로 검토합니다.
 - 2026-11-22 추가 구현: `audio.context` provider와 기본 disabled realtime voice backend metadata 설정. full-duplex 자체는 이번 범위가 아니며, raw audio 대신 VAD/silence/AEC/CED/diarization/DOA 가능값/prosody/ASR를 Context로 전달합니다. 관련 Issue #354.
+- Coin WOW (#355): `CoinWowUseCase.process_frame`가 로컬 영상에서 `vision.rotation_tracks`와 `vision.object_rotations`를 발행하고, 앱은 반환된 관측 ID와 트랙별 값을 표시합니다. 실물 동전 사진은 둥근 후보 여러 개를 검출했습니다. [Euler’s disk](https://commons.wikimedia.org/wiki/File:Euler%E2%80%99s_disk.webm) 8–10초 구간의 프레임 60개가 SQLite에 기록됐지만 후보가 있었던 프레임은 3개뿐입니다. 회전수 정확도, 실제 동전 던짐·앞뒷면 전환은 검증하지 못했습니다. GCP 결제는 재활성화하지 않았고 디스크·스냅샷 삭제 요청도 거부됐습니다.
+- Mac 카메라: 1280×720/30fps를 강제로 요청한 실행은 첫 프레임을 받지 못했습니다. 기본값을 장치 원래 형식으로 바꾼 뒤 `--camera 0 --frames 15 --no-semantic` 프리뷰가 실제 관측 ID를 출력하고 정상 종료했습니다. 30fps 처리 성능을 측정한 것은 아닙니다.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더

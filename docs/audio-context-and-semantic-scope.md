@@ -87,3 +87,19 @@ clock or provider contracts.
 RelateAnything is excluded from this implementation. It may be revisited as
 an optional relation provider only if semantic object-pair relations are later
 needed.
+
+### Run the local evidence overlay
+
+`PYTHONPATH=. python3 scripts/coin_rotation_demo.py --camera 0 --no-semantic`
+opens the camera; `--video PATH` replays a recording. The preview shows a
+`vision.object_rotations` record ID, the matching region labels and track IDs,
+and net image-plane turns or `insufficient evidence`. `--store PATH` keeps
+derived SDK records in SQLite; the default is in-memory. No raw frames are saved.
+
+Without references the detector labels round contours as candidates, not coins.
+For textured props pass `--reference wheel=wheel.jpg` or a pair of tightly cropped
+photos: `--reference coin:heads=heads.jpg --reference coin:tails=tails.jpg`.
+The paired mode reports observed stable face changes, not unseen airborne flips.
+The optional local VLM supplies separate scene context; its text is not used
+as a high-rate rotation measurement. The pixel path does not measure contact
+or establish that an object was thrown.

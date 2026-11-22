@@ -59,10 +59,9 @@ async def run(args):
     try:
         if not cap.isOpened():
             raise RuntimeError(f'cannot open input: {source}')
-        if not args.video:
+        if not args.video and args.width and args.height:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-            cap.set(cv2.CAP_PROP_FPS, 30)
         async with Gamst(consent=True, store=args.store, sensor_inference_interval_ms=500) as human:
             usecase = CoinWowUseCase(human, references=photos, rotation_options={'min_quality': .65})
             if args.vlm_endpoint:
@@ -117,8 +116,8 @@ if __name__ == '__main__':
     sources.add_argument('--camera', type=int, default=0)
     sources.add_argument('--video')
     parser.add_argument('--frames', type=int, help='stop preview after this many frames')
-    parser.add_argument('--width', type=int, default=1280)
-    parser.add_argument('--height', type=int, default=720)
+    parser.add_argument('--width', type=int, help='requested camera width (use with --height)')
+    parser.add_argument('--height', type=int, help='requested camera height (use with --width)')
     parser.add_argument('--reference', action='append', default=[], metavar='LABEL=PHOTO')
     parser.add_argument('--store', default=':memory:', help='optional SQLite path for derived SDK evidence only')
     semantic = parser.add_mutually_exclusive_group()
