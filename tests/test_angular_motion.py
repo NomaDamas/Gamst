@@ -10,7 +10,7 @@ def frame(sequence, timestamp_ms, angle):
     return InputFrame({'track_id':'object-1','center':center,'points':points},'video',timestamp_ms,sensor=sensor)
 
 def test_counts_object_agnostic_full_turns_and_velocity():
-    provider=AngularMotionCounter(); values=[provider.process(frame(i,i*100,i*math.pi/4)) for i in range(10)]; final=values[-1]
+    provider=AngularMotionCounter(); values=[provider.process(frame(i,i*100,i*math.pi/4)) for i in range(9)]; final=values[-1]
     assert final['track_id']=='object-1'; assert abs(final['rotation_count']-1.)<.01; assert final['direction']=='clockwise'; assert final['angular_velocity_deg_s']>400; assert final['confidence']>=.99
 
 def test_track_change_resets_without_false_rotation():

@@ -51,10 +51,10 @@ class AngularMotionCounter:
             scores=[1.]*len(points) if scores is None else [float(s) for s in scores]
             owner=(frame.subject_id,frame.sensor.source_id,frame.sensor.sensor_id,frame.sensor.stream_epoch);sequence=frame.sensor.capture_sequence if frame.sensor.capture_sequence is not None else frame.sensor.sequence
             reset=owner!=self.owner or track_id!=self.track_id or self.last_ts is None or frame.timestamp_ms-self.last_ts>self.max_gap_ms or self.last_sequence is not None and sequence<=self.last_sequence
-            if reset:
-                self.owner,self.track_id=owner,track_id;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=None;self.previous_ts=frame.timestamp_ms;self.phase=0.;self.samples=0
-                return self._output(0.,"unknown",0.,len(points))
             angles=[math.atan2(y-center[1],x-center[0]) for (x,y),score in zip(points,scores) if math.hypot(x-center[0],y-center[1])>=self.min_radius and score>0]
+            if reset:
+                self.owner,self.track_id=owner,track_id;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms;self.phase=0.;self.samples=0
+                return self._output(0.,"unknown",0.,len(points))
             previous=self.previous_angles;previous_ts=self.previous_ts;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms
             if len(angles)<4 or previous is None or len(previous)!=len(angles): return self._output(0.,"unknown",0.,len(angles))
             deltas=[(after-before+math.pi)%(2*math.pi)-math.pi for before,after in zip(previous,angles)];median=sorted(deltas)[len(deltas)//2];confidence=sum(abs(delta-median)<=.35 for delta in deltas)/len(deltas)

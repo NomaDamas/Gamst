@@ -29,6 +29,13 @@ class ObjectRotationBank:
                 if not isinstance(item,dict) or set(item)-{"track_id","center","points","feature_scores"}:raise ValueError("object contains unsupported fields")
                 track_id=item.get("track_id")
                 if not isinstance(track_id,str) or not track_id:raise ValueError("object track_id is required")
-                live.add(track_id);counter=self.counters.setdefault(track_id,AngularMotionCounter(**self.options));value=counter.process(InputFrame({"track_id":track_id,"center":item["center"],"points":item["points"],"feature_scores":item.get("feature_scores")},"video",frame.timestamp_ms,subject_id=frame.subject_id,sensor=frame.sensor));output.append(value)
-            for track_id in set(self.counters)-live:self.counters[track_id].reset()
+                if track_id in live:
+                    raise ValueError('duplicate track_id')
+                live.add(track_id)
+                if track_id not in self.counters:
+                    self.counters[track_id] = AngularMotionCounter(**self.options)
+                value = self.counters[track_id].process(InputFrame({"track_id":track_id,"center":item["center"],"points":item["points"],"feature_scores":item.get("feature_scores")},"video",frame.timestamp_ms,subject_id=frame.subject_id,sensor=frame.sensor))
+                output.append(value)
+            for track_id in set(self.counters) - live:
+                self.counters.pop(track_id).close()
             return self.spec.validate({"objects":output})
