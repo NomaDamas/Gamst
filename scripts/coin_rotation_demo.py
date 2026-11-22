@@ -1,14 +1,17 @@
-"""Local 30fps object-rotation demo.
+"""Local 30fps Coin WOW application over the GAMST SDK.
 
-Semantic mode asks a Qwen3.5-VL-compatible endpoint for a target box. For a
-Qwen-free mechanical test, pass ``--no-semantic --roi x,y,w,h``: the box is
-explicit test input and is labelled ``unknown-object``; no object identity is
-claimed. In both modes, GAMST's existing/additive rotation capability counts
-feature phase locally.
+Semantic mode asks a Qwen3.5-VL-compatible endpoint for a target box. The
+Qwen-free mode accepts an explicit unknown-object ROI only to test the
+mechanical path. Both modes feed ``CoinWowUseCase``; the demo never calls
+AngularMotionCounter directly. GAMST commits rotation/toss/flip observations
+through the normal engine Context/Watch boundary.
+
+    PYTHONPATH=. python scripts/coin_rotation_demo.py --camera 0 --no-semantic --roi 540,280,200,200
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
 import time
@@ -17,9 +20,9 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
+from gamst import Gamst
 from gamst.capabilities import SensorMetadata
-from gamst.plugins import InputFrame
-from gamst.providers.angular_motion import AngularMotionCounter
+from gamst.usecases import CoinWowUseCase
 
 
 def features(gray, mask, max_points=64):
@@ -74,6 +77,11 @@ def main():
     test_roi = tuple(int(value) for value in args.roi.split(',')) if args.roi else None
     if test_roi is not None and len(test_roi) != 4:
         raise SystemExit("--roi requires x,y,w,h")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    human = Gamst(consent=True)
+    usecase = CoinWowUseCase(human, event_options={"stable_face_frames": 1})
     cap = cv2.VideoCapture(args.camera, cv2.CAP_AVFOUNDATION)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
@@ -81,7 +89,6 @@ def main():
     ok, frame = cap.read()
     if not ok:
         raise SystemExit("카메라를 열 수 없습니다. macOS 카메라 권한과 --camera를 확인하세요.")
-    provider = AngularMotionCounter(min_radius=3, min_quality=.35)
     roi = previous_gray = previous_points = None
     sequence = 0
     started = time.monotonic()
@@ -96,6 +103,7 @@ def main():
                 break
             elapsed = time.monotonic() - started
             now_ms = int(elapsed * 1000)
+            detected = None
             if args.no_semantic:
                 detected = (*test_roi, 1.0) if roi is None else None
                 if detected is not None:
@@ -105,10 +113,9 @@ def main():
                 next_semantic = elapsed + args.semantic_interval
                 if detected is None:
                     roi = previous_gray = previous_points = None
-                    provider.reset()
-                    status = f"Waiting for semantic {args.target} detection..."
+                    status = f"Waiting for semantic scene target: {args.target}"
                 else:
-                    status = f"Semantic scene target: {args.target} ({detected[4]:.2f})"
+                    status = f"General semantic scene perception: {args.target} ({detected[4]:.2f})"
             if detected is not None:
                 x, y, w, h, _confidence = detected
                 roi = (x, y, w, h)
@@ -117,7 +124,6 @@ def main():
                 mask[y:y+h, x:x+w] = 255
                 previous_points = features(gray_now, mask)
                 previous_gray = gray_now
-                provider.reset()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if roi is not None:
                 x, y, w, h = roi
@@ -130,8 +136,7 @@ def main():
                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, .01))
                     if nxt is not None:
                         valid = flow_status.reshape(-1).astype(bool)
-                        old = previous_points[valid]
-                        new = nxt.reshape(-1, 2)[valid]
+                        old, new = previous_points[valid], nxt.reshape(-1, 2)[valid]
                         if len(old) >= 4:
                             transform, mask = cv2.estimateAffinePartial2D(old, new, method=cv2.RANSAC,
                                                                           ransacReprojThreshold=3.0)
@@ -148,9 +153,14 @@ def main():
                 if current_points is not None and len(current_points) >= 4 and inliers >= 4:
                     sensor = SensorMetadata(source_id="mac-camera", sensor_id="rotation-demo", sequence=sequence,
                                             stream_epoch="coin-demo")
-                    last_value = provider.process(InputFrame({"track_id": "unknown-object", "center": [x+w/2,y+h/2],
-                        "points": current_points.tolist(), "feature_scores": [1.0] * len(current_points)},
-                        "video", now_ms, sensor=sensor))
+                    semantic = {"track_id": "unknown-object" if args.no_semantic else "semantic-object",
+                                "label": "unknown-object" if args.no_semantic else args.target,
+                                "center": [x+w/2,y+h/2], "points": current_points.tolist(),
+                                "feature_scores": [1.0] * len(current_points)}
+                    result = loop.run_until_complete(usecase.process(
+                        subject_id="local-user", timestamp_ms=now_ms, sensor=sensor,
+                        semantic_objects=[semantic]))
+                    last_value = result["rotation"]["objects"][0]
                     sequence += 1
                     measured_frames += 1
                     cv2.rectangle(frame, (x,y), (x+w,y+h), (255,180,0), 2)
@@ -162,17 +172,19 @@ def main():
                     status = "Object lost; waiting for semantic detection" if not args.no_semantic else "Object lost; mechanical test waiting"
                 previous_gray = gray
             cv2.putText(frame, status, (20,95), cv2.FONT_HERSHEY_SIMPLEX, .55, (255,255,0), 2)
-            cv2.imshow("GAMST 30fps object rotation", frame)
+            cv2.imshow("GAMST Coin WOW UseCase", frame)
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord('q'),27):
-                break
+            if key in (ord('q'),27): break
             if key == ord('r'):
                 roi = previous_gray = previous_points = None
-                provider.reset()
-        print(f"measured_frames={measured_frames}; last={last_value}")
+                usecase.rotation.reset()
+        print(f"measured_frames={measured_frames}; last={last_value}; usecase={usecase.status()}")
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        usecase.close()
+        loop.run_until_complete(human.close())
+        loop.close()
 
 
 if __name__ == "__main__":
