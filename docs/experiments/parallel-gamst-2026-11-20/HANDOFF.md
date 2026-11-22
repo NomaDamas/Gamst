@@ -262,6 +262,9 @@
 - hands-on MCP Watch demo 완료: alarm 1건, evidence contribution 1.0 확인.
 - VM `gamst-par`는 최종 작업 후 TERMINATED.
 - PR은 draft 상태로 남겨 실패 모델과 blocker를 검토할 수 있게 했습니다. 자동 merge하지 않았습니다.
+- 2026-11-22 의미 역할 정정: Qwen3.5-VL은 coin detector가 아니라 GAMST perception layer의 general scene semantic model입니다. 낮은 cadence/event boundary에서 객체·행동·상태 변화·사건 시작/진행/종료를 이해하고, GAMST additive capability가 고주파 수치/시간 Context를 계산합니다.
+- Coin WOW는 첫 application입니다: `coin/wheel/tire/fan -> Qwen semantic flow -> light detector/tracker -> AngularMotionCounter/ObjectEventReducer/ObjectRotationBank -> GAMST Context/Watch/overlay`.
+- 세 capability는 기존 GAMST provider boundary에 additive로 들어가며 engine/MCP/store/clock contract를 바꾸지 않습니다.
 
 
 

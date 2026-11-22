@@ -41,31 +41,49 @@ Default:
 
 Supported provider labels: `openai`, `gemini`, `custom`. The configuration is a transport boundary only. A product/application must supply the actual realtime client, playback reference, consent, billing guard, and privacy policy before enabling it.
 
-## Semantic perception flow
+## General semantic perception flow
 
-Qwen3.5-9B-VL is a **GAMST perception-layer model** in this UseCase. It is
-not the final answer pipeline and does not count every camera frame. It runs at
-low cadence or at event boundaries to label objects, identify semantic actions,
-and provide optional heads/tails or rotating-state evidence.
+Qwen3.5-9B-VL is a **general GAMST perception-layer model**. Its purpose is
+not to be a coin detector or a final answer pipeline. At a low cadence or at
+event boundaries it understands the semantic flow of a scene:
+
+- what objects and participants are present
+- what actions are unfolding
+- which state changed between windows
+- whether an event appears to start, continue or end
+- what the current scene means in natural language
+
+It can provide semantic hints for object labels, rotation/toss state and
+heads/tails, but GAMST does not treat those hints as calibrated measurements.
+The high-rate numeric and temporal work stays in the additive perception
+capabilities and existing tracking/flow components.
 
 ```text
-RF-DETR / YOLOE / pose / audio workers
-  -> typed GAMST observations
-  -> Qwen3.5-VL semantic perception when needed
-  -> GAMST temporal Context and Watch
-  -> optional answer/notification consumer
+camera
+  -> Qwen3.5-VL general scene semantic perception (low cadence)
+  -> light detector/tracker and existing OpenCV/timeseries components
+  -> additive GAMST perception capabilities:
+       AngularMotionCounter / ObjectEventReducer / ObjectRotationBank
+  -> GAMST Context / Watch / overlay
 ```
 
-## Coin WOW UseCase boundary
+## Coin WOW UseCase
 
-The coin demo is an **application/demo composition**, not a new GAMST core
-provider. It may combine existing detector/tracker, OpenCV optical flow and
-timeseries/repetition utilities in a demo process, while Qwen3.5-VL supplies
-low-rate semantic perception (object label, rotating state, toss boundary and
-optional face label).
+The coin is the first marketing demo, not a coin-specific architecture:
 
-The demo must not claim that an arbitrary moving contour is a coin. Without a
-semantic object result it stays in an unknown/waiting state. The existing
-GAMST core structures remain unchanged.
+```text
+coin / wheel / tire / fan / rotating tool
+  -> Qwen3.5-VL understands the scene and semantic progression
+  -> light detector/tracker supplies boxes and track IDs
+  -> per-track AngularMotionCounter computes rotation
+  -> ObjectEventReducer computes toss and face-change events
+  -> GAMST Context / Watch / live display
+```
 
-RelateAnything is excluded from the demo and current GAMST implementation.
+The three rotation/event capabilities are additive to the existing GAMST
+provider boundary. They do not replace or restructure the engine, MCP, store,
+clock or provider contracts.
+
+RelateAnything is excluded from this implementation. It may be revisited as
+an optional relation provider only if semantic object-pair relations are later
+needed.
