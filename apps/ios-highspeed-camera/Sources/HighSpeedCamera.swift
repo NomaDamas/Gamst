@@ -3,22 +3,32 @@ import Foundation
 import Network
 import VideoToolbox
 
-/// Captures at the camera's highest frame rate (240 fps on the back camera) and streams
-/// upright, downscaled colour JPEG frames with their sensor presentation timestamps to GAMST
-/// on a Mac. The phone is only a sensor: tracking, rotation counting, records and alarms all
-/// run in GAMST. Scaling, rotation and JPEG encoding run on the VideoToolbox hardware path.
+/// The phone is a sensor for GAMST on a Mac. The camera runs from launch (the Mac shows the
+/// live view for framing); Start/Stop marks a take, and every frame carries that flag.
+/// Capture runs at the camera's highest frame rate (240 fps on the back camera); scaling,
+/// horizon-level rotation and JPEG encoding run on the VideoToolbox hardware path.
 ///
-/// Wire format per frame (little endian): "GMST" | u32 sequence | f64 capture seconds |
-/// u16 width | u16 height | u32 jpeg length | jpeg bytes. Frames are already upright.
+/// Wire format per frame (little endian, 28-byte header): "GMS2" | u32 sequence |
+/// f64 capture seconds | u16 width | u16 height | u8 flags (bit 0 = recording) | 3 bytes reserved |
+/// u32 jpeg length | jpeg bytes. Frames are already upright.
 final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    @Published var status = "idle"
-    @Published var running = false
+    @Published var status = "starting camera"
+    @Published private(set) var macConnected = false
+    @Published private(set) var recording = false
+    @Published private(set) var recordingStartedAt: Date?
     @Published private(set) var position: AVCaptureDevice.Position = .back
+    @Published private(set) var zoom: CGFloat = 1
 
     let session = AVCaptureSession()
+    weak var previewLayer: AVCaptureVideoPreviewLayer?
+
     private let captureQueue = DispatchQueue(label: "gamst.capture", qos: .userInteractive)
-    private var connection: NWConnection?
+    private let networkQueue = DispatchQueue(label: "gamst.network")
     private let lock = NSLock()
+    private var connection: NWConnection?
+    private var endpoint: (host: String, port: UInt16)?
+    private var connected = false
+    private var recordingFlag = false
     private var pending = 0
     private var sequence: UInt32 = 0
     private var captured = 0, sent = 0, droppedSend = 0, droppedLate = 0
@@ -27,8 +37,9 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private var lastStatusAt = Date()
     private var lastCaptured = 0, lastSent = 0
 
-    private let outWidth = 640, outHeight = 360
-    private let maxPending = 8
+    private let outWidth = 960, outHeight = 540
+    // Half a second of in-flight frames absorbs Wi-Fi jitter; a cap of 8 dropped ~25% of 240 fps frames.
+    private let maxPending = 120
     private var transfer: VTPixelTransferSession?
     private var rotator: VTPixelRotationSession?
     private var encoder: VTCompressionSession?
@@ -38,33 +49,36 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private var captureAngle = 0
     private var coordinator: AVCaptureDevice.RotationCoordinator?
     private var observations: [NSKeyValueObservation] = []
-    weak var previewLayer: AVCaptureVideoPreviewLayer?
 
-    func start(host: String, port: UInt16) {
-        guard !running else { return }
+    /// Starts the camera and the stream to the Mac; called once when the app appears.
+    func activate(host: String, port: UInt16) {
         AVCaptureDevice.requestAccess(for: .video) { granted in
             guard granted else { DispatchQueue.main.async { self.status = "camera permission denied" }; return }
             self.captureQueue.async {
                 do {
                     try self.configure()
-                    self.connect(host: host, port: port)
                     self.session.startRunning()
-                    DispatchQueue.main.async {
-                        self.running = true
-                        self.startStatusTimer()
-                    }
                 } catch {
-                    DispatchQueue.main.async { self.status = "setup failed: \(error.localizedDescription)" }
+                    DispatchQueue.main.async { self.status = "camera setup failed: \(error.localizedDescription)" }
                 }
+            }
+            DispatchQueue.main.async {
+                self.connect(host: host, port: port)
+                self.startStatusTimer()
             }
         }
     }
 
+    func toggleRecording() {
+        let next = !recording
+        lock.lock(); recordingFlag = next; lock.unlock()
+        recording = next
+        recordingStartedAt = next ? Date() : nil
+    }
+
     /// Front cameras usually top out below 240 fps; the status line shows the rate actually set.
     func switchCamera() {
-        let next: AVCaptureDevice.Position = position == .back ? .front : .back
-        position = next
-        guard running else { return }
+        position = position == .back ? .front : .back
         captureQueue.async {
             self.session.stopRunning()
             do {
@@ -76,9 +90,7 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
 
-    @Published private(set) var zoom: CGFloat = 1
-
-    /// Cycles 1x, 2x, 3x so a small object fills more of the streamed 640x360 frame.
+    /// Cycles 1x, 2x, 3x so a small object fills more of the streamed frame.
     func cycleZoom() {
         let next: CGFloat = zoom >= 3 ? 1 : zoom + 1
         zoom = next
@@ -90,26 +102,52 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
 
-    func stop() {
-        captureQueue.async {
-            self.session.stopRunning()
-            self.connection?.cancel()
-            self.connection = nil
-            DispatchQueue.main.async {
-                self.running = false
-                self.statusTimer?.invalidate()
-                self.status = "stopped"
+    // MARK: Network
+
+    /// Connects (or reconnects) to GAMST on the Mac; a refused or dropped connection retries every second.
+    func connect(host: String, port: UInt16) {
+        endpoint = (host, port)
+        connection?.cancel()
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { status = "invalid port"; return }
+        let params = NWParameters.tcp
+        if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options { tcp.noDelay = true }
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                self.setConnected(true)
+            case .failed, .waiting:
+                self.setConnected(false)
+                connection.cancel()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    guard self.connection === connection, let endpoint = self.endpoint else { return }
+                    self.connect(host: endpoint.host, port: endpoint.port)
+                }
+            case .cancelled:
+                self.setConnected(false)
+            default:
+                break
             }
         }
+        lock.lock(); self.connection = connection; lock.unlock()
+        connection.start(queue: networkQueue)
     }
+
+    private func setConnected(_ value: Bool) {
+        lock.lock(); connected = value; lock.unlock()
+        DispatchQueue.main.async { self.macConnected = value }
+    }
+
+    // MARK: Camera
 
     private func configure() throws {
         let (position, zoom) = DispatchQueue.main.sync { (self.position, self.zoom) }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             throw NSError(domain: "gamst", code: 1, userInfo: [NSLocalizedDescriptionKey: "no \(position == .back ? "back" : "front") camera"])
         }
-        // Highest frame rate the camera offers (240 on the back camera), then the smallest format at that
-        // rate; capture rate, not resolution, decides countability.
+        // Highest frame rate the camera offers, then the smallest format at that rate that still
+        // covers the streamed size; capture rate, not resolution, decides countability.
         func maxRate(_ format: AVCaptureDevice.Format) -> Double {
             format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
         }
@@ -179,23 +217,6 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         })
     }
 
-    private func connect(host: String, port: UInt16) {
-        let params = NWParameters.tcp
-        if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options { tcp.noDelay = true }
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
-        connection.stateUpdateHandler = { state in
-            DispatchQueue.main.async {
-                switch state {
-                case .failed(let error): self.status = "network failed: \(error)"
-                case .waiting(let error): self.status = "waiting for Mac: \(error)"
-                default: break
-                }
-            }
-        }
-        connection.start(queue: DispatchQueue(label: "gamst.network"))
-        self.connection = connection
-    }
-
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         lock.lock(); droppedLate += 1; lock.unlock()
     }
@@ -203,12 +224,13 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         lock.lock()
         captured += 1
-        let busy = pending >= maxPending
-        if busy { droppedSend += 1 } else { pending += 1 }
-        let angle = captureAngle
+        let network = connected ? self.connection : nil
+        let busy = network != nil && pending >= maxPending
+        if busy { droppedSend += 1 } else if network != nil { pending += 1 }
+        let angle = captureAngle, flags: UInt8 = recordingFlag ? 1 : 0
         lock.unlock()
-        if busy { return }
-        guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer), let network = self.connection,
+        guard let network, !busy else { return }
+        guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
               let upright = uprightFrame(pixels, angle: angle) else { finish(sent: false); return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let width = CVPixelBufferGetWidth(upright), height = CVPixelBufferGetHeight(upright)
@@ -222,11 +244,12 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             }
             guard copied == kCMBlockBufferNoErr else { self.finish(sent: false); return }
             self.lock.lock(); self.sequence &+= 1; let sequence = self.sequence; self.lock.unlock()
-            var header = Data("GMST".utf8)
+            var header = Data("GMS2".utf8)
             self.append(&header, sequence.littleEndian)
             self.append(&header, pts.seconds.bitPattern.littleEndian)
             self.append(&header, UInt16(width).littleEndian)
             self.append(&header, UInt16(height).littleEndian)
+            header.append(contentsOf: [flags, 0, 0, 0])
             self.append(&header, UInt32(jpeg.count).littleEndian)
             network.send(content: header + jpeg, completion: .contentProcessed { error in self.finish(sent: error == nil) })
         }
@@ -307,8 +330,8 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             let now = Date(), dt = now.timeIntervalSince(self.lastStatusAt)
             let captureFps = Double(c - self.lastCaptured) / dt, sendFps = Double(s - self.lastSent) / dt
             self.lastCaptured = c; self.lastSent = s; self.lastStatusAt = now
-            self.status = String(format: "%@\ncapture %.0f fps · sent %.0f fps\nsent %d · dropped send %d · late %d",
-                                 format, captureFps, sendFps, s, ds, dl)
+            self.status = String(format: "%@\ncapture %.0f fps · sent %.0f fps · dropped %d · late %d",
+                                 format, captureFps, sendFps, ds, dl)
         }
     }
 }

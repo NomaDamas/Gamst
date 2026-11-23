@@ -14,28 +14,57 @@ struct ContentView: View {
     @AppStorage("gamstPort") private var port = "9123"
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack {
             CameraPreview(camera: camera).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    TextField("Mac IP", text: $host).textFieldStyle(.roundedBorder).frame(width: 160)
-                        .keyboardType(.numbersAndPunctuation).disabled(camera.running)
-                    TextField("port", text: $port).textFieldStyle(.roundedBorder).frame(width: 70)
-                        .keyboardType(.numberPad).disabled(camera.running)
-                    Button(camera.running ? "Stop" : "Start 240 fps") {
-                        if camera.running { camera.stop() } else { camera.start(host: host, port: UInt16(port) ?? 9123) }
+            VStack {
+                HStack(spacing: 10) {
+                    Circle().fill(camera.macConnected ? Color.green : Color.orange).frame(width: 10, height: 10)
+                    Text(camera.macConnected ? "GAMST connected" : "connecting to \(host):\(port)")
+                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+                    Spacer()
+                    if let started = camera.recordingStartedAt {
+                        TimelineView(.periodic(from: started, by: 0.1)) { context in
+                            Text(String(format: "● REC %.1fs", context.date.timeIntervalSince(started)))
+                                .font(.system(.footnote, design: .monospaced).weight(.bold))
+                                .foregroundColor(.red)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    Button(camera.position == .back ? "Front camera" : "Back camera") { camera.switchCamera() }
-                        .buttonStyle(.bordered)
-                    Button("\(Int(camera.zoom))x") { camera.cycleZoom() }
-                        .buttonStyle(.bordered)
                 }
-                Text(camera.status).font(.system(.caption, design: .monospaced)).foregroundColor(.white)
+                .padding(10)
+                .background(.ultraThinMaterial, in: Capsule())
+                Spacer()
+                HStack(alignment: .bottom, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            TextField("Mac IP", text: $host).textFieldStyle(.roundedBorder).frame(width: 150)
+                                .keyboardType(.numbersAndPunctuation)
+                                .onSubmit { camera.connect(host: host, port: UInt16(port) ?? 9123) }
+                            TextField("port", text: $port).textFieldStyle(.roundedBorder).frame(width: 64)
+                                .keyboardType(.numberPad)
+                            Button(camera.position == .back ? "Front" : "Back") { camera.switchCamera() }
+                                .buttonStyle(.bordered)
+                            Button("\(Int(camera.zoom))x") { camera.cycleZoom() }.buttonStyle(.bordered)
+                        }
+                        Text(camera.status).font(.system(.caption2, design: .monospaced)).foregroundColor(.white)
+                    }
+                    Spacer()
+                    Button(action: camera.toggleRecording) {
+                        ZStack {
+                            Circle().stroke(Color.white, lineWidth: 4).frame(width: 74, height: 74)
+                            RoundedRectangle(cornerRadius: camera.recording ? 8 : 30)
+                                .fill(Color.red)
+                                .frame(width: camera.recording ? 30 : 60, height: camera.recording ? 30 : 60)
+                        }
+                    }
+                    .accessibilityLabel(camera.recording ? "Stop" : "Start")
+                }
+                .padding(12)
+                .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 16))
             }
-            .padding(12)
-            .background(Color.black.opacity(0.55))
+            .padding()
+            .foregroundColor(.white)
         }
+        .onAppear { camera.activate(host: host, port: UInt16(port) ?? 9123) }
     }
 }
 

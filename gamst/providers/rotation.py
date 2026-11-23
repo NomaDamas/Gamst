@@ -7,6 +7,7 @@ can name the same timeline later; this provider only measures visible motion.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import math
@@ -153,9 +154,45 @@ class RotationProvider:
     def _clear(self):
         self._active = {}
         self._labels = {}
+        self._paths = {}
         self._last_region_ts = None
         self._motion_previous = None
         self._motion_owner = None
+
+    def _trajectory(self, track_id, start_ms, end_ms):
+        """Classify how a rotating object moved: ``free_fall`` (thrown: image-down constant
+        acceleration, steady sideways drift), ``stationary`` (spinning in place) or ``moving``.
+
+        Units are object diameters, so the test needs no camera calibration; a 24 mm coin
+        under gravity accelerates ~400 diameters/s^2. A flipping rigid disc keeps its major
+        axis while the minor axis oscillates, so a varying major axis (hands, bodies,
+        blur envelopes) is never classified as thrown or spinning in place.
+        """
+        import numpy as np
+        samples = [sample for sample in self._paths.get(track_id, ()) if start_ms <= sample[0] <= end_ms]
+        if len(samples) < 10:
+            return dict(kind='unknown', observed_frames=len(samples))
+        t = np.array([(sample[0] - samples[0][0]) / 1000 for sample in samples])
+        x, y = np.array([sample[1] for sample in samples]), np.array([sample[2] for sample in samples])
+        major = np.array([sample[3] for sample in samples])
+        size = max(1., float(np.median(major)))
+        rigidity = float(np.std(major) / size)
+        spread = float(max(np.ptp(x), np.ptp(y))) / size
+        common = dict(travel_diameters=round(spread, 2), size_variation=round(rigidity, 3),
+                      observed_frames=len(samples))
+        if rigidity > .25:
+            return dict(kind='moving', **common)
+        if spread < .5:
+            return dict(kind='stationary', **common)
+        fit_y = np.polyfit(t, y, 2)
+        residual = float(np.sum((y - np.polyval(fit_y, t)) ** 2))
+        total = float(np.sum((y - y.mean()) ** 2)) or 1.
+        r2 = 1 - residual / total
+        drift = float(np.sqrt(np.mean((x - np.polyval(np.polyfit(t, x, 1), t)) ** 2))) / size
+        accel = 2 * float(fit_y[0]) / size
+        free_fall = r2 >= .95 and 150 <= accel <= 3000 and drift <= .5
+        return dict(kind='free_fall' if free_fall else 'moving', accel_diameters_s2=round(accel, 1),
+                    fit_r2=round(r2, 3), **common)
 
     def reset(self):
         with self._lock:
@@ -221,6 +258,7 @@ class RotationProvider:
             roi = self.config['roi']
             rows = _rows([dict(label=roi.get('label', 'unknown'), score=1., bbox=roi)], self.config['targets'])
         else:
+            self.tracks.expire_unconfirmed(stamp, max(150, 3 * self.config['region_refresh_ms']))
             rows = _rows(self._motion_regions(frame.data, stamp), self.config['targets'])
         self.tracks.detections(rows, frame.data.shape, stamp)
         self._last_region_ts = stamp
@@ -262,6 +300,9 @@ class RotationProvider:
             label = None if item['label'] == 'unknown' else item['label']
             if label is not None:
                 self._labels[track_id] = label
+            if item['observed'] and item['axes']:
+                path = self._paths.setdefault(track_id, collections.deque(maxlen=4096))
+                path.append((stamp, item['center'][0], item['center'][1], item['axes'][0]))
             flip = spin_by[track_id]
             plane = rotation_by.get(track_id, dict(rotation_count=0., angular_velocity_deg_s=0., direction='unknown'))
             plane_rev_s = abs(plane['angular_velocity_deg_s']) / 360
@@ -308,7 +349,12 @@ class RotationProvider:
                     turns=event['turns'], rev_s=event['rev_s'], duration_ms=event['duration_ms'],
                     fit_quality=event['fit_quality'], capture_fps=event['capture_fps'],
                     max_countable_rev_s=event['max_countable_rev_s'],
-                    expected_max_rev_s=event['expected_max_rev_s']))
+                    expected_max_rev_s=event['expected_max_rev_s'],
+                    trajectory=self._trajectory(event['track_id'], event['timestamp_ms'] - event['duration_ms'],
+                                                event['timestamp_ms'])))
+        for track_id in [key for key in self._paths if key not in seen]:
+            if stamp - self._paths[track_id][-1][0] > 2 * self.config['max_gap_ms']:
+                del self._paths[track_id]
         return dict(objects=output, events=events)
 
     def _end_in_plane(self, track_id, state, reason):
@@ -331,7 +377,8 @@ class RotationPlugin:
 
     ``record_every_ms`` keeps high-fps sources affordable: every frame is still
     measured, but a record is committed only when an event fires or the cadence
-    elapses. ``0`` commits every frame.
+    elapses. ``0`` commits every frame. ``latest`` holds the newest per-frame
+    measurement for live overlays; records stay the context contract.
     """
 
     modalities = ('video',)
@@ -350,6 +397,7 @@ class RotationPlugin:
         self._captures = {}
         self._committed_at = {}
         self._detection_ids = {}
+        self.latest = None
         self.closed = False
 
     def _latest_detections(self, frame):
@@ -385,6 +433,7 @@ class RotationPlugin:
         detections, fresh = self._latest_detections(frame)
         value = self.provider.process(InputFrame(frame.data, 'video', frame.timestamp_ms,
             subject_id=frame.subject_id, sensor=sensor), detections=detections, detector_fresh=fresh)
+        self.latest = value
         last = self._committed_at.get(frame.subject_id)
         if value['events'] or last is None or frame.timestamp_ms - last >= self.record_every_ms:
             self._sequences[frame.subject_id] = sequence
