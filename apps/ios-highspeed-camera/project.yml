@@ -1,7 +1,7 @@
 name: GamstHighSpeedCamera
 options:
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "15.0"
 targets:
   GamstHighSpeedCamera:
     type: application

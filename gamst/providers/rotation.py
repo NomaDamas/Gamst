@@ -116,7 +116,11 @@ def _rows(items, targets=None):
         score = item.get('score', 0.)
         if type(score) not in (int, float) or not math.isfinite(score):
             score = 0.
-        output.append(dict(label=label, score=max(0., min(1., float(score))), bbox=box))
+        row = dict(label=label, score=max(0., min(1., float(score))), bbox=box)
+        size = item.get('size_px')
+        if type(size) in (int, float) and math.isfinite(size) and size > 0:
+            row['size_px'] = float(size)
+        output.append(row)
     return output
 
 
@@ -136,6 +140,7 @@ class RotationProvider:
         self.rotation = ObjectRotationBank(max_tracks=options['max_tracks'], max_gap_ms=options['max_gap_ms'],
                                            max_points=options['max_points'], min_quality=options['min_quality'])
         self._lock = threading.RLock()
+        self._target_size = None
         self.closed = False
         self._clear()
 
@@ -210,6 +215,20 @@ class RotationProvider:
             self.rotation.close()
             self.closed = True
 
+    def set_target(self, size_px):
+        """Follow only objects of an exemplar's size (pixels on the frames this provider receives).
+
+        Motion alone proposes every moving thing (hands, arms, heads). A target exemplar, e.g.
+        a box the user drew around a coin, restricts proposals to similar-size blobs and fixes
+        each track's expected size, so segmentation rejects larger blobs. ``None`` clears it.
+        """
+        if size_px is not None and (type(size_px) not in (int, float) or not math.isfinite(size_px) or
+                                    not 4 <= size_px <= 4096):
+            raise ValueError('target size must be 4..4096 pixels or None')
+        with self._lock:
+            self._target_size = None if size_px is None else float(size_px)
+            self.tracks.reset()
+
     def _motion_regions(self, image, stamp):
         import cv2
         import numpy as np
@@ -221,22 +240,32 @@ class RotationProvider:
         difference = cv2.absdiff(cv2.GaussianBlur(previous, (5, 5), 0), cv2.GaussianBlur(gray, (5, 5), 0))
         _, mask = cv2.threshold(difference, 24, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+        target = self._target_size
+        grow = 9 if target is None else max(3, int(target // 4) | 1)
+        mask = cv2.dilate(mask, np.ones((grow, grow), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         height, width = gray.shape
         rows = []
         for contour in sorted(contours, key=cv2.contourArea, reverse=True):
-            area = cv2.contourArea(contour)
-            if area < max(144., height * width * .0005):
-                break
             x, y, w, h = cv2.boundingRect(contour)
-            if w < 12 or h < 12 or w * h > height * width * .5:
-                continue
+            if target is not None:
+                # The exemplar fixes the scale: a moving coin's difference blob spans roughly one to
+                # a few diameters (its motion smear); hands and arms are far larger.
+                if not .5 * target <= max(w, h) <= 5 * target or min(w, h) < .3 * target:
+                    continue
+            else:
+                if cv2.contourArea(contour) < max(144., height * width * .0005):
+                    break
+                if w < 12 or h < 12 or w * h > height * width * .5:
+                    continue
             pad_x, pad_y = w * .1, h * .1
             x0, y0 = max(0., x - pad_x), max(0., y - pad_y)
             x1, y1 = min(float(width), x + w + pad_x), min(float(height), y + h + pad_y)
-            rows.append(dict(label='unknown', score=0., bbox=dict(
-                x=x0 / width, y=y0 / height, width=(x1 - x0) / width, height=(y1 - y0) / height)))
+            row = dict(label='unknown', score=0., bbox=dict(
+                x=x0 / width, y=y0 / height, width=(x1 - x0) / width, height=(y1 - y0) / height))
+            if target is not None:
+                row['size_px'] = target
+            rows.append(row)
             if len(rows) >= self.config['max_tracks']:
                 break
         return rows
@@ -441,6 +470,10 @@ class RotationPlugin:
             await self.human.push_observation(self.spec.id, value, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         return []
+
+    def set_target(self, size_px):
+        """See :meth:`RotationProvider.set_target`; sizes are in pixels of the pushed frames."""
+        self.provider.set_target(size_px)
 
     def reset(self):
         self.provider.reset()

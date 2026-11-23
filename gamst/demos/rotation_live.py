@@ -32,17 +32,20 @@ from pathlib import Path
 
 from ..providers.rotation import RotationPlugin
 
-# "GMS2" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 | 2 pad |
-# u32 jpeg bytes. "GMST" (first app build) has no flags field and counts as one continuous take.
+# "GMS3" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 |
+# u16 clockwise degrees to upright | u16 x4 crop rect (sensor-normalized x65535) | u32 jpeg bytes.
+# Frames arrive in sensor orientation; the Mac rotates them upright. "GMS2" frames are already upright
+# and uncropped; "GMST" (first app build) has no flags and counts as one continuous take.
 # The Mac drives the phone with newline-delimited JSON commands written back on the same socket.
-HEADER_SIZE = {b'GMS2': 28, b'GMST': 24}
+HEADER_SIZE = {b'GMS3': 36, b'GMS2': 28, b'GMST': 24}
 RECORDING, FRONT_CAMERA = 1, 2
-MEASURE_LONG_SIDE = 640  # GAMST measures at this size; the HUD shows the full received frame
+FULL = (0., 0., 1., 1.)
+MEASURE_PIXELS = 300_000  # GAMST measures frames scaled down to at most this many pixels
 
 
 def measured_size(frame):
     height, width = frame.shape[:2]
-    scale = MEASURE_LONG_SIDE / max(width, height)
+    scale = min(1., (MEASURE_PIXELS / (width * height)) ** .5)
     return max(2, round(width * scale)), max(2, round(height * scale))
 
 
@@ -54,10 +57,17 @@ class FrameHeader(typing.NamedTuple):
     flags: int
     zoom: float
     size: int
+    angle: int = 0
+    crop: tuple = FULL
 
 
 def parse_header(header):
     magic = header[:4]
+    if magic == b'GMS3':
+        sequence, seconds, width, height, flags, zoom, angle, cx, cy, cw, ch, size = struct.unpack(
+            '<IdHHBBH4HI', header[4:36])
+        return FrameHeader(sequence, seconds, width, height, flags, (zoom or 10) / 10, size, angle % 360,
+                           (cx / 65535, cy / 65535, cw / 65535, ch / 65535))
     if magic == b'GMS2':
         sequence, seconds, width, height, flags, zoom, size = struct.unpack('<IdHHBB2xI', header[4:28])
         return FrameHeader(sequence, seconds, width, height, flags, (zoom or 10) / 10, size)
@@ -68,6 +78,7 @@ def parse_header(header):
 
 
 def read_recording(path):
+    """[(FrameHeader, header bytes, jpeg bytes)] of a raw.gmst stream."""
     data = Path(path).read_bytes()
     frames, offset = [], 0
     while offset + 4 <= len(data):
@@ -76,10 +87,49 @@ def read_recording(path):
             raise SystemExit(f'{path}: not a GAMST 240 recording')
         info = parse_header(data[offset:offset + size])
         offset += size
-        frames.append((info.sequence, info.seconds, info.flags, data[offset - size:offset],
-                       data[offset:offset + info.size]))
+        frames.append((info, data[offset - size:offset], data[offset:offset + info.size]))
         offset += info.size
     return frames
+
+
+def decode(info, payload):
+    """The frame upright, as BGR."""
+    import cv2
+    import numpy as np
+    frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+    turn = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(info.angle)
+    return frame if frame is None or turn is None else cv2.rotate(frame, turn)
+
+
+def sensor_to_upright(x, y, angle):
+    """Full-sensor normalized point -> full upright normalized point (clockwise ``angle``)."""
+    return {0: (x, y), 90: (1 - y, x), 180: (1 - x, 1 - y), 270: (y, 1 - x)}[angle]
+
+
+def upright_to_sensor(x, y, angle):
+    return {0: (x, y), 90: (y, 1 - x), 180: (1 - x, 1 - y), 270: (1 - y, x)}[angle]
+
+
+def frame_to_upright(info, fx, fy):
+    """Point in the received (cropped, upright) frame, normalized -> full upright normalized."""
+    # Undo the rotation inside the crop, then place the crop in the full sensor frame.
+    lx, ly = upright_to_sensor(fx, fy, info.angle)
+    cx, cy, cw, ch = info.crop
+    return sensor_to_upright(cx + lx * cw, cy + ly * ch, info.angle)
+
+
+def upright_rect_to_sensor(rect, angle):
+    x, y, w, h = rect
+    points = [upright_to_sensor(px, py, angle) for px, py in ((x, y), (x + w, y + h))]
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+
+def pixel_density(info, measured_width, frame_width):
+    """Measured pixels per unit of sqrt(full-sensor area) for this frame's mode and crop."""
+    _, _, cw, ch = info.crop
+    native = ((info.width / cw) * (info.height / ch)) ** .5
+    return native * measured_width / frame_width
 
 
 # ---------------------------------------------------------------- rendering
@@ -186,13 +236,25 @@ class Hud:
         cv2.rectangle(canvas, (1432, y - 2), (1888, y + h + 1), PANEL, -1)
         cv2.rectangle(canvas, (x - 2, 900), (1888, 1052), PANEL, -1)
         t = self.text
-        width = t.put(canvas, 'GAMST', 32, 30, 44, WHITE, 'bold')
-        t.put(canvas, 'Halo  ·  vision.rotation  ·  moment capture', 32 + width + 18, 44, 22, MUTED)
+        width = self._logo(canvas, 28, 20)
+        t.put(canvas, 'Halo  ·  vision.rotation  ·  moment capture', 28 + width + 20, 44, 22, MUTED)
         t.put(canvas, 'LAST TOSS', 1456, 124, 18, MUTED, 'semibold')
         t.put(canvas, 'THIS TAKE', 1456, 560, 18, MUTED, 'semibold')
         t.put(canvas, 'GAMST CONTEXT   Watch: rotation.ended  ->  timestamped records an LLM can read later',
               48, 914, 18, MUTED, 'semibold')
         return canvas
+
+    def _logo(self, canvas, x, y):
+        """Alpha-blend the packaged GAMST logo; returns its width."""
+        from PIL import Image
+        np = self.np
+        logo = Image.open(Path(__file__).parent / 'assets' / 'gamst-logo.png').convert('RGBA')
+        rgba = np.asarray(logo, dtype=np.float32)
+        alpha = rgba[..., 3:] / 255
+        h, w = rgba.shape[:2]
+        region = canvas[y:y + h, x:x + w]
+        region[:] = (region * (1 - alpha) + rgba[..., 2::-1] * alpha).astype(np.uint8)
+        return w
 
     def update(self, value):
         """Feed every measured frame so motion trails stay continuous (measurement coordinates)."""
@@ -277,6 +339,8 @@ class Hud:
         right = f"camera {state['capture_fps']:.0f} fps"
         if state.get('frame_size'):
             right += f"  ·  {state['frame_size'][0]}x{state['frame_size'][1]}"
+        if state.get('target_px'):
+            right += f"  ·  target {state['target_px']:.0f} px"
         t.put(canvas, right, 1888, 34, 22, WHITE, 'semibold', anchor='right')
         t.put(canvas, f"countable up to {state['capture_fps'] / 4:.0f} rev/s flipping", 1888, 64, 18, MUTED, anchor='right')
 
@@ -381,13 +445,11 @@ class Take:
 
 def render_slowmo(directory):
     """Every captured frame of a take with its GAMST overlay at 30 fps (8x slow at 240 fps)."""
-    import cv2
-    import numpy as np
     directory = Path(directory)
     hud, sink = Hud(), None
     with open(directory / 'measurements.jsonl') as measurements:
-        for (_, _, _, _, payload), line in zip(read_recording(directory / 'raw.gmst'), measurements):
-            frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+        for (info, _, payload), line in zip(read_recording(directory / 'raw.gmst'), measurements):
+            frame = decode(info, payload)
             if frame is None:
                 continue
             value = json.loads(line)
@@ -440,16 +502,16 @@ async def run(args):
     latest = {'frame': None}       # standby view: newest frame only
     stats = dict(received=0, capture=collections.deque(maxlen=241))
 
-    def receive(header, payload, seconds, flags):
+    def receive(info, header, payload):
         stats['received'] += 1
-        stats['capture'].append(seconds)
-        if flags & RECORDING:
-            take_queue.put(('frame', header, payload, seconds))
+        stats['capture'].append(info.seconds)
+        if info.flags & RECORDING:
+            take_queue.put(('frame', info, header, payload))
         else:
-            latest['frame'] = (header, payload, seconds)
+            latest['frame'] = (info, payload)
 
     recording_flag = {'on': False}
-    phone = dict(sock=None, recording=False, front=False, zoom=1.)
+    phone = dict(sock=None, recording=False, front=False, zoom=1., angle=0, crop=FULL)
 
     def mark(flags):
         on = bool(flags & RECORDING)
@@ -457,22 +519,26 @@ async def run(args):
             recording_flag['on'] = on
             take_queue.put(('start',) if on else ('stop',))
 
-    def command(name):
-        """Drive the phone exactly like its own buttons; the phone echoes state in each frame header."""
+    def send(message):
         sock = phone['sock']
         if sock is None:
             return
-        if name == 'record':
-            message = dict(cmd='record', on=not phone['recording'])
-        elif name == 'camera':
-            message = dict(cmd='camera', position='back' if phone['front'] else 'front')
-        else:
-            message = dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1)
         try:
             sock.sendall((json.dumps(message) + '\n').encode())
         except OSError:
             return
         print(json.dumps({'command': message}), flush=True)
+
+    def command(name):
+        """Drive the phone exactly like its own buttons; the phone echoes state in each frame header."""
+        if name == 'record':
+            send(dict(cmd='record', on=not phone['recording']))
+        elif name == 'camera':
+            send(dict(cmd='camera', position='back' if phone['front'] else 'front'))
+        elif name == 'zoom':
+            send(dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1))
+        elif name == 'target':
+            clear_target()
 
     def serve(listener):
         while True:
@@ -495,9 +561,9 @@ async def run(args):
                     if len(payload) < info.size:
                         raise ConnectionError('stream ended')
                     phone.update(recording=bool(info.flags & RECORDING), front=bool(info.flags & FRONT_CAMERA),
-                                 zoom=info.zoom)
+                                 zoom=info.zoom, angle=info.angle, crop=info.crop)
                     mark(info.flags)
-                    receive(header, payload, info.seconds, info.flags)
+                    receive(info, header, payload)
             except (OSError, ValueError, struct.error) as error:
                 print(json.dumps({'iphone': 'disconnected', 'reason': str(error)}), flush=True)
             finally:
@@ -509,10 +575,10 @@ async def run(args):
 
     async def replay(path):
         frames = read_recording(path)
-        stats['span_ms'] = round(1000 * (frames[-1][1] - frames[0][1])) if frames else 0
-        for _, seconds, flags, header, payload in frames:
-            mark(flags)
-            receive(header, payload, seconds, flags)
+        stats['span_ms'] = round(1000 * (frames[-1][0].seconds - frames[0][0].seconds)) if frames else 0
+        for info, header, payload in frames:
+            mark(info.flags)
+            receive(info, header, payload)
             await asyncio.sleep(0)
         mark(0)
         take_queue.put(('end',))
@@ -528,21 +594,73 @@ async def run(args):
     hud = Hud(show_all=args.show_all)
     title = 'GAMST 240 - vision.rotation'
     buttons = []  # (name, x, y, width, height) in HUD pixels; drawn on the window only, never recorded
+    drag = dict(start=None, now=None, button=None)
+    view = dict(info=None, shape=None)  # header and size of the frame on screen, to map clicks
+    target = dict(norm=None, applied=None)  # exemplar size per unit of sensor density
+
+    def to_frame(x, y):
+        """HUD pixel -> normalized point in the frame on screen (None outside the picture)."""
+        if view['shape'] is None:
+            return None
+        fh, fw = view['shape'][:2]
+        scale = min(VIDEO[2] / fw, VIDEO[3] / fh)
+        dw, dh = int(fw * scale) // 2 * 2, int(fh * scale) // 2 * 2
+        fx = (x - VIDEO[0] - (VIDEO[2] - dw) // 2) / dw
+        fy = (y - VIDEO[1] - (VIDEO[3] - dh) // 2) / dh
+        return (fx, fy) if 0 <= fx <= 1 and 0 <= fy <= 1 else None
+
+    def set_target_from_box(a, b):
+        """The user's box around the object fixes its size and moves the phone's native-resolution
+        strip over it: full frame height (the object flies up), narrow enough to keep 240 fps."""
+        info, shape = view['info'], view['shape']
+        if info is None or a is None or b is None:
+            return
+        fh, fw = shape[:2]
+        size_px = max(abs(a[0] - b[0]) * fw, abs(a[1] - b[1]) * fh)
+        measured_w = measured_size(np.empty((fh, fw, 1), np.uint8))[0]
+        if size_px * measured_w / fw < 3:
+            return
+        target.update(norm=size_px * measured_w / fw / pixel_density(info, measured_w, fw), applied=None)
+        ux, _ = frame_to_upright(info, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        left = min(max(0., ux - .2), .6)
+        send(dict(cmd='crop', rect=[round(v, 4) for v in upright_rect_to_sensor((left, 0., .4, 1.), info.angle)]))
+        print(json.dumps({'target': {'size_px_on_screen_frame': round(size_px, 1), 'norm': round(target['norm'], 6)}}),
+              flush=True)
+
+    def clear_target():
+        target.update(norm=None, applied=None)
+        if plugin_ref:
+            plugin_ref[0].set_target(None)
+        send(dict(cmd='crop', rect=list(FULL)))
+
+    plugin_ref = []
     if not args.headless:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(title, 1440, 810)
         cv2.moveWindow(title, 40, 60)
 
         def on_mouse(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONUP:
+            if event == cv2.EVENT_LBUTTONDOWN:
+                drag.update(start=None, now=None, button=None)
                 for name, bx, by, bw, bh in buttons:
                     if bx <= x <= bx + bw and by <= y <= by + bh:
-                        command(name)
+                        drag['button'] = name
+                        return
+                if to_frame(x, y) is not None:
+                    drag.update(start=(x, y), now=(x, y))
+            elif event == cv2.EVENT_MOUSEMOVE and drag['start'] is not None:
+                drag['now'] = (x, y)
+            elif event == cv2.EVENT_LBUTTONUP:
+                if drag['button'] is not None:
+                    command(drag['button'])
+                elif drag['start'] is not None and abs(x - drag['start'][0]) + abs(y - drag['start'][1]) > 6:
+                    set_target_from_box(to_frame(*drag['start']), to_frame(x, y))
+                drag.update(start=None, now=None, button=None)
 
         cv2.setMouseCallback(title, on_mouse)
     pending_alarms = []
     state = dict(mode='waiting', take_seconds=0., lag_s=0., saved='', capture_fps=0., frame_size=None,
-                 last_toss=None, tosses=0, ignored=0, frames=0, history=[], feed=[])
+                 last_toss=None, tosses=0, ignored=0, frames=0, history=[], feed=[], target_px=None)
     take = None
     first = base = last_stamp = None
     hud_due = take_started = None
@@ -555,12 +673,14 @@ async def run(args):
         return (len(window) - 1) / (window[-1] - window[0]) if len(window) > 1 and window[-1] > window[0] else 0.
 
     def controls(image):
-        """Phone controls for the Mac window (space/r: record, c: camera, z: zoom, q: quit)."""
+        """Phone controls for the Mac window (space/r: record, c: camera, z: zoom, t: clear target, q: quit)."""
+        import cv2
         buttons.clear()
         connected = phone['sock'] is not None
         items = [('record', '■  STOP' if phone['recording'] else '●  REC', REC if connected else DIM),
                  ('camera', f"camera  {'front' if phone['front'] else 'back'}", PANEL if connected else DIM),
-                 ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM)]
+                 ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM),
+                 ('target', 'target  ✕' if target['norm'] else 'target: drag a box', GOOD if target['norm'] else PANEL)]
         widths = [hud.text.patch(label, 24, WHITE, 'semibold')[0].shape[1] + 36 for _, label, _ in items]
         x = VIDEO[0] + (VIDEO[2] - sum(widths) - 16 * (len(items) - 1)) // 2
         y = VIDEO[1] + VIDEO[3] - 72
@@ -568,8 +688,11 @@ async def run(args):
             _pill(image, hud.text, x, y, label, color, size=24)
             buttons.append((name, x, y, width, 44))
             x += width + 16
-        hint = 'space  record   ·   c  camera   ·   z  zoom   ·   q  quit' if connected else 'phone not connected'
+        hint = ('drag a box around the coin   ·   space  record   ·   c  camera   ·   z  zoom   ·   t  clear   ·   q  quit'
+                if connected else 'phone not connected')
         hud.text.put(image, hint, VIDEO[0] + VIDEO[2] // 2, y + 54, 16, MUTED, anchor='center')
+        if drag['start'] is not None and drag['now'] is not None:
+            cv2.rectangle(image, drag['start'], drag['now'], GOOD, 2, cv2.LINE_AA)
         return image
 
     def show(image):
@@ -585,6 +708,8 @@ async def run(args):
             command('camera')
         elif key == ord('z'):
             command('zoom')
+        elif key == ord('t'):
+            clear_target()
         return key in (27, ord('q'))
 
     try:
@@ -592,6 +717,7 @@ async def run(args):
             plugin = RotationPlugin(human, expected_max_rev_s=args.expected_max_rev_s, region_source='motion',
                                     region_refresh_ms=20, record_every_ms=33)
             human.register(plugin)
+            plugin_ref.append(plugin)
             watch = human.watches.create(owner='user', description='Tell me how many turns each rotation made.',
                 rule=dict(conditions=[dict(capability_id='vision.rotation', path='events', op='contains',
                                            value='rotation.ended', within_ms=1000)],
@@ -609,11 +735,12 @@ async def run(args):
                             state['mode'] == 'saved' and time.monotonic() - state['saved_at'] > 4)):
                         state['mode'] = 'standby' if latest['frame'] is not None else 'waiting'
                     if take is None and latest['frame'] is not None and time.monotonic() - last_view > 1 / 30:
-                        _, payload, _ = latest['frame']
-                        frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+                        info, payload = latest['frame']
+                        frame = decode(info, payload)
                         if frame is not None:
                             state['frame_size'] = (frame.shape[1], frame.shape[0])
                             shown_frame = frame
+                            view.update(info=info, shape=frame.shape)
                             if show(hud.render(frame, None, state)):
                                 break
                     elif not args.headless and time.monotonic() - last_view > .25:
@@ -643,13 +770,27 @@ async def run(args):
                               flush=True)
                         take = None
                     continue
-                _, header, payload, seconds = item
+                _, info, header, payload = item
                 if take is None:
                     continue
-                frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+                frame = decode(info, payload)
                 if frame is None:
                     continue
-                measured = cv2.resize(frame, measured_size(frame), interpolation=cv2.INTER_AREA)
+                size = measured_size(frame)
+                measured = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+                seconds = info.seconds
+                density = pixel_density(info, size[0], frame.shape[1])
+                if args.target_px and target['norm'] is None:
+                    target['norm'] = args.target_px / density
+                if target['norm']:
+                    # Keep the exemplar's size in this frame's pixels (crop and format change the scale).
+                    wanted = min(4096., max(4., target['norm'] * density))
+                    if target['applied'] is None or abs(wanted / target['applied'] - 1) > .05:
+                        plugin.set_target(wanted)
+                        target['applied'] = wanted
+                    state['target_px'] = wanted
+                else:
+                    state['target_px'] = None
                 if first is None:
                     first, base = seconds, time.time_ns() // 1_000_000 - 1000 - stats.get('span_ms', 0)
                 stamp = base + round((seconds - first) * 1000)
@@ -693,6 +834,7 @@ async def run(args):
                     state['mode'] = 'processing'
                 take.add(header, payload, seconds, value, state['last_toss'])
                 shown_frame = frame
+                view.update(info=info, shape=frame.shape)
                 if seconds >= hud_due:
                     # hud.mp4 advances on capture time, so it plays in real time however far GAMST lags.
                     image = hud.render(frame, value, state)

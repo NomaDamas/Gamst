@@ -1,19 +1,27 @@
 import AVFoundation
+import CoreMotion
 import Foundation
 import Network
+import UIKit
 import VideoToolbox
 
 /// The phone is a sensor for GAMST on a Mac. The camera runs from launch (the Mac shows the
 /// live view for framing); Start/Stop marks a take, and every frame carries that flag.
-/// Capture runs at the camera's highest frame rate (240 fps on the back camera); scaling,
-/// horizon-level rotation and JPEG encoding run on the VideoToolbox hardware path.
-/// The Mac can drive the same controls: it writes newline-delimited JSON commands back on
-/// the stream socket ({"cmd":"record","on":true}, {"cmd":"camera","position":"front"},
-/// {"cmd":"zoom","factor":2}).
 ///
-/// Wire format per frame (little endian, 28-byte header): "GMS2" | u32 sequence |
-/// f64 capture seconds | u16 width | u16 height | u8 flags (bit 0 = recording, bit 1 = front
-/// camera) | u8 zoom x10 | 2 bytes reserved | u32 jpeg length | jpeg bytes. Frames are upright.
+/// Two capture modes, neither of which scales pixels on the phone:
+/// * full: the camera's smallest format at its highest frame rate (720p240), sent whole for framing;
+/// * crop: the largest format at that rate (1080p240) and only a requested sensor rectangle sent at
+///   native resolution, so a small fast object keeps its pixels while the frame keeps its height.
+/// The phone never rotates pixels: each frame carries the angle that makes it upright, and the Mac
+/// rotates. Frames are JPEG-encoded on the VideoToolbox path.
+///
+/// The Mac drives the same controls with newline-delimited JSON written back on the socket:
+/// {"cmd":"record","on":true}, {"cmd":"camera","position":"front"}, {"cmd":"zoom","factor":2},
+/// {"cmd":"crop","rect":[x,y,w,h]} (sensor-normalized; [0,0,1,1] returns to full mode).
+///
+/// Wire format per frame (little endian, 36-byte header): "GMS3" | u32 sequence | f64 capture seconds |
+/// u16 width | u16 height | u8 flags (bit 0 recording, bit 1 front camera) | u8 zoom x10 |
+/// u16 clockwise degrees to upright | u16 x4 crop rect (sensor-normalized x65535) | u32 jpeg length.
 final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var status = "starting camera"
     @Published private(set) var macConnected = false
@@ -43,18 +51,17 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private var lastStatusAt = Date()
     private var lastCaptured = 0, lastSent = 0
 
-    private let outWidth = 960, outHeight = 540
-    // Half a second of in-flight frames absorbs Wi-Fi jitter; a cap of 8 dropped ~25% of 240 fps frames.
+    /// Native pixels a crop may send per frame; ~0.6 MP keeps 240 fps within Wi-Fi bandwidth.
+    private let cropPixelBudget = 600_000
     private let maxPending = 120
-    private var transfer: VTPixelTransferSession?
-    private var rotator: VTPixelRotationSession?
+    private var crop = CGRect(x: 0, y: 0, width: 1, height: 1)  // sensor-normalized; capture queue only
     private var encoder: VTCompressionSession?
     private var encoderSize = (width: 0, height: 0)
     private var pools: [String: CVPixelBufferPool] = [:]
-    private var appliedAngle = -1
     private var captureAngle = 0
-    private var coordinator: AVCaptureDevice.RotationCoordinator?
+    private var coordinatorBox: AnyObject?
     private var observations: [NSKeyValueObservation] = []
+    private let motion = CMMotionManager()
 
     /// Starts the camera and the stream to the Mac; called once when the app appears.
     func activate(host: String, port: UInt16) {
@@ -91,15 +98,7 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         guard next != position else { return }
         position = next
         lock.lock(); frontFlag = next == .front; lock.unlock()
-        captureQueue.async {
-            self.session.stopRunning()
-            do {
-                try self.configure()
-                self.session.startRunning()
-            } catch {
-                DispatchQueue.main.async { self.status = "camera switch failed: \(error.localizedDescription)" }
-            }
-        }
+        reconfigure()
     }
 
     /// Cycles 1x, 2x, 3x so a small object fills more of the streamed frame.
@@ -114,6 +113,30 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
                   (try? device.lockForConfiguration()) != nil else { return }
             device.videoZoomFactor = min(next, device.activeFormat.videoMaxZoomFactor)
             device.unlockForConfiguration()
+        }
+    }
+
+    /// Sensor-normalized rectangle to stream at native resolution; the full rectangle returns to full mode.
+    func setCrop(_ rect: CGRect) {
+        let clipped = rect.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        captureQueue.async {
+            let wasFull = self.isFull(self.crop), isFull = clipped.isNull || self.isFull(clipped)
+            self.crop = isFull ? CGRect(x: 0, y: 0, width: 1, height: 1) : clipped
+            if wasFull != isFull { self.reconfigureNow() }
+        }
+    }
+
+    private func isFull(_ rect: CGRect) -> Bool { rect.width >= 0.999 && rect.height >= 0.999 }
+
+    private func reconfigure() { captureQueue.async { self.reconfigureNow() } }
+
+    private func reconfigureNow() {
+        session.stopRunning()
+        do {
+            try configure()
+            session.startRunning()
+        } catch {
+            DispatchQueue.main.async { self.status = "camera reconfigure failed: \(error.localizedDescription)" }
         }
     }
 
@@ -139,6 +162,11 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         case "record": setRecording(command["on"] as? Bool ?? !recording)
         case "camera": setCamera((command["position"] as? String) == "front" ? .front : .back)
         case "zoom": setZoom(CGFloat((command["factor"] as? NSNumber)?.doubleValue ?? 1))
+        case "crop":
+            if let rect = command["rect"] as? [NSNumber], rect.count == 4 {
+                setCrop(CGRect(x: rect[0].doubleValue, y: rect[1].doubleValue,
+                               width: rect[2].doubleValue, height: rect[3].doubleValue))
+            }
         default: break
         }
     }
@@ -189,20 +217,21 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             throw NSError(domain: "gamst", code: 1, userInfo: [NSLocalizedDescriptionKey: "no \(position == .back ? "back" : "front") camera"])
         }
-        // Highest frame rate the camera offers, then the smallest format at that rate that still
-        // covers the streamed size; capture rate, not resolution, decides countability.
         func maxRate(_ format: AVCaptureDevice.Format) -> Double {
             format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
         }
-        let rate = device.formats.map(maxRate).max() ?? 0
-        let candidates = device.formats.filter { maxRate($0) >= rate - 1 }.sorted {
-            let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-            let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-            return Int(a.width) * Int(a.height) < Int(b.width) * Int(b.height)
+        func pixels(_ format: AVCaptureDevice.Format) -> Int {
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return Int(d.width) * Int(d.height)
         }
-        guard let format = candidates.first(where: {
+        let rate = device.formats.map(maxRate).max() ?? 0
+        let candidates = device.formats.filter { maxRate($0) >= rate - 1 }.sorted { pixels($0) < pixels($1) }
+        // Full mode: smallest format at the top rate (whole field of view, affordable to send).
+        // Crop mode: largest format at the top rate, so the cropped strip keeps native detail.
+        let wantsCrop = !isFull(crop)
+        guard rate > 0, let format = (wantsCrop ? candidates.last : candidates.first(where: {
             CMVideoFormatDescriptionGetDimensions($0.formatDescription).width >= 1280
-        }) ?? candidates.first, rate > 0 else {
+        }) ?? candidates.first) else {
             throw NSError(domain: "gamst", code: 2, userInfo: [NSLocalizedDescriptionKey: "no usable video format"])
         }
         let fps = Int32(rate.rounded())
@@ -238,26 +267,51 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         device.unlockForConfiguration()
         session.commitConfiguration()
         let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-        let description = "\(position == .back ? "back" : "front") \(dims.width)x\(dims.height)@\(fps) -> \(outWidth)x\(outHeight)"
+        let description = "\(position == .back ? "back" : "front") \(dims.width)x\(dims.height)@\(fps) \(wantsCrop ? "crop" : "full")"
         lock.lock(); formatDescription = description; lock.unlock()
         DispatchQueue.main.async { self.followRotation(of: device) }
     }
 
-    /// Keeps the preview and the streamed frames level with the horizon however the phone is held.
+    /// Tracks the clockwise angle that makes frames upright (sent to the Mac) and keeps the preview level.
     private func followRotation(of device: AVCaptureDevice) {
         observations.removeAll()
-        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
-        self.coordinator = coordinator
-        observations.append(coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] coordinator, _ in
-            DispatchQueue.main.async {
-                self?.previewLayer?.connection?.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelPreview
+        motion.stopDeviceMotionUpdates()
+        if #available(iOS 17.0, *) {
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            coordinatorBox = coordinator
+            observations.append(coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] coordinator, _ in
+                DispatchQueue.main.async {
+                    self?.previewLayer?.connection?.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelPreview
+                }
+            })
+            observations.append(coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] coordinator, _ in
+                self?.setAngle(Int(coordinator.videoRotationAngleForHorizonLevelCapture.rounded()))
+            })
+        } else {
+            // iOS 15/16: gravity gives the physical orientation even with the rotation lock on.
+            let front = device.position == .front
+            motion.deviceMotionUpdateInterval = 0.2
+            motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
+                guard let self, let g = data?.gravity else { return }
+                let angle: Int, orientation: AVCaptureVideoOrientation
+                if abs(g.x) > abs(g.y) {
+                    // Device top pointing left (gravity along -x): sensor already upright for the back camera.
+                    angle = (g.x < 0) != front ? 0 : 180
+                    orientation = g.x < 0 ? .landscapeRight : .landscapeLeft
+                } else {
+                    angle = g.y < 0 ? 90 : 270
+                    orientation = g.y < 0 ? .portrait : .portraitUpsideDown
+                }
+                self.setAngle(angle)
+                if let connection = self.previewLayer?.connection, connection.isVideoOrientationSupported {
+                    connection.videoOrientation = orientation
+                }
             }
-        })
-        observations.append(coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] coordinator, _ in
-            guard let self else { return }
-            let angle = (Int(coordinator.videoRotationAngleForHorizonLevelCapture.rounded()) % 360 + 360) % 360
-            self.lock.lock(); self.captureAngle = angle; self.lock.unlock()
-        })
+        }
+    }
+
+    private func setAngle(_ degrees: Int) {
+        lock.lock(); captureAngle = (degrees % 360 + 360) % 360; lock.unlock()
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -275,11 +329,11 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         lock.unlock()
         guard let network, !busy else { return }
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let upright = uprightFrame(pixels, angle: angle) else { finish(sent: false); return }
+              let (image, region) = cropped(pixels) else { finish(sent: false); return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let width = CVPixelBufferGetWidth(upright), height = CVPixelBufferGetHeight(upright)
+        let width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image)
         guard let encoder = jpegEncoder(width: width, height: height) else { finish(sent: false); return }
-        let status = VTCompressionSessionEncodeFrame(encoder, imageBuffer: upright, presentationTimeStamp: pts,
+        let status = VTCompressionSessionEncodeFrame(encoder, imageBuffer: image, presentationTimeStamp: pts,
                                                      duration: .invalid, frameProperties: nil, infoFlagsOut: nil) { status, _, sample in
             guard status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) else { self.finish(sent: false); return }
             var jpeg = Data(count: CMBlockBufferGetDataLength(block))
@@ -288,12 +342,16 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             }
             guard copied == kCMBlockBufferNoErr else { self.finish(sent: false); return }
             self.lock.lock(); self.sequence &+= 1; let sequence = self.sequence; self.lock.unlock()
-            var header = Data("GMS2".utf8)
+            var header = Data("GMS3".utf8)
             self.append(&header, sequence.littleEndian)
             self.append(&header, pts.seconds.bitPattern.littleEndian)
             self.append(&header, UInt16(width).littleEndian)
             self.append(&header, UInt16(height).littleEndian)
-            header.append(contentsOf: [flags, zoomByte, 0, 0])
+            header.append(contentsOf: [flags, zoomByte])
+            self.append(&header, UInt16(angle).littleEndian)
+            for value in [region.minX, region.minY, region.width, region.height] {
+                self.append(&header, UInt16((min(max(value, 0), 1) * 65535).rounded()).littleEndian)
+            }
             self.append(&header, UInt32(jpeg.count).littleEndian)
             network.send(content: header + jpeg, completion: .contentProcessed { error in self.finish(sent: error == nil) })
         }
@@ -311,9 +369,47 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         withUnsafeBytes(of: value) { data.append(contentsOf: $0) }
     }
 
+    /// Full mode returns the camera buffer as is. Crop mode copies the requested rectangle (even-aligned,
+    /// shrunk around its centre along the shorter side to the pixel budget) out of the native frame.
+    private func cropped(_ pixels: CVPixelBuffer) -> (CVPixelBuffer, CGRect)? {
+        let full = CGRect(x: 0, y: 0, width: 1, height: 1)
+        if isFull(crop) { return (pixels, full) }
+        let sw = CVPixelBufferGetWidth(pixels), sh = CVPixelBufferGetHeight(pixels)
+        var w = Double(crop.width) * Double(sw), h = Double(crop.height) * Double(sh)
+        let budget = Double(cropPixelBudget)
+        if w * h > budget {
+            if w < h { w = max(64, budget / h) } else { h = max(64, budget / w) }
+        }
+        let cw = min(sw, Int(w) / 2 * 2), ch = min(sh, Int(h) / 2 * 2)
+        let cx = min(max(0, Int(Double(crop.midX) * Double(sw) - Double(cw) / 2) / 2 * 2), sw - cw)
+        let cy = min(max(0, Int(Double(crop.midY) * Double(sh) - Double(ch) / 2) / 2 * 2), sh - ch)
+        guard cw >= 16, ch >= 16, let out = buffer(width: cw, height: ch) else { return nil }
+        CVPixelBufferLockBaseAddress(pixels, .readOnly)
+        CVPixelBufferLockBaseAddress(out, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(out, [])
+            CVPixelBufferUnlockBaseAddress(pixels, .readOnly)
+        }
+        for plane in 0..<2 {
+            guard let src = CVPixelBufferGetBaseAddressOfPlane(pixels, plane),
+                  let dst = CVPixelBufferGetBaseAddressOfPlane(out, plane) else { return nil }
+            let srcRow = CVPixelBufferGetBytesPerRowOfPlane(pixels, plane)
+            let dstRow = CVPixelBufferGetBytesPerRowOfPlane(out, plane)
+            // Luma is 1 byte per pixel; interleaved CbCr is 2 bytes per 2x2 block.
+            let rows = plane == 0 ? ch : ch / 2, top = plane == 0 ? cy : cy / 2, bytes = cw
+            for row in 0..<rows {
+                memcpy(dst + row * dstRow, src + (top + row) * srcRow + cx, bytes)
+            }
+        }
+        let region = CGRect(x: Double(cx) / Double(sw), y: Double(cy) / Double(sh),
+                            width: Double(cw) / Double(sw), height: Double(ch) / Double(sh))
+        return (out, region)
+    }
+
     private func buffer(width: Int, height: Int) -> CVPixelBuffer? {
         let key = "\(width)x\(height)"
         if pools[key] == nil {
+            if pools.count > 8 { pools.removeAll() }
             let attributes: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                 kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height,
@@ -328,25 +424,6 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         return pixels
     }
 
-    /// Hardware downscale, then hardware rotation to the horizon-level angle.
-    private func uprightFrame(_ pixels: CVPixelBuffer, angle: Int) -> CVPixelBuffer? {
-        if transfer == nil { VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &transfer) }
-        guard let transfer, let scaled = buffer(width: outWidth, height: outHeight),
-              VTPixelTransferSessionTransferImage(transfer, from: pixels, to: scaled) == noErr else { return nil }
-        if angle == 0 { return scaled }
-        if rotator == nil { VTPixelRotationSessionCreate(nil, &rotator) }
-        guard let rotator else { return nil }
-        if angle != appliedAngle {
-            let rotation: CFString = angle == 90 ? kVTRotation_CW90 : angle == 180 ? kVTRotation_180 : kVTRotation_CCW90
-            VTSessionSetProperty(rotator, key: kVTPixelRotationPropertyKey_Rotation, value: rotation)
-            appliedAngle = angle
-        }
-        let quarter = angle == 90 || angle == 270
-        guard let rotated = buffer(width: quarter ? outHeight : outWidth, height: quarter ? outWidth : outHeight),
-              VTPixelRotationSessionRotateImage(rotator, scaled, rotated) == noErr else { return nil }
-        return rotated
-    }
-
     private func jpegEncoder(width: Int, height: Int) -> VTCompressionSession? {
         if let encoder, encoderSize == (width, height) { return encoder }
         if let encoder { VTCompressionSessionInvalidate(encoder) }
@@ -358,7 +435,9 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
                                          outputCallback: nil, refcon: nil, compressionSessionOut: &session) == noErr,
               let session else { return nil }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.5 as CFNumber)
+        // Full frames are for framing; crops carry the measurement and get more bits per pixel.
+        let quality = width * height > cropPixelBudget ? 0.4 : 0.55
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: quality as CFNumber)
         encoder = session
         encoderSize = (width, height)
         return session

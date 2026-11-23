@@ -1,6 +1,11 @@
 <div align="center">
 
-# GAMST
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/gamst-logo-dark.png">
+    <img src="docs/images/gamst-logo-light.png" alt="GAMST" width="420">
+  </picture>
+</h1>
 
 <img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
 

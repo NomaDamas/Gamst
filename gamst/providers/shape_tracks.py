@@ -84,7 +84,8 @@ class ShapeTracks:
             box = item['bbox']
             bw, bh = box['width'] * w, box['height'] * h
             cx, cy = box['x'] * w + bw / 2, box['y'] * h + bh / 2
-            size = max(bw, bh)
+            # A target exemplar's size beats the motion box, which includes the object's motion smear.
+            size = float(item.get('size_px') or max(bw, bh))
             match = None
             for track_id, track in self.tracks.items():
                 if math.dist(track['center'], (cx, cy)) < max(track['size'], size):
