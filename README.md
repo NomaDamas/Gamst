@@ -20,7 +20,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.4 alpha.** Adds generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and the GAMST Playground (browser + local). See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
+**Status: v0.5 alpha.** Adds generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
@@ -207,8 +207,14 @@ gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 
 Role-based hardware defaults are delegated to GamstCrew:
 `gamst setup plan --goals rotation,speech --json` and
-`gamst setup apply PLAN.json`. If GamstCrew is not installed, `gamst setup`
-prints its installation command instead of silently choosing another setup.
+`gamst setup apply PLAN.json` (agents: MCP `plan_setup` / `apply_setup`). If
+GamstCrew is not installed, `gamst setup` prints its installation command
+instead of silently choosing another setup. Apply writes
+`~/.config/gamst/profile.json`; `await ProfileRuntime.open(human)` from
+`gamst.profile` then registers every selected role as an ordinary plugin
+(isolated workers behind a queue, model-free roles such as `vision.rotation`
+in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
+the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
 
 A hand-tossed coin turns 36-40 times per second, so GAMST withholds flip counts
 as `undersampled` on 30/60 fps cameras instead of reporting an aliased number;
