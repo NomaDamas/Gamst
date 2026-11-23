@@ -97,6 +97,13 @@
 - 2026-11-22 추가 구현: `audio.context` provider와 기본 disabled realtime voice backend metadata 설정. full-duplex 자체는 이번 범위가 아니며, raw audio 대신 VAD/silence/AEC/CED/diarization/DOA 가능값/prosody/ASR를 Context로 전달합니다. 관련 Issue #354.
 - Coin Halo (#355, 2026-11-23): 사용자 승인으로 동전 데모를 첫 Halo로 확정했습니다. 둥근 윤곽 추적은 폐기했고, YOLOE-26s(ProcessProvider)가 이름을 붙이고 `ShapeTracks`가 매 프레임 추적합니다. 회전수는 `ObjectSpinCounter`(면 밖 회전)와 `AngularMotionCounter`(면 안 회전)가 셉니다. 실제 영상에서 동전 관측 프레임은 344/375와 54/54(비행 구간)였고, 30fps·25fps 영상은 모두 `undersampled`로 판정해 회전수를 내지 않았습니다. 회전수 정확도는 사용자가 촬영할 240fps 던지기 10회로 검증해야 합니다(통과 기준: 8회 이상 정확히 일치). 결과는 `docs/halo-coin.md`에 있습니다. GCP 디스크·스냅샷 삭제는 결제 비활성으로 거부된 상태입니다.
 - 2026-11-23: 240fps iPhone 실시간 앱은 사용자 결정으로 후순위입니다. GitHub star는 동의를 받은 경우에만 누릅니다(`gamst` 첫 대화형 실행 시 질문하고, 에이전트는 `AGENTS.md`를 따릅니다). PyPI trusted publisher(gamst-sdk, NomaDamas/Gamst, publish.yml, environment pypi)는 Aside에서 등록했습니다.
+- 2026-11-23 구조 정리(사용자 승인):
+  - 회전은 동전 전용이 아니라 GAMST 빠른 줄의 일반 기능 `vision.rotation`입니다(#357). 엔진·저장·Watch·MCP 구조는 그대로이며, 어떤 검출기·ROI·움직임 영역에서도 동작합니다. 실제 영상: 동전 관측 343/375, YOLOE p50 MPS 45.7 ms / CPU 157.1 ms.
+  - 역할 기반 에이전틱 설정은 GamstCrew(#24)에 있습니다: `gamst setup` / MCP `plan_setup`·`apply_setup` → `~/.config/gamst/profile.json` → `gamst mcp|dashboard --profile`(#359). YOLOE는 선택 후보입니다.
+  - 벤치마크·과금·평가 원장 코드를 문서화 후 삭제했습니다(#358, 약 4.3만 줄). 기록: `docs/archive/benchmarks-and-evaluation.md`, Gamst-bench#18(`docs/gamst-setup-defaults.md` 포함). 대화 상대(companion)는 `examples/companion/`으로 옮겼고, 감정·의도 가설·주장 비교는 컨텍스트로 유지합니다.
+  - 전체 테스트 1137개 통과(기존 실패 91개 해소). `gamst-sdk` 0.5.0 PyPI 배포.
+  - 워크트리 57개 정리(17개 머지·깨끗, 40개는 메인 대조 후 사용자 승인으로 삭제, 원격 브랜치 유지). 해결된 이슈 12개와 폐기 이슈 8개를 PR 근거와 함께 닫았습니다.
+  - 남은 것: 240fps 실제 던지기 10회로 회전수 정확도 검증(사용자 촬영 필요), 240fps iPhone 실시간 앱(후순위), CUDA 기본 설정의 실기기 검증(GCP 결제 비활성).
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더
