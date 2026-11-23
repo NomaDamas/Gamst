@@ -41,15 +41,33 @@ class ContextMemory:
         self.episodic_memory: deque[dict[str, Any]] = deque(maxlen=max_episodic)
         self._evidence: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._revision = 0
+        self._sizes: dict[int, tuple[dict[str, Any], int]] = {}
+
+    def _encoded(self, value) -> int:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+
+    def _item_size(self, item: dict[str, Any]) -> int:
+        cached = self._sizes.get(id(item))
+        if cached is None or cached[0] is not item:
+            cached = self._sizes[id(item)] = (item, self._encoded(item))
+        return cached[1]
+
+    def _snapshot_bytes(self) -> int:
+        """Exact byte length of the compact snapshot JSON without copying or re-encoding retained items."""
+        empty = {"session_id": self.session_id, "revision": self._revision,
+                 "current_state": {}, "recent_timeline": [], "episodic_memory": []}
+        total = self._encoded(empty)
+        for items in (self.recent_timeline, self.episodic_memory):
+            total += sum(self._item_size(item) for item in items) + max(0, len(items) - 1)
+        total += sum(self._encoded(key) + 1 + self._item_size(item) for key, item in self.current_state.items())
+        return total + max(0, len(self.current_state) - 1)
 
     def _check_size(self) -> None:
         # Retention is bounded across every index.  Previously only episodic
         # entries were evicted, allowing non-episodic evidence and current
         # state to grow without limit.
         while True:
-            payload = json.dumps(self.snapshot(), ensure_ascii=False, sort_keys=True,
-                                 separators=(",", ":")).encode()
-            if len(payload) <= self.max_bytes:
+            if self._snapshot_bytes() <= self.max_bytes:
                 break
             if self.episodic_memory:
                 self.episodic_memory.popleft()
@@ -63,6 +81,8 @@ class ContextMemory:
         self._evidence = OrderedDict(
             (item["evidence_id"], item) for item in retained if item.get("evidence_id")
         )
+        live = {id(item) for item in retained}
+        self._sizes = {key: value for key, value in self._sizes.items() if key in live}
 
     def append(self, event: dict[str, Any], *, entity_id: str | None = None,
                episodic: bool = False) -> dict[str, Any]:

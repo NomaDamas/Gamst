@@ -328,18 +328,27 @@ class RotationPlugin:
     ``push_video`` intentionally has no sensor argument, so this adapter gives
     each subject a monotonic local capture sequence. It commits the registered
     observation directly and returns no duplicate legacy signals to the engine.
+
+    ``record_every_ms`` keeps high-fps sources affordable: every frame is still
+    measured, but a record is committed only when an event fires or the cadence
+    elapses. ``0`` commits every frame.
     """
 
     modalities = ('video',)
 
-    def __init__(self, human, **config):
+    def __init__(self, human, record_every_ms=0, **config):
+        if type(record_every_ms) is not int or record_every_ms < 0:
+            raise ValueError('record_every_ms must be a non-negative integer')
         self.human = human
+        self.record_every_ms = record_every_ms
         self.provider = RotationProvider(**config)
         self.spec = self.provider.spec
         self.name, self.version = self.spec.provider, self.spec.version
         self.human.register_capability(self.spec)
         self._epoch = uuid.uuid4().hex
         self._sequences = {}
+        self._captures = {}
+        self._committed_at = {}
         self._detection_ids = {}
         self.closed = False
 
@@ -368,20 +377,27 @@ class RotationPlugin:
     async def process(self, frame):
         if self.closed:
             raise RuntimeError('rotation plugin is closed')
+        capture = self._captures.get(frame.subject_id, -1) + 1
+        self._captures[frame.subject_id] = capture
         sequence = self._sequences.get(frame.subject_id, -1) + 1
-        self._sequences[frame.subject_id] = sequence
         sensor = SensorMetadata(source_id='gamst-plugin', sensor_id='vision-rotation', sequence=sequence,
-                                capture_sequence=sequence, coordinate_frame='image', stream_epoch=self._epoch)
+                                capture_sequence=capture, coordinate_frame='image', stream_epoch=self._epoch)
         detections, fresh = self._latest_detections(frame)
         value = self.provider.process(InputFrame(frame.data, 'video', frame.timestamp_ms,
             subject_id=frame.subject_id, sensor=sensor), detections=detections, detector_fresh=fresh)
-        await self.human.push_observation(self.spec.id, value, sensor=sensor,
-            subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
+        last = self._committed_at.get(frame.subject_id)
+        if value['events'] or last is None or frame.timestamp_ms - last >= self.record_every_ms:
+            self._sequences[frame.subject_id] = sequence
+            self._committed_at[frame.subject_id] = frame.timestamp_ms
+            await self.human.push_observation(self.spec.id, value, sensor=sensor,
+                subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         return []
 
     def reset(self):
         self.provider.reset()
         self._sequences.clear()
+        self._captures.clear()
+        self._committed_at.clear()
         self._detection_ids.clear()
         self._epoch = uuid.uuid4().hex
 
@@ -389,5 +405,7 @@ class RotationPlugin:
         if not self.closed:
             self.provider.close()
             self._sequences.clear()
+            self._captures.clear()
+            self._committed_at.clear()
             self._detection_ids.clear()
             self.closed = True

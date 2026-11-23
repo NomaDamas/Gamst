@@ -275,12 +275,186 @@ async def run(args):
     return report
 
 
+IPHONE_HEADER = 24  # b"GMST" | u32 sequence | f64 capture seconds | u16 width | u16 height | u32 jpeg bytes
+
+
+async def run_iphone(args):
+    """Receive 240 fps frames from the GAMST 240 iPhone app and feed them to GAMST.
+
+    The phone is only a camera: it sends downscaled luma JPEGs with their sensor
+    presentation timestamps. Capture timing comes from those timestamps, so the
+    rotation counter sees the true 240 fps cadence even when frames arrive in bursts.
+    ``--record-dir`` keeps the raw stream; ``--iphone-replay`` feeds a recording back
+    through the same path with no real-time pressure.
+    """
+    import struct
+    import cv2
+    import numpy as np
+    from .. import Gamst
+
+    # Tosses are short bursts: a 20 s backlog adds latency between tosses but keeps every frame,
+    # and a counter fed a gapped sequence would see a lower capture rate than the phone delivered.
+    queue = asyncio.Queue(maxsize=4800)
+    stats = dict(received=0, dropped=0, processed=0)
+
+    async def handle(reader, writer):
+        peer = writer.get_extra_info('peername')
+        sink = None
+        if args.record_dir:
+            Path(args.record_dir).mkdir(parents=True, exist_ok=True)
+            sink = open(Path(args.record_dir) / f'iphone-{time.strftime("%Y%m%d-%H%M%S")}.gmst', 'wb')
+        print(json.dumps({'iphone': 'connected', 'peer': str(peer), 'recording': sink and sink.name}), flush=True)
+        try:
+            while True:
+                header = await reader.readexactly(IPHONE_HEADER)
+                if header[:4] != b'GMST':
+                    raise ValueError('not a GAMST 240 frame stream')
+                sequence, seconds, _, _, size = struct.unpack('<IdHHI', header[4:])
+                payload = await reader.readexactly(size)
+                if sink is not None:
+                    sink.write(header + payload)
+                if queue.full():
+                    queue.get_nowait()
+                    stats['dropped'] += 1
+                queue.put_nowait((sequence, seconds, payload))
+                stats['received'] += 1
+        except (asyncio.IncompleteReadError, ConnectionError):
+            print(json.dumps({'iphone': 'disconnected'}), flush=True)
+        finally:
+            if sink is not None:
+                sink.close()
+            writer.close()
+
+    async def replay(path):
+        data = Path(path).read_bytes()
+        frames, offset = [], 0
+        while offset + IPHONE_HEADER <= len(data):
+            if data[offset:offset + 4] != b'GMST':
+                raise SystemExit(f'{path}: not a GAMST 240 recording')
+            sequence, seconds, _, _, size = struct.unpack('<IdHHI', data[offset + 4:offset + IPHONE_HEADER])
+            offset += IPHONE_HEADER
+            frames.append((sequence, seconds, data[offset:offset + size]))
+            offset += size
+        # Replay runs faster than real time; anchor the recording so its last frame is not in the future.
+        stats['span_ms'] = round(1000 * (frames[-1][1] - frames[0][1])) if frames else 0
+        for frame in frames:
+            await queue.put(frame)
+            stats['received'] += 1
+        await queue.put(None)
+
+
+    server = feeder = None
+    if args.iphone_replay:
+        feeder = asyncio.create_task(replay(args.iphone_replay))
+        source = args.iphone_replay
+    else:
+        server = await asyncio.start_server(handle, '0.0.0.0', args.iphone)
+        print(json.dumps({'listening': args.iphone, 'note': 'open GAMST 240 on the iPhone and tap Start'}), flush=True)
+        source = f'iphone:{args.iphone}'
+    pending, alarm_events, report = [], [], dict(source=source, frames=0, alarms=0, events=[])
+    panel = Panel()
+    plugin = None
+    try:
+        async with Gamst(consent=True, store=args.store) as human:
+            config = dict(expected_max_rev_s=args.expected_max_rev_s, region_source='motion', record_every_ms=33)
+            if args.roi is not None:
+                x, y, width, height = args.roi
+                config.update(region_source='roi', roi=dict(x=x, y=y, width=width, height=height))
+            plugin = RotationPlugin(human, **config)
+            human.register(plugin)
+            watch = human.watches.create(owner='user', description='Tell me how many turns each rotation made.',
+                rule=dict(conditions=[dict(capability_id='vision.rotation', path='events', op='contains',
+                                           value='rotation.ended', within_ms=1000)],
+                          cooldown_ms=0, max_per_minute=600, context_window_ms=3000))
+            human.watches.add_sink(pending.append)
+            first = base = last = None
+            capture_times, last_print, printed = [], time.monotonic(), 0
+            title = 'GAMST rotation - iPhone 240 fps'
+            if not args.headless:
+                cv2.namedWindow(title, cv2.WINDOW_AUTOSIZE)
+                cv2.moveWindow(title, 40, 60)
+                waiting = np.full((540, 1680, 3), 24, np.uint8)
+                cv2.putText(waiting, f'waiting for the iPhone on port {args.iphone}: open GAMST 240 and tap Start',
+                            (30, 270), cv2.FONT_HERSHEY_SIMPLEX, 1., (80, 220, 255), 2)
+                cv2.imshow(title, waiting)
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), 0.05)
+                except asyncio.TimeoutError:
+                    if not args.headless and (cv2.waitKey(1) & 0xFF) in (27, ord('q')):
+                        break
+                    continue
+                if item is None:
+                    break
+                sequence, seconds, payload = item
+                frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    continue
+                if first is None:
+                    first, base = seconds, time.time_ns() // 1_000_000 - 1000 - stats.get('span_ms', 0)
+                stamp = base + round((seconds - first) * 1000)
+                if last is not None and stamp <= last:
+                    stamp = last + 1
+                last = stamp
+                capture_times.append(seconds)
+                await human.push_video(frame, timestamp_ms=stamp)
+                stats['processed'] += 1
+                report['frames'] += 1
+                while pending:
+                    alarm = pending.pop(0)
+                    report['alarms'] += 1
+                    ended = [event for item in alarm['context']['records'] if item['id'] == alarm['trigger_record_id']
+                             for event in item['observation']['value']['events'] if event['type'] == 'rotation.ended']
+                    alarm_events.extend(ended)
+                    report['events'].extend(ended)
+                    for event in ended:
+                        print(json.dumps({'watch': watch['id'], 'rotation.ended': event}, ensure_ascii=False), flush=True)
+                window = capture_times[-241:]
+                capture_fps = (len(window) - 1) / (window[-1] - window[0]) if len(window) > 1 and window[-1] > window[0] else 0
+                if time.monotonic() - last_print >= 2:
+                    elapsed = time.monotonic() - last_print
+                    print(json.dumps({'capture_fps': round(capture_fps, 1), 'received': stats['received'],
+                                      'processed': stats['processed'],
+                                      'processed_fps': round((stats['processed'] - printed) / elapsed, 1),
+                                      'queue': queue.qsize(), 'dropped_on_mac': stats['dropped']}), flush=True)
+                    last_print, printed = time.monotonic(), stats['processed']
+                if not args.headless and stats['processed'] % 8 == 0:
+                    records = await human.get_observations(capability_id='vision.rotation', window='1h', limit=1)
+                    record = records['items'][0] if records['items'] else None
+                    view = panel.draw(frame, record, alarm_events, capture_fps)
+                    cv2.imshow(title, cv2.resize(view, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_NEAREST))
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (27, ord('q')):
+                        break
+                    if key == ord('r'):
+                        plugin.reset()
+                if args.frames and report['frames'] >= args.frames:
+                    break
+    finally:
+        if server is not None:
+            server.close()
+        if feeder is not None:
+            feeder.cancel()
+        if plugin is not None:
+            plugin.close()
+        if not args.headless:
+            cv2.destroyAllWindows()
+    report.update(received=stats['received'], dropped_on_mac=stats['dropped'])
+    if args.report:
+        Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='gamst demo rotation', description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     source = parser.add_mutually_exclusive_group()
     source.add_argument('--camera', type=int, default=0)
     source.add_argument('--video', help='recorded file; capture timestamps come from the file')
+    source.add_argument('--iphone', type=int, metavar='PORT',
+                        help='listen for the GAMST 240 iPhone app (240 fps frames with capture timestamps)')
+    source.add_argument('--iphone-replay', metavar='FILE', help='replay a GAMST 240 recording (.gmst)')
+    parser.add_argument('--record-dir', help='with --iphone: keep each raw phone stream as DIR/iphone-*.gmst')
     parser.add_argument('--targets', type=lambda value: [item.strip() for item in value.split(',') if item.strip()],
                         default=['coin', 'wheel', 'fan'], help='detector labels and optional rotation label filter')
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)
@@ -303,7 +477,7 @@ def main(argv=None):
         return
     if args.roi is not None and len(args.roi) != 4:
         parser.error('--roi requires x,y,width,height')
-    asyncio.run(run(args))
+    asyncio.run(run_iphone(args) if args.iphone or args.iphone_replay else run(args))
 
 
 if __name__ == '__main__':
