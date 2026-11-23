@@ -207,8 +207,13 @@ gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 
 Role-based hardware defaults are delegated to GamstCrew:
 `gamst setup plan --goals rotation,speech --json` and
-`gamst setup apply PLAN.json`. If GamstCrew is not installed, `gamst setup`
-prints its installation command instead of silently choosing another setup.
+`gamst setup apply PLAN.json` (agents: MCP `plan_setup` / `apply_setup`). If
+GamstCrew is not installed, `gamst setup` prints its installation command
+instead of silently choosing another setup. Apply writes
+`~/.config/gamst/profile.json`; `await ProfileRuntime.open(human)` from
+`gamst.profile` then registers every selected role as an ordinary plugin
+(isolated workers behind a queue, model-free roles such as `vision.rotation`
+in-process), so `push_video`, MCP capture and the dashboard all feed them.
 
 A hand-tossed coin turns 36-40 times per second, so GAMST withholds flip counts
 as `undersampled` on 30/60 fps cameras instead of reporting an aliased number;
