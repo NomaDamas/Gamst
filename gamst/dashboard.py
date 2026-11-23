@@ -289,7 +289,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None, profile=None):
     from . import Gamst
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with Gamst(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
@@ -326,6 +326,11 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
             register_config(human, json.loads(Path(plugins_config).read_text()))
         if scene_url:
             human.register(QueuedPlugin(human, LocalScenePlugin(scene_url, scene_model, human=human), capacity=1))
+        runtime = None
+        if profile is not None:
+            from .profile import ProfileRuntime
+            runtime = await ProfileRuntime.open(human, profile or None)
+            print(f"gamst profile roles: {json.dumps(runtime.status)}", flush=True)
         websocket_task = None
         if websocket_port:
             from .server import serve_websocket
@@ -346,6 +351,8 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+            if runtime is not None:
+                await runtime.close()
 
 
 def main():
@@ -362,9 +369,11 @@ def main():
     parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
     parser.add_argument("--plugins-config", help="Explicit JSON list of installed plugin factories and local model options")
     parser.add_argument("--sam3-config", help="Installed local SAM3 ready.json")
+    parser.add_argument("--profile", nargs="?", const="", default=None,
+                        help="run the roles in a gamst setup profile (default ~/.config/gamst/profile.json)")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model, args.sam3_config))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model, args.sam3_config, args.profile))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:

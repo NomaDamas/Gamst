@@ -461,13 +461,24 @@ async def _main(args: argparse.Namespace) -> None:
         if backend is not None:
             human.set_analysis_backend(backend)
         adapter = MCPServer(human)
-        await serve_stdio(adapter)
+        runtime = None
+        if args.profile is not None:
+            from .profile import ProfileRuntime
+            runtime = await ProfileRuntime.open(human, args.profile or None)
+            logging.warning("gamst profile roles: %s", json.dumps(runtime.status))
+        try:
+            await serve_stdio(adapter)
+        finally:
+            if runtime is not None:
+                await runtime.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gamst MCP stdio server (devices off by default)")
     parser.add_argument("--store", default=":memory:", help="SQLite path; default stores only in memory")
     parser.add_argument("--retention-hours", type=float, default=24)
+    parser.add_argument("--profile", nargs="?", const="", default=None,
+                        help="run the roles in a gamst setup profile (default ~/.config/gamst/profile.json)")
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     try:
