@@ -7,7 +7,7 @@ from .streams import SensorStreams
 from .process_provider import ProcessProvider
 
 Observer = Gamst
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 __all__ = ["Gamst", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]
 __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetadata']
 __all__ += ['SensorStreams']

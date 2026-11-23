@@ -67,39 +67,21 @@ camera
   -> GAMST Context / Watch / overlay
 ```
 
-## Coin WOW UseCase
+## Coin Halo UseCase
 
-The coin is the first marketing demo, not a coin-specific architecture:
+The coin is the first Halo demo, not a coin-specific architecture. The full
+description, hardware limits and measured results are in
+[docs/halo-coin.md](halo-coin.md).
 
 ```text
-coin / wheel / tire / fan / rotating tool
-  -> Qwen3.5-VL understands the scene and semantic progression
-  -> light detector/tracker supplies boxes and track IDs
-  -> per-track AngularMotionCounter computes rotation
-  -> ObjectEventReducer computes toss and face-change events
-  -> GAMST Context / Watch / live display
+coin / wheel / disc / card
+  -> YOLOE (ProcessProvider worker, ~10 Hz) names objects
+  -> ShapeTracks re-finds each object every capture (ellipse + features)
+  -> ObjectSpinCounter: out-of-plane half turns (flipped / table-spun coin)
+  -> AngularMotionCounter: in-plane turns (wheel facing the camera)
+  -> GAMST Context / user Watch (spin ended) -> optional VLM call once
 ```
 
-The three rotation/event capabilities are additive to the existing GAMST
-provider boundary. They do not replace or restructure the engine, MCP, store,
-clock or provider contracts.
-
-RelateAnything is excluded from this implementation. It may be revisited as
-an optional relation provider only if semantic object-pair relations are later
-needed.
-
-### Run the local evidence overlay
-
-`PYTHONPATH=. python3 scripts/coin_rotation_demo.py --camera 0 --no-semantic`
-opens the camera; `--video PATH` replays a recording. The preview shows a
-`vision.object_rotations` record ID, the matching region labels and track IDs,
-and net image-plane turns or `insufficient evidence`. `--store PATH` keeps
-derived SDK records in SQLite; the default is in-memory. No raw frames are saved.
-
-Without references the detector labels round contours as candidates, not coins.
-For textured props pass `--reference wheel=wheel.jpg` or a pair of tightly cropped
-photos: `--reference coin:heads=heads.jpg --reference coin:tails=tails.jpg`.
-The paired mode reports observed stable face changes, not unseen airborne flips.
-The optional local VLM supplies separate scene context; its text is not used
-as a high-rate rotation measurement. The pixel path does not measure contact
-or establish that an object was thrown.
+The capabilities are additive to the existing GAMST provider boundary. They do
+not replace or restructure the engine, MCP, store, clock or provider contracts.
+RelateAnything is excluded.

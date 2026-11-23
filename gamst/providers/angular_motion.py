@@ -26,7 +26,7 @@ class AngularMotionCounter:
     def capability(*,version="installed",max_gap_ms=500):
         identifier(version,"model version")
         return CapabilitySpec("vision.object_rotation","vision.object_rotation","video","gamst.angular_motion",version,(OutputField("track_id","string"),OutputField("rotation_count","number"),OutputField("phase_degrees","number"),OutputField("angular_velocity_deg_s","number"),OutputField("direction","string"),OutputField("confidence","number"),OutputField("sample_count","integer")),"frame",stateful=True,reset_on_gap=True,freshness_ms=max_gap_ms,interpretation="measurement",devices=("cpu",),sensor_requirements=("tracked-object-center","corresponding-feature-points"),license="Apache-2.0")
-    def reset(self): self.owner=None;self.last_ts=None;self.last_sequence=None;self.track_id=None;self.phase=0.;self.samples=0;self.previous_angles=None;self.previous_ts=None
+    def reset(self): self.owner=None;self.last_ts=None;self.last_sequence=None;self.track_id=None;self.phase=0.;self.samples=0;self.previous_angles=None;self.previous_ts=None;self.points_epoch=None
     def close(self):
         with self._lock: self.reset();self.closed=True
     @staticmethod
@@ -41,7 +41,9 @@ class AngularMotionCounter:
             if not isinstance(frame,InputFrame) or frame.modality!="video" or not isinstance(frame.sensor,SensorMetadata): raise ValueError("structured video InputFrame with sensor metadata required")
             if type(frame.timestamp_ms) is not int or frame.timestamp_ms<0: raise ValueError("integer capture timestamp required")
             data=bounded_json(frame.data,max_bytes=32768)
-            if not isinstance(data,dict) or set(data)-{"track_id","center","points","roi","feature_scores"}: raise ValueError("rotation data contains unsupported fields")
+            if not isinstance(data,dict) or set(data)-{"track_id","center","points","roi","feature_scores","points_epoch"}: raise ValueError("rotation data contains unsupported fields")
+            epoch=data.get("points_epoch")
+            if epoch is not None and (type(epoch) is not int or epoch<0): raise ValueError("points_epoch must be a non-negative integer")
             track_id=data.get("track_id")
             if not isinstance(track_id,str) or not track_id: raise ValueError("track_id is required")
             center=self._point(data.get("center"),"center"); raw_points=data.get("points")
@@ -53,9 +55,11 @@ class AngularMotionCounter:
             reset=owner!=self.owner or track_id!=self.track_id or self.last_ts is None or frame.timestamp_ms-self.last_ts>self.max_gap_ms or self.last_sequence is not None and sequence<=self.last_sequence
             angles=[math.atan2(y-center[1],x-center[0]) for (x,y),score in zip(points,scores) if math.hypot(x-center[0],y-center[1])>=self.min_radius and score>0]
             if reset:
-                self.owner,self.track_id=owner,track_id;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms;self.phase=0.;self.samples=0
+                self.owner,self.track_id=owner,track_id;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms;self.phase=0.;self.samples=0;self.points_epoch=epoch
                 return self._output(0.,"unknown",0.,len(points))
-            previous=self.previous_angles;previous_ts=self.previous_ts;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms
+            # A new points_epoch means the tracker reseeded its features: those points do not
+            # correspond to the previous ones, so skip one delta but keep the accumulated phase.
+            previous=self.previous_angles if epoch==self.points_epoch else None;previous_ts=self.previous_ts;self.last_ts,self.last_sequence=frame.timestamp_ms,sequence;self.previous_angles=angles;self.previous_ts=frame.timestamp_ms;self.points_epoch=epoch
             if len(angles)<4 or previous is None or len(previous)!=len(angles): return self._output(0.,"unknown",0.,len(angles))
             deltas=[(after-before+math.pi)%(2*math.pi)-math.pi for before,after in zip(previous,angles)];median=sorted(deltas)[len(deltas)//2];confidence=sum(abs(delta-median)<=.35 for delta in deltas)/len(deltas)
             if confidence<self.min_quality: median=0.
