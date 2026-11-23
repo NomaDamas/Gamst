@@ -2,7 +2,7 @@
 
 ## Scope and evidence rules
 
-This is an archive of the evaluation, replay, recording, transport and billing implementation at Gamst commit `5eb94c3bf841cd50cc8fd69ab3744eeede3b73fd`, in source worktree `/Users/jinminseong/Desktop/catch-your-mind/.local-run/wt-cleanup` on branch `feat/cleanup-eval-billing`. It covers all **65 files** under `benchmarks/` (64 Python modules and one JSON fixture) and all **15 SDK modules** slated for removal. Paths below are repository-relative so the archived identities remain precise after deletion.
+This is an archive of the evaluation, replay, recording, transport and billing implementation at Gamst commit `5eb94c3bf841cd50cc8fd69ab3744eeede3b73fd`, on branch `feat/cleanup-eval-billing`. It covers all **65 files** under `benchmarks/` (64 Python modules and one JSON fixture) and all **15 SDK modules** slated for removal. Paths below are repository-relative so the archived identities remain precise after deletion.
 
 A declaration, hash chain, synthetic fixture, loopback server, test double or successful software test is not a measured model-quality, real-latency or authentic-cost result. Each entry therefore separates its contract from results actually recorded in the repository. “No measured result recorded” means no real measured result for that entry was found in the source documentation or `docs/evidence/`; it does not assert that the code was never executed. The only numerical runtime result recorded for these Gamst benchmark modules is the explicitly synthetic workload in `docs/runtime-benchmark.md`, reproduced below. The two `docs/evidence/cross-repo-checksum-2026-11-{16,17}.json` files record repository HEAD/checksum bindings, not benchmark performance.
 

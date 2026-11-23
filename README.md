@@ -470,23 +470,24 @@ human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
 No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 is an optional gated-model provider; biometric re-identification is not included.
 
 <a id="companion"></a>
-## 🤝 Context-aware Companion
+## 🤝 Context-aware Companion (example consumer)
 
-| Consumer provider | Selection | Setup |
-| --- | --- | --- |
-| Gemini Flash / Gemini Live | `--companion gemini-flash` / `--companion gemini-live` | [Gemini endpoints, Vertex, privacy and limits](docs/gemini-providers.md) |
+GAMST delivers context; replying to a person is the consumer's job. The
+Companion is therefore an example application in `examples/companion/` (source
+checkout), not a core, MCP or dashboard feature. It reads GAMST context and asks
+a configured chat model for a reply:
 
-Configure an actual chat-completions server and installed model:
+```python
+from gamst import Gamst
+from examples.companion import Companion, companion_backend_from_env
 
-```bash
-export GAMST_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
-export GAMST_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
-python -m gamst dashboard
+async with Gamst(consent=True) as human:   # GAMST_COMPANION_URL / _MODEL or a Gemini preset
+    reply = await Companion(human, companion_backend_from_env()).reply("What changed?")
 ```
 
-Choose **Send to Companion** in the dashboard, or call the MCP `chat` tool. The Companion uses conversation history, observation context, and the suggested strategy to generate a reply. Without a configured backend it reports an error instead of producing a fake model response.
+Gemini Flash / Live presets: [docs/gemini-providers.md](docs/gemini-providers.md). Without a configured backend it reports an error instead of producing a fake model response.
 
-For evidence-citing semantic analysis, configure `GAMST_REASONING_URL` and `GAMST_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
+For evidence-citing semantic analysis (expression and interaction hypotheses delivered as context), configure `GAMST_REASONING_URL` and `GAMST_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
 
 <a id="integrations"></a>
 ## 🌐 WebSocket & integrations

@@ -461,8 +461,6 @@ async def _main(args: argparse.Namespace) -> None:
         if backend is not None:
             human.set_analysis_backend(backend)
         adapter = MCPServer(human)
-        from examples.companion import Companion, companion_backend_from_env
-        adapter.companion = Companion(human, companion_backend_from_env())
         await serve_stdio(adapter)
 
 

@@ -10,8 +10,9 @@ import json
 import os
 import time
 
-from ..companion import SYSTEM_PROMPT, LocalChatBackend, _bounded_context
-from ..reasoning import prepare_records
+from gamst.reasoning import prepare_records
+
+from .companion import SYSTEM_PROMPT, LocalChatBackend, _bounded_context
 
 GEMINI_FLASH_MODEL = "gemini-3.5-flash-lite"
 GEMINI_LIVE_MODEL = "gemini-live-2.5-flash-native-audio"

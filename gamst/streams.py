@@ -45,7 +45,7 @@ async def _call(function, *args, cleanup_on_cancel=None, cancel_entry=None):
     return result
 
 
-async def _snapshot(data, limit):
+def _snapshot(data, limit):
     """Bound raw input before copying. Arrays retain dimensions and channels."""
     if isinstance(data, (bytes, bytearray, memoryview)):
         size = data.nbytes if isinstance(data, memoryview) else len(data)

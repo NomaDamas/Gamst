@@ -176,7 +176,7 @@ def companion_backend_from_env() -> ConversationBackend | None:
     provider = os.environ.get("GAMST_COMPANION_PROVIDER", "").strip().lower()
     if provider in ("gemini-flash", "gemini-live"):
         # The optional google-genai import remains inside the Live session.
-        from gamst.providers.gemini import (GEMINI_FLASH_MODEL, GEMINI_LIVE_MODEL,
+        from .gemini import (GEMINI_FLASH_MODEL, GEMINI_LIVE_MODEL,
             GeminiLiveBackend, gemini_flash_backend)
         default = GEMINI_FLASH_MODEL if provider == "gemini-flash" else GEMINI_LIVE_MODEL
         options = {"model": os.environ.get("GAMST_GEMINI_MODEL") or default,
