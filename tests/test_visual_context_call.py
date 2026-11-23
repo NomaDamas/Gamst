@@ -49,7 +49,7 @@ class Calls(unittest.IsolatedAsyncioTestCase):
         a=self.adapter(complete)
         for route in ('small','strong'):
             rid,r,f=await self.queued(route);before=self.h.store.status()['records']
-            result=await a.execute(rid,r,f,'What changed?',maximum_charge=10)
+            result=await a.execute(rid,r,f,'What changed?')
             self.assertTrue(result['accepted']);sent=captured[-1];im=sent['images'][0]
             png=base64.b64decode(im['data_base64'],validate=True)
             np.testing.assert_array_equal(cv2.imdecode(np.frombuffer(png,dtype=np.uint8),cv2.IMREAD_COLOR),f.data)
@@ -61,11 +61,10 @@ class Calls(unittest.IsolatedAsyncioTestCase):
             source=self.c.snapshot()['sources'][next(x for x in self.c.snapshot()['sources'] if self.c.snapshot()['sources'][x]['last_semantic']==f.timestamp_ms)]
             self.assertEqual(source['last_semantic'],f.timestamp_ms)
             self.assertEqual(result['capture_ms'],f.timestamp_ms);self.assertFalse(result['quality_validated'])
-            self.c.settle(rid,components={'other':1},now_ms=timestamp())
         status=await MCPServer(self.h).call_tool('get_call_status',{})
         self.assertNotIn('PRIVATE',json.dumps(status));self.assertNotIn('data_base64',json.dumps(status))
 
-    async def test_mismatch_and_budget_never_call_client(self):
+    async def test_mismatch_never_calls_client(self):
         calls=[]
         async def complete(request):calls.append(request);return dict(text='ok',usage=None)
         a=self.adapter(complete);rid,r,f=await self.queued()
@@ -73,23 +72,21 @@ class Calls(unittest.IsolatedAsyncioTestCase):
         for changed in (replace(f,data=bad),replace(f,data=f.data.reshape(48,32,3)),
                         replace(f,timestamp_ms=f.timestamp_ms+1),replace(f,sensor=replace(f.sensor,sequence=99)),
                         replace(f,subject_id='other')):
-            with self.assertRaises(ValueError):await a.execute(rid,r,changed,'q',maximum_charge=10)
-        with self.assertRaises(ValueError):await a.execute(rid,dict(r,id='changed'),f,'q',maximum_charge=10)
-        self.assertEqual((await a.execute(rid,r,f,'q',maximum_charge=None))['status'],'blocked')
+            with self.assertRaises(ValueError):await a.execute(rid,r,changed,'q')
+        with self.assertRaises(ValueError):await a.execute(rid,dict(r,id='changed'),f,'q')
         tr,rr,ff=await self.queued('text')
-        with self.assertRaises(ValueError):await a.execute(tr,rr,ff,'q',maximum_charge=10)
+        with self.assertRaises(ValueError):await a.execute(tr,rr,ff,'q')
         self.assertEqual(calls,[])
 
-    async def test_copy_and_early_receipt_lifecycle_discard(self):
-        for action in ('normal','pause','reset','delete','delete_then_bill','close'):
+    async def test_copy_and_lifecycle_discard(self):
+        for action in ('normal','pause','reset','delete','delete_before_completion','close'):
             started=asyncio.Event();release=asyncio.Event();captured=[]
             async def complete(request):
                 captured.append(copy.deepcopy(request));started.set();await release.wait();return dict(text='LATE PRIVATE',usage=None)
             a=self.adapter(complete);rid,r,f=await self.queued();original=f.data.copy()
-            task=asyncio.create_task(a.execute(rid,r,f,'q',maximum_charge=10));await started.wait()
+            task=asyncio.create_task(a.execute(rid,r,f,'q'));await started.wait()
             f.data[:]=0
-            if action=='delete_then_bill':await self.h.delete_data()
-            self.c.settle(rid,components={'other':1},now_ms=timestamp())
+            if action=='delete_before_completion':await self.h.delete_data()
             if action=='pause':await self.h.pause()
             elif action=='reset':await self.h.reset_processing()
             elif action=='delete':await self.h.delete_data()
@@ -99,22 +96,19 @@ class Calls(unittest.IsolatedAsyncioTestCase):
             np.testing.assert_array_equal(cv2.imdecode(np.frombuffer(png,dtype=np.uint8),cv2.IMREAD_COLOR),original)
             self.assertEqual(result['status'],'completed' if action=='normal' else 'discarded')
             if action!='normal':self.assertNotIn('text',result)
-            self.assertEqual(self.c.snapshot()['budget']['reserved_liability'],0)
             if action=='pause':await self.h.resume()
-        self.assertEqual(self.c.snapshot()['budget']['spent_known'],6)
 
     async def test_timeout_and_repeated_cancel_join_cleanup(self):
         async def delayed(request):await asyncio.sleep(60)
         a=self.adapter(delayed,timeout=.02);rid,r,f=await self.queued()
-        with self.assertRaises(asyncio.TimeoutError):await a.execute(rid,r,f,'q',maximum_charge=10)
-        self.assertEqual(self.c.snapshot()['budget']['reserved_liability'],10)
+        with self.assertRaises(asyncio.TimeoutError):await a.execute(rid,r,f,'q')
         started=asyncio.Event();cleaning=asyncio.Event();release=asyncio.Event();done=asyncio.Event()
         async def complete(request):
             started.set()
             try:await asyncio.Event().wait()
             finally:cleaning.set();await release.wait();done.set()
         b=self.adapter(complete);rid,r,f=await self.queued()
-        task=asyncio.create_task(b.execute(rid,r,f,'q',maximum_charge=10));await started.wait()
+        task=asyncio.create_task(b.execute(rid,r,f,'q'));await started.wait()
         task.cancel();await cleaning.wait();task.cancel();closing=asyncio.create_task(b.close())
         for _ in range(5):await asyncio.sleep(0)
         self.assertFalse(task.done());self.assertFalse(closing.done())
@@ -136,12 +130,12 @@ class Calls(unittest.IsolatedAsyncioTestCase):
         async def complete(request):calls.append(request);return dict(text='ok',usage=None)
         a=self.adapter(complete);rid,r,f=await self.queued()
         with patch.object(VisualContextCalls,'_encode',staticmethod(encode)):
-            task=asyncio.create_task(a.execute(rid,r,f,'q',maximum_charge=10))
+            task=asyncio.create_task(a.execute(rid,r,f,'q'))
             async def running():
                 while not started.is_set():await asyncio.sleep(.001)
             try:
                 await asyncio.wait_for(running(),1)
-                with self.assertRaisesRegex(RuntimeError,'busy'):await a.execute(rid,r,f,'q',maximum_charge=10)
+                with self.assertRaisesRegex(RuntimeError,'busy'):await a.execute(rid,r,f,'q')
                 task.cancel();closing=asyncio.create_task(a.close())
                 for _ in range(10):await asyncio.sleep(0)
                 task.cancel()
@@ -150,4 +144,4 @@ class Calls(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):await task
             await closing
         self.assertTrue(finished.is_set());self.assertEqual(calls,[])
-        self.assertEqual(self.c.snapshot()['budget']['dispatched'],0)
+        self.assertTrue(all(r['state']=='pending' for r in self.c.snapshot()['requests']))

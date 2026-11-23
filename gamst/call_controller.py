@@ -7,7 +7,12 @@ import uuid
 
 from .capabilities import bounded_json, identifier
 from .call_policy import CallPolicy, _canonical, _ms, _sha
-from .call_budget import CallBudget, BudgetDenied, _integer
+
+
+def _integer(value, maximum=10**18, minimum=0):
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError('bounded exact integer required')
+    return value
 
 
 def _digest(value):
@@ -33,18 +38,16 @@ def _owner(record, decision):
 
 
 class CallController:
-    """Owns source history, bounded requests and an exclusive fresh CallBudget.
+    """Owns source history and bounded VLM call-timing requests.
 
     Application must retain/verify media and explicitly perform authorized calls.
     Lifecycle acknowledgements are trusted application inputs, not model claims.
     """
-    def __init__(self, *, policy, budget, max_sources=32, max_requests=128,
+    def __init__(self, *, policy, max_sources=32, max_requests=128,
                  receipt_limit=128, retention_ms=60000):
-        if type(policy) is not CallPolicy or type(budget) is not CallBudget:
-            raise ValueError('explicit policy and fresh exclusive budget required')
-        if budget.snapshot()['accepted'] or budget.snapshot()['closed']:
-            raise ValueError('budget must be fresh and exclusively owned')
-        self._policy, self._budget = policy, budget
+        if type(policy) is not CallPolicy:
+            raise ValueError('explicit call policy required')
+        self._policy = policy
         self._max_sources = _integer(max_sources, 128, 1)
         self._max_requests = _integer(max_requests, 256, 1)
         self._retention = _integer(retention_ms, 3600000, 1)
@@ -52,19 +55,17 @@ class CallController:
         self._lock = threading.RLock()
         self._scope = uuid.uuid4().hex
         self._sources, self._requests = {}, {}
-        self._source_seq = self._request_seq = self._budget_seq = 0
+        self._source_seq = self._request_seq = 0
         self._submission_seq = -1
         self._clock = self._retired = self._overflow = 0
         self._closed = False
         self._runtime_guard = self._runtime_clock = self._record_guard = self._runtime_epoch = None
-        self._detached = {}
         self._denials = {}
-        self._recording_settlement_recorder = None
 
     def bind_runtime(self, *, guard, clock, validate_record, epoch):
         """One-way binding of a fresh instance to an application-owned runtime."""
         with self._lock:
-            if self._runtime_guard is not None or self._source_seq or self._closed or self._budget.snapshot()['accepted']:
+            if self._runtime_guard is not None or self._source_seq or self._closed:
                 raise ValueError('runtime binding requires a fresh unbound controller')
             if not all(callable(f) for f in (guard, clock, validate_record, epoch)):
                 raise ValueError('runtime callbacks required')
@@ -125,7 +126,7 @@ class CallController:
     def submit_next(self, handle, record, *, now_ms, **rules):
         """Allocate one ordered submission atomically for owned orchestrators.
 
-        Retains all source/capture/fingerprint/budget rules; callers using the
+        Retains all source/capture/fingerprint rules; callers using the
         explicit sequence API must continue from the controller's actual order.
         """
         with self._lock:
@@ -179,12 +180,12 @@ class CallController:
                     s.update(active=d['proposed_change_active'], last_capture=capture)
                 return dict(status='context_only', decision=d)
             priority = 0 if rules.get('conflict_rule') or rules.get('unknown_candidate') else (1 if rules.get('query') else 2)
-            if len(self._requests) + len(self._detached) >= self._max_requests:
+            if len(self._requests) >= self._max_requests:
                 victims = [r for r in self._requests.values() if r['state'] == 'pending' and r['priority'] > priority]
                 if victims:
                     victim = max(victims, key=lambda r:(r['priority'], r['submitted_ms']))
                     self._retire(victim, 'preempted_uninspected')
-            if len(self._requests) + len(self._detached) >= self._max_requests:
+            if len(self._requests) >= self._max_requests:
                 self._overflow += 1
                 return dict(status='rejected', reason='request_capacity', decision=d)
             # A newer attempt permanently supersedes older retry eligibility.
@@ -199,9 +200,9 @@ class CallController:
                 state='pending', order=self._request_seq, decision=d, record=record, rules=rules,
                 freshness_ms=record['observation']['capability']['freshness_ms'], modality=record['observation']['modality'],
                 submitted_ms=now, expires_ms=min(2**53-1, now+self._retention), priority=priority,
-                reservation=None, execution=None, last_admission=None, finished=False, charged=False,
+                reservation=None, execution=None, last_admission=None, finished=False,
                 discard=False, outcome=None)
-            # The event is now retained even if cooldown or price blocks execution.
+            # The event is now retained even if cooldown blocks execution.
             if not retry:
                 s.update(active=d['proposed_change_active'], last_capture=capture)
             return dict(status='queued', request_id=token, decision=deepcopy(d))
@@ -227,34 +228,28 @@ class CallController:
             self._denials[reason] = self._denials.get(reason, 0) + 1
 
     def reserve(self, token, *, provider, model_revision, prompt_sha256,
-                maximum_charge, now_ms, ttl_ms=1000):
+                now_ms, ttl_ms=1000):
         _sha(prompt_sha256); identifier(provider); identifier(model_revision)
-        if maximum_charge is not None:
-            _integer(maximum_charge)
         _integer(ttl_ms, 3600000, 1)
         with self._lock:
             now = self._time(now_ms); r = self._request(token)
             self._admit(r.get('record'))
+            if now + ttl_ms > 2**53-1:
+                raise ValueError('expiry exceeds clock range')
             if r['state'] != 'pending':
                 raise ValueError('request already reserved or dispatched')
             execution = dict(request_id=token, route=r['decision']['desired_route'],
                 decision_sha256=r['decision']['decision_sha256'], provider=provider,
                 model_revision=model_revision, prompt_sha256=prompt_sha256)
             blockers = self._blockers(r, now)
-            if maximum_charge is None:
-                blockers.append('unknown_charge_ceiling')
             if blockers:
                 self._attempt(r, stage='reserve', status='blocked', reasons=blockers, now=now, candidate=execution)
                 return dict(status='blocked', blockers=blockers)
-            self._budget_seq += 1
-            try:
-                reservation = self._budget.reserve(sequence=self._budget_seq,
-                    decision_sha256=_digest(execution), evidence_sha256=r['decision']['evidence']['record_sha256'],
-                    provider=provider, model_revision=model_revision, maximum_charge=maximum_charge,
-                    now_ms=now, ttl_ms=ttl_ms)
-            except BudgetDenied as exc:
-                self._attempt(r, stage='reserve', status='blocked', reasons=[exc.reason], now=now, candidate=execution)
-                return dict(status='blocked', blockers=[exc.reason])
+            reservation = dict(token=f'{self._scope}:reservation:{r["order"]}',
+                decision_sha256=_digest(execution),
+                evidence_sha256=r['decision']['evidence']['record_sha256'],
+                provider=provider, model_revision=model_revision,
+                reserved_ms=now, expires_ms=now+ttl_ms)
             r.update(state='reserved', reservation=reservation, execution=execution)
             self._attempt(r, stage='reserve', status='reserved', reasons=[], now=now, candidate=execution)
             return dict(status='reserved', execution=deepcopy(execution), reservation=deepcopy(reservation))
@@ -270,14 +265,8 @@ class CallController:
                 blockers.append('reservation_expired')
             if blockers:
                 self._attempt(r, stage='dispatch', status='blocked', reasons=blockers, now=now, candidate=r['execution'])
-                self._budget.release(r['reservation']['token'], now_ms=now)
                 r.update(state='pending', reservation=None, execution=None)
                 return dict(status='blocked', blockers=blockers)
-            try:
-                self._budget.dispatch(r['reservation']['token'], now_ms=now)
-            except BudgetDenied as exc:
-                self._attempt(r, stage='dispatch', status='blocked', reasons=[exc.reason], now=now, candidate=r['execution'])
-                return dict(status='blocked', blockers=[exc.reason])
             self._attempt(r, stage='dispatch', status='dispatched', reasons=[], now=now, candidate=r['execution'])
             r['state'] = 'dispatched'
             observation = r.pop('record')
@@ -307,35 +296,7 @@ class CallController:
                 result_sha256=result_sha256, completed_ms=now,
                 semantic_capture_ms=r['decision']['evidence']['capture_ms'] if semantic else None))
             result = deepcopy(r['outcome'])
-            if r['charged']:
-                self._retire(r, 'completed')
-            return result
-
-    def settle(self, token, *, components, now_ms, recording_receipt=None):
-        with self._lock:
-            now = self._time(now_ms)
-            recorder = self._recording_settlement_recorder
-            if recording_receipt is not None:
-                if recorder is None:
-                    raise ValueError('recording receipt has no controller owner')
-                recorder._prepare(self, token, recording_receipt, components)
-            if type(token) is str and token in self._detached:
-                result = self._budget.settle(self._detached[token], components=components, now_ms=now)
-                if result['state'] == 'settled':
-                    if recording_receipt is not None:
-                        recorder._record(token, recording_receipt, result)
-                    del self._detached[token]
-                return result
-            r = self._request(token)
-            if r['state'] != 'dispatched' or r['charged']:
-                raise ValueError('single dispatched financial settlement required')
-            result = self._budget.settle(r['reservation']['token'], components=components, now_ms=now)
-            if result['state'] == 'settled':
-                if recording_receipt is not None:
-                    recorder._record(token, recording_receipt, result)
-                r['charged'] = True
-                if r['finished']:
-                    self._retire(r, 'completed')
+            self._retire(r, 'completed')
             return result
 
     @staticmethod
@@ -362,9 +323,7 @@ class CallController:
             now = self._time(now_ms); r = self._request(token)
             if r['state'] == 'dispatched':
                 r['discard'] = True
-                return dict(status='discard_output', liability_preserved=True)
-            if r['state'] == 'reserved':
-                self._budget.release(r['reservation']['token'], now_ms=now)
+                return dict(status='discard_output')
             self._retire(r, 'cancelled_undispatched')
             return dict(status='cancelled')
 
@@ -376,12 +335,9 @@ class CallController:
                 if r['state'] == 'dispatched':
                     continue
                 if now >= r['expires_ms']:
-                    if r['state'] == 'reserved':
-                        self._budget.release(r['reservation']['token'], now_ms=now)
                     self._retire(r, 'expired_uninspected')
                     changed += 1
                 elif r['state'] == 'reserved' and now >= r['reservation']['expires_ms']:
-                    self._budget.release(r['reservation']['token'], now_ms=now)
                     r.update(state='pending', reservation=None, execution=None)
                     changed += 1
             return changed
@@ -401,29 +357,19 @@ class CallController:
                 self.close_source(handle, now_ms=now)
 
     def forget_subject(self, subject_id=None, *, now_ms):
-        """Erase sensory associations; retain only opaque unsettled financial handles.
-
-        Ledger evidence is conservatively redacted across the whole controller,
-        since bounded historical receipts cannot prove subject ownership forever.
-        """
+        """Erase request and source associations for deleted runtime data."""
         with self._lock:
-            now = self._time(now_ms)
+            self._time(now_ms)
             handles = {h for h,s in self._sources.items()
                        if subject_id is None or s['base'][0] == subject_id}
             for r in list(self._requests.values()):
                 subject = r['decision']['evidence']['subject_id']
-                if subject_id is not None and subject != subject_id:
-                    continue
-                if r['state'] == 'reserved':
-                    self._budget.release(r['reservation']['token'], now_ms=now)
-                if r['state'] == 'dispatched' and not r['charged']:
-                    self._detached[r['id']] = r['reservation']['token']
-                del self._requests[r['id']]
+                if subject_id is None or subject == subject_id:
+                    del self._requests[r['id']]
             for h in handles:
                 del self._sources[h]
             self._recent = deque((r for r in self._recent
                 if subject_id is not None and r['evidence']['subject_id'] != subject_id), maxlen=self._recent.maxlen)
-            self._budget.redact_evidence()
 
     def close(self, *, now_ms):
         with self._lock:
@@ -431,9 +377,8 @@ class CallController:
             for handle in list(self._sources):
                 self.close_source(handle, now_ms=now)
             self._closed = True
-            self._budget.close(now_ms=now)
 
-    def _admission_view(self, r, budget):
+    def _admission_view(self, r):
         blockers = self._blockers(r, self._clock)
         if not self._runtime_active():
             blockers.append('runtime_unavailable')
@@ -442,10 +387,6 @@ class CallController:
         if r['state'] == 'reserved':
             if self._clock >= r['reservation']['expires_ms']:
                 blockers.append('reservation_expired')
-            if budget['closed']:
-                blockers.append('ledger_closed')
-            if budget['overrun']:
-                blockers.append('reservation_overrun')
         elif r['state'] == 'pending':
             blockers.append('reservation_required')
         else:
@@ -466,7 +407,6 @@ class CallController:
         with self._lock:
             if now_ms is not None or self._runtime_clock is not None:
                 self._time(self._clock if now_ms is None else now_ms)
-            budget = self._budget.snapshot()
             requests = sorted(self._requests.values(), key=lambda r:(r['priority'], r['submitted_ms'], r['id']))
             sources = {h:dict(s, semantic_audit_due=s['modality']=='video' and
                 (s['last_semantic'] is None or self._clock-s['last_semantic'] >= self._policy.semantic_interval_ms))
@@ -474,10 +414,9 @@ class CallController:
             return deepcopy(dict(closed=self._closed, sources=sources,
                 requests=[dict(id=r['id'], source=r['source'], state=r['state'], priority=r['priority'],
                     decision=r['decision'], blockers=self._blockers(r, self._clock),
-                    expires_ms=r['expires_ms'], finished=r['finished'], charged=r['charged'],
+                    expires_ms=r['expires_ms'], finished=r['finished'],
                     discard=r['discard'], execution=r['execution'],
-                    **self._admission_view(r, budget)) for r in requests],
-                detached_financial_requests=list(self._detached),
+                    **self._admission_view(r)) for r in requests],
                 recent=list(self._recent), omitted_receipts=self._retired-len(self._recent),
-                overflow_rejections=self._overflow, admission_denials=self._denials, budget=budget,
+                overflow_rejections=self._overflow, admission_denials=self._denials,
                 executes_model=False, changes_sensor_cadence=False, durable=False))

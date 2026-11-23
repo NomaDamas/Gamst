@@ -1,18 +1,29 @@
-# Gemini Companion providers
+# Gemini Companion providers (example consumer)
 
-GAMST can use Gemini Flash through its OpenAI-compatible Chat Completions API or
-Gemini Live through one persistent bidirectional session. Both are explicit
+The Companion is an example application in `examples/companion/` that reads
+GAMST context and asks a chat model for a reply; it is not part of the GAMST
+core, MCP or dashboard. Gemini Flash uses the OpenAI-compatible Chat Completions
+API; Gemini Live keeps one persistent bidirectional session. Both are explicit
 remote consumers: neither is selected by default, and observations remain
 measurements rather than claims about a person's emotions or intentions.
 
 ## Gemini Flash
 
-The Flash preset needs no additional Python SDK. Set the API key in the
-environment and select the provider in the local launcher:
+The Flash preset needs no additional Python SDK. Set the API key and select the
+provider when constructing the example Companion from a source checkout:
 
 ```bash
+export GAMST_COMPANION_PROVIDER=gemini-flash
 export GEMINI_API_KEY='YOUR_KEY'
-.venv/bin/python scripts/run_local.py --companion gemini-flash
+# Optional: export GAMST_GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+```python
+from gamst import Gamst
+from examples.companion import Companion, companion_backend_from_env
+
+async with Gamst(consent=True) as human:
+    reply = await Companion(human, companion_backend_from_env()).reply("What changed?")
 ```
 
 The defaults are model `gemini-3.5-flash-lite` and endpoint
@@ -21,16 +32,6 @@ The key is read only when a request is made. This endpoint and bearer-key usage
 match Google's [Gemini OpenAI compatibility guide](https://ai.google.dev/gemini-api/docs/openai).
 The preset deliberately sets `allow_remote=True`; choosing it authorizes sending
 the bounded Companion conversation and derived text context to Google.
-
-The equivalent environment configuration for an independently started dashboard
-is:
-
-```bash
-export GAMST_COMPANION_PROVIDER=gemini-flash
-export GEMINI_API_KEY='YOUR_KEY'
-# Optional: export GAMST_GEMINI_MODEL=gemini-3.5-flash-lite
-.venv/bin/python -m gamst.dashboard
-```
 
 ### Vertex AI
 
@@ -43,7 +44,7 @@ export GAMST_GEMINI_VERTEX=true
 export GAMST_GEMINI_PROJECT='YOUR_PROJECT_ID'
 export GAMST_GEMINI_LOCATION='us-central1'
 export GAMST_GEMINI_MODEL='google/gemini-3.5-flash-lite'
-.venv/bin/python scripts/run_local.py --companion gemini-flash
+export GAMST_COMPANION_PROVIDER=gemini-flash
 ```
 
 The preset constructs
@@ -63,7 +64,7 @@ Install the optional SDK; the core GAMST package does not import or require it:
 ```bash
 .venv/bin/python -m pip install -e '.[gemini]'
 export GEMINI_API_KEY='YOUR_KEY'
-.venv/bin/python scripts/run_local.py --companion gemini-live
+export GAMST_COMPANION_PROVIDER=gemini-live
 ```
 
 The default model is `gemini-live-2.5-flash-native-audio`; set
@@ -81,7 +82,7 @@ gcloud auth application-default login
 export GAMST_GEMINI_VERTEX=true
 export GAMST_GEMINI_PROJECT='YOUR_PROJECT_ID'
 export GAMST_GEMINI_LOCATION='us-central1'
-.venv/bin/python scripts/run_local.py --companion gemini-live
+export GAMST_COMPANION_PROVIDER=gemini-live
 ```
 
 Live Vertex construction is `genai.Client(vertexai=True, project=..., location=...)`;
@@ -94,7 +95,7 @@ and [SDK session reference](https://googleapis.github.io/python-genai/genai.html
 Direct users can inject a session factory for deterministic tests:
 
 ```python
-from gamst.providers.gemini import GeminiLiveCompanion
+from examples.companion.gemini import GeminiLiveCompanion
 
 async with GeminiLiveCompanion() as live:
     await live.push_context({"event": "speech.started", "capture_ms": 10,
@@ -114,8 +115,8 @@ prohibits inner-state claims.
 
 The Flash Chat Completions URL above is also the Gemini endpoint for an
 OpenAI-compatible scene-VLM integration. This is separate from selecting the
-Companion consumer. `run_local.py --companion ...` leaves the launcher's scene
-VLM on loopback; the existing `LocalScenePlugin` is loopback-only. An application
+Companion consumer. The Companion example never configures a scene VLM; the
+existing `LocalScenePlugin` is loopback-only. An application
 that separately configures a remote scene VLM must explicitly authorize and
 authenticate that path.
 

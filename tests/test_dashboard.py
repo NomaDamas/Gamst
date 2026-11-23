@@ -156,24 +156,3 @@ class HTTPBoundaryTests(unittest.TestCase):
             handler.do_GET()
             self.assertEqual(handler.response[0], 200)
             self.assertIn(marker, handler.response[1])
-
-class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_stop_does_not_wait_for_long_model_call(self):
-        from gamst.companion import Companion
-        entered, release = asyncio.Event(), asyncio.Event()
-        class Backend:
-            model_id, model_version = 'fixture', '1'
-            async def reply(self, records, context, inference):
-                entered.set(); await release.wait(); return 'late response'
-        async with Gamst(consent=True) as human:
-            app = Dashboard(human, asyncio.get_running_loop())
-            app.companion = Companion(human, Backend())
-            await app.dispatch({'op':'start','consent':True})
-            task = asyncio.create_task(app.dispatch({'op':'chat','text':'help me'}))
-            await entered.wait()
-            await asyncio.wait_for(app.dispatch({'op':'stop'}), .2)
-            self.assertTrue(human.paused)
-            release.set()
-            with self.assertRaises(RuntimeError): await task
-            history = await human.get_history()
-            self.assertFalse(any(r.get('observation',{}).get('value') == 'late response' for r in history))

@@ -23,7 +23,6 @@ class Rules(unittest.TestCase):
         d=CallPolicy().recommend(r,now_ms=1000,query=True,unknown_candidate=True,conflict_rule='task-rule',visual_reference=visual())
         self.assertEqual(d['recommended_route'],'none');self.assertTrue(d['unknown_candidate_unresolved'])
         self.assertTrue(d['semantic_audit_due']);self.assertFalse(d['executes_model']);self.assertEqual(r,before)
-        self.assertFalse(d['budget_authorized'])
 
     def test_periodic_requires_actual_success_not_a_recommendation(self):
         p=CallPolicy(mode='periodic');r=record()

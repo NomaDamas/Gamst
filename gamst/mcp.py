@@ -49,10 +49,8 @@ def tool_definitions() -> list[dict]:
         ("list_decision_modules", "Internal multimodal perception decision modules. Discovery registers only a dependency-free contract; it never starts sensors or loads model weights.", {}, ()),
         ("decide_multimodal", "Run an internal multimodal perception decision over already retained registered observations. The decision is published as decision.multimodal into Context and observation memory; no raw media is accepted or returned.", {"subject_id": SUBJECT, "window": WINDOW, "requested_capabilities": {"type": "array", "maxItems": 16, "items": identifier_field}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "timestamp_ms": TIME}, ()),
         ("get_multimodal_decisions", "Read retained decision.multimodal observations produced by the internal perception module. No inference is run and no sensors are activated.", dict(query_bounds, window=WINDOW), ()),
-        ("get_call_status", "Read-only bounded call-controller diagnostics. No model calls or cadence changes. Financial totals cover whole controller, not a selected subject. No raw observations, prompts or responses.",
+        ("get_call_status", "Read-only bounded call-controller timing and lifecycle diagnostics. No model calls or cadence changes. No raw observations, prompts or responses.",
          {"controller_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
-        ("get_sentinel_status", "Read-only bounded fresh-frame scheduler diagnostics. Inspected capture points and unobserved gaps are not continuous scene coverage. Polling never starts capture or inference. No raw media.",
-         {"sentinel_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
         ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
         ("finish_sensor_stream", "Drain and finalize one existing typed sensor stream, then close it. Does not stop its application-owned producer or open devices. Use IDs from get_sensor_status. No raw media returned.",
          {"manager_id": identifier_field, "source_id": identifier_field, "sensor_id": identifier_field},
@@ -77,6 +75,10 @@ def tool_definitions() -> list[dict]:
         ("get_features", "Runtime model switches shared with dashboard settings.", {}, ()),
         ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
         ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
+        ("configure_vlm", "Update the installed local temporal VLM settings shared with the dashboard. Does not load a model or start capture.",
+         {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60},
+          "window_seconds": {"type": "number", "minimum": 1, "maximum": 30},
+          "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
         ("get_semantic_state", "Read bounded short-term semantic state updates. This is read-only and never triggers a model call.", {"subject_id": SUBJECT, "window": WINDOW, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}, ()),
         ("get_voice_backend_status", "Read optional realtime voice backend configuration. Disabled by default; reading status never opens a network connection or microphone.", {}, ()),
         ("configure_voice_backend", "Enable or disable an explicitly configured realtime voice consumer. This only stores validated provider metadata; it never starts full-duplex capture or spends API credits.",
@@ -89,7 +91,6 @@ def tool_definitions() -> list[dict]:
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
         ("get_trends", "Measured changes relative to a subject's available baseline.", {"subject_id": SUBJECT, "window": WINDOW}, ()),
         ("inspect_interval", "Inspect stored evidence for a subject and time interval.", {"subject_id": SUBJECT, "start_ms": TIME, "end_ms": TIME}, ("start_ms", "end_ms")),
-        ("chat", "Generate a context-aware companion reply using the configured backend. Generated text is unverified model output.", {"subject_id": SUBJECT, "text": {"type": "string", "minLength": 1}}, ("text",)),
         ("analyze", "Run configured reasoning backend over retained evidence; unavailable without explicit backend setup.", {"subject_id": SUBJECT, "window": WINDOW}, ()),
         ("record_feedback", "Record an explicit observed outcome for a retained inference; never silently recalibrates models.", {"subject_id": SUBJECT, "inference_id": {"type": "string", "minLength": 1}, "outcome": {"type": "boolean"}, "prediction": {"type": "string", "minLength": 1}}, ("inference_id", "outcome")),
         ("push_text", "Supply a conversation turn; no camera or microphone needed.", {"subject_id": SUBJECT, "text": {"type": "string", "minLength": 1}, "timestamp_ms": TIME, "role": {"type": "string", "enum": ["user", "assistant"]}}, ("text",)),
@@ -163,7 +164,6 @@ class MCPServer:
     def __init__(self, human: Any):
         self.human = human
         self.capture = None
-        self.companion = None
         self.tools = {t["name"]: t for t in tool_definitions()}
         self._capture_plugins: dict[str, tuple[tuple, Any]] = {}
         self._tool_lock = asyncio.Lock()
@@ -201,7 +201,7 @@ class MCPServer:
         # deletion so two concurrent clients cannot open duplicate devices.
         # Finalization owns its manager's lifecycle lock. Do not hold the global
         # tool lock while draining: deletion must invalidate a pending final.
-        if name in ("chat", "analyze", "finish_sensor_stream", "endpoint_sensor_stream"):
+        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)
@@ -246,12 +246,8 @@ class MCPServer:
         if name in ("get_vlm_status", "configure_vlm"):
             from .realtime import scene_status, configure_scene
             return scene_status(self.human) if name == "get_vlm_status" else await configure_scene(self.human, args)
-        if name in ("chat", "push_text", "push_claim") and not getattr(self.human, "text_companion_enabled", True):
-            raise ValueError("Text and Companion are disabled in settings")
-        if name == "chat":
-            if self.companion is None:
-                raise ValueError("No companion backend configured")
-            return await self.companion.reply(**args)
+        if name in ("push_text", "push_claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text input is disabled in settings")
         if name == "get_events":
             return await self.human.get_history(type="observation.event", **args)
         if name == "get_capture_status":
@@ -465,8 +461,6 @@ async def _main(args: argparse.Namespace) -> None:
         if backend is not None:
             human.set_analysis_backend(backend)
         adapter = MCPServer(human)
-        from .companion import Companion, companion_backend_from_env
-        adapter.companion = Companion(human, companion_backend_from_env())
         await serve_stdio(adapter)
 
 

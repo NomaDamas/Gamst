@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from gamst import Gamst
-from gamst.companion import Companion, LocalChatBackend, companion_backend_from_env
+from examples.companion import Companion, LocalChatBackend, companion_backend_from_env
 
 
 class CompanionTests(unittest.IsolatedAsyncioTestCase):
@@ -114,7 +114,7 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
         for index in range(43):
             await self.human.push_text("turn-" + str(index) + " " + "x" * 450, role="user")
         await self.human.push_signal("scene.image", "private image not a turn", "video", model_id="test", model_version="1")
-        with patch("gamst.companion.asyncio.to_thread", inline):
+        with patch("examples.companion.companion.asyncio.to_thread", inline):
             output = await Companion(self.human, backend).reply("Please explain again")
         self.assertEqual(output["assistant_text"], "Could I clarify the last step?")
         body = json.loads(requests[0].data)

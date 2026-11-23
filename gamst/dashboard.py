@@ -18,7 +18,6 @@ class Dashboard:
         # State-stream snapshots can be queued before a start/stop request.
         # Clients use this monotonic operation revision to reject stale data.
         self.capture_revision = 0
-        self.companion = None
         self._lock = asyncio.Lock()
         self._capture_lock = asyncio.Lock()
         self._vlm_test_lock = asyncio.Lock()
@@ -144,7 +143,6 @@ class Dashboard:
                     "context": await self.human.get_context(),
                     "guide_test_available": self.fixture_image is not None, "capture": self.capture,
                     "capture_revision": self.capture_revision, "adapter_errors": self.errors,
-                    "companion_available": self.companion is not None and self.companion.backend is not None,
                     "analysis_available": self.human.analysis_backend is not None,
                     "plugins": [p.name for p in self.human.plugins],
                     "workers": [p.status() for p in self.human.plugins if callable(getattr(p, 'status', None))],
@@ -171,12 +169,8 @@ class Dashboard:
             return {"deleted": True}
         if not self.capture:
             raise ValueError("Start with consent before submitting observations")
-        if op in ("chat", "text", "claim") and not getattr(self.human, "text_companion_enabled", True):
-            raise ValueError("Text and Companion are disabled in settings")
-        if op == "chat":
-            if self.companion is None:
-                raise ValueError("No companion backend configured")
-            return await self.companion.reply(body["text"])
+        if op in ("text", "claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text input is disabled in settings")
         if op == "analyze":
             return await self.human.analyze()
         if op == "feedback":
@@ -287,7 +281,7 @@ def handler_for(app):
                             future.cancel()
                     return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
-                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm", "test_guides") else 30))
+                self.respond(200, future.result(timeout=90 if body.get("op") in ("analyze", "test_vlm", "test_guides") else 30))
             except Exception as exc:
                 if future is not None and not future.done():
                     future.cancel()
@@ -307,8 +301,6 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
         fixture = Path.cwd() / '.local-run/qa/pose.jpg'
         if fixture.is_file():
             app.fixture_image = fixture
-        from .companion import Companion, companion_backend_from_env
-        app.companion = Companion(human, companion_backend_from_env())
         for factory in (AudioLevelPlugin, OpenCVPersonPlugin):
             try:
                 human.register(factory())
@@ -339,7 +331,6 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
             from .server import serve_websocket
             from .mcp import MCPServer
             adapter = MCPServer(human)
-            adapter.companion = app.companion
             websocket_task = asyncio.create_task(serve_websocket(adapter, websocket_port))
         await human.pause()
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_for(app))

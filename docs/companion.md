@@ -4,7 +4,7 @@ The Companion uses the same gamst runtime and retention store as perception. A r
 
 ```python
 from gamst import Gamst
-from gamst.companion import Companion, LocalChatBackend
+from examples.companion import Companion, LocalChatBackend
 
 async with Gamst(consent=True) as human:
     backend = LocalChatBackend(
@@ -18,19 +18,11 @@ async with Gamst(consent=True) as human:
 
 The prompt includes bounded prior turns, measured aggregate context and the recommended strategy. Inferences are explicitly identified as unverified hypotheses. If a reasoning backend is also configured, it first performs evidence-citing analysis; otherwise it uses the runtime's rule-based inference. The generated assistant turn is recorded in the same local history and serves as a timing anchor for the next user response. It does not execute outside tools or diagnose a person.
 
-## Dashboard and MCP
+## Example consumer
 
-Configure a provider you actually run:
+The implementation lives in `examples/companion/`; it is not a GAMST core module, MCP tool, dashboard operation, or server startup dependency. Applications instantiate it explicitly with a runtime and provider backend. Configure a provider you actually run with `GAMST_COMPANION_URL` and `GAMST_COMPANION_MODEL`, then pass `companion_backend_from_env()` to `Companion`.
 
-```bash
-export GAMST_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
-export GAMST_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
-python -m gamst dashboard
-```
-
-Consent and start collection, enter a message, and click **Companion에게 보내기**. For MCP, start `python -m gamst.mcp` with the same environment and call `chat` with `{"text":"설명을 짧게 해 주세요"}`. WebSocket clients call the same tool. The UI does not automatically upload camera recordings to the provider or continuously call a model for every frame.
-
-If separate Companion variables are absent, an explicitly configured reasoning endpoint/model is reused. If neither is configured, chat reports a missing-backend error. For an external provider use HTTPS, `GAMST_COMPANION_ALLOW_REMOTE=true`, and optionally `GAMST_COMPANION_KEY_ENV=YOUR_KEY_VARIABLE`. Obtain consent to transmit conversation/context before enabling remote service. Keys remain in the environment and are not observations.
+If separate Companion variables are absent, an explicitly configured reasoning endpoint/model is reused. If neither is configured, replies report a missing-backend error. For an external provider use HTTPS, `GAMST_COMPANION_ALLOW_REMOTE=true`, and optionally `GAMST_COMPANION_KEY_ENV=YOUR_KEY_VARIABLE`. Obtain consent to transmit conversation/context before enabling remote service. Keys remain in the environment and are not observations.
 
 Stop/delete invalidates in-flight model results so a late answer cannot restore deleted or paused observations. User-visible transcripts already displayed by other applications or remote provider copies are outside the SDK's deletion boundary.
 

@@ -135,14 +135,13 @@ class Native(unittest.TestCase):
                 from gamst.capabilities import CapabilitySpec,OutputField
                 from gamst.call_policy import CallPolicy
                 from gamst.call_controller import CallController
-                from gamst.call_budget import CallBudget
                 real_spawn=asyncio.create_subprocess_exec;children=[]
                 async def spawn(*args,**kwargs):
                     child=await real_spawn(sys.executable,'-u','-c',code,**kwargs);children.append(child);return child
                 async with Gamst(consent=True) as human:
                     thin=CapabilitySpec('fixture.detect','fixture.objects','video','fixture','1',(OutputField('count','integer'),),'frame',freshness_ms=1000)
                     human.register_capability(thin)
-                    controller=CallController(policy=CallPolicy(mode='sentinel'),budget=CallBudget(unit='fixture',pricing_revision='1',ceiling=2))
+                    controller=CallController(policy=CallPolicy(mode='sentinel'))
                     human.register_call_controller('native',controller)
                     with patch('asyncio.create_subprocess_exec',spawn):
                         adapter=await SmolVLMCalls.open(human,'native',sys.executable,{k:v for k,v in worker_config.items() if k!='window_frames'},inference_timeout=60)
@@ -153,10 +152,9 @@ class Native(unittest.TestCase):
                         frame=InputFrame(images[0].copy(),'video',ts,sensor=sensor)
                         ref=dict(source_id='camera',sensor_id='video',stream_epoch='native-1',capture_ms=ts,sha256=smolvlm_frame_sha256(frame.data))
                         queued=controller.submit(source,record,sequence=0,now_ms=timestamp(),visual_reference=ref,unknown_candidate=True)
-                        result=await adapter.execute(queued['request_id'],record,frame,maximum_charge=1)
+                        result=await adapter.execute(queued['request_id'],record,frame)
                         self.assertIn(result['status'],('published','discarded'))
-                        self.assertEqual(controller.snapshot()['budget']['dispatched'],1)
-                        self.assertEqual(controller.snapshot()['budget']['reserved_liability'],1)
+                        self.assertFalse(controller.snapshot()['requests'])
                         if result['status']=='published':
                             self.assertEqual(result['observation']['observation']['value']['model']['checkpoint_sha256'],worker_config['checkpoint_sha256'])
                             self.assertFalse(result['observation']['observation']['value']['semantic']['quality_validated'])

@@ -43,7 +43,7 @@ class Gamst:
     def __init__(self, *, consent=False, store=":memory:", retention_hours=24,
                  window_ms=30_000, queue_size=256, save_raw_media=False,
                  capabilities=None, sensor_inference_interval_ms=0,
-                 max_records=5000, max_payload_bytes=32*1024*1024, evaluation_observer=None):
+                 max_records=5000, max_payload_bytes=32*1024*1024):
         if not isinstance(consent, bool):
             raise TypeError("consent must be an explicit boolean")
         if save_raw_media:
@@ -54,8 +54,6 @@ class Gamst:
         if capabilities is not None and (isinstance(capabilities, str) or set(capabilities)-supported):
             raise ValueError("supported capabilities: conversation, behavior, consistency")
         self.capabilities = tuple(capabilities or ("conversation", "behavior", "consistency"))
-        self._evaluation_observers=[]
-        if evaluation_observer is not None:self._register_evaluation_observer(evaluation_observer)
         self.consent = bool(consent)
         self.paused = False
         self.closed = False
@@ -82,7 +80,6 @@ class Gamst:
         self.context_memory = ContextMemory(session_id=self._session_id,
                                             max_bytes=min(max_payload_bytes, 4 * 1024 * 1024))
         self.context_memory_drops = 0
-        self._evaluation_snapshot_publishers = {}
         self._metric_directions = {}
         self.dropped_records = 0
         self.plugin_errors = []
@@ -91,8 +88,6 @@ class Gamst:
         self.sensor_inference_interval_ms = sensor_inference_interval_ms
         self._sensor_refresh = {}
         self._call_controllers = {}
-        self._call_drivers = {}
-        self._call_driver_cleanup = {}
         self._separation_media = None
         # The multimodal decision provider is an internal perception module.
         # It is registered lazily so discovery of unrelated capabilities stays
@@ -104,28 +99,6 @@ class Gamst:
         self.watches = WatchManager(
             lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
             timestamp)
-
-    def _register_evaluation_observer(self, observer):
-        from .recording_scope import evaluation_owner
-        observer=evaluation_owner(observer)
-        if not callable(getattr(observer,"invalidate",None)):
-            raise TypeError("evaluation observer requires callable invalidate")
-        if any(value is observer for value in self._evaluation_observers):return
-        if len(self._evaluation_observers)>=32:
-            raise ValueError("at most 32 distinct evaluation observers per runtime")
-        self._evaluation_observers.append(observer)
-
-    def _invalidate_evaluation(self, reason, subject_id=None):
-        # Privacy cleanup must run even when the external accounting sink fails.
-        for observer in self._evaluation_observers:
-            try:observer.invalidate(reason, subject_id=subject_id)
-            except BaseException:pass
-
-    def _retire_evaluation_snapshot_publishers(self):
-        publishers = getattr(self, '_evaluation_snapshot_publishers', {})
-        for publisher in publishers.values():
-            publisher._retire()
-        publishers.clear()
 
     def enable_separation_media(self, *, subject_id='local-user', source_id, sensor_id,
                                 ttl_ms=30000, capacity=8, max_bytes=16*1024*1024,
@@ -162,10 +135,7 @@ class Gamst:
         prior = getattr(self, '_consent', False)
         self._consent = value
         if prior and not value:
-            self._retire_evaluation_snapshot_publishers()
-            self._invalidate_evaluation("consent_revoked")
             self._generation += 1
-            self._invalidate_call_drivers('consent_revoked')
             self._clear_separation_media()
             for controller in getattr(self, '_call_controllers', {}).values():
                 controller.reset_sources(now_ms=timestamp())
@@ -377,15 +347,6 @@ class Gamst:
         record = self._record("observation.signal", subject_id, ts,
             observation=observation,
             models=[{"id": model_id, "version": model_version, "backend": "plugin"}], quality=quality)
-        # The SDK-owned task wrapper is detached evidence about a frozen Context,
-        # not another sensory measurement. Running inference here would create
-        # derived wrapper records that contaminate subsequent source counts.
-        publisher = self._evaluation_snapshot_publishers.get(subject_id)
-        if (publisher is not None and capability_id == publisher._spec.id
-                and spec == publisher._spec):
-            from .capabilities import bounded_json
-            bounded_json(record, max_bytes=131072)
-            return self._emit(record)
         self._emit(record)
         if name == "speech.activity" and isinstance(value, bool) and record["quality"]["status"] == "sufficient":
             activity = [r for r in self.store.query(subject_id, end=ts, kind="observation.signal", name=name)
@@ -729,65 +690,6 @@ class Gamst:
                                 epoch=lambda: f'{self._session_id}:{self._generation}')
         self._call_controllers[controller_id] = controller
 
-    def _register_call_driver(self, kind, driver_id, driver):
-        """Internal opt-in ownership, including invalidated owners still reaping."""
-        self._check();identifier(driver_id)
-        if kind not in ('frame_sentinel','context_fill'):
-            raise ValueError('known owned call-driver kind required')
-        key=(kind,driver_id)
-        if (key in self._call_drivers or len(self._call_drivers)>=8 or
-                sum(k[0]==kind for k in self._call_drivers)>=4):
-            raise RuntimeError('owned call-driver ID or resource capacity unavailable')
-        if not callable(getattr(driver,'invalidate',None)) or not callable(getattr(driver,'owns_task',None)):
-            raise TypeError('owned call-driver lifecycle required')
-        self._call_drivers[key]=driver
-
-    def _track_call_driver_cleanup(self, kind, driver_id, driver, task):
-        key=(kind,driver_id)
-        if self._call_drivers.get(key) is not driver or not isinstance(task,asyncio.Task):
-            raise ValueError('original registered call-driver cleanup required')
-        self._call_driver_cleanup[task]=(key,driver)
-        def retired(completed):
-            # The task terminates only after every owned worker/task is joined.
-            owner=self._call_driver_cleanup.pop(completed,None)
-            if owner is not None and self._call_drivers.get(owner[0]) is owner[1]:
-                del self._call_drivers[owner[0]]
-            if not completed.cancelled():completed.exception()
-        task.add_done_callback(retired)
-
-    def _invalidate_call_drivers(self, reason, *, reject_self_join=False):
-        try:current=asyncio.current_task()
-        except RuntimeError:current=None
-        drivers=list(getattr(self,'_call_drivers',{}).values())
-        owned=current is not None and any(driver.owns_task(current) for driver in drivers)
-        for driver in drivers:driver.invalidate(reason)
-        if owned and reject_self_join:
-            raise RuntimeError('owned call driver cannot join its own host lifecycle; cleanup remains scheduled')
-
-    async def _join_call_drivers(self):
-        from .streams import _finish
-        tasks=list(self._call_driver_cleanup)
-        if not tasks:return
-        current=asyncio.current_task()
-        if any(driver.owns_task(current) for driver in self._call_drivers.values()):
-            raise RuntimeError('owned call driver cannot join its own cleanup')
-        async def drain():
-            if tasks:
-                outcomes=await asyncio.gather(*tasks,return_exceptions=True)
-                if any(isinstance(value,BaseException) for value in outcomes):
-                    raise RuntimeError('owned call-driver cleanup failed')
-        task=asyncio.create_task(drain())
-        try:await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await _finish(task);raise
-
-    async def get_sentinel_status(self, sentinel_id=None, limit=100, max_bytes=65536):
-        """Read-only sampled-frame diagnostics; never starts capture or inference."""
-        if sentinel_id is not None:identifier(sentinel_id)
-        items=[item.snapshot() for (kind,key),item in sorted(self._call_drivers.items())
-               if kind=='frame_sentinel' and (sentinel_id is None or key==sentinel_id)]
-        return self._bounded_query(items,limit,max_bytes)
-
     async def get_call_status(self, controller_id=None, limit=100, max_bytes=65536):
         """Read-only bounded diagnostics; totals describe whole controller scope."""
         self._bounded_query([], limit, max_bytes)
@@ -800,30 +702,24 @@ class Gamst:
             if controller_id is not None and name != controller_id:
                 continue
             state = controller.snapshot()
-            budget = {k:v for k,v in state['budget'].items() if k not in ('active', 'recent')}
             rows.append(dict(kind='controller', controller_id=name, closed=state['closed'],
                 source_count=len(state['sources']), request_count=len(state['requests']),
-                detached_financial_count=len(state['detached_financial_requests']),
                 overflow_rejections=state['overflow_rejections'], omitted_receipts=state['omitted_receipts'],
-                budget=budget, admission_denials=state['admission_denials'],
-                cadence_scope='independent_sensor_and_context_delivery; see get_sensor_status/get_context',
-                accounting_scope='whole_controller_all_subjects'))
+                admission_denials=state['admission_denials'],
+                cadence_scope='independent_sensor_and_context_delivery; see get_sensor_status/get_context'))
             for request in state['requests']:
                 decision = request['decision']
                 rows.append(dict(kind='request', controller_id=name, request_id=request['id'],
                     source=request['source'], state=request['state'], priority=request['priority'],
                     desired_route=decision['desired_route'], reason=decision['reason'], blockers=request['blockers'],
                     evidence=decision['evidence'], expires_ms=request['expires_ms'],
-                    finished=request['finished'], charged=request['charged'], discard=request['discard'],
+                    finished=request['finished'], discard=request['discard'],
                     allowed_route=request['allowed_route'], admission_blockers=request['admission_blockers'],
                     admission_advisory=True, dispatched_route=request['dispatched_route'],
                     last_admission=request['last_admission'], execution=request['execution'],
                     semantic_audit_due=request['semantic_audit_due'],
                     last_semantic_capture_ms=request['last_semantic_capture_ms'],
                     unknown_candidate_unresolved=request['unknown_candidate_unresolved']))
-            for token in state['detached_financial_requests']:
-                rows.append(dict(kind='detached_liability', controller_id=name, request_id=token,
-                    meaning='sensory_associations_deleted_billing_unresolved'))
             for receipt in reversed(state['recent']):
                 rows.append(dict(kind='receipt', controller_id=name, request_id=receipt['id'],
                     reason=receipt['reason'], trigger_reason=receipt['trigger_reason'],
@@ -1015,18 +911,11 @@ class Gamst:
             models[(model["id"], model["version"])] = model
         return list(models.values())
 
-    def create_evaluation_snapshot_publisher(self, subject_id='local-user', *, implementation_sha256):
-        """Issue a bounded task-evidence publisher and its opt-in source view."""
-        from .evaluation_snapshot import create_snapshot_publisher
-        return create_snapshot_publisher(self, subject_id, implementation_sha256)
-
-    async def get_trends(self, subject_id="local-user", window="1h", end_ms=None, *, context_view=None):
-        from .evaluation_snapshot import context_exclusion
-        exclusion = context_exclusion(self, subject_id, context_view)
+    async def get_trends(self, subject_id="local-user", window="1h", end_ms=None):
         self._prune()
         end = timestamp(end_ms)
         duration = _window_ms(window)
-        rows = self.store.numeric_summary(subject_id, end-duration, end, _exclude_capability=exclusion)
+        rows = self.store.numeric_summary(subject_id, end-duration, end)
         metrics = {}
         names = Counter(row[0] for row in rows)
         for name, modality, model_id, model_version, count, mean, prior_count, prior_mean, prior_min, prior_max in rows:
@@ -1040,30 +929,23 @@ class Gamst:
         return {"status": "available" if metrics else "insufficient", "metrics": metrics,
                 "window_ms": duration, "interpretation": "observed_patterns_only"}
 
-    async def build_temporal_context(self, subject_id="local-user", window="1h", *, query_cutoff_ms=None, max_bytes=131072, context_view=None):
+    async def build_temporal_context(self, subject_id="local-user", window="1h", *, query_cutoff_ms=None, max_bytes=131072):
         """Return a bounded timestamped event packet for temporal consumers.
 
         This is additive; ``get_context`` remains the stable legacy snapshot API.
         Records after the query cutoff are never eligible.
         """
-        from .evaluation_snapshot import context_exclusion
         from .temporal import TemporalAligner, TemporalEvent
         from .contradictions import detect_contradictions
-        exclusion = context_exclusion(self, subject_id, context_view)
         self._prune()
         cutoff = timestamp(query_cutoff_ms)
         start = cutoff - _window_ms(window)
         # Context snapshots may collapse same-name observations to their latest
         # value. Contradiction detection needs both cross-modal source records,
-        # so query the bounded signal history directly while retaining the same
-        # cutoff/exclusion policy.
+        # so query the bounded signal history directly with the same cutoff.
         records = [r for r in self.store.query(subject_id, start, cutoff,
                                                "observation.signal", limit=64)
-                   if r.get("timestamp_ms", 0) <= cutoff
-                   and (exclusion is None or not (
-                       r.get("observation", {}).get("capability", {}).get("id") == exclusion[0]
-                       and r.get("models", [{}])[0].get("id") == exclusion[1]
-                       and r.get("models", [{}])[0].get("version") == exclusion[2]))]
+                   if r.get("timestamp_ms", 0) <= cutoff]
         aligner = TemporalAligner()
         events = []
         for record in records[:64]:
@@ -1121,15 +1003,13 @@ class Gamst:
             raise ValueError("temporal context exceeds byte budget")
         return result
 
-    async def get_context(self, subject_id="local-user", window="1h", include=None, *, context_view=None):
-        from .evaluation_snapshot import context_exclusion
-        exclusion = context_exclusion(self, subject_id, context_view)
+    async def get_context(self, subject_id="local-user", window="1h", include=None):
         self._prune()
         now = timestamp()
         start = now-_window_ms(window)
-        counts, events = self.store.event_summary(subject_id, start, now, per_kind=8, _exclude_capability=exclusion)
+        counts, events = self.store.event_summary(subject_id, start, now, per_kind=8)
         total_events = sum(counts.values())
-        records = [r for r in self.store.latest_signals(subject_id, start, now, _exclude_capability=exclusion)+events
+        records = [r for r in self.store.latest_signals(subject_id, start, now)+events
                    if r.get("observation", {}).get("name") != TRANSCRIPT_OUTPUT]
         result = envelope("observation.context", subject_id, now, window_ms=_window_ms(window),
             evidence=[{"record_id": r["id"]} for r in events])
@@ -1142,12 +1022,9 @@ class Gamst:
                        "summary": {"event_counts": counts, "event_count": total_events,
                                    "evidence_count": len(events), "max_evidence_per_event_type": 8,
                                    "evidence_truncated": total_events > len(events),
-                                   "record_count": self.store.count(subject_id, start, now, _exclude_capability=exclusion), "method": "deterministic_aggregate"},
-                       "trends": await self.get_trends(subject_id, window, context_view=context_view),
+                                   "record_count": self.store.count(subject_id, start, now), "method": "deterministic_aggregate"},
+                       "trends": await self.get_trends(subject_id, window),
                        "include": include or ["speech", "movement", "interaction"]})
-        if context_view is not None:
-            result['context_policy'].update(view=context_view.name,
-                excluded_capability_sha256=context_view._publisher.capability_sha256)
         return result
 
     async def summarize(self, **kwargs):
@@ -1184,12 +1061,9 @@ class Gamst:
                 "records": await self.get_history(subject_id, start_ms=start_ms, end_ms=end_ms, limit=100_000)}
 
     async def pause(self):
-        self._retire_evaluation_snapshot_publishers()
-        self._invalidate_evaluation("pause")
         self.paused = True
         self._analysis_results.clear()
         self._generation += 1
-        self._invalidate_call_drivers('pause',reject_self_join=True)
         self._clear_separation_media()
         await self._reset_plugins()
         return {"paused": True}
@@ -1229,12 +1103,7 @@ class Gamst:
         return {"paused": self.paused, "owners": len(self._capture_owners)}
 
     async def delete_data(self, subject_id=None):
-        # Deletion resets the global processing generation, so every issued
-        # publisher is retired before any owned asynchronous cleanup can run.
-        self._retire_evaluation_snapshot_publishers()
-        self._invalidate_evaluation("delete", subject_id)
         from .streams import _finish
-        self._invalidate_call_drivers('delete',reject_self_join=True)
         cleanup = asyncio.create_task(self._delete_data(subject_id))
         try:
             return await asyncio.shield(cleanup)
@@ -1244,7 +1113,6 @@ class Gamst:
 
     async def _delete_data(self, subject_id=None):
         self._generation += 1
-        self._invalidate_call_drivers('delete')
         self._clear_separation_media()
         for controller in self._call_controllers.values():
             controller.forget_subject(subject_id, now_ms=timestamp())
@@ -1296,8 +1164,6 @@ class Gamst:
             raise
 
     async def _reset_all_plugins(self):
-        self._invalidate_call_drivers('reset')
-        await self._join_call_drivers()
         for controller in self._call_controllers.values():
             controller.reset_sources(now_ms=timestamp())
         self.object_memory.invalidate_visibility()
@@ -1327,21 +1193,15 @@ class Gamst:
 
     async def reset_processing(self):
         """Discard pending media results and model buffers without pausing text."""
-        self._retire_evaluation_snapshot_publishers()
-        self._invalidate_evaluation("reset")
         self._generation += 1
-        self._invalidate_call_drivers('reset',reject_self_join=True)
         self._clear_separation_media()
         await self._reset_plugins()
         return {"processing_reset": True}
 
     async def close(self):
         from .streams import _finish
-        self._invalidate_call_drivers('close',reject_self_join=True)
-        self._retire_evaluation_snapshot_publishers()
         task = getattr(self, '_close_task', None)
         if task is None:
-            self._invalidate_evaluation("close")
             task = self._close_task = asyncio.create_task(self._close())
         try:
             await asyncio.shield(task)
@@ -1353,7 +1213,6 @@ class Gamst:
         if self.closed:
             return
         self.closed = True
-        self._invalidate_call_drivers('close')
         for controller in self._call_controllers.values():
             controller.forget_subject(now_ms=timestamp())
             controller.close(now_ms=timestamp())
@@ -1369,10 +1228,6 @@ class Gamst:
             queue.put_nowait(None)
         errors = []
         try:
-            try:
-                await self._join_call_drivers()
-            except Exception as exc:
-                errors.append(exc)
             for streams in getattr(self, '_sensor_streams', ()):
                 try:
                     await streams.close()

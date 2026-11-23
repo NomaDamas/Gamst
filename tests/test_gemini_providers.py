@@ -6,8 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gamst.companion import LocalChatBackend, companion_backend_from_env
-from gamst.providers.gemini import (
+from examples.companion import LocalChatBackend, companion_backend_from_env
+from examples.companion.gemini import (
     GEMINI_OPENAI_URL,
     GeminiLiveBackend,
     GeminiLiveCompanion,
