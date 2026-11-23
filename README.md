@@ -10,7 +10,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
-[Coin Halo](#coin-halo) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
+[Rotation](#rotation) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
 
 ⭐ If GAMST is useful to you, a [GitHub star](https://github.com/NomaDamas/Gamst) helps the project a lot.
 
@@ -20,13 +20,13 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.4 alpha.** Adds the [Coin Halo](docs/halo-coin.md) (`gamst demo coin`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and the GAMST Playground (browser + local). See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
+**Status: v0.4 alpha.** Adds generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and the GAMST Playground (browser + local). See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
 - [🌱 Context layer](#overview)
 - [✨ Capabilities](#capabilities)
-- [🪙 Coin Halo](#coin-halo)
+- [🔄 Object rotation](#rotation)
 - [🚀 Quick start](#quick-start)
 - [🏠 Complete local stack](#local-stack)
 - [🐍 Python SDK](#python-sdk)
@@ -155,8 +155,9 @@ routing on event recall, miss rate, detection latency, p95 answer-ready latency,
 VLM tokens/cost, drops, and task quality. GAMST must preserve critical-event
 quality while reducing unnecessary semantic inference.
 
-The first Halo is the [Coin Halo](docs/halo-coin.md): count how many times a
-coin or wheel turns from camera frames, a task a frame-sampling VLM cannot do.
+The first Halo is [generic object rotation](docs/halo-coin.md): measure how
+many times tracked objects turn from camera frames, a task a frame-sampling
+VLM cannot do. A coin, wheel or fan is only a detector label, not a code path.
 The next Halo is a high-frequency, multimodal game or sports episode,
 such as a table-tennis rally: ball and racket trajectories, impact timing,
 player pose, sound onsets, spatial relations, and a semantic rally summary.
@@ -173,22 +174,46 @@ infrastructure. GAMST is valuable when each team would otherwise rebuild clock
 alignment, bounded queues, gap handling, cross-modal events, episode memory,
 evidence provenance, model routing, replay, and latency/cost/quality evaluation.
 
-<a id="coin-halo"></a>
-## 🪙 Coin Halo
+<a id="rotation"></a>
+## 🔄 Object rotation
 
-```bash
-pip install "gamst-sdk[coin]" "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
-gamst demo coin --fetch-models     # pinned YOLOE-26s + MobileCLIP2 weights, sha256-checked
-gamst demo coin --camera 0         # or --video toss.mov (e.g. iPhone 240 fps slow motion)
+`vision.rotation` is a generic fast-lane capability. It measures in-plane turns
+and out-of-plane flips for every tracked region, with rev/s, `counting`,
+`undersampled` or `idle` status, and `rotation.started` / `rotation.ended`
+events. Regions come from any object-detection observations already in GAMST
+(RF-DETR, optional YOLOE or a fine-tuned detector), an explicit ROI, or
+detector-free motion. Labels are optional; coin, wheel and fan are examples,
+not separate implementations.
+
+```python
+from gamst.providers.rotation import RotationPlugin
+
+plugin = RotationPlugin(human, expected_max_rev_s=8, targets=["coin", "wheel"])
+human.register(plugin)                 # also consumes detector records in the Store
+await human.push_video(frame)          # one vision.rotation observation per capture
 ```
 
-YOLOE names the coin a few times per second in its own worker; GAMST tracks it
-in every frame, counts turns from its changing ellipse, stores the evidence and
-fires a Watch when the spin ends. Only then may a VLM be asked, once, which
-face is up. A hand-tossed coin turns 36-40 times per second, so GAMST withholds
-the count as `undersampled` on 30/60 fps cameras instead of reporting an
-aliased number; 240 fps capture resolves it. Count accuracy on real 240 fps
-tosses is still being measured. Details, limits and results: [docs/halo-coin.md](docs/halo-coin.md).
+For capture-timed/high-fps sources, use the same `RotationProvider` in a
+SensorStreams lane or the `vision.rotation` ProcessProvider profile (ROI/motion
+regions in the isolated worker). The demo only pushes frames and renders
+committed records and Watch alarms:
+
+```bash
+pip install "gamst-sdk[rotation,yoloe]" "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
+gamst demo rotation --fetch-models   # optional pinned YOLOE + MobileCLIP2 weights
+gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
+gamst demo rotation --video spin.mp4 --detector motion  # no detector required
+```
+
+Role-based hardware defaults are delegated to GamstCrew:
+`gamst setup plan --goals rotation,speech --json` and
+`gamst setup apply PLAN.json`. If GamstCrew is not installed, `gamst setup`
+prints its installation command instead of silently choosing another setup.
+
+A hand-tossed coin turns 36-40 times per second, so GAMST withholds flip counts
+as `undersampled` on 30/60 fps cameras instead of reporting an aliased number;
+240 fps capture resolves it. Count accuracy on real 240 fps tosses is still
+being measured. Details and limits: [docs/halo-coin.md](docs/halo-coin.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start

@@ -135,7 +135,7 @@ class YOLOEContext:
         version = hashlib.sha256(json.dumps([labels,prompt_sha256,checkpoint_sha256,mode,threshold,max_objects]).encode()).hexdigest()
         return CapabilitySpec('vision.yoloe.prompted','vision.prompted_objects','video','yoloe.local','1.'+version,
             (OutputField('objects','array'),OutputField('summary','object')),'frame',stateful=True,
-            reset_on_gap=True,freshness_ms=1000,interpretation='estimate',devices=('cpu','cuda'),
+            reset_on_gap=True,freshness_ms=1000,interpretation='estimate',devices=('cpu','cuda','mps'),
             sensor_requirements=('uint8-bgr-camera','declared-image-coordinate-frame'),
             license='adapter:Apache-2.0;Ultralytics:AGPL-3.0-or-commercial;weights:verify-separately')
 
