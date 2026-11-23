@@ -99,8 +99,4 @@ jobs:
       - run: python -m unittest discover -s tests -p test_smolvlm_native.py -v
       - run: python -m unittest discover -s tests -p test_smolvlm_context.py -v
       - run: python -m unittest discover -s tests -p test_smolvlm_call.py -v
-      - run: python -m unittest discover -s tests -p test_frame_sentinel.py -v
       - run: python -m unittest discover -s tests -p test_visual_context_call.py -v
-      - run: python -m unittest discover -s tests -p 'test_openai_responses*.py' -v
-      - run: python -m unittest discover -s tests -p test_controller_attempts.py -v
-      - run: PYTHONPATH=tests:. python -m unittest test_recording_financial test_recording_financial_bounds test_recording_settlement test_recording_financial_native test_recording_lifetime_ledger test_recording_full_lifetime test_recording_fixture_receipts test_recording_exposure_report test_matched_source_exposure test_recording_numeric_finance -v

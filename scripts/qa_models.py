@@ -10,7 +10,7 @@ async def main():
     from gamst.plugins import MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin, InputFrame
     from gamst.realtime import LocalScenePlugin
     from gamst import Gamst
-    from gamst.companion import Companion, LocalChatBackend
+    from examples.companion import Companion, LocalChatBackend
     root = Path(__file__).resolve().parents[1]
     assets = root / '.local-models'
     qa = root / '.local-run/qa'

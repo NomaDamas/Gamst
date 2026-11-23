@@ -3,23 +3,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-import hashlib
 import inspect
 import json
 import math
 import time
-import threading
 import uuid
 
 from .capabilities import CapabilitySpec, SensorMetadata, bounded_json, identifier
 from .plugins import InputFrame
 from .schema import timestamp
-from .recording_scope import RecordingScope, evaluation_owner
-from .evaluation_publication import AcceptedObservationSink
-
-
-class _EntryRevoked(Exception):
-    pass
 
 
 async def _finish(task):
@@ -53,48 +45,7 @@ async def _call(function, *args, cleanup_on_cancel=None, cancel_entry=None):
     return result
 
 
-async def _observed_call(function, *args, invoke, invoke_sync, valid,
-                         cleanup_on_cancel=None):
-    """Admission occurs in the actual coroutine/thread, never its scheduling task."""
-    cancelled = threading.Event()
-    def check():
-        if cancelled.is_set() or not valid():
-            raise _EntryRevoked('owned provider entry invalidated')
-    if inspect.iscoroutinefunction(function):
-        async def entered():
-            check()
-            return await invoke(lambda: function(*args))
-        task = asyncio.create_task(entered())
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled.set()
-            task.cancel()
-            try:
-                result = await _finish(task)
-            except BaseException:
-                pass
-            else:
-                if cleanup_on_cancel is not None:
-                    await _finish(asyncio.create_task(cleanup_on_cancel(result)))
-            raise
-    else:
-        def entered():
-            check()
-            def callback():
-                result = function(*args)
-                if inspect.isawaitable(result):
-                    close = getattr(result, 'close', None)
-                    if close is not None:
-                        close()
-                    raise ValueError('observed providers require explicit sync or async methods')
-                return result
-            return invoke_sync(callback)
-    return await _call(entered, cleanup_on_cancel=cleanup_on_cancel,
-                       cancel_entry=cancelled.set)
-
-
-def _snapshot(data, limit):
+async def _snapshot(data, limit):
     """Bound raw input before copying. Arrays retain dimensions and channels."""
     if isinstance(data, (bytes, bytearray, memoryview)):
         size = data.nbytes if isinstance(data, memoryview) else len(data)
@@ -136,15 +87,11 @@ and reset()/close() as needed. Synchronous methods run off the event loop.
 This is an additional typed-input path; legacy MediaRouter remains compatible.
 """
     def __init__(self, human, *, capacity=2, max_streams=16,
-                 max_packet_bytes=4*1024*1024, max_buffer_bytes=64*1024*1024,
-                 evaluation_publication_sink=None):
+                 max_packet_bytes=4*1024*1024, max_buffer_bytes=64*1024*1024):
         for value, maximum in ((capacity, 64), (max_streams, 64),
                                (max_packet_bytes, 32*1024*1024), (max_buffer_bytes, 256*1024*1024)):
             if type(value) is not int or not 1 <= value <= maximum:
                 raise ValueError('invalid stream resource bound')
-        if evaluation_publication_sink is not None and not isinstance(evaluation_publication_sink, AcceptedObservationSink):
-            raise TypeError('typed accepted-observation sink required')
-        self._evaluation_publication_sink = evaluation_publication_sink
         self.manager_id = uuid.uuid4().hex
         self.human, self.capacity, self.max_streams = human, capacity, max_streams
         self.max_packet_bytes, self.max_buffer_bytes = max_packet_bytes, max_buffer_bytes
@@ -182,115 +129,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         finally:
             self.human._sensor_provider_owners.pop(id(provider), None)
 
-    async def _dispose_lane(self, lane):
-        lifecycle = lane.get('evaluation_lifecycle')
-        if lifecycle is None:
-            return await self._dispose(lane['provider'])
-        provider = lane['provider']
-        errors = []
-        closed = False
-        try:
-            try:
-                lifecycle.idle(False)
-                if not lane['evaluation_ready']:
-                    lifecycle.ready(provider)
-                    lane['evaluation_ready'] = True
-            except BaseException as exc:
-                errors.append(exc)
-            close = getattr(provider, 'close', None)
-            if not callable(close):
-                raise ValueError('observed providers require explicit close')
-            try:
-                await self._lifecycle_call(lane, 'close', close)
-            except BaseException as exc:
-                errors.append(exc)
-                closed = lane.get('evaluation_close_succeeded', False)
-                # A journal failure must never prevent actual owned disposal.
-                if not lane.get('evaluation_close_entered'):
-                    await _call(close)
-                    closed = True
-            else:
-                closed = True
-        finally:
-            try:
-                if lane.get('evaluation_thread_used'):
-                    lifecycle.thread_joined()
-                if closed:
-                    lifecycle.closed()
-            finally:
-                self.human._sensor_provider_owners.pop(id(provider), None)
-        if errors:
-            raise errors[0]
-
-    async def _lifecycle_call(self, lane, kind, function, *, valid=lambda: True):
-        lifecycle = lane.get('evaluation_lifecycle')
-        if lifecycle is None:
-            return await _call(function)
-        ticket = lifecycle.work(kind)
-        if not inspect.iscoroutinefunction(function):
-            lane['evaluation_thread_used'] = True
-        def callback():
-            if kind == 'close':
-                lane['evaluation_close_entered'] = True
-            result = function()
-            if kind == 'close':
-                lane['evaluation_close_succeeded'] = True
-            return result
-        if inspect.iscoroutinefunction(function):
-            async def callback():
-                if kind == 'close':
-                    lane['evaluation_close_entered'] = True
-                result = await function()
-                if kind == 'close':
-                    lane['evaluation_close_succeeded'] = True
-                return result
-        try:
-            return await _observed_call(callback, invoke=ticket.invoke,
-                invoke_sync=ticket.invoke_sync, valid=valid)
-        finally:
-            ticket.finish('error')
-
-    @staticmethod
-    def _capture_metadata(frame, data):
-        if frame.modality == 'audio' and type(data) is bytes:
-            payload, shape = data, None
-        elif frame.modality == 'video':
-            import numpy as np
-            if type(data) is not np.ndarray or data.dtype != np.uint8 or data.ndim != 3 or data.shape[2] != 3:
-                raise ValueError('observed video requires plain uint8 HWC BGR pixels')
-            payload, shape = data.tobytes(order='C'), list(data.shape)
-        else:
-            raise ValueError('observed captures require original PCM16 bytes or uint8 BGR pixels')
-        sensor = frame.sensor
-        sequence = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
-        return dict(source_id=sensor.source_id, sensor_id=sensor.sensor_id, modality=frame.modality,
-            sequence=sequence, capture_ms=frame.timestamp_ms, sample_rate=frame.sample_rate,
-            payload_bytes=len(payload), payload_sha256=hashlib.sha256(payload).hexdigest(), shape=shape)
-
-    @staticmethod
-    def _reserve_operation(lane, kind, reference):
-        scope = lane.get('evaluation_scope')
-        if scope is None:
-            return None
-        from .call_controller import _digest
-        refs = [reference]
-        request = _digest(dict(binding=scope.binding_index, operation_kind=kind, capture_refs=refs))
-        return scope.owner.reserve_operation(scope.binding_index, scope, kind, refs,
-            request, reference['record_sha256'])
-
-    async def _provider_call(self, lane, function, *args, ticket=None, valid=lambda: True):
-        lifecycle = lane.get('evaluation_lifecycle')
-        if lifecycle is not None:
-            lifecycle.idle(False)
-        if ticket is None:
-            return await _call(function, *args)
-        if not inspect.iscoroutinefunction(function):
-            lane['evaluation_thread_used'] = True
-        return await _observed_call(function, *args, invoke=ticket.invoke,
-            invoke_sync=ticket.invoke_sync, valid=valid)
-
-    async def open(self, source_id, sensor_id, capabilities, *, subject_id='local-user',
-                   evaluation_bindings=None, evaluation_configurations=None):
+    async def open(self, source_id, sensor_id, capabilities, *, subject_id='local-user'):
         """Explicitly construct providers; discovery and submit never load them."""
         self.human._check()
         identifier(source_id); identifier(sensor_id); identifier(subject_id)
@@ -300,25 +139,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         specs = [self.human.perception_capabilities.get(i) for i in ids]
         if any(i not in self.factories for i in ids) or len({s.modality for s in specs}) != 1:
             raise ValueError('select registered factories with one input modality')
-        bindings = {} if evaluation_bindings is None else evaluation_bindings
-        configurations = {} if evaluation_configurations is None else evaluation_configurations
-        if (type(bindings) is not dict or set(bindings)-set(ids) or
-                type(configurations) is not dict or set(configurations) != set(bindings)):
-            raise ValueError('explicit observed capability bindings and configurations must match')
-        if self._evaluation_publication_sink is not None and set(bindings) != set(ids):
-            raise ValueError('publication export requires every explicit recording binding')
-        bindings = dict(bindings)
-        configurations = {key: bounded_json(value) for key, value in configurations.items()}
-        for spec in specs:
-            if spec.id not in bindings:
-                continue
-            scope = bindings[spec.id]
-            if type(scope) is not RecordingScope:
-                raise TypeError('owner-issued immutable stream binding required')
-            owner = evaluation_owner(scope)
-            owner.validate_stream_binding(scope, source_id, sensor_id, spec)
-            owner.validate_stream_configuration(scope, configurations[spec.id])
-            self.human._register_evaluation_observer(scope)
         key = (source_id, sensor_id)
         async with self._lock:
             if self.closed or key in self.streams or len(self.streams) >= self.max_streams:
@@ -326,38 +146,14 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             lanes = []
             try:
                 for spec in specs:
-                    scope = bindings.get(spec.id)
-                    lifecycle = None if scope is None else scope.owner.reserve_stream_lifecycle(scope)
                     factory = self.factories[spec.id]
-                    thread_used = not inspect.iscoroutinefunction(factory)
-                    async def discard(provider):
-                        if lifecycle is None:
-                            return await self._discard_unowned(provider)
-                        if id(provider) not in self.human._sensor_provider_owners:
-                            await self._dispose_lane(dict(provider=provider, evaluation_lifecycle=lifecycle,
-                                evaluation_ready=False, evaluation_thread_used=thread_used))
-                    try:
-                        if lifecycle is None:
-                            provider = await _call(factory, cleanup_on_cancel=discard)
-                        else:
-                            provider = await _observed_call(factory, invoke=lifecycle.invoke_startup,
-                                invoke_sync=lifecycle.invoke_startup_sync,
-                                valid=lambda: not self.closed and not self.human.closed and not self.human.paused and self.human.consent,
-                                cleanup_on_cancel=discard)
-                    except BaseException:
-                        if lifecycle is not None:
-                            if thread_used:
-                                lifecycle.thread_joined()
-                            lifecycle.startup_failed()
-                        raise
+                    provider = await _call(factory, cleanup_on_cancel=self._discard_unowned)
                     owners = self.human._sensor_provider_owners
                     if id(provider) in owners:
                         raise ValueError('factory must return an isolated provider instance')
                     # Reserve before awaiting the next factory, including across managers.
                     owners[id(provider)] = provider
                     lane = dict(spec=spec, provider=provider, queue=asyncio.Queue(self.capacity),
-                                evaluation_scope=scope, evaluation_lifecycle=lifecycle,
-                                evaluation_ready=False, evaluation_thread_used=thread_used,
                                 epoch=uuid.uuid4().hex,
                                 task=None, gap=False, reset_required=False, output_sequence=-1, endpoint_control=None,
                                 accepted=0, processed=0, dropped=0,
@@ -370,18 +166,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         raise ValueError('provider must implement process')
                     if spec.stateful and not callable(getattr(provider, 'reset', None)):
                         raise ValueError('stateful provider must implement reset')
-                    if lifecycle is not None:
-                        from .process_provider import ProcessProvider
-                        if isinstance(provider, ProcessProvider):
-                            raise ValueError('process providers require their own native observation binding')
-                        if not callable(getattr(provider, 'close', None)):
-                            raise ValueError('observed providers require explicit close')
-                        if hasattr(provider, 'config'):
-                            actual = bounded_json(provider.config)
-                            scope.owner.validate_stream_configuration(scope, actual)
-                        lifecycle.ready(provider)
-                        lane['evaluation_ready'] = True
-                        lifecycle.idle(True)
                 self.human._check()
                 self.streams[key] = dict(subject=subject_id, modality=specs[0].modality,
                                         sequence=-1, timestamp=-1, lanes=lanes, epoch=uuid.uuid4().hex)
@@ -390,7 +174,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 async def cleanup_lanes():
                     for lane in lanes:
                         try:
-                            await self._dispose_lane(lane)
+                            await self._dispose(lane['provider'])
                         except BaseException as exc:
                             errors.append(exc)
                 await _finish(asyncio.create_task(cleanup_lanes()))
@@ -398,7 +182,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     raise RuntimeError('provider construction cleanup failed') from errors[0]
                 raise
 
-    async def submit(self, frame, *, evaluation_capture_ref=None):
+    async def submit(self, frame):
         self.human._check()
         if self.closed or not isinstance(frame, InputFrame) or not isinstance(frame.sensor, SensorMetadata):
             raise ValueError('open manager and InputFrame with SensorMetadata required')
@@ -418,19 +202,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         if frame.modality == 'audio' and (type(frame.sample_rate) is not int or not 8000 <= frame.sample_rate <= 192000):
             raise ValueError('audio sample rate must be 8000..192000')
         lanes = stream['lanes']
-        observed = [lane for lane in lanes if lane.get('evaluation_scope') is not None]
-        if bool(observed) != (evaluation_capture_ref is not None):
-            raise ValueError('observed input requires its exact original capture locator')
-        reference = None
-        if observed:
-            reference = bounded_json(evaluation_capture_ref, max_bytes=2048)
-            if type(reference) is not dict:
-                raise ValueError('original capture locator required')
         data, size = _snapshot(frame.data, self.max_packet_bytes)
-        if observed:
-            metadata = self._capture_metadata(frame, data)
-            for lane in observed:
-                lane['evaluation_scope'].owner.validate_stream_capture(lane['evaluation_scope'], metadata, reference)
         reclaimed = sum(l['queue']._queue[0][1] for l in lanes if l['queue'].full())
         if self.buffer_bytes-reclaimed+size*len(lanes) > self.max_buffer_bytes:
             raise ValueError('sensor buffer budget exhausted')
@@ -438,14 +210,14 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         stream['sequence'], stream['timestamp'] = frame.sensor.sequence, ts
         for lane in lanes:
             if lane['queue'].full():
-                _, old_size, _, _, _ = lane['queue'].get_nowait()
+                _, old_size, _, _ = lane['queue'].get_nowait()
                 lane['queue'].task_done()
                 self.buffer_bytes -= old_size
                 lane['dropped'] += 1
                 lane['gap'] = True
             # Each provider receives its own snapshot to prevent cross-provider mutation.
             owned, _ = _snapshot(data, self.max_packet_bytes)
-            lane['queue'].put_nowait((replace(frame, data=owned, timestamp_ms=ts), size, gap, self.human._generation, reference))
+            lane['queue'].put_nowait((replace(frame, data=owned, timestamp_ms=ts), size, gap, self.human._generation))
             self.buffer_bytes += size
             lane['accepted'] += 1
             if lane['task'] is None or lane['task'].done():
@@ -460,23 +232,18 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     queue._queue[0][0].sensor.sequence > control['sequence']):
                 await self._run_endpoint(stream, lane, control)
                 continue
-            frame, size, gap, generation, reference = queue.get_nowait()
+            frame, size, gap, generation = queue.get_nowait()
             started = time.monotonic()
-            ticket = None
-            release_reason = 'unadmitted'
             def valid():
                 return (generation == self.human._generation and not stream.get('closing') and
                     not self.closed and not self.human.paused and not self.human.closed and self.human.consent)
             try:
                 if not valid():
                     continue
-                lifecycle = lane.get('evaluation_lifecycle')
-                if lifecycle is not None:
-                    lifecycle.idle(False)
                 if gap or lane['gap']:
                     lane['gap'] = False
                     if lane['spec'].stateful and (lane['spec'].reset_on_gap or lane['reset_required']):
-                        await self._lifecycle_call(lane, 'reset', lane['provider'].reset, valid=valid)
+                        await _call(lane['provider'].reset)
                         self.human.object_memory.invalidate_visibility(frame.sensor.source_id,
                             frame.sensor.sensor_id, lane['spec'].id)
                         self.human.transcript_memory.interrupt(frame.sensor.source_id,
@@ -486,22 +253,16 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         lane['resets'] += 1
                     lane['reset_required'] = False
                 frame = replace(frame, sensor=replace(frame.sensor, stream_epoch=lane['epoch']))
-                ticket = self._reserve_operation(lane, 'process', reference)
-                result = await self._provider_call(lane, lane['provider'].process, frame, ticket=ticket, valid=valid)
+                result = await _call(lane['provider'].process, frame)
                 if not valid():
                     continue
                 if result is not None:
-                    await self._publish(lane, result, frame, frame.sensor.sequence, ticket=ticket)
-                if ticket is not None:
-                    ticket.published(result is not None)
-                lane['last_capture'] = (replace(frame, data=None), generation, reference)
+                    await self._publish(lane, result, frame, frame.sensor.sequence)
+                lane['last_capture'] = (replace(frame, data=None), generation)
                 lane['processed'] += 1
                 lane['last_latency_ms'] = round((time.monotonic()-started)*1000, 3)
             except asyncio.CancelledError:
-                release_reason = 'cancelled'
                 raise
-            except _EntryRevoked:
-                pass
             except Exception as exc:
                 lane['errors'] += 1
                 lane['last_error'] = type(exc).__name__
@@ -513,23 +274,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     frame.sensor.sensor_id, lane['spec'].id,
                     subject_id=frame.subject_id, epoch=lane['epoch'])
             finally:
-                try:
-                    if ticket is not None:
-                        ticket.release(release_reason)
-                    lifecycle = lane.get('evaluation_lifecycle')
-                    if lifecycle is not None and queue.empty() and valid():
-                        lifecycle.idle(True)
-                finally:
-                    self.buffer_bytes -= size
-                    queue.task_done()
+                self.buffer_bytes -= size
+                queue.task_done()
 
-    async def _publish(self, lane, result, frame, minimum_sequence, *, ticket=None):
-        reference = None
-        if self._evaluation_publication_sink is not None:
-            from .native_operation import NativeOperationRef
-            reference = None if ticket is None else ticket.entry_reference()
-            if type(reference) is not NativeOperationRef:
-                raise ValueError('publication export requires its actual entered operation')
+    async def _publish(self, lane, result, frame, minimum_sequence):
         # Capture order belongs to the provider input. Publication also includes
         # no-input control results, so its sequence must advance independently.
         sequence = max(minimum_sequence, lane['output_sequence']+1)
@@ -541,7 +289,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             clock_id=getattr(provider, 'clock_id', frame.sensor.clock_id),
             clock_epoch=getattr(provider, 'clock_epoch', frame.sensor.clock_epoch))
         try:
-            record = await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
+            await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         except BaseException:
             discard = getattr(lane['provider'], 'discard_separation_result', None)
@@ -549,12 +297,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 discard(result)
             raise
         lane['output_sequence'] = sequence
-        if self._evaluation_publication_sink is not None:
-            # Publication already happened. A failed exporter must not turn this
-            # accepted SDK observation into a falsely discarded native event.
-            ticket.published(True)
-            self._evaluation_publication_sink.record(bounded_json(record, max_bytes=131072),
-                reference)
 
     async def endpoint(self, source_id, sensor_id, capability_id, *, stream_epoch, after_sequence=None):
         """Finalize one lane after an exact accepted-input barrier; keep capture open."""
@@ -600,7 +342,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         outcome = {'error': 'endpoint invalidated before publication'}
         invoked = False
         captured = lane.get('last_capture')
-        ticket = None
         def valid():
             return (not control['cancelled'] and not stream.get('closing') and not self.closed and
                 not self.human.closed and not self.human.paused and not lane['gap'] and
@@ -611,14 +352,11 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 return
             frame = captured[0]
             invoked = True
-            ticket = self._reserve_operation(lane, 'endpoint', captured[2])
-            result = await self._provider_call(lane, lane['provider'].endpoint, ticket=ticket, valid=valid)
+            result = await _call(lane['provider'].endpoint)
             if not valid():
                 return
             if result is not None:
-                await self._publish(lane, result, frame, control['sequence']+1, ticket=ticket)
-            if ticket is not None:
-                ticket.published(result is not None)
+                await self._publish(lane, result, frame, control['sequence']+1)
             outcome = {'published': result is not None, 'closed': False,
                        'capability_id': lane['spec'].id, 'after_sequence': control['sequence']}
         except asyncio.CancelledError:
@@ -628,11 +366,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
             lane['last_error'] = type(exc).__name__
             outcome = {'error': 'sensor endpoint failed'}
         finally:
-            if ticket is not None:
-                try:
-                    ticket.release('unadmitted')
-                except Exception:
-                    outcome = {'error': 'sensor endpoint observation failed'}
             if invoked and 'error' in outcome:
                 lane['reset_required'] = True
                 lane['gap'] = True
@@ -643,9 +376,6 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                 lane['endpoint_control'] = None
             if not control['future'].done():
                 control['future'].set_result(outcome)
-            lifecycle = lane.get('evaluation_lifecycle')
-            if lifecycle is not None and lane['queue'].empty() and valid():
-                lifecycle.idle(True)
 
     async def drain(self):
         lanes = [l for s in self.streams.values() for l in s['lanes']]
@@ -700,32 +430,25 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                         skipped.append(lane['spec'].id)
                         continue
                     frame = captured[0]
-                    ticket = None
                     try:
                         # This stream terminates; reserve a distinct output sequence
                         # without injecting or inventing another captured audio frame.
-                        ticket = self._reserve_operation(lane, 'finish', captured[2])
                         def still_valid():
                             return (not control['cancelled'] and not stream.get('closing') and not self.closed and
                                 not self.human.closed and not self.human.paused and self.human.consent and
                                 generation == self.human._generation)
-                        result = await self._provider_call(lane, finish, ticket=ticket, valid=still_valid)
+                        result = await _call(finish)
                         if (control['cancelled'] or stream.get('closing') or self.closed or self.human.closed or
                             self.human.paused or generation != self.human._generation):
                             skipped.append(lane['spec'].id)
                             continue
                         if result is not None:
-                            await self._publish(lane, result, frame, stream['sequence']+1, ticket=ticket)
+                            await self._publish(lane, result, frame, stream['sequence']+1)
                             published.append(lane['spec'].id)
-                        if ticket is not None:
-                            ticket.published(result is not None)
                     except Exception as exc:
                         lane['errors'] += 1
                         lane['last_error'] = type(exc).__name__
                         errors.append(exc)
-                    finally:
-                        if ticket is not None:
-                            ticket.release('unadmitted')
             finally:
                 stream['closing'] = True
                 for lane in stream['lanes']:
@@ -733,7 +456,7 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     self.human.transcript_memory.interrupt(*key, lane['spec'].id,
                         subject_id=stream['subject'], epoch=lane['epoch'])
                     try:
-                        await self._dispose_lane(lane)
+                        await self._dispose(lane['provider'])
                     except Exception as exc:
                         errors.append(exc)
                 del self.streams[key]
@@ -775,11 +498,11 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     self.human.transcript_memory.interrupt(*key, lane['spec'].id,
                         subject_id=stream['subject'], epoch=lane['epoch'])
                     while not lane['queue'].empty():
-                        _, size, _, _, _ = lane['queue'].get_nowait()
+                        _, size, _, _ = lane['queue'].get_nowait()
                         self.buffer_bytes -= size
                         lane['queue'].task_done()
                     try:
-                        await self._dispose_lane(lane)
+                        await self._dispose(lane['provider'])
                     except Exception as exc:
                         errors.append(exc)
                 del self.streams[key]

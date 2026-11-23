@@ -155,7 +155,7 @@ class PromptRoleTests(unittest.TestCase):
         self.assertNotIn('\x07', message)
 
     def test_companion_never_sends_sensor_context_as_system(self):
-        from gamst.companion import LocalChatBackend
+        from examples.companion import LocalChatBackend
         captured = {}
 
         class Response:
