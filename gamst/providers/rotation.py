@@ -19,6 +19,7 @@ from ..plugins import InputFrame
 from .object_rotation_bank import ObjectRotationBank
 from .object_spin import ObjectSpinCounter
 from .shape_tracks import ShapeTracks
+from .target_tracks import TargetTracks
 
 
 _OPTIONS = {
@@ -141,6 +142,7 @@ class RotationProvider:
                                            max_points=options['max_points'], min_quality=options['min_quality'])
         self._lock = threading.RLock()
         self._target_size = None
+        self._target_tracks = None
         self.closed = False
         self._clear()
 
@@ -202,6 +204,8 @@ class RotationProvider:
     def reset(self):
         with self._lock:
             self.tracks.reset()
+            if self._target_tracks is not None:
+                self._target_tracks.reset()
             self.spin.reset()
             self.rotation.reset()
             self._clear()
@@ -216,18 +220,35 @@ class RotationProvider:
             self.closed = True
 
     def set_target(self, size_px):
-        """Follow only objects of an exemplar's size (pixels on the frames this provider receives).
+        """Follow only an object of an exemplar's size (pixels on the frames this provider receives).
 
-        Motion alone proposes every moving thing (hands, arms, heads). A target exemplar, e.g.
-        a box the user drew around a coin, restricts proposals to similar-size blobs and fixes
-        each track's expected size, so segmentation rejects larger blobs. ``None`` clears it.
+        Motion alone proposes every moving thing (hands, arms, heads). With a target exemplar,
+        e.g. a box the user drew around a coin, exemplar-sized motion proposals seed
+        :class:`TargetTracks`, which follows that object frame to frame along a predicted
+        path and ignores everything else. ``None`` returns to generic motion tracking.
         """
         if size_px is not None and (type(size_px) not in (int, float) or not math.isfinite(size_px) or
                                     not 4 <= size_px <= 4096):
             raise ValueError('target size must be 4..4096 pixels or None')
         with self._lock:
             self._target_size = None if size_px is None else float(size_px)
+            self._target_tracks = None if size_px is None else TargetTracks(
+                size_px, max_tracks=self.config['max_tracks'])
             self.tracks.reset()
+
+    def _observe_target(self, frame):
+        """Exemplar mode: motion proposals every refresh, frame-to-frame tracking in between."""
+        import cv2
+        stamp = frame.timestamp_ms
+        proposals = []
+        if self._last_region_ts is None or stamp - self._last_region_ts >= self.config['region_refresh_ms']:
+            height, width = frame.data.shape[:2]
+            proposals = [((row['bbox']['x'] + row['bbox']['width'] / 2) * width,
+                          (row['bbox']['y'] + row['bbox']['height'] / 2) * height)
+                         for row in self._motion_regions(frame.data, stamp)]
+            self._last_region_ts = stamp
+        gray = cv2.cvtColor(frame.data, cv2.COLOR_BGR2GRAY)
+        return self._target_tracks.observe(gray, stamp, proposals)
 
     def _motion_regions(self, image, stamp):
         import cv2
@@ -312,10 +333,15 @@ class RotationProvider:
             if owner != self._motion_owner:
                 self._motion_previous = None
                 self._motion_owner = owner
-            if detections is not None:
-                detector_fresh = True
-            self._refresh_regions(frame, detections, detector_fresh)
-            objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
+                if self._target_tracks is not None:
+                    self._target_tracks.reset()
+            if self._target_tracks is not None:
+                objects = self._observe_target(frame)
+            else:
+                if detections is not None:
+                    detector_fresh = True
+                self._refresh_regions(frame, detections, detector_fresh)
+                objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
             spin = self.spin.process(InputFrame({'objects': [
                 {'track_id': item['track_id'], 'axes': item['axes'], 'observed': item['observed']}
                 for item in objects]}, 'video', frame.timestamp_ms,

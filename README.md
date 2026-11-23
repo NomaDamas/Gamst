@@ -123,6 +123,7 @@ implementation, not a fork or endorsement of those projects.
 | 🤝 **Agent Responses** | Suggested next action or generated reply | Context-aware Companion using a configured local or authorized remote provider |
 | 🧭 **Temporal Fusion & State Chain** | Time-aligned state, semantic episodes, evidence and bounded context | Freshness watermarks, physical-state precomputation, deterministic rules, optional multimodal observation plugin |
 | 🎥 **Perception Plugins** | High-frequency vision/audio/physical measurements and semantic windows | OpenCV, MediaPipe, Silero VAD, faster-whisper, depth, tracking and pluggable workers |
+| 🔄 **Rotation Counting (Experimental)** | Turn counts and `undersampled` status | High-frame-rate ellipse-ratio fitting; live 240 fps iPhone HUD and per-take replay |
 
 ### Why GAMST exists
 
@@ -221,10 +222,31 @@ instead of silently choosing another setup. Apply writes
 in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
 the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
 
-A hand-tossed coin turns 36-40 times per second, so GAMST withholds flip counts
-as `undersampled` on 30/60 fps cameras instead of reporting an aliased number;
-240 fps capture resolves it. Count accuracy on real 240 fps tosses is still
-being measured. Details and limits: [docs/halo-coin.md](docs/halo-coin.md).
+### Rotation counting (experimental)
+
+For a tracked flat object, `vision.rotation` measures each frame's ellipse
+(minor/major axis ratio) and fits the periodic `r^2` signal in 250 ms windows
+to integrate turns, without a learned counting model. A hand-tossed coin turns
+about 36–40 rev/s, so ≥160 fps is required and ~240 fps is recommended. Below
+that, GAMST reports `undersampled` instead of an aliased count.
+
+An iPhone can supply 240 fps (iOS 15+; tested on iPhone 13 mini and iPhone SE
+2nd gen) using `apps/ios-highspeed-camera`, which streams capture-timestamped
+frames over Wi-Fi. The Mac HUD has REC/camera/zoom controls and drag-a-box
+target selection. With a tight box, the phone streams a native-resolution
+strip around the object, keeping 240 fps when Wi-Fi cannot sustain full-frame
+capture. Each take saves `raw.gmst`, `hud.mp4`, `slowmo.mp4`, and `summary.json`.
+
+```bash
+gamst demo rotation --iphone 9123
+gamst demo rotation --iphone-replay take/raw.gmst
+```
+
+Accuracy is not guaranteed and has not been validated on a ground-truth set;
+tracking loss can ruin a take. Use bright, even lighting and a bright, plain
+background and clothing behind the coin. Keep the whole flight in frame, fix
+the phone on a stand, and select a tight box; avoid flickering lights and
+cracked or dirty lenses. [Details and limits](docs/halo-coin.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start

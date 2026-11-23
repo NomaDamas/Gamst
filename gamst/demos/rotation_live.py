@@ -31,6 +31,7 @@ import typing
 from pathlib import Path
 
 from ..providers.rotation import RotationPlugin
+from ..providers.target_tracks import measure_exemplar
 
 # "GMS3" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 |
 # u16 clockwise degrees to upright | u16 x4 crop rect (sensor-normalized x65535) | u32 jpeg bytes.
@@ -478,14 +479,17 @@ def _toss_line(event):
             f"  {event['status']}  {kind}  {event.get('capture_fps') or 0:.0f} fps")
 
 
-def is_toss(event, show_all=False):
-    """HUD policy: thrown flips, or a sustained spin in place (>=1 turn over >=250 ms)."""
+def is_toss(event, show_all=False, targeted=False):
+    """HUD policy: thrown flips, or a sustained spin in place (>=1 turn over >=250 ms) when no target
+    is set. A rate above ``expected_max_rev_s`` is not a coin flip but shape noise, so it never counts."""
     if event.get('axis') != 'flip' or event.get('status') != 'counting' or not event.get('turns'):
         return False
     if show_all:
         return True
+    if event.get('rev_s') and event.get('expected_max_rev_s') and event['rev_s'] > event['expected_max_rev_s']:
+        return False
     kind = (event.get('trajectory') or {}).get('kind')
-    if kind == 'stationary':
+    if kind == 'stationary' and not targeted:
         return event['turns'] >= 1 and event.get('duration_ms', 0) >= 250
     return kind == 'free_fall'
 
@@ -617,6 +621,11 @@ async def run(args):
             return
         fh, fw = shape[:2]
         size_px = max(abs(a[0] - b[0]) * fw, abs(a[1] - b[1]) * fh)
+        if view.get('frame') is not None:
+            # Boxes are drawn loosely; the object's own outline inside the box gives its real size.
+            box = (min(a[0], b[0]) * fw, min(a[1], b[1]) * fh, max(a[0], b[0]) * fw, max(a[1], b[1]) * fh)
+            measured = measure_exemplar(view['frame'], box)
+            size_px = measured if measured is not None else .5 * size_px
         measured_w = measured_size(np.empty((fh, fw, 1), np.uint8))[0]
         if size_px * measured_w / fw < 3:
             return
@@ -740,7 +749,7 @@ async def run(args):
                         if frame is not None:
                             state['frame_size'] = (frame.shape[1], frame.shape[0])
                             shown_frame = frame
-                            view.update(info=info, shape=frame.shape)
+                            view.update(info=info, shape=frame.shape, frame=frame)
                             if show(hud.render(frame, None, state)):
                                 break
                     elif not args.headless and time.monotonic() - last_view > .25:
@@ -806,7 +815,7 @@ async def run(args):
                     if event['type'] != 'rotation.ended':
                         continue
                     take.events.append(event)
-                    if is_toss(event, args.show_all):
+                    if is_toss(event, args.show_all, bool(target['norm'])):
                         toss = dict(turns=event['turns'], rev_s=event['rev_s'], duration_ms=event['duration_ms'],
                                     capture_fps=event['capture_fps'] or 0, trajectory=event.get('trajectory'),
                                     timestamp_ms=event['timestamp_ms'])
@@ -821,7 +830,7 @@ async def run(args):
                         if record['id'] != alarm['trigger_record_id']:
                             continue
                         for event in record['observation']['value']['events']:
-                            if event['type'] == 'rotation.ended' and is_toss(event, args.show_all):
+                            if event['type'] == 'rotation.ended' and is_toss(event, args.show_all, bool(target['norm'])):
                                 state['feed'].append(_toss_line(event))
                                 print(json.dumps({'watch': watch['id'], 'rotation.ended': event}), flush=True)
                 state['feed'] = state['feed'][-8:]
@@ -834,7 +843,7 @@ async def run(args):
                     state['mode'] = 'processing'
                 take.add(header, payload, seconds, value, state['last_toss'])
                 shown_frame = frame
-                view.update(info=info, shape=frame.shape)
+                view.update(info=info, shape=frame.shape, frame=frame)
                 if seconds >= hud_due:
                     # hud.mp4 advances on capture time, so it plays in real time however far GAMST lags.
                     image = hud.render(frame, value, state)
