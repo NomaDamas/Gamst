@@ -19,19 +19,24 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import queue
 import shutil
+import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
+import typing
 from pathlib import Path
 
 from ..providers.rotation import RotationPlugin
 
-# "GMS2" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | 3 pad | u32 jpeg bytes
-# "GMST" (first app build) has no flags field and counts as one continuous take.
+# "GMS2" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 | 2 pad |
+# u32 jpeg bytes. "GMST" (first app build) has no flags field and counts as one continuous take.
+# The Mac drives the phone with newline-delimited JSON commands written back on the same socket.
 HEADER_SIZE = {b'GMS2': 28, b'GMST': 24}
-RECORDING = 1
+RECORDING, FRONT_CAMERA = 1, 2
 MEASURE_LONG_SIDE = 640  # GAMST measures at this size; the HUD shows the full received frame
 
 
@@ -41,16 +46,25 @@ def measured_size(frame):
     return max(2, round(width * scale)), max(2, round(height * scale))
 
 
+class FrameHeader(typing.NamedTuple):
+    sequence: int
+    seconds: float
+    width: int
+    height: int
+    flags: int
+    zoom: float
+    size: int
+
+
 def parse_header(header):
     magic = header[:4]
     if magic == b'GMS2':
-        sequence, seconds, width, height, flags, size = struct.unpack('<IdHHB3xI', header[4:28])
-    elif magic == b'GMST':
+        sequence, seconds, width, height, flags, zoom, size = struct.unpack('<IdHHBB2xI', header[4:28])
+        return FrameHeader(sequence, seconds, width, height, flags, (zoom or 10) / 10, size)
+    if magic == b'GMST':
         sequence, seconds, width, height, size = struct.unpack('<IdHHI', header[4:24])
-        flags = RECORDING
-    else:
-        raise ValueError('not a GAMST 240 frame stream')
-    return sequence, seconds, width, height, flags, size
+        return FrameHeader(sequence, seconds, width, height, RECORDING, 1., size)
+    raise ValueError('not a GAMST 240 frame stream')
 
 
 def read_recording(path):
@@ -60,10 +74,11 @@ def read_recording(path):
         size = HEADER_SIZE.get(data[offset:offset + 4])
         if size is None:
             raise SystemExit(f'{path}: not a GAMST 240 recording')
-        sequence, seconds, _, _, flags, length = parse_header(data[offset:offset + size])
+        info = parse_header(data[offset:offset + size])
         offset += size
-        frames.append((sequence, seconds, flags, data[offset - size:offset], data[offset:offset + length]))
-        offset += length
+        frames.append((info.sequence, info.seconds, info.flags, data[offset - size:offset],
+                       data[offset:offset + info.size]))
+        offset += info.size
     return frames
 
 
@@ -254,7 +269,7 @@ class Hud:
         elif mode == 'saved':
             label, color = f"saved  {state['saved']}", GOOD
         elif mode == 'standby':
-            label, color = 'STANDBY  ·  press ● on the iPhone to record a take', DIM
+            label, color = 'STANDBY  ·  REC on the iPhone or here (space) starts a take', DIM
         else:
             label, color = 'waiting for the iPhone', DIM
         alpha, _, _ = t.patch(label, 22, WHITE, 'semibold')
@@ -419,7 +434,9 @@ async def run(args):
     from .. import Gamst
 
     record_dir = Path(args.record_dir or 'gamst-takes')
-    take_queue = asyncio.Queue()  # every take frame; GAMST must see the full capture cadence
+    # Every take frame, in order; GAMST must see the full capture cadence. Filled by a socket thread
+    # so a busy GAMST loop never stops reading and back-pressures the phone into dropping frames.
+    take_queue = queue.Queue()
     latest = {'frame': None}       # standby view: newest frame only
     stats = dict(received=0, capture=collections.deque(maxlen=241))
 
@@ -427,35 +444,68 @@ async def run(args):
         stats['received'] += 1
         stats['capture'].append(seconds)
         if flags & RECORDING:
-            take_queue.put_nowait(('frame', header, payload, seconds))
+            take_queue.put(('frame', header, payload, seconds))
         else:
             latest['frame'] = (header, payload, seconds)
 
     recording_flag = {'on': False}
+    phone = dict(sock=None, recording=False, front=False, zoom=1.)
 
     def mark(flags):
         on = bool(flags & RECORDING)
         if on != recording_flag['on']:
             recording_flag['on'] = on
-            take_queue.put_nowait(('start',) if on else ('stop',))
+            take_queue.put(('start',) if on else ('stop',))
 
-    async def handle(reader, writer):
-        print(json.dumps({'iphone': 'connected', 'peer': str(writer.get_extra_info('peername'))}), flush=True)
+    def command(name):
+        """Drive the phone exactly like its own buttons; the phone echoes state in each frame header."""
+        sock = phone['sock']
+        if sock is None:
+            return
+        if name == 'record':
+            message = dict(cmd='record', on=not phone['recording'])
+        elif name == 'camera':
+            message = dict(cmd='camera', position='back' if phone['front'] else 'front')
+        else:
+            message = dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1)
         try:
-            while True:
-                magic = await reader.readexactly(4)
-                if magic not in HEADER_SIZE:
-                    raise ValueError('not a GAMST 240 frame stream')
-                header = magic + await reader.readexactly(HEADER_SIZE[magic] - 4)
-                _, seconds, _, _, flags, size = parse_header(header)
-                payload = await reader.readexactly(size)
-                mark(flags)
-                receive(header, payload, seconds, flags)
-        except (asyncio.IncompleteReadError, ConnectionError, ValueError) as error:
-            print(json.dumps({'iphone': 'disconnected', 'reason': type(error).__name__}), flush=True)
-        finally:
-            mark(0)
-            writer.close()
+            sock.sendall((json.dumps(message) + '\n').encode())
+        except OSError:
+            return
+        print(json.dumps({'command': message}), flush=True)
+
+    def serve(listener):
+        while True:
+            try:
+                sock, peer = listener.accept()
+            except OSError:
+                return
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            print(json.dumps({'iphone': 'connected', 'peer': str(peer)}), flush=True)
+            phone['sock'] = sock
+            stream = sock.makefile('rb', buffering=1 << 20)
+            try:
+                while True:
+                    magic = stream.read(4)
+                    if magic not in HEADER_SIZE:
+                        raise ConnectionError('stream ended' if len(magic) < 4 else 'not a GAMST 240 frame stream')
+                    header = magic + stream.read(HEADER_SIZE[magic] - 4)
+                    info = parse_header(header)
+                    payload = stream.read(info.size)
+                    if len(payload) < info.size:
+                        raise ConnectionError('stream ended')
+                    phone.update(recording=bool(info.flags & RECORDING), front=bool(info.flags & FRONT_CAMERA),
+                                 zoom=info.zoom)
+                    mark(info.flags)
+                    receive(header, payload, info.seconds, info.flags)
+            except (OSError, ValueError, struct.error) as error:
+                print(json.dumps({'iphone': 'disconnected', 'reason': str(error)}), flush=True)
+            finally:
+                if phone['sock'] is sock:
+                    phone['sock'] = None
+                mark(0)
+                stream.close()
+                sock.close()
 
     async def replay(path):
         frames = read_recording(path)
@@ -465,21 +515,31 @@ async def run(args):
             receive(header, payload, seconds, flags)
             await asyncio.sleep(0)
         mark(0)
-        take_queue.put_nowait(('end',))
+        take_queue.put(('end',))
 
-    server = feeder = None
+    listener = feeder = None
     if args.iphone_replay:
         feeder = asyncio.create_task(replay(args.iphone_replay))
     else:
-        server = await asyncio.start_server(handle, '0.0.0.0', args.iphone)
+        listener = socket.create_server(('0.0.0.0', args.iphone), reuse_port=False)
+        threading.Thread(target=serve, args=(listener,), daemon=True).start()
         print(json.dumps({'listening': args.iphone, 'takes': str(record_dir.resolve())}), flush=True)
 
     hud = Hud(show_all=args.show_all)
     title = 'GAMST 240 - vision.rotation'
+    buttons = []  # (name, x, y, width, height) in HUD pixels; drawn on the window only, never recorded
     if not args.headless:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(title, 1440, 810)
         cv2.moveWindow(title, 40, 60)
+
+        def on_mouse(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONUP:
+                for name, bx, by, bw, bh in buttons:
+                    if bx <= x <= bx + bw and by <= y <= by + bh:
+                        command(name)
+
+        cv2.setMouseCallback(title, on_mouse)
     pending_alarms = []
     state = dict(mode='waiting', take_seconds=0., lag_s=0., saved='', capture_fps=0., frame_size=None,
                  last_toss=None, tosses=0, ignored=0, frames=0, history=[], feed=[])
@@ -494,13 +554,38 @@ async def run(args):
         window = stats['capture']
         return (len(window) - 1) / (window[-1] - window[0]) if len(window) > 1 and window[-1] > window[0] else 0.
 
+    def controls(image):
+        """Phone controls for the Mac window (space/r: record, c: camera, z: zoom, q: quit)."""
+        buttons.clear()
+        connected = phone['sock'] is not None
+        items = [('record', '■  STOP' if phone['recording'] else '●  REC', REC if connected else DIM),
+                 ('camera', f"camera  {'front' if phone['front'] else 'back'}", PANEL if connected else DIM),
+                 ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM)]
+        widths = [hud.text.patch(label, 24, WHITE, 'semibold')[0].shape[1] + 36 for _, label, _ in items]
+        x = VIDEO[0] + (VIDEO[2] - sum(widths) - 16 * (len(items) - 1)) // 2
+        y = VIDEO[1] + VIDEO[3] - 72
+        for (name, label, color), width in zip(items, widths):
+            _pill(image, hud.text, x, y, label, color, size=24)
+            buttons.append((name, x, y, width, 44))
+            x += width + 16
+        hint = 'space  record   ·   c  camera   ·   z  zoom   ·   q  quit' if connected else 'phone not connected'
+        hud.text.put(image, hint, VIDEO[0] + VIDEO[2] // 2, y + 54, 16, MUTED, anchor='center')
+        return image
+
     def show(image):
         nonlocal last_view
         if args.headless:
             return False
-        cv2.imshow(title, image)
+        cv2.imshow(title, controls(image.copy()) if not args.iphone_replay else image)
         last_view = time.monotonic()
-        return (cv2.waitKey(1) & 0xFF) in (27, ord('q'))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord(' '), ord('r')):
+            command('record')
+        elif key == ord('c'):
+            command('camera')
+        elif key == ord('z'):
+            command('zoom')
+        return key in (27, ord('q'))
 
     try:
         async with Gamst(consent=True, store=args.store) as human:
@@ -515,7 +600,7 @@ async def run(args):
             while True:
                 try:
                     item = take_queue.get_nowait()
-                except asyncio.QueueEmpty:
+                except queue.Empty:
                     item = None
                 if item is None:
                     # Standby: show the newest live frame at ~30 fps, no measurement.
@@ -623,8 +708,8 @@ async def run(args):
                 saved.append(str(directory))
             plugin.close()
     finally:
-        if server is not None:
-            server.close()
+        if listener is not None:
+            listener.close()
         if feeder is not None:
             feeder.cancel()
         if not args.headless:

@@ -7,10 +7,13 @@ import VideoToolbox
 /// live view for framing); Start/Stop marks a take, and every frame carries that flag.
 /// Capture runs at the camera's highest frame rate (240 fps on the back camera); scaling,
 /// horizon-level rotation and JPEG encoding run on the VideoToolbox hardware path.
+/// The Mac can drive the same controls: it writes newline-delimited JSON commands back on
+/// the stream socket ({"cmd":"record","on":true}, {"cmd":"camera","position":"front"},
+/// {"cmd":"zoom","factor":2}).
 ///
 /// Wire format per frame (little endian, 28-byte header): "GMS2" | u32 sequence |
-/// f64 capture seconds | u16 width | u16 height | u8 flags (bit 0 = recording) | 3 bytes reserved |
-/// u32 jpeg length | jpeg bytes. Frames are already upright.
+/// f64 capture seconds | u16 width | u16 height | u8 flags (bit 0 = recording, bit 1 = front
+/// camera) | u8 zoom x10 | 2 bytes reserved | u32 jpeg length | jpeg bytes. Frames are upright.
 final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var status = "starting camera"
     @Published private(set) var macConnected = false
@@ -29,6 +32,9 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private var endpoint: (host: String, port: UInt16)?
     private var connected = false
     private var recordingFlag = false
+    private var frontFlag = false
+    private var zoomTenths: UInt8 = 10
+    private var commandBuffer = Data()
     private var pending = 0
     private var sequence: UInt32 = 0
     private var captured = 0, sent = 0, droppedSend = 0, droppedLate = 0
@@ -69,16 +75,22 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
 
-    func toggleRecording() {
-        let next = !recording
-        lock.lock(); recordingFlag = next; lock.unlock()
-        recording = next
-        recordingStartedAt = next ? Date() : nil
+    func toggleRecording() { setRecording(!recording) }
+
+    func setRecording(_ on: Bool) {
+        guard on != recording else { return }
+        lock.lock(); recordingFlag = on; lock.unlock()
+        recording = on
+        recordingStartedAt = on ? Date() : nil
     }
 
     /// Front cameras usually top out below 240 fps; the status line shows the rate actually set.
-    func switchCamera() {
-        position = position == .back ? .front : .back
+    func switchCamera() { setCamera(position == .back ? .front : .back) }
+
+    func setCamera(_ next: AVCaptureDevice.Position) {
+        guard next != position else { return }
+        position = next
+        lock.lock(); frontFlag = next == .front; lock.unlock()
         captureQueue.async {
             self.session.stopRunning()
             do {
@@ -91,14 +103,43 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     }
 
     /// Cycles 1x, 2x, 3x so a small object fills more of the streamed frame.
-    func cycleZoom() {
-        let next: CGFloat = zoom >= 3 ? 1 : zoom + 1
+    func cycleZoom() { setZoom(zoom >= 3 ? 1 : zoom + 1) }
+
+    func setZoom(_ factor: CGFloat) {
+        let next = min(max(factor, 1), 3)
         zoom = next
+        lock.lock(); zoomTenths = UInt8((next * 10).rounded()); lock.unlock()
         captureQueue.async {
             guard let device = (self.session.inputs.first as? AVCaptureDeviceInput)?.device,
                   (try? device.lockForConfiguration()) != nil else { return }
             device.videoZoomFactor = min(next, device.activeFormat.videoMaxZoomFactor)
             device.unlockForConfiguration()
+        }
+    }
+
+    /// Commands from GAMST on the Mac, applied exactly like the on-screen buttons.
+    private func receiveCommands(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak connection] data, _, done, error in
+            guard let self, let connection else { return }
+            if let data {
+                self.commandBuffer.append(data)
+                while let newline = self.commandBuffer.firstIndex(of: 0x0A) {
+                    let line = self.commandBuffer[self.commandBuffer.startIndex..<newline]
+                    self.commandBuffer.removeSubrange(self.commandBuffer.startIndex...newline)
+                    guard let command = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                    DispatchQueue.main.async { self.apply(command) }
+                }
+            }
+            if error == nil && !done { self.receiveCommands(on: connection) }
+        }
+    }
+
+    private func apply(_ command: [String: Any]) {
+        switch command["cmd"] as? String {
+        case "record": setRecording(command["on"] as? Bool ?? !recording)
+        case "camera": setCamera((command["position"] as? String) == "front" ? .front : .back)
+        case "zoom": setZoom(CGFloat((command["factor"] as? NSNumber)?.doubleValue ?? 1))
+        default: break
         }
     }
 
@@ -117,6 +158,8 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             switch state {
             case .ready:
                 self.setConnected(true)
+                self.networkQueue.async { self.commandBuffer.removeAll() }
+                self.receiveCommands(on: connection)
             case .failed, .waiting:
                 self.setConnected(false)
                 connection.cancel()
@@ -227,7 +270,8 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         let network = connected ? self.connection : nil
         let busy = network != nil && pending >= maxPending
         if busy { droppedSend += 1 } else if network != nil { pending += 1 }
-        let angle = captureAngle, flags: UInt8 = recordingFlag ? 1 : 0
+        let angle = captureAngle
+        let flags: UInt8 = (recordingFlag ? 1 : 0) | (frontFlag ? 2 : 0), zoomByte = zoomTenths
         lock.unlock()
         guard let network, !busy else { return }
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
@@ -249,7 +293,7 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             self.append(&header, pts.seconds.bitPattern.littleEndian)
             self.append(&header, UInt16(width).littleEndian)
             self.append(&header, UInt16(height).littleEndian)
-            header.append(contentsOf: [flags, 0, 0, 0])
+            header.append(contentsOf: [flags, zoomByte, 0, 0])
             self.append(&header, UInt32(jpeg.count).littleEndian)
             network.send(content: header + jpeg, completion: .contentProcessed { error in self.finish(sent: error == nil) })
         }
