@@ -51,8 +51,8 @@ def configuration(config):
         raise ValueError('text or exemplar mode required')
     device = config.get('device','cpu')
     imgsz = config.get('imgsz',640)
-    if device not in ('cpu','cuda') or type(imgsz) is not int or imgsz not in (320,480,640):
-        raise ValueError('cpu/cuda device and imgsz320/480/640 required')
+    if device not in ('cpu','cuda','mps') or type(imgsz) is not int or imgsz not in (320,480,640):
+        raise ValueError('cpu/cuda/mps device and imgsz320/480/640 required')
     provenance.update(imgsz=imgsz,runtime=ULTRALYTICS_VERSION)
     args = dict(labels=labels,prompt_sha256=hashlib.sha256(json.dumps(provenance,sort_keys=True,
         separators=(',',':')).encode()).hexdigest(),checkpoint_sha256=config['checkpoint_sha256'],mode=mode,

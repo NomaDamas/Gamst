@@ -57,6 +57,12 @@ def capability(profile, config):
         from .providers.yoloe import YOLOEContext
         args,_,_ = configuration(config)
         return YOLOEContext.capability(**args)
+    if profile == 'smolvlm2.500m.local':
+        from .providers.smolvlm_context import SmolVLMContext
+        return SmolVLMContext.capability(**config)
+    if profile == 'orbslam3.monocular':
+        from .providers.orbslam_context import ORBSLAMContext
+        return ORBSLAMContext.capability(**config)
     if profile == 'ti.radar':
         from .providers.radar import TIRadar
         return TIRadar.capability(**config)
@@ -184,6 +190,11 @@ def capability(profile, config):
         if not isinstance(config.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', config['sha256']):
             raise ValueError('RF-DETR needs a lowercase checkpoint SHA256')
         return RFDETRObjects.capability('1.12.1.eager.sha256.'+config['sha256'], variant=profile.split('.')[1])
+    if profile == 'vision.rotation':
+        from .providers.rotation import RotationProvider
+        if config.get('region_source') == 'detections':
+            raise ValueError('an isolated vision.rotation worker requires roi, motion or auto regions; Store detections require RotationPlugin')
+        return RotationProvider.capability(**config)
     if profile == 'object.rotations':
         from .providers.object_rotation_bank import ObjectRotationBank
         allowed = {'max_tracks', 'max_gap_ms', 'min_radius', 'max_points', 'min_quality', 'history_s'}

@@ -66,15 +66,30 @@ async def demo():
                           "context": await human.get_context()}, ensure_ascii=False, indent=2))
 
 
+def _dispatch_setup(extra):
+    import importlib.util
+    try:
+        available = importlib.util.find_spec("gamstcrew.setup") is not None
+    except ModuleNotFoundError:
+        available = False
+    if not available:
+        print("GamstCrew is required for role-based setup. Install it with: python -m pip install gamstcrew")
+        raise SystemExit(1)
+    result = subprocess.run([sys.executable, "-m", "gamstcrew.setup", *extra], check=False)
+    if result.returncode:
+        raise SystemExit(result.returncode)
+    return 0
+
+
 def main():
     from .star import ask
-    if sys.argv[1:3] == ["demo", "coin"]:  # own parser, including --help
+    if sys.argv[1:3] == ["demo", "rotation"]:  # own parser, including --help
         ask()
-        from .demos.coin_halo import main as coin
-        coin(sys.argv[3:])
+        from .demos.rotation import main as rotation
+        rotation(sys.argv[3:])
         return
     parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
-    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "star"])
+    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "setup", "star"])
     args, extra = parser.parse_known_args()
     if args.command == "star":
         ask(force=True)
@@ -83,8 +98,10 @@ def main():
         ask()
     if args.command == "demo":
         if extra:
-            parser.error("demo accepts no extra arguments; for the Coin Halo use: gamst demo coin [options]")
+            parser.error("demo accepts no extra arguments; for rotation use: gamst demo rotation [options]")
         asyncio.run(demo())
+    elif args.command == "setup":
+        _dispatch_setup(extra)
     elif args.command in _LOCAL_COMMANDS:
         _dispatch_local_command(args.command, extra)
     else:

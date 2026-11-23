@@ -63,25 +63,28 @@ camera
   -> Qwen3.5-VL general scene semantic perception (low cadence)
   -> light detector/tracker and existing OpenCV/timeseries components
   -> additive GAMST perception capabilities:
-       AngularMotionCounter / ObjectEventReducer / ObjectRotationBank
+       vision.rotation (in-plane turns and out-of-plane flips)
   -> GAMST Context / Watch / overlay
 ```
 
-## Coin Halo UseCase
+## Generic object rotation
 
-The coin is the first Halo demo, not a coin-specific architecture. The full
-description, hardware limits and measured results are in
+Rotation is a fast-lane capability, not an object-specific application. Coins,
+wheels, fans and cards are optional detector labels on the same timeline. The
+full description, hardware limits and measured results are in
 [docs/halo-coin.md](halo-coin.md).
 
 ```text
-coin / wheel / disc / card
-  -> YOLOE (ProcessProvider worker, ~10 Hz) names objects
-  -> ShapeTracks re-finds each object every capture (ellipse + features)
-  -> ObjectSpinCounter: out-of-plane half turns (flipped / table-spun coin)
-  -> AngularMotionCounter: in-plane turns (wheel facing the camera)
-  -> GAMST Context / user Watch (spin ended) -> optional VLM call once
+any detector observation / explicit ROI / detector-free motion region
+  -> ShapeTracks re-finds each region every capture (ellipse + features)
+  -> vision.rotation: in-plane turns + out-of-plane flips, rev/s and status
+  -> rotation.started / rotation.ended events
+  -> GAMST Context / user Watch / overlay
 ```
 
-The capabilities are additive to the existing GAMST provider boundary. They do
-not replace or restructure the engine, MCP, store, clock or provider contracts.
-RelateAnything is excluded.
+`RotationPlugin` consumes the latest detector boxes already in the Store via
+`human.register(plugin)` and `push_video`. `RotationProvider` also runs in a
+SensorStreams/ProcessProvider lane with ROI or motion regions. Semantic labels
+are optional; unknown objects remain measurable and the low-cadence semantic
+VLM may describe them later. The providers are additive to the existing GAMST
+boundary and do not restructure the engine, MCP, store or clock.

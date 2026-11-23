@@ -56,7 +56,10 @@ class Labels(unittest.TestCase):
         a,_,_ = configuration(NATIVE)
         b,_,_ = configuration(dict(NATIVE,encoder_sha256='c'*64))
         self.assertNotEqual(a['prompt_sha256'],b['prompt_sha256'])
-        for change in ({'imgsz':True},{'device':'mps'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
+        args,device,_ = configuration(dict(NATIVE,device='mps'))
+        self.assertEqual(device,'mps')
+        self.assertIn('mps',YOLOEContext.capability(**args).devices)
+        for change in ({'imgsz':True},{'device':'auto'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
             with self.assertRaises(ValueError): configuration(dict(NATIVE,**change))
         code = 'import sys;from gamst import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
         result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
