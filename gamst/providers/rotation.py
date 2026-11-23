@@ -237,27 +237,38 @@ class RotationProvider:
         self._motion_previous = gray
         if previous is None or previous.shape != gray.shape:
             return []
-        difference = cv2.absdiff(cv2.GaussianBlur(previous, (5, 5), 0), cv2.GaussianBlur(gray, (5, 5), 0))
+        blurred_previous, blurred = cv2.GaussianBlur(previous, (5, 5), 0), cv2.GaussianBlur(gray, (5, 5), 0)
+        target = self._target_size
+        if target is not None:
+            # Lights flicker against a 1/1000 s shutter, so whole frames brighten and darken between
+            # captures; remove the global change before differencing.
+            shift = float(blurred.mean()) - float(blurred_previous.mean())
+            difference = cv2.absdiff(cv2.convertScaleAbs(blurred_previous, beta=shift), blurred)
+        else:
+            difference = cv2.absdiff(blurred_previous, blurred)
         _, mask = cv2.threshold(difference, 24, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        target = self._target_size
         grow = 9 if target is None else max(3, int(target // 4) | 1)
         mask = cv2.dilate(mask, np.ones((grow, grow), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         height, width = gray.shape
-        rows = []
-        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
-            x, y, w, h = cv2.boundingRect(contour)
-            if target is not None:
-                # The exemplar fixes the scale: a moving coin's difference blob spans roughly one to
-                # a few diameters (its motion smear); hands and arms are far larger.
-                if not .5 * target <= max(w, h) <= 5 * target or min(w, h) < .3 * target:
-                    continue
-            else:
+        if target is not None:
+            # The exemplar fixes the scale: a moving coin's difference blob spans about one to a few
+            # diameters (its motion smear); hands and arms are far larger. Closest to that size first.
+            boxes = [cv2.boundingRect(contour) for contour in contours]
+            boxes = [box for box in boxes if .5 * target <= max(box[2], box[3]) <= 5 * target
+                     and min(box[2], box[3]) >= .3 * target]
+            boxes.sort(key=lambda box: abs(math.log(max(box[2], box[3]) / (1.6 * target))))
+        else:
+            boxes = []
+            for contour in sorted(contours, key=cv2.contourArea, reverse=True):
                 if cv2.contourArea(contour) < max(144., height * width * .0005):
                     break
-                if w < 12 or h < 12 or w * h > height * width * .5:
-                    continue
+                x, y, w, h = cv2.boundingRect(contour)
+                if w >= 12 and h >= 12 and w * h <= height * width * .5:
+                    boxes.append((x, y, w, h))
+        rows = []
+        for x, y, w, h in boxes[:self.config['max_tracks']]:
             pad_x, pad_y = w * .1, h * .1
             x0, y0 = max(0., x - pad_x), max(0., y - pad_y)
             x1, y1 = min(float(width), x + w + pad_x), min(float(height), y + h + pad_y)
@@ -266,8 +277,6 @@ class RotationProvider:
             if target is not None:
                 row['size_px'] = target
             rows.append(row)
-            if len(rows) >= self.config['max_tracks']:
-                break
         return rows
 
     def _refresh_regions(self, frame, detections, detector_fresh):
