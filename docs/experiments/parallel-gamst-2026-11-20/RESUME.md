@@ -95,6 +95,8 @@
 - 2026-11-20 SAM 3.1 재검증 확정 실패: 공식 checkpoint 구조(`multiplex_count=16`)로 로드·propagation 시작은 되지만 실제 프레임에서 SAM3 내부 `vision_feat`가 `[5184, 0, 256]`이 되어 tracker가 실패합니다. 공식 코드/가중치와 Blackwell에서 재현되었습니다. 결과는 실패로 보고합니다.
 - 2026-11-22 추가 범위 결정: RelateAnything은 현재 도입하지 않습니다. RF-DETR/YOLOE box+track+GAMST temporal state로 가능한 관계/zone 조건은 기존 perception에서 처리하고, holding/riding/on 등 필요 시 Issue #353의 별도 provider로 검토합니다.
 - 2026-11-22 추가 구현: `audio.context` provider와 기본 disabled realtime voice backend metadata 설정. full-duplex 자체는 이번 범위가 아니며, raw audio 대신 VAD/silence/AEC/CED/diarization/DOA 가능값/prosody/ASR를 Context로 전달합니다. 관련 Issue #354.
+- Coin Halo (#355, 2026-11-23): 사용자 승인으로 동전 데모를 첫 Halo로 확정했습니다. 둥근 윤곽 추적은 폐기했고, YOLOE-26s(ProcessProvider)가 이름을 붙이고 `ShapeTracks`가 매 프레임 추적합니다. 회전수는 `ObjectSpinCounter`(면 밖 회전)와 `AngularMotionCounter`(면 안 회전)가 셉니다. 실제 영상에서 동전 관측 프레임은 344/375와 54/54(비행 구간)였고, 30fps·25fps 영상은 모두 `undersampled`로 판정해 회전수를 내지 않았습니다. 회전수 정확도는 사용자가 촬영할 240fps 던지기 10회로 검증해야 합니다(통과 기준: 8회 이상 정확히 일치). 결과는 `docs/halo-coin.md`에 있습니다. GCP 디스크·스냅샷 삭제는 결제 비활성으로 거부된 상태입니다.
+- 2026-11-23: 240fps iPhone 실시간 앱은 사용자 결정으로 후순위입니다. GitHub star는 동의를 받은 경우에만 누릅니다(`gamst` 첫 대화형 실행 시 질문하고, 에이전트는 `AGENTS.md`를 따릅니다). PyPI trusted publisher(gamst-sdk, NomaDamas/Gamst, publish.yml, environment pypi)는 Aside에서 등록했습니다.
 
 ## 4. 산출물 위치
 - **설계·결과 문서:** 이 폴더

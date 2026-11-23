@@ -67,12 +67,23 @@ async def demo():
 
 
 def main():
+    from .star import ask
+    if sys.argv[1:3] == ["demo", "coin"]:  # own parser, including --help
+        ask()
+        from .demos.coin_halo import main as coin
+        coin(sys.argv[3:])
+        return
     parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
-    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run"])
+    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "star"])
     args, extra = parser.parse_known_args()
+    if args.command == "star":
+        ask(force=True)
+        return
+    if args.command in ("demo", "install", "run"):  # never on stdio/server commands
+        ask()
     if args.command == "demo":
         if extra:
-            parser.error("demo accepts no extra arguments")
+            parser.error("demo accepts no extra arguments; for the Coin Halo use: gamst demo coin [options]")
         asyncio.run(demo())
     elif args.command in _LOCAL_COMMANDS:
         _dispatch_local_command(args.command, extra)

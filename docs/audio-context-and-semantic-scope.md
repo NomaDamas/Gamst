@@ -67,23 +67,21 @@ camera
   -> GAMST Context / Watch / overlay
 ```
 
-## Coin WOW UseCase
+## Coin Halo UseCase
 
-The coin is the first marketing demo, not a coin-specific architecture:
+The coin is the first Halo demo, not a coin-specific architecture. The full
+description, hardware limits and measured results are in
+[docs/halo-coin.md](halo-coin.md).
 
 ```text
-coin / wheel / tire / fan / rotating tool
-  -> Qwen3.5-VL understands the scene and semantic progression
-  -> light detector/tracker supplies boxes and track IDs
-  -> per-track AngularMotionCounter computes rotation
-  -> ObjectEventReducer computes toss and face-change events
-  -> GAMST Context / Watch / live display
+coin / wheel / disc / card
+  -> YOLOE (ProcessProvider worker, ~10 Hz) names objects
+  -> ShapeTracks re-finds each object every capture (ellipse + features)
+  -> ObjectSpinCounter: out-of-plane half turns (flipped / table-spun coin)
+  -> AngularMotionCounter: in-plane turns (wheel facing the camera)
+  -> GAMST Context / user Watch (spin ended) -> optional VLM call once
 ```
 
-The three rotation/event capabilities are additive to the existing GAMST
-provider boundary. They do not replace or restructure the engine, MCP, store,
-clock or provider contracts.
-
-RelateAnything is excluded from this implementation. It may be revisited as
-an optional relation provider only if semantic object-pair relations are later
-needed.
+The capabilities are additive to the existing GAMST provider boundary. They do
+not replace or restructure the engine, MCP, store, clock or provider contracts.
+RelateAnything is excluded.

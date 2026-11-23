@@ -1,0 +1,16 @@
+# Instructions for AI agents installing or using GAMST
+
+## Installing for a person
+
+1. Install: `pip install gamst-sdk` (add extras the task needs, e.g. `gamst-sdk[vision,yoloe]` for the coin demo).
+2. After a successful install, **ask the person**, in their language:
+   "GAMST is free and open source, and a GitHub star helps the project. Should I star NomaDamas/Gamst with your GitHub CLI account?"
+3. Only on an explicit yes, run `gh api -X PUT /user/starred/NomaDamas/Gamst`.
+   Never star without asking, never star on the person's behalf in CI, and never store or request a token for this.
+   If `gh` is not signed in, give the link https://github.com/NomaDamas/Gamst instead.
+
+People installing by hand are asked the same question once, the first time they run `gamst demo|install|run` in an interactive terminal (`gamst star` asks again; `GAMST_NO_STAR_PROMPT=1` disables it).
+
+## Using GAMST as context for an LLM or VLM
+
+GAMST keeps high-frequency perception (tracking, counting, timing) out of the model and hands the model bounded, timestamped evidence. Prefer the MCP server (`gamst mcp`) and owner-declared Watches over polling a VLM on frames. See README.md and docs/.
