@@ -20,10 +20,23 @@ gamst gives agents a shared layer for observing behavior, tracking changes, and 
 
 ## 🗂️ Contents
 
-[🌱 Context layer](#overview) · [✨ Capabilities](#capabilities) · [🚀 Quick start](#quick-start) · [🏠 Complete local stack](#local-stack)<br>
-[🐍 Python SDK](#python-sdk) · [🔌 Context MCP](#mcp) · [🎥 Vision & voice](#perception) · [🤝 Companion](#companion) · [🌐 Integrations](#integrations)<br>
-[🖥️ Dashboard guide](#dashboard-guide) · [🗄️ Retention](#retention) · [🧩 Optional providers](#providers) · [📊 Benchmarking](#benchmarking)<br>
-[🔒 Privacy](#privacy) · [🧪 Validation](#validation) · [📚 Documentation](#documentation) · [📄 License](#license)
+· [🌱 Context layer](#overview) <br>
+· [✨ Capabilities](#capabilities) <br>
+· [🚀 Quick start](#quick-start) <br>
+· [🏠 Complete local stack](#local-stack)<br>
+· [🐍 Python SDK](#python-sdk) <br>
+· [🔌 Context MCP](#mcp) <br>
+· [🎥 Vision & voice](#perception) <br>
+· [🤝 Companion](#companion) <br>
+· [🌐 Integrations](#integrations)<br>
+· [🖥️ Dashboard guide](#dashboard-guide) <br>
+· [🗄️ Retention](#retention) <br>
+· [🧩 Optional providers](#providers) <br>
+· [📊 Benchmarking](#benchmarking)<br>
+· [🔒 Privacy](#privacy) <br>
+· [🧪 Validation](#validation) <br>
+· [📚 Documentation](#documentation) <br>
+· [📄 License](#license)<br>
 
 <a id="overview"></a>
 ## 🌱 A context layer for an ecosystem of tools
