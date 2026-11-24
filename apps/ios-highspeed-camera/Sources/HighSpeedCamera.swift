@@ -44,6 +44,9 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private var zoomTenths: UInt8 = 10
     private var commandBuffer = Data()
     private var pending = 0
+    /// Bumped on every new connection: sends still in flight on a dropped connection may never
+    /// complete, so they must not hold the new connection's backlog full (frames would all drop).
+    private var generation = 0
     private var sequence: UInt32 = 0
     private var captured = 0, sent = 0, droppedSend = 0, droppedLate = 0
     private var formatDescription = ""
@@ -185,6 +188,7 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             guard let self, let connection else { return }
             switch state {
             case .ready:
+                self.lock.lock(); self.generation &+= 1; self.pending = 0; self.lock.unlock()
                 self.setConnected(true)
                 self.networkQueue.async { self.commandBuffer.removeAll() }
                 self.receiveCommands(on: connection)
@@ -324,23 +328,24 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         let network = connected ? self.connection : nil
         let busy = network != nil && pending >= maxPending
         if busy { droppedSend += 1 } else if network != nil { pending += 1 }
-        let angle = captureAngle
+        let angle = captureAngle, gen = generation
         let flags: UInt8 = (recordingFlag ? 1 : 0) | (frontFlag ? 2 : 0), zoomByte = zoomTenths
         lock.unlock()
         guard let network, !busy else { return }
+        let finish = { (ok: Bool) in self.finish(sent: ok, generation: gen) }
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let (image, region) = cropped(pixels) else { finish(sent: false); return }
+              let (image, region) = cropped(pixels) else { finish(false); return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image)
-        guard let encoder = jpegEncoder(width: width, height: height) else { finish(sent: false); return }
+        guard let encoder = jpegEncoder(width: width, height: height) else { finish(false); return }
         let status = VTCompressionSessionEncodeFrame(encoder, imageBuffer: image, presentationTimeStamp: pts,
                                                      duration: .invalid, frameProperties: nil, infoFlagsOut: nil) { status, _, sample in
-            guard status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) else { self.finish(sent: false); return }
+            guard status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) else { finish(false); return }
             var jpeg = Data(count: CMBlockBufferGetDataLength(block))
             let copied = jpeg.withUnsafeMutableBytes {
                 CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!)
             }
-            guard copied == kCMBlockBufferNoErr else { self.finish(sent: false); return }
+            guard copied == kCMBlockBufferNoErr else { finish(false); return }
             self.lock.lock(); self.sequence &+= 1; let sequence = self.sequence; self.lock.unlock()
             var header = Data("GMS3".utf8)
             self.append(&header, sequence.littleEndian)
@@ -353,14 +358,14 @@ final class HighSpeedCamera: NSObject, ObservableObject, AVCaptureVideoDataOutpu
                 self.append(&header, UInt16((min(max(value, 0), 1) * 65535).rounded()).littleEndian)
             }
             self.append(&header, UInt32(jpeg.count).littleEndian)
-            network.send(content: header + jpeg, completion: .contentProcessed { error in self.finish(sent: error == nil) })
+            network.send(content: header + jpeg, completion: .contentProcessed { error in finish(error == nil) })
         }
-        if status != noErr { finish(sent: false) }
+        if status != noErr { finish(false) }
     }
 
-    private func finish(sent ok: Bool) {
+    private func finish(sent ok: Bool, generation gen: Int) {
         lock.lock()
-        pending -= 1
+        if gen == generation { pending -= 1 }
         if ok { sent += 1 }
         lock.unlock()
     }
