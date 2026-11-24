@@ -415,7 +415,8 @@ class Take:
     competes with GAMST for the live loop.
     """
 
-    def __init__(self, root):
+    def __init__(self, root, refine=None):
+        self.refine = refine
         stamp = time.strftime('%Y%m%d-%H%M%S')
         self.dir = Path(root) / f'take-{stamp}'
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -441,6 +442,12 @@ class Take:
         (self.dir / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         subprocess.Popen([sys.executable, '-m', 'gamst.demos.rotation_live', 'slowmo', str(self.dir)],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.refine_process = None
+        if self.refine:
+            with open(self.dir / 'refine.log', 'w') as log:
+                self.refine_process = subprocess.Popen(
+                    [sys.executable, '-m', 'gamst.demos.rotation_live', 'refine', str(self.dir), *self.refine],
+                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         return self.dir
 
 
@@ -466,6 +473,56 @@ def render_slowmo(directory):
     if sink is not None:
         sink.close()
         (directory / 'slowmo.part.mp4').rename(directory / 'slowmo.mp4')
+
+
+async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
+                      detect_every=4, threshold=.2):
+    """Re-count a saved take's throws of one named object; writes ``refined.json``.
+
+    YOLOE (GAMST's pinned worker, text prompt ``label``) looks at every ``detect_every``-th frame
+    in native-resolution tiles; its hits seed EfficientTAM, which follows that one object through
+    each throw. See :mod:`gamst.providers.rotation_refine`.
+    """
+    import numpy as np
+    from ..capabilities import SensorMetadata
+    from ..plugins import InputFrame
+    from ..providers.rotation_refine import EfficientTAMVideo, refine, tiles
+    from .. import ProcessProvider
+    from .rotation import REFINE_ASSETS, detector_config
+    directory, models = Path(directory), Path(models)
+    recording = read_recording(directory / 'raw.gmst')
+    frames = [(info.seconds * 1000, (lambda info=info, payload=payload: decode(info, payload)))
+              for info, _, payload in recording]
+    worker = await ProcessProvider.open(worker_python, 'yoloe.local',
+                                        detector_config(models, [label], device, threshold))
+    detections = []
+    try:
+        for index in range(0, len(frames), detect_every):
+            stamp, load = frames[index]
+            image = load()
+            if image is None:
+                continue
+            for number, (x, y) in enumerate(tiles(*image.shape[:2])):
+                tile = np.ascontiguousarray(image[y:y + 640, x:x + 640])
+                sensor = SensorMetadata(source_id='gamst.take', sensor_id=f'tile-{number}', sequence=index,
+                                        capture_sequence=index, coordinate_frame='image', stream_epoch='refine')
+                value = await worker.process(InputFrame(tile, 'video', int(stamp), subject_id='local-user',
+                                                        sensor=sensor))
+                h, w = tile.shape[:2]
+                for item in value['objects']:
+                    box = item['bbox']
+                    detections.append((stamp, index, item['score'], (
+                        x + box['x'] * w, y + box['y'] * h,
+                        x + (box['x'] + box['width']) * w, y + (box['y'] + box['height']) * h)))
+    finally:
+        await worker.close()
+    name = 'efficienttam_ti_512x512.pt'
+    segmenter = EfficientTAMVideo(efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
+    results = refine(frames, detections, segmenter, label=label)
+    output = dict(label=label, detections=len(detections), results=results)
+    (directory / 'refined.part.json').write_text(json.dumps(output, ensure_ascii=False, indent=2))
+    (directory / 'refined.part.json').rename(directory / 'refined.json')
+    return output
 
 
 # ---------------------------------------------------------------- run
@@ -721,6 +778,36 @@ async def run(args):
             clear_target()
         return key in (27, ord('q'))
 
+    refine_args = None if not getattr(args, 'refine', None) else [
+        '--label', args.refine, '--efficienttam-source', args.efficienttam_source, '--models', args.models,
+        '--device', args.device, '--worker-python', args.worker_python]
+    pending_refine = []  # saved takes whose refine.json has not been published yet
+
+    async def collect_refined(human):
+        """Publish finished take refinements: registered observations + named objects in ObjectMemory."""
+        from ..providers.rotation_refine import publish
+        for item in list(pending_refine):
+            path = item['dir'] / 'refined.json'
+            if not path.exists():
+                if item['process'].poll() is not None:
+                    pending_refine.remove(item)
+                    print(json.dumps({'refine_failed': str(item['dir']), 'log': str(item['dir'] / 'refine.log')}),
+                          flush=True)
+                continue
+            pending_refine.remove(item)
+            output = json.loads(path.read_text())
+            records = await publish(human, output['results'], take_id=item['dir'].name,
+                                    clock=lambda ms, item=item: item['base'] + round((ms / 1000 - item['first']) * 1000))
+            for event in output['results']:
+                state['feed'].append(f"refined  {event['track_id']}  {event['turns']:.1f} turns  "
+                                     f"{event['rev_s'] or 0:.1f} rev/s  {event['status']}  "
+                                     f"seen {event['coverage']:.0%}  {event['trajectory'].get('kind')}")
+            state['feed'] = state['feed'][-8:]
+            objects = await human.find_objects(text=output['label'])
+            print(json.dumps({'refined': str(item['dir']), 'records': [record['id'] for record in records],
+                              'objects': [dict(entity_id=entry['entity_id'], label=entry['label'],
+                                               track_id=entry['track_id']) for entry in objects]}), flush=True)
+
     try:
         async with Gamst(consent=True, store=args.store) as human:
             plugin = RotationPlugin(human, expected_max_rev_s=args.expected_max_rev_s, region_source='motion',
@@ -755,13 +842,15 @@ async def run(args):
                     elif not args.headless and time.monotonic() - last_view > .25:
                         if show(hud.render(shown_frame, None, state)):
                             break
+                    if pending_refine:
+                        await collect_refined(human)
                     await asyncio.sleep(.003)
                     continue
                 kind = item[0]
                 if kind == 'end':
                     break
                 if kind == 'start':
-                    take = Take(record_dir)
+                    take = Take(record_dir, refine_args)
                     plugin.reset()
                     hud.trails.clear()
                     state.update(mode='recording', last_toss=None, tosses=0, ignored=0, frames=0, history=[])
@@ -774,6 +863,9 @@ async def run(args):
                                        expected_max_rev_s=args.expected_max_rev_s)
                         directory = take.close(summary)
                         saved.append(str(directory))
+                        if refine_args:
+                            pending_refine.append(dict(dir=directory, first=first, base=base,
+                                                       process=take.refine_process))
                         state.update(mode='saved', saved=directory.name, saved_at=time.monotonic())
                         print(json.dumps({'take': 'saved', 'dir': str(directory), 'tosses': len(state['history'])}),
                               flush=True)
@@ -857,6 +949,13 @@ async def run(args):
                 directory = take.close(dict(tosses=state['history'], ignored_motions=state['ignored'],
                                             expected_max_rev_s=args.expected_max_rev_s))
                 saved.append(str(directory))
+                if refine_args:
+                    pending_refine.append(dict(dir=directory, first=first, base=base, process=take.refine_process))
+            if args.iphone_replay:
+                # A replay ends with its take: wait for the refined count so it reaches GAMST too.
+                while pending_refine:
+                    await collect_refined(human)
+                    await asyncio.sleep(.5)
             plugin.close()
     finally:
         if listener is not None:
@@ -869,8 +968,29 @@ async def run(args):
     return saved
 
 
+def _refine_main(argv):
+    import argparse
+    from .rotation import DEFAULT_MODELS
+    parser = argparse.ArgumentParser(prog='python -m gamst.demos.rotation_live refine')
+    parser.add_argument('take_dir')
+    parser.add_argument('--label', required=True, help='open-vocabulary text for the object to follow')
+    parser.add_argument('--efficienttam-source', required=True)
+    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
+    parser.add_argument('--worker-python', default=sys.executable)
+    args = parser.parse_args(argv)
+    output = asyncio.run(refine_take(args.take_dir, label=args.label, models=args.models, device=args.device,
+                                     efficienttam_source=args.efficienttam_source,
+                                     worker_python=args.worker_python))
+    print(json.dumps(dict(detections=output['detections'], throws=[
+        {key: event.get(key) for key in ('track_id', 'turns', 'rev_s', 'status', 'coverage', 'flight_frames')}
+        | dict(trajectory=event['trajectory'].get('kind')) for event in output['results']])))
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == 'slowmo':
         render_slowmo(sys.argv[2])
+    elif len(sys.argv) > 2 and sys.argv[1] == 'refine':
+        _refine_main(sys.argv[2:])
     else:
-        raise SystemExit('usage: python -m gamst.demos.rotation_live slowmo TAKE_DIR')
+        raise SystemExit('usage: python -m gamst.demos.rotation_live slowmo TAKE_DIR | refine TAKE_DIR --label ...')

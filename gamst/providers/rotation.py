@@ -125,6 +125,42 @@ def _rows(items, targets=None):
     return output
 
 
+def classify_trajectory(samples):
+    """How a rotating object moved: ``free_fall`` (thrown: image-down constant acceleration,
+    steady sideways drift), ``stationary`` (spinning in place) or ``moving``.
+
+    ``samples`` are (timestamp_ms, x, y, major_axis) of observed frames. Units are object
+    diameters, so the test needs no camera calibration; a 24 mm coin under gravity accelerates
+    ~400 diameters/s^2. A flipping rigid disc keeps its major axis while the minor axis
+    oscillates, so a varying major axis (hands, bodies, blur envelopes) is never classified as
+    thrown or spinning in place.
+    """
+    import numpy as np
+    if len(samples) < 10:
+        return dict(kind='unknown', observed_frames=len(samples))
+    t = np.array([(sample[0] - samples[0][0]) / 1000 for sample in samples])
+    x, y = np.array([sample[1] for sample in samples]), np.array([sample[2] for sample in samples])
+    major = np.array([sample[3] for sample in samples])
+    size = max(1., float(np.median(major)))
+    rigidity = float(np.std(major) / size)
+    spread = float(max(np.ptp(x), np.ptp(y))) / size
+    common = dict(travel_diameters=round(spread, 2), size_variation=round(rigidity, 3),
+                  observed_frames=len(samples))
+    if rigidity > .25:
+        return dict(kind='moving', **common)
+    if spread < .5:
+        return dict(kind='stationary', **common)
+    fit_y = np.polyfit(t, y, 2)
+    residual = float(np.sum((y - np.polyval(fit_y, t)) ** 2))
+    total = float(np.sum((y - y.mean()) ** 2)) or 1.
+    r2 = 1 - residual / total
+    drift = float(np.sqrt(np.mean((x - np.polyval(np.polyfit(t, x, 1), t)) ** 2))) / size
+    accel = 2 * float(fit_y[0]) / size
+    free_fall = r2 >= .95 and 150 <= accel <= 3000 and drift <= .5
+    return dict(kind='free_fall' if free_fall else 'moving', accel_diameters_s2=round(accel, 1),
+                fit_r2=round(r2, 3), **common)
+
+
 class RotationProvider:
     """One isolated stream's tracker, in-plane counter and flip counter."""
 
@@ -167,39 +203,8 @@ class RotationProvider:
         self._motion_owner = None
 
     def _trajectory(self, track_id, start_ms, end_ms):
-        """Classify how a rotating object moved: ``free_fall`` (thrown: image-down constant
-        acceleration, steady sideways drift), ``stationary`` (spinning in place) or ``moving``.
-
-        Units are object diameters, so the test needs no camera calibration; a 24 mm coin
-        under gravity accelerates ~400 diameters/s^2. A flipping rigid disc keeps its major
-        axis while the minor axis oscillates, so a varying major axis (hands, bodies,
-        blur envelopes) is never classified as thrown or spinning in place.
-        """
-        import numpy as np
-        samples = [sample for sample in self._paths.get(track_id, ()) if start_ms <= sample[0] <= end_ms]
-        if len(samples) < 10:
-            return dict(kind='unknown', observed_frames=len(samples))
-        t = np.array([(sample[0] - samples[0][0]) / 1000 for sample in samples])
-        x, y = np.array([sample[1] for sample in samples]), np.array([sample[2] for sample in samples])
-        major = np.array([sample[3] for sample in samples])
-        size = max(1., float(np.median(major)))
-        rigidity = float(np.std(major) / size)
-        spread = float(max(np.ptp(x), np.ptp(y))) / size
-        common = dict(travel_diameters=round(spread, 2), size_variation=round(rigidity, 3),
-                      observed_frames=len(samples))
-        if rigidity > .25:
-            return dict(kind='moving', **common)
-        if spread < .5:
-            return dict(kind='stationary', **common)
-        fit_y = np.polyfit(t, y, 2)
-        residual = float(np.sum((y - np.polyval(fit_y, t)) ** 2))
-        total = float(np.sum((y - y.mean()) ** 2)) or 1.
-        r2 = 1 - residual / total
-        drift = float(np.sqrt(np.mean((x - np.polyval(np.polyfit(t, x, 1), t)) ** 2))) / size
-        accel = 2 * float(fit_y[0]) / size
-        free_fall = r2 >= .95 and 150 <= accel <= 3000 and drift <= .5
-        return dict(kind='free_fall' if free_fall else 'moving', accel_diameters_s2=round(accel, 1),
-                    fit_r2=round(r2, 3), **common)
+        return classify_trajectory([sample for sample in self._paths.get(track_id, ())
+                                    if start_ms <= sample[0] <= end_ms])
 
     def reset(self):
         with self._lock:

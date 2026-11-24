@@ -153,3 +153,34 @@ The MPS maximum includes first-call warmup. MPS is now accepted by both
 **Counting accuracy is not claimed.** These runs establish intake, coverage,
 status/event/Watch behavior and detection latency, not exact turn counts.
 Accuracy requires real high-fps recordings with frame-by-frame human counts.
+
+## Take refinement against frame counts (2026-11-24, iPhone SE 2, 240 fps)
+
+`--refine "metal coin"` was run on two real takes:
+
+- Capture: native 554×1080 strip, hand-tossed coin.
+- Detector: YOLOE-26s, text prompt, every 4th frame.
+- Tracker: EfficientTAM tiny 512 on MPS, at about 20–23 frames/s.
+
+Ground truth comes from counting edge-on frames by eye in coin-centred crops.
+
+| Toss | Frame-counted | GAMST refined | Note |
+|---|---:|---:|---|
+| Black shirt #1 | ≈3.4 turns, ~10 rev/s | 3.5 turns, 9.9 rev/s, `free_fall` | one object followed through the whole flight |
+| Black shirt #2 | not countable by eye (coin in front of the face) | `partial` (coverage 52%) | reported as a lower bound, not a count |
+| Black shirt #3 | — | not found | YOLOE never named the coin |
+| White shirt #1 | ≈4.2 turns, ~15 rev/s | 5.1 turns, 15.6 rev/s | flight start taken ~14 frames early |
+| White shirt #3 | ≈4.0 turns, ~15 rev/s | 4.5 turns, 16.8 rev/s | |
+| White shirt, other throws | not counted | 0.5–2.0 turns over 90–120 ms flights | short fragments; not trustworthy |
+
+Findings:
+
+- With a correct seed, the segmenter keeps one identity through face, edge and glint. The live
+  motion tracker could not do this.
+- Error is about +0.1 to +0.9 turns.
+- Recall is limited by naming. YOLOE scores the coin at 0.2–0.9 in only a few frames per throw,
+  and sometimes names a static shirt detail instead. Following each of the best 3 hits on its
+  own, and keeping the best-observed throw, stops a wrong hit from corrupting the right one.
+- A wrong hit can still produce a short fragment, which is reported with its own short duration.
+
+Counting accuracy is still not claimed.

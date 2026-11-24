@@ -242,6 +242,21 @@ gamst demo rotation --iphone 9123
 gamst demo rotation --iphone-replay take/raw.gmst
 ```
 
+After each take, `--refine LABEL` re-counts throws offline. YOLOE, given a text
+prompt such as `"metal coin"`, finds the object in native-resolution tiles.
+EfficientTAM then follows that one object through each throw, and only the
+parabolic flight is counted. Each result is stored as a `vision.rotation.refined`
+observation, and the named object is kept in `ObjectMemory`. If the object was
+lost for a large part of the flight, the throw is reported as `partial` (a lower
+bound) instead of as a count.
+
+```bash
+pip install "gamst-sdk[rotation,yoloe,efficienttam]"
+gamst demo rotation --fetch-models   # YOLOE + EfficientTAM tiny weights, SHA256-pinned
+git clone https://github.com/yformer/EfficientTAM && git -C EfficientTAM checkout abcd061
+gamst demo rotation --iphone 9123 --device mps --refine "metal coin" --efficienttam-source EfficientTAM
+```
+
 Accuracy is not guaranteed and has not been validated on a ground-truth set;
 tracking loss can ruin a take. Use bright, even lighting and a bright, plain
 background and clothing behind the coin. Keep the whole flight in frame, fix
