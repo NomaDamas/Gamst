@@ -162,22 +162,25 @@ Accuracy requires real high-fps recordings with frame-by-frame human counts.
 - Detector: YOLOE-26s, text prompt, every 4th frame.
 - Tracker: EfficientTAM tiny 512 on MPS, at about 20–23 frames/s.
 
-Ground truth comes from counting edge-on frames by eye in coin-centred crops.
+Ground truth comes from counting edge-on frames by eye in coin-centred crops (the assistant's
+count), except white shirt #1, which the person who threw it counted in the rendered video: 11 flips
+(half turns). The assistant's count for that throw was ≈4.2 turns, so the other assistant counts
+may also be low. `turns` are full revolutions; one flip is half a turn.
 
 | Toss | Frame-counted | GAMST refined | Note |
 |---|---:|---:|---|
 | Black shirt #1 | ≈3.4 turns, ~10 rev/s | 3.5 turns, 9.9 rev/s, `free_fall` | one object followed through the whole flight |
 | Black shirt #2 | not countable by eye (coin in front of the face) | `partial` (coverage 52%) | reported as a lower bound, not a count |
 | Black shirt #3 | — | not found | YOLOE never named the coin |
-| White shirt #1 | ≈4.2 turns, ~15 rev/s | 5.1 turns, 15.6 rev/s | flight start taken ~14 frames early |
-| White shirt #3 | ≈4.0 turns, ~15 rev/s | 4.5 turns, 16.8 rev/s | |
+| White shirt #1 | 11 flips = 5.5 turns (thrower's count) | 5.1 turns, 15.6 rev/s | |
+| White shirt #3 | ≈4.0 turns, ~15 rev/s (assistant count) | 4.5 turns, 16.8 rev/s | |
 | White shirt, other throws | not counted | 0.5–2.0 turns over 90–120 ms flights | short fragments; not trustworthy |
 
 Findings:
 
 - With a correct seed, the segmenter keeps one identity through face, edge and glint. The live
   motion tracker could not do this.
-- Error is about +0.1 to +0.9 turns.
+- Error is −0.4 turns (white #1, thrower's count) and +0.1 turns (black #1, assistant count).
 - Recall is limited by naming. YOLOE scores the coin at 0.2–0.9 in only a few frames per throw,
   and sometimes names a static shirt detail instead. Following each of the best 3 hits on its
   own, and keeping the best-observed throw, stops a wrong hit from corrupting the right one.
