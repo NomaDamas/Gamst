@@ -1,6 +1,11 @@
 <div align="center">
 
-# GAMST
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/gamst-logo-dark.png">
+    <img src="docs/images/gamst-logo-light.png" alt="GAMST" width="420">
+  </picture>
+</h1>
 
 <img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
 
@@ -118,6 +123,7 @@ implementation, not a fork or endorsement of those projects.
 | 🤝 **Agent Responses** | Suggested next action or generated reply | Context-aware Companion using a configured local or authorized remote provider |
 | 🧭 **Temporal Fusion & State Chain** | Time-aligned state, semantic episodes, evidence and bounded context | Freshness watermarks, physical-state precomputation, deterministic rules, optional multimodal observation plugin |
 | 🎥 **Perception Plugins** | High-frequency vision/audio/physical measurements and semantic windows | OpenCV, MediaPipe, Silero VAD, faster-whisper, depth, tracking and pluggable workers |
+| 🔄 **Rotation Counting (Experimental)** | Turn counts and `undersampled` status | High-frame-rate ellipse-ratio fitting; live 240 fps iPhone HUD and per-take replay |
 
 ### Why GAMST exists
 
@@ -177,6 +183,15 @@ evidence provenance, model routing, replay, and latency/cost/quality evaluation.
 <a id="rotation"></a>
 ## 🔄 Object rotation
 
+https://github.com/user-attachments/assets/419dba58-2668-43c7-b8a9-20a7088b1b9d
+
+An iPhone at 240 fps streams a coin toss to GAMST. GAMST follows the coin
+through the flight, counts its flips and hands the count to an agent as
+timestamped context. Gemini Live takes video at 1 fps; on the same toss it
+answered "Zero." Korean and vertical cuts:
+[issue #355](https://github.com/NomaDamas/Gamst/issues/355#issuecomment-7125967905).
+Recipe: `gamst recipe run coin-flip` ([`skills/gamst-coin-flip`](skills/gamst-coin-flip/SKILL.md)).
+
 `vision.rotation` is a generic fast-lane capability. It measures in-plane turns
 and out-of-plane flips for every tracked region, with rev/s, `counting`,
 `undersampled` or `idle` status, and `rotation.started` / `rotation.ended`
@@ -216,10 +231,52 @@ instead of silently choosing another setup. Apply writes
 in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
 the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
 
-A hand-tossed coin turns 36-40 times per second, so GAMST withholds flip counts
-as `undersampled` on 30/60 fps cameras instead of reporting an aliased number;
-240 fps capture resolves it. Count accuracy on real 240 fps tosses is still
-being measured. Details and limits: [docs/halo-coin.md](docs/halo-coin.md).
+### Rotation counting (experimental)
+
+For a followed flat object, GAMST measures each frame's ellipse (minor/major
+axis ratio) and fits the periodic `r^2` signal in 250 ms windows to integrate
+turns, without a learned counting model. Counting a flip needs at least four
+frames per turn, so 240 fps counts up to 60 rev/s. Below the rate a throw needs,
+GAMST reports `undersampled` instead of an aliased count.
+
+An iPhone can supply 240 fps (iOS 15+; tested on iPhone 13 mini and iPhone SE
+2nd gen) using `apps/ios-highspeed-camera`, which streams capture-timestamped
+frames over Wi-Fi. The Mac HUD is a camera monitor with REC/camera/zoom
+controls. Dragging a box makes the phone stream a native-resolution strip
+around it, which keeps 240 fps when Wi-Fi cannot carry full frames. Each take
+saves `raw.gmst`, `hud.mp4` and `summary.json`.
+
+Throws are counted after the take. A per-frame tracker cheap enough for 240 fps
+lost glinting coins, so the HUD shows no live count. With `--refine LABEL`:
+
+- YOLOE, given a text prompt such as `"metal coin"`, finds the object in
+  native-resolution tiles.
+- EfficientTAM follows that one object through each throw.
+- Only the parabolic flight is counted. A throw whose object was lost for a
+  large part of the flight is reported as `partial` (a lower bound).
+
+Each throw becomes a timestamped `vision.rotation.refined` observation
+(flips, turns, rev/s, flight start and end) that agents read from GAMST context.
+The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
+(each throw at 8× slow motion with the running count) are written next to the
+take.
+
+The `coin-flip` recipe runs this pipeline. `setup` installs only its parts: the extras, the SHA256-pinned YOLOE and
+EfficientTAM tiny weights, and EfficientTAM at its pinned revision. `check` tells whether a camera's frame rate can
+count the recipe's speed.
+
+```bash
+gamst recipe setup coin-flip
+gamst recipe check coin-flip --fps 240
+gamst recipe run coin-flip --iphone 9123
+gamst recipe run coin-flip --take take-20261124-140345
+```
+
+On one 240 fps take with 7 hand tosses, GAMST matched a person's
+frame-by-frame flip count within one flip on 6 tosses; it missed the
+remaining toss by 6 flips. Accuracy is not guaranteed. Use even lighting, keep
+the whole flight in frame and fix the phone on a stand.
+[Details, measurements and limits](docs/halo-coin.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start

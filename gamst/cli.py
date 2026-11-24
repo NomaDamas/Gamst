@@ -88,8 +88,13 @@ def main():
         from .demos.rotation import main as rotation
         rotation(sys.argv[3:])
         return
+    if sys.argv[1:2] == ["recipe"]:  # own parser with subcommands, including --help
+        from .recipes import main as recipe
+        recipe(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
-    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "setup", "star"])
+    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "setup", "star",
+                                            "recipe"])
     args, extra = parser.parse_known_args()
     if args.command == "star":
         ask(force=True)

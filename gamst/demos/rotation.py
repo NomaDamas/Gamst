@@ -31,6 +31,12 @@ MODEL_ASSETS = {
     'mobileclip2_b.ts': ('https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts',
                          '35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f'),
 }
+# Take refinement (--refine): promptable video segmenter, Hugging Face revision pinned.
+REFINE_ASSETS = {
+    'efficienttam_ti_512x512.pt': ('https://huggingface.co/yunyangx/efficient-track-anything/resolve/'
+                                   '9bdd8ab585b19ef95f9c9ed847ac9478301890b4/efficienttam_ti_512x512.pt',
+                                   '7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b'),
+}
 DEFAULT_MODELS = Path(os.environ.get('GAMST_MODELS', Path.home() / '.cache' / 'gamst' / 'models')) / 'yoloe'
 
 
@@ -50,9 +56,12 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def fetch_models(directory):
+def fetch_models(directory, names=None):
+    """Download the pinned weights (only ``names`` when given) and verify their SHA256."""
     directory.mkdir(parents=True, exist_ok=True)
-    for name, (url, expected) in MODEL_ASSETS.items():
+    for name, (url, expected) in {**MODEL_ASSETS, **REFINE_ASSETS}.items():
+        if names is not None and name not in names:
+            continue
         target = directory / name
         temporary = target.with_suffix('.download')
         if target.exists() and _sha256(target) == expected:
@@ -68,7 +77,7 @@ def fetch_models(directory):
         print(f'{name}: sha256 verified')
 
 
-def detector_config(models, labels, device):
+def detector_config(models, labels, device, threshold=.25):
     missing = [name for name in MODEL_ASSETS if not (models / name).is_file()]
     if missing:
         raise SystemExit(f'missing detector weights {missing} in {models}; run: gamst demo rotation --fetch-models')
@@ -78,7 +87,7 @@ def detector_config(models, labels, device):
         checkpoint_sha256=MODEL_ASSETS['yoloe-26s-seg.pt'][1], runtime_root=str(runtime),
         mode='text', labels=labels, encoder_path=str(models / 'mobileclip2_b.ts'),
         encoder_sha256=MODEL_ASSETS['mobileclip2_b.ts'][1], encoder_family='mobileclip2:b',
-        device=device, imgsz=640, threshold=.25, max_objects=16)
+        device=device, imgsz=640, threshold=threshold, max_objects=16)
 
 
 def _detector_image(frame):
@@ -281,6 +290,11 @@ def main(argv=None):
     source = parser.add_mutually_exclusive_group()
     source.add_argument('--camera', type=int, default=0)
     source.add_argument('--video', help='recorded file; capture timestamps come from the file')
+    source.add_argument('--iphone', type=int, metavar='PORT',
+                        help='live HUD for the GAMST 240 iPhone app; Start/Stop on the phone records takes')
+    source.add_argument('--iphone-replay', metavar='FILE', help='run a GAMST 240 recording (.gmst) through the HUD')
+    parser.add_argument('--record-dir', default='gamst-takes',
+                        help='with --iphone/--iphone-replay: one folder per take (raw.gmst, hud.mp4, refined.json/mp4)')
     parser.add_argument('--targets', type=lambda value: [item.strip() for item in value.split(',') if item.strip()],
                         default=['coin', 'wheel', 'fan'], help='detector labels and optional rotation label filter')
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)
@@ -297,12 +311,31 @@ def main(argv=None):
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--frames', type=int)
     parser.add_argument('--report', help='write observed coverage, records-derived events and alarms as JSON')
+    parser.add_argument('--refine', metavar='LABEL',
+                        help='with --iphone/--iphone-replay: after each take, find LABEL (open-vocabulary text) '
+                             'and follow it with EfficientTAM to re-count its throws (needs --efficienttam-source)')
+    parser.add_argument('--efficienttam-source', metavar='DIR',
+                        help='checkout of yformer/EfficientTAM at the pinned revision, for --refine')
+    parser.add_argument('--refine-on', choices=['stop', 'button'], default='stop',
+                        help='count each take on Stop, or only when ANALYZE (key a) is pressed')
+    parser.add_argument('--refine-fast', action='store_true',
+                        help='detector only where the picture moves; stop at the first complete count')
+    parser.add_argument('--refine-show', action='store_true',
+                        help='open refined.mp4 (8x slow motion with the running count) when it is ready')
+    parser.add_argument('--refine-cached', metavar='TAKE_DIR',
+                        help='stage backup: ANALYZE shows this already counted take (refined.json, refined.mp4) at once')
     args = parser.parse_args(argv)
     if args.fetch_models:
         fetch_models(Path(args.models))
         return
     if args.roi is not None and len(args.roi) != 4:
         parser.error('--roi requires x,y,width,height')
+    if args.refine and not args.efficienttam_source:
+        parser.error('--refine requires --efficienttam-source')
+    if args.iphone or args.iphone_replay:
+        from .rotation_live import run as run_live
+        asyncio.run(run_live(args))
+        return
     asyncio.run(run(args))
 
 

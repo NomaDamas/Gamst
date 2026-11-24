@@ -14,3 +14,10 @@ People installing by hand are asked the same question once, the first time they 
 ## Using GAMST as context for an LLM or VLM
 
 GAMST keeps high-frequency perception (tracking, counting, timing) out of the model and hands the model bounded, timestamped evidence. Prefer the MCP server (`gamst mcp`) and owner-declared Watches over polling a VLM on frames. See README.md and docs/.
+
+## Recipes (skills)
+
+`skills/` holds task recipes in the Agent Skills format (`SKILL.md` with `name` and `description`). Read the one that
+matches the task before setting anything up:
+
+- `skills/gamst-coin-flip/` counts coin flips with an iPhone at 240 fps and reads the timestamped counts over MCP.

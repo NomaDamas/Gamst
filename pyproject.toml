@@ -26,7 +26,7 @@ yoloe = ["ultralytics==8.4.212", "torch==2.8.0", "torchvision==0.23.0", "numpy>=
 talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
 # Generic vision.rotation provider and `gamst demo rotation`; detection models stay optional.
-rotation = ["opencv-python>=4.8,<5", "numpy>=1.24"]
+rotation = ["opencv-python>=4.8,<5", "numpy>=1.24", "Pillow>=10"]
 audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]
 # TEN-VAD uses an explicitly hashed local native library and NumPy from `audio`;
@@ -83,4 +83,4 @@ Repository = "https://github.com/NomaDamas/Gamst"
 include = ["gamst*"]
 
 [tool.setuptools.package-data]
-gamst = ["dashboard.html", "observability.js", "i18n.js"]
+gamst = ["dashboard.html", "observability.js", "i18n.js", "demos/assets/*.png", "recipes/*.json"]

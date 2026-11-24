@@ -153,3 +153,82 @@ The MPS maximum includes first-call warmup. MPS is now accepted by both
 **Counting accuracy is not claimed.** These runs establish intake, coverage,
 status/event/Watch behavior and detection latency, not exact turn counts.
 Accuracy requires real high-fps recordings with frame-by-frame human counts.
+
+## Take refinement against frame counts (2026-11-24, iPhone SE 2, 240 fps)
+
+`--refine "metal coin"` was run on two real takes:
+
+- Capture: native 554×1080 strip, hand-tossed coin.
+- Detector: YOLOE-26s, text prompt, every 4th frame.
+- Tracker: EfficientTAM tiny 512 on MPS, at about 20–23 frames/s.
+
+Ground truth comes from counting edge-on frames by eye in coin-centred crops (the assistant's
+count), except white shirt #1, which the person who threw it counted in the rendered video: 11 flips
+(half turns). The assistant's count for that throw was ≈4.2 turns, so the other assistant counts
+may also be low. `turns` are full revolutions; one flip is half a turn.
+
+| Toss | Frame-counted | GAMST refined | Note |
+|---|---:|---:|---|
+| Black shirt #1 | ≈3.4 turns, ~10 rev/s | 3.5 turns, 9.9 rev/s, `free_fall` | one object followed through the whole flight |
+| Black shirt #2 | not countable by eye (coin in front of the face) | `partial` (coverage 52%) | reported as a lower bound, not a count |
+| Black shirt #3 | — | not found | YOLOE never named the coin |
+| White shirt #1 | 11 flips = 5.5 turns (thrower's count) | 5.1 turns, 15.6 rev/s | |
+| White shirt #3 | ≈4.0 turns, ~15 rev/s (assistant count) | 4.5 turns, 16.8 rev/s | |
+| White shirt, other throws | not counted | 0.5–2.0 turns over 90–120 ms flights | short fragments; not trustworthy |
+
+Findings:
+
+- With a correct seed, the segmenter keeps one identity through face, edge and glint. The live
+  motion tracker could not do this.
+- Error is −0.4 turns (white #1, thrower's count) and +0.1 turns (black #1, assistant count).
+- Recall is limited by naming. YOLOE scores the coin at 0.2–0.9 in only a few frames per throw,
+  and sometimes names a static shirt detail instead. Following each of the best 3 hits on its
+  own, and keeping the best-observed throw, stops a wrong hit from corrupting the right one.
+- A wrong hit can still produce a short fragment, which is reported with its own short duration.
+
+Counting accuracy is still not claimed.
+
+## Seven tosses against a person's flip count (2026-11-24, take `140345`)
+
+White shirt, iPhone SE 2, 240.2 fps, native 554×1080 strip, 21.5 s, 5,173 frames.
+The thrower counted flips (half turns) frame by frame in `refined.mp4`.
+
+| Toss | Person (flips) | GAMST (flips) | GAMST turns · rev/s | Flight GAMST counted |
+|---:|---:|---:|---|---:|
+| 1 | 9 | 8.8 | 4.4 · 9.6 | 462 ms |
+| 2 | 6 | 5.2 | 2.6 · 7.4 | 354 ms |
+| 3 | 15 | 14.4 | 7.2 · 15.5 | 466 ms |
+| 4 | 15 | 8.6 | 4.3 · 15.5 | 279 ms |
+| 5 | 12 | 11.6 | 5.8 · 12.7 | 454 ms |
+| 6 | 3 | 2.4 | 1.2 · 3.6 | 346 ms |
+| 7 | 10 | 10.2 | 5.1 · 13.6 | 375 ms |
+
+Findings:
+
+- 6 of 7 tosses are within one flip of the person's count.
+- GAMST is slightly low on 6 of 7 tosses.
+- Toss 4 is low by about 6 flips because the counted flight (279 ms) is much shorter than the
+  rate implies (15 flips at 15.5 rev/s ≈ 480 ms). The parabola window stopped early; the count
+  itself is not a sampling error.
+
+Time on an Apple M2 Pro MacBook Pro (MPS), for toss 7's 169-frame (0.7 s) window:
+
+| Step | Time |
+|---|---:|
+| Decode 169 frames | 0.5 s |
+| YOLOE on every 4th frame (43 frames, 2 tiles each) | 4.7 s |
+| EfficientTAM + count, per seed | 13–14 s |
+| One toss, 3 seeds (current default) | ≈ 45 s |
+
+The whole take, 7 tosses including YOLOE over all 21.5 s, took about 8 minutes.
+
+Each throw is handed to agents as GAMST context. This is toss 7's object in the stored
+`vision.rotation.refined` observation; times are on the runtime clock, and the capture clock is
+kept in the event as `capture_timestamp_ms`:
+
+```json
+{"track_id": "metal-coin-7", "label": "metal coin",
+ "attributes": {"flips": 10.2, "turns": 5.1, "rev_s": 13.55, "status": "counting",
+                "coverage": 1.0, "duration_ms": 375, "trajectory": "free_fall",
+                "started_ms": 1795496643254, "ended_ms": 1795496643629}}
+```

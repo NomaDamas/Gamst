@@ -84,7 +84,8 @@ class ShapeTracks:
             box = item['bbox']
             bw, bh = box['width'] * w, box['height'] * h
             cx, cy = box['x'] * w + bw / 2, box['y'] * h + bh / 2
-            size = max(bw, bh)
+            # A target exemplar's size beats the motion box, which includes the object's motion smear.
+            size = float(item.get('size_px') or max(bw, bh))
             match = None
             for track_id, track in self.tracks.items():
                 if math.dist(track['center'], (cx, cy)) < max(track['size'], size):
@@ -92,7 +93,7 @@ class ShapeTracks:
                         match = track_id
             if match is not None:
                 track = self.tracks[match]
-                track.update(label=item['label'], score=float(item['score']))
+                track.update(label=item['label'], score=float(item['score']), confirmed=stamp)
                 if not track['observed']:
                     track.update(center=(cx, cy), velocity=(0., 0.))
                 track['anchor'] = .7 * track['anchor'] + .3 * size
@@ -103,8 +104,19 @@ class ShapeTracks:
             self.sequence += 1
             self.tracks[f'object-{self.sequence}'] = dict(
                 label=item['label'], score=float(item['score']), center=(cx, cy), size=size, anchor=size,
-                velocity=(0., 0.), last_seen=stamp, observed=False, axes=None, angle=None,
+                velocity=(0., 0.), last_seen=stamp, confirmed=stamp, observed=False, axes=None, angle=None,
                 points=None, points_epoch=0)
+
+    def expire_unconfirmed(self, stamp, hold_ms):
+        """Drop tracks no region has re-confirmed within ``hold_ms``.
+
+        Motion-seeded tracks otherwise keep segmenting whatever static thing they
+        landed on (an ear, a shirt fold) and hold every slot, so a newly thrown
+        object never gets a track. A spinning object keeps producing motion and
+        stays confirmed.
+        """
+        for track_id in [key for key, track in self.tracks.items() if stamp - track['confirmed'] > hold_ms]:
+            del self.tracks[track_id]
 
     def _segment(self, gray, track, dt):
         cv, np = self.cv, self.np
