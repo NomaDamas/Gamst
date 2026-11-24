@@ -1,6 +1,7 @@
 import math
+from unittest.mock import patch
 
-from gamst.providers.rotation_refine import count_spins, episodes, flight_span
+from gamst.providers.rotation_refine import count_spins, episodes, flight_span, refine
 
 FPS = 240.0
 
@@ -56,3 +57,37 @@ def test_episodes_group_by_time_with_one_candidate_per_frame():
     assert first['seed'][1] == 10
     assert [(item[1], item[2]) for item in first['prompts']] == [(0, .3), (10, .8)]
     assert second['hits'] == 1 and second['seed'][1] == 480
+
+
+def test_max_throws_prioritizes_scores_stops_on_complete_and_restores_time_order():
+    frames = [(stamp, lambda: None) for stamp in range(0, 3001, 100)]
+    detections = [(0, 0, .2, (0, 0, 40, 40)), (1000, 6, .9, (10, 0, 50, 40)),
+                  (2000, 12, .8, (20, 0, 60, 40))]
+
+    class Segmenter:
+        def __init__(self):
+            self.seeds = []
+
+        def track(self, images, seeds):
+            self.seeds.append(seeds[0][1][0])
+            return {}
+
+    def fake_count(stamps, shapes, *, track_id, **kwargs):
+        number = int(track_id.rsplit('-', 1)[1])
+        counting = number != 2  # The highest-scoring episode is not a complete throw.
+        return [dict(track_id=track_id, status='counting' if counting else 'partial',
+                     turns=1. if counting else None,
+                     rev_s=10. if counting else None, coverage=.95 if counting else .5,
+                     duration_ms=100, timestamp_ms=(number - 1) * 1000,
+                     trajectory=dict(kind='free_fall'))]
+
+    segmenter = Segmenter()
+    progress = []
+    with (patch('gamst.providers.rotation_refine.ellipses', lambda masks: masks),
+          patch('gamst.providers.rotation_refine.count_spins', side_effect=fake_count)):
+        results = refine(frames, detections, segmenter, label='coin', max_throws=1,
+                         progress=lambda *args: progress.append(args))
+    assert segmenter.seeds == [10, 20]
+    assert [event['track_id'] for event in results] == ['coin-2', 'coin-3']
+    assert [event['timestamp_ms'] for event in results] == [1000, 2000]
+    assert progress == [('tracking', 1, 3), ('tracking', 2, 3)]

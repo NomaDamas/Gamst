@@ -290,11 +290,22 @@ class Hud:
     def _panel(self, canvas, state):
         t = self.text
         throw = state['last_throw']
-        if throw is None:
+        if state['pending']:
+            # The audience watches the wait: what GAMST is doing, on how many frames, how far along.
+            progress = state.get('progress') or {}
+            stage = dict(finding='finding the coin', tracking='following it through the flight',
+                         rendering='drawing the slow motion').get(progress.get('stage'), 'starting')
+            t.put(canvas, 'GAMST is counting', 1456, 150, 40, WHITE, 'bold')
+            t.put(canvas, f"{state['take_frames']:,} frames at {state['take_fps']:.0f} fps", 1456, 210, 26, ACCENT, 'semibold')
+            t.put(canvas, stage, 1456, 262, 22, MUTED)
+            done, total = progress.get('done', 0), max(1, progress.get('total', 1))
+            import cv2
+            cv2.rectangle(canvas, (1456, 302), (1856, 316), LINE, -1)
+            cv2.rectangle(canvas, (1456, 302), (1456 + int(400 * min(1., done / total)), 316), ACCENT, -1)
+            t.put(canvas, f"{state['pending']:.0f} s", 1456, 336, 22, MUTED)
+        elif throw is None:
             t.put(canvas, '0', 1450, 150, 150, LINE, 'bold')
-            hint = (f"GAMST is counting ...  {state['pending']:.0f} s" if state['pending'] else
-                    'REC, toss, STOP: counted after the take')
-            t.put(canvas, hint, 1456, 340, 22, MUTED)
+            t.put(canvas, 'REC, toss, STOP, ANALYZE', 1456, 340, 22, MUTED)
         else:
             width = t.put(canvas, f"{throw['flips']:.1f}", 1450, 150, 150, WHITE, 'bold')
             t.put(canvas, 'flips', 1456 + width + 8, 262, 30, MUTED, 'semibold')
@@ -469,25 +480,35 @@ def render_refined(directory):
 
 
 async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
-                      detect_every=4, threshold=.2, fast=False):
+                      detect_every=4, threshold=.2, fast=False, batch=16, warm=None):
     """Re-count a saved take's throws of one named object; writes ``refined.json``.
 
     YOLOE (GAMST's pinned worker, text prompt ``label``) looks at every ``detect_every``-th frame
     in native-resolution tiles; its hits seed EfficientTAM, which follows that one object through
     each throw. See :mod:`gamst.providers.rotation_refine`.
 
-    ``fast`` (for live demos): YOLOE looks at every 2nd frame but only where the picture moves,
-    and once a seed gives a complete free-fall count the remaining seeds are skipped.
+    ``fast`` (for live demos, one throw per take):
+
+    - YOLOE runs in this already separate process, ``batch`` tiles per call, on every 2nd frame
+      where the picture moves.
+    - Only the most confidently named throw is followed, and the remaining seeds are skipped once
+      a complete free-fall count exists.
+
+    ``refine.progress.json`` reports the current stage for the HUD.
     """
     import cv2
     import numpy as np
     from ..capabilities import SensorMetadata
     from ..plugins import InputFrame
     from ..providers.rotation_refine import EfficientTAMVideo, moving_frames, refine, tiles
-    from .. import ProcessProvider
     from .rotation import REFINE_ASSETS, detector_config
     began = time.perf_counter()
     directory, models = Path(directory), Path(models)
+
+    def report(stage, done, total):
+        (directory / 'refine.progress.part.json').write_text(json.dumps(dict(stage=stage, done=done, total=total)))
+        (directory / 'refine.progress.part.json').rename(directory / 'refine.progress.json')
+
     recording = read_recording(directory / 'raw.gmst')
     frames = [(info.seconds * 1000, (lambda info=info, payload=payload: decode(info, payload)))
               for info, _, payload in recording]
@@ -499,39 +520,76 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
         looked = sorted(index for index in moving if index % 2 == 0)
     else:
         looked = list(range(0, len(frames), detect_every))
-    worker = await ProcessProvider.open(worker_python, 'yoloe.local',
-                                        detector_config(models, [label], device, threshold))
+    report('finding', 0, len(looked))
+    config = detector_config(models, [label], device, threshold)
     detections = []
-    try:
-        for index in looked:
-            stamp, load = frames[index]
-            image = load()
-            if image is None:
-                continue
-            for number, (x, y) in enumerate(tiles(*image.shape[:2])):
-                tile = np.ascontiguousarray(image[y:y + 640, x:x + 640])
-                sensor = SensorMetadata(source_id='gamst.take', sensor_id=f'tile-{number}', sequence=index,
-                                        capture_sequence=index, coordinate_frame='image', stream_epoch='refine')
-                value = await worker.process(InputFrame(tile, 'video', int(stamp), subject_id='local-user',
-                                                        sensor=sensor))
-                h, w = tile.shape[:2]
-                for item in value['objects']:
-                    box = item['bbox']
-                    detections.append((stamp, index, item['score'], (
-                        x + box['x'] * w, y + box['y'] * h,
-                        x + (box['x'] + box['width']) * w, y + (box['y'] + box['height']) * h)))
-    finally:
-        await worker.close()
+
+    def tile_frames(index):
+        """(tile origin and size, InputFrame) for each native-resolution tile of one frame."""
+        stamp, load = frames[index]
+        image = load()
+        if image is None:
+            return []
+        output = []
+        for number, (x, y) in enumerate(tiles(*image.shape[:2])):
+            tile = np.ascontiguousarray(image[y:y + 640, x:x + 640])
+            sensor = SensorMetadata(source_id='gamst.take', sensor_id=f'tile-{number}', sequence=index,
+                                    capture_sequence=index, coordinate_frame='image', stream_epoch='refine')
+            output.append(((stamp, index, x, y, tile.shape[1], tile.shape[0]),
+                           InputFrame(tile, 'video', int(stamp), subject_id='local-user', sensor=sensor)))
+        return output
+
+    def collect(where, value):
+        stamp, index, x, y, w, h = where
+        for item in value['objects']:
+            box = item['bbox']
+            detections.append((stamp, index, item['score'], (
+                x + box['x'] * w, y + box['y'] * h, x + (box['x'] + box['width']) * w, y + (box['y'] + box['height']) * h)))
+
+    if fast:
+        detector = (warm or {}).get('detector')
+        owned = detector is None
+        if owned:
+            from ..providers.yoloe_native import load_in_process
+            detector = load_in_process(config)
+        try:
+            pending = []
+            for count, index in enumerate(looked, 1):
+                pending += tile_frames(index)
+                if len(pending) >= batch or count == len(looked):
+                    for where, value in zip([p[0] for p in pending],
+                                            detector.process_batch([p[1] for p in pending])):
+                        collect(where, value)
+                    pending = []
+                    report('finding', count, len(looked))
+        finally:
+            if owned:
+                detector.close()
+    else:
+        from .. import ProcessProvider
+        worker = await ProcessProvider.open(worker_python, 'yoloe.local', config)
+        try:
+            for count, index in enumerate(looked, 1):
+                for where, frame in tile_frames(index):
+                    collect(where, await worker.process(frame))
+                report('finding', count, len(looked))
+        finally:
+            await worker.close()
     detected = time.perf_counter()
     name = 'efficienttam_ti_512x512.pt'
-    segmenter = EfficientTAMVideo(efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
-    results = refine(frames, detections, segmenter, label=label, stop_when_complete=fast)
+    segmenter = (warm or {}).get('segmenter') or EfficientTAMVideo(
+        efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
+    report('tracking', 0, 1)
+    results = refine(frames, detections, segmenter, label=label, stop_when_complete=fast,
+                     max_throws=1 if fast else None, progress=report)
     timing = dict(frames=len(frames), detector_frames=len(looked), detect_s=round(detected - began, 1),
                   track_s=round(time.perf_counter() - detected, 1), total_s=round(time.perf_counter() - began, 1))
     output = dict(label=label, detections=len(detections), results=results, timing=timing)
     (directory / 'refined.part.json').write_text(json.dumps(output, ensure_ascii=False, indent=2))
     (directory / 'refined.part.json').rename(directory / 'refined.json')
+    report('rendering', 0, 1)
     render_refined(directory)
+    report('done', 1, 1)
     return output
 
 
@@ -695,7 +753,8 @@ async def run(args):
 
         cv2.setMouseCallback(title, on_mouse)
     state = dict(mode='waiting', take_seconds=0., saved='', capture_fps=0., frame_size=None,
-                 last_throw=None, frames=0, history=[], feed=[], pending=0.)
+                 last_throw=None, frames=0, history=[], feed=[], pending=0., progress=None,
+                 take_frames=0, take_fps=0.)
     take = None
     first = base = None
     hud_due = take_started = None
@@ -717,9 +776,9 @@ async def run(args):
                  ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM),
                  ('crop', 'strip  ✕' if tuple(phone['crop']) != FULL else 'strip: drag a box',
                   GOOD if tuple(phone['crop']) != FULL else PANEL)]
-        if refine_args:
+        if refine_args or args.refine_cached:
             # Counting is not live: it runs on the last saved take when asked (or on Stop).
-            ready = last_take['dir'] is not None
+            ready = last_take['dir'] is not None or bool(args.refine_cached)
             label = (f"COUNTING  {state['pending']:.0f} s" if state['pending'] else
                      'ANALYZE  ▶' if ready else 'ANALYZE')
             items.append(('analyze', label, ACCENT if ready or state['pending'] else DIM))
@@ -763,16 +822,60 @@ async def run(args):
     pending_refine = []  # takes being counted, until their refine process exits
     last_take = dict(dir=None, first=None, base=None)
 
+    # With --refine-fast the models stay loaded in one long-lived refine server, so ANALYZE does
+    # not pay for loading YOLOE and EfficientTAM again; without it each take gets its own process.
+    server = None
+    if refine_args and args.refine_fast:
+        record_dir.mkdir(parents=True, exist_ok=True)
+        server = subprocess.Popen([sys.executable, '-m', 'gamst.demos.rotation_live', 'refine-server', *refine_args],
+                                  stdin=subprocess.PIPE, stdout=open(record_dir / 'refine-server.log', 'w'),
+                                  stderr=subprocess.STDOUT, text=True, start_new_session=True)
+
+    class _ServerJob:
+        """A take queued on the refine server; finished when its progress says done or failed."""
+        def __init__(self, directory):
+            self.path = directory / 'refine.progress.json'
+
+        def poll(self):
+            try:
+                stage = json.loads(self.path.read_text()).get('stage')
+            except (OSError, ValueError):
+                stage = None
+            return 0 if stage in ('done', 'failed') else None if server.poll() is None else 1
+
     def start_refine(directory):
-        with open(directory / 'refine.log', 'w') as log:
-            process = subprocess.Popen(
-                [sys.executable, '-m', 'gamst.demos.rotation_live', 'refine', str(directory), *refine_args],
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        summary = json.loads((directory / 'summary.json').read_text())
+        state.update(take_frames=summary['frames'], take_fps=summary['capture_fps'] or 0., progress=None)
+        (directory / 'refine.progress.json').unlink(missing_ok=True)
+        if server is not None and server.poll() is None:
+            server.stdin.write(f'{directory}\n')
+            server.stdin.flush()
+            process = _ServerJob(directory)
+        else:
+            with open(directory / 'refine.log', 'w') as log:
+                process = subprocess.Popen(
+                    [sys.executable, '-m', 'gamst.demos.rotation_live', 'refine', str(directory), *refine_args],
+                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         pending_refine.append(dict(dir=directory, first=last_take['first'], base=last_take['base'],
                                    process=process, started=time.monotonic(), published=False))
         print(json.dumps({'refine': 'started', 'dir': str(directory)}), flush=True)
 
+    class _Finished:
+        """Stands in for a refine process that already ran (a cached take)."""
+        def poll(self):
+            return 0
+
     def analyze_last():
+        if args.refine_cached:
+            # Stage backup: a take counted beforehand, shown at once as if just analyzed.
+            cached = Path(args.refine_cached)
+            recording = read_recording(cached / 'raw.gmst')
+            span = recording[-1][0].seconds - recording[0][0].seconds
+            state.update(take_frames=len(recording), take_fps=(len(recording) - 1) / span if span else 0.)
+            pending_refine.append(dict(dir=cached, first=recording[0][0].seconds,
+                                       base=time.time_ns() // 1_000_000 - round(span * 1000) - 500,
+                                       process=_Finished(), started=time.monotonic(), published=False))
+            return
         if refine_args and last_take['dir'] is not None and not any(
                 item['dir'] == last_take['dir'] for item in pending_refine):
             start_refine(last_take['dir'])
@@ -788,6 +891,11 @@ async def run(args):
         from ..providers.rotation_refine import publish
         for item in list(pending_refine):
             path = item['dir'] / 'refined.json'
+            if not item['published']:
+                try:
+                    state['progress'] = json.loads((item['dir'] / 'refine.progress.json').read_text())
+                except (OSError, ValueError):
+                    pass
             if not item['published'] and path.exists():
                 item['published'] = True
                 output = json.loads(path.read_text())
@@ -796,7 +904,7 @@ async def run(args):
                 for event, record in zip(output['results'], records):
                     attributes = record['observation']['value']['objects'][0]['attributes']
                     throw = dict(attributes, trajectory=attributes['trajectory'])
-                    if throw['turns'] is not None:
+                    if throw['turns'] is not None and throw['trajectory'] == 'free_fall':
                         state['history'].append(throw)
                         state['last_throw'] = throw
                     clock = time.strftime('%H:%M:%S', time.localtime(attributes['ended_ms'] / 1000))
@@ -910,6 +1018,8 @@ async def run(args):
                     await collect_refined(human)
                     await asyncio.sleep(.5)
     finally:
+        if server is not None:
+            server.terminate()
         if listener is not None:
             listener.close()
         if feeder is not None:
@@ -941,10 +1051,48 @@ def _refine_main(argv):
         | dict(trajectory=event['trajectory'].get('kind')) for event in output['results']])))
 
 
+def _refine_server(argv):
+    """Keep YOLOE (batched, in this process) and EfficientTAM loaded; count each take directory
+    read from stdin with the fast path. Saves the model loading time on every ANALYZE."""
+    import argparse
+    from ..providers.rotation_refine import EfficientTAMVideo
+    from ..providers.yoloe_native import load_in_process
+    from .rotation import DEFAULT_MODELS, REFINE_ASSETS, detector_config
+    parser = argparse.ArgumentParser(prog='python -m gamst.demos.rotation_live refine-server')
+    parser.add_argument('--label', required=True)
+    parser.add_argument('--efficienttam-source', required=True)
+    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
+    parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--fast', action='store_true', help='accepted for symmetry; the server is always fast')
+    args = parser.parse_args(argv)
+    models = Path(args.models)
+    name = 'efficienttam_ti_512x512.pt'
+    warm = dict(detector=load_in_process(detector_config(models, [args.label], args.device, .2)),
+                segmenter=EfficientTAMVideo(args.efficienttam_source, models / name, REFINE_ASSETS[name][1],
+                                            device=args.device))
+    print(json.dumps({'refine_server': 'ready'}), flush=True)
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        directory = Path(line.strip())
+        try:
+            output = asyncio.run(refine_take(directory, label=args.label, models=models, device=args.device,
+                                             efficienttam_source=args.efficienttam_source,
+                                             worker_python=args.worker_python, fast=True, warm=warm))
+            print(json.dumps({'refined': str(directory), 'timing': output['timing']}), flush=True)
+        except Exception as error:  # one bad take must not stop the server
+            (directory / 'refine.progress.json').write_text(json.dumps(dict(stage='failed', error=str(error))))
+            print(json.dumps({'refine_failed': str(directory), 'error': str(error)}), flush=True)
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == 'render':
         render_refined(sys.argv[2])
     elif len(sys.argv) > 2 and sys.argv[1] == 'refine':
         _refine_main(sys.argv[2:])
+    elif len(sys.argv) > 2 and sys.argv[1] == 'refine-server':
+        _refine_server(sys.argv[2:])
     else:
-        raise SystemExit('usage: python -m gamst.demos.rotation_live refine TAKE_DIR --label ... | render TAKE_DIR')
+        raise SystemExit('usage: python -m gamst.demos.rotation_live refine TAKE_DIR --label ... | '
+                         'refine-server --label ... | render TAKE_DIR')

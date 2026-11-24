@@ -62,6 +62,24 @@ gamst demo rotation --iphone 9123 --device mps \
 Use `"metal coin"` as the label. With plain `"coin"`, the detector missed the coin entirely.
 The label is what lands in context and object memory.
 
+## Live demo on stage
+
+Count one toss per take, started by the ANALYZE button (or key `a`):
+
+```bash
+gamst demo rotation --iphone 9123 --device mps \
+  --refine "metal coin" --efficienttam-source EfficientTAM \
+  --refine-on button --refine-fast --refine-show
+```
+
+1. Press REC just before the toss and STOP right after the catch. Shorter takes count faster.
+2. Press ANALYZE.
+   - The panel shows "GAMST is counting", the number of frames, the current stage and a progress bar.
+   - The flips appear as soon as the count exists.
+   - `refined.mp4` (8× slow motion with the running count) opens when it is rendered.
+3. Add `--refine-cached TAKE_DIR` to make ANALYZE show an already counted take at once. Keep this as the backup if the
+   room's Wi-Fi or light ruins a live toss.
+
 ## Read the result as an agent
 
 Point the MCP server at the same store and read the throws:

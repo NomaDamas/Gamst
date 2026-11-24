@@ -92,10 +92,11 @@ def _offline(*args,**kwargs):
     raise RuntimeError('network access is disabled in the local YOLOE worker')
 
 
-def _bootstrap(directory):
-    """Only for the owned one-provider child; this is not an untrusted-code sandbox."""
-    if os.environ.get('GAMST_PROVIDER_WORKER') != '1' or 'ultralytics' in sys.modules:
-        raise RuntimeError('YOLOE native loading requires a fresh owned ProcessProvider worker')
+def _bootstrap(directory, *, require_worker=True):
+    """Only for an owned dedicated child; this is not an untrusted-code sandbox."""
+    if ((require_worker and os.environ.get('GAMST_PROVIDER_WORKER') != '1')
+            or 'ultralytics' in sys.modules):
+        raise RuntimeError('YOLOE native loading requires a fresh owned child process')
     os.environ.update(YOLO_AUTOINSTALL='False',YOLO_OFFLINE='True',ULTRALYTICS_SAFE_LOAD='True',
                       YOLO_CONFIG_DIR=str(directory))
     # Keep these guards for the child's lifetime. Native artifacts are trusted;
@@ -116,19 +117,21 @@ class NativeYOLOE:
         self.reference,self.prompts = reference,prompts
         self.runtime = None
 
-    def predict(self,image):
-        import numpy as np
+    def _predict(self, source, batch):
         import torch
-        kwargs = dict(source=image,device=self.device,imgsz=self.imgsz,conf=self.threshold,
+        kwargs = dict(source=source,device=self.device,imgsz=self.imgsz,conf=self.threshold,
             max_det=self.max_objects,retina_masks=True,half=False,save=False,save_txt=False,
-            save_crop=False,show=False,verbose=False,stream=False,batch=1,augment=False,
+            save_crop=False,show=False,verbose=False,stream=False,batch=batch,augment=False,
             rect=False,agnostic_nms=True,iou=.7)
         if self.reference is not None:
             kwargs.update(refer_image=self.reference,visual_prompts=self.prompts)
         with torch.inference_mode(): results = self.model.predict(**kwargs)
-        if type(results) is not list or len(results) != 1:
-            raise ValueError('YOLOE must return exactly one result')
-        result = results[0]
+        if type(results) is not list or len(results) != batch:
+            raise ValueError('YOLOE must return one result per input image')
+        return results
+
+    def _convert(self, result, image):
+        import numpy as np
         if tuple(result.orig_shape) != image.shape[:2] or result.boxes is None:
             raise ValueError('YOLOE original image geometry mismatch')
         shape = tuple(result.boxes.data.shape)
@@ -143,10 +146,22 @@ class NativeYOLOE:
             raise ValueError('YOLOE must restore one original-image mask per box')
         else:
             masks = result.masks.data.detach().cpu().numpy().copy()
+        return boxes,masks
+
+    def predict(self,image):
+        result = self._convert(self._predict(image,1)[0],image)
         # The model now owns the fixed visual embeddings; do not re-encode on
         # every capture. Preserve reference until a full successful prediction.
         self.reference = self.prompts = None
-        return boxes,masks
+        return result
+
+    def predict_batch(self,images):
+        if type(images) is not list or not images:
+            raise ValueError('nonempty list of YOLOE input images required')
+        results = self._predict(images,len(images))
+        output = [self._convert(result,image) for result,image in zip(results,images)]
+        self.reference = self.prompts = None
+        return output
 
     def close(self):
         self.model = self.reference = self.prompts = None
@@ -155,10 +170,13 @@ class NativeYOLOE:
             runtime.cleanup()
 
 
-def load_worker(config):
+def _load(config, *, require_worker):
     args,device,imgsz = configuration(config)
-    if os.environ.get('GAMST_PROVIDER_WORKER') != '1' or 'ultralytics' in sys.modules:
-        raise RuntimeError('use a fresh owned ProcessProvider worker for YOLOE')
+    if ((require_worker and os.environ.get('GAMST_PROVIDER_WORKER') != '1')
+            or 'ultralytics' in sys.modules):
+        message = ('use a fresh owned ProcessProvider worker for YOLOE' if require_worker else
+                   'use a fresh dedicated child process without importing ultralytics for YOLOE')
+        raise RuntimeError(message)
     _dependencies(config['mode'])
     checkpoint = _read(config['checkpoint_path'],config['checkpoint_sha256'],256*1024*1024)
     other = _read(config['encoder_path'],config['encoder_sha256'],512*1024*1024) if config['mode']=='text' else _read(
@@ -169,7 +187,7 @@ def load_worker(config):
     backend = None
     try:
         directory = Path(runtime.name)
-        _bootstrap(directory)
+        _bootstrap(directory,require_worker=require_worker)
         model_path = directory/'checkpoint.pt'
         model_path.write_bytes(checkpoint); del checkpoint
         import torch
@@ -234,3 +252,19 @@ def load_worker(config):
         if backend is not None: backend.close()
         else: runtime.cleanup()
         raise
+
+
+def load_worker(config):
+    return _load(config,require_worker=True)
+
+
+def load_in_process(config):
+    """Load YOLOE in a fresh dedicated child process owned by the caller.
+
+    Call this before importing ``ultralytics`` in that child. Unlike
+    :func:`load_worker`, ``GAMST_PROVIDER_WORKER=1`` is neither required nor set.
+    Validation, pinned asset checks, dependency checks and the offline bootstrap
+    are identical; the bootstrap's process-wide network guards remain installed
+    for the child's lifetime.
+    """
+    return _load(config,require_worker=False)

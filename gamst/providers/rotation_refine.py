@@ -251,7 +251,7 @@ def moving_frames(stamps, grays, *, pad_ms=300, spread=4.0):
 
 
 def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev_s=40.0, max_seeds=3,
-           stop_when_complete=False):
+           stop_when_complete=False, max_throws=None, progress=None):
     """Refined rotation events for one take.
 
     ``frames``: list of (timestamp_ms, decode) where ``decode()`` returns the upright BGR frame;
@@ -262,17 +262,36 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
     seed yields no throw, or one that is less complete, instead of corrupting the right one.
     With ``stop_when_complete`` the next seeds are skipped once a seed has given a complete
     free-fall count (seen in at least 90% of the flight), which saves most of the time.
+    ``max_throws`` prioritizes episodes by their best detection score and stops after that many
+    complete throws. ``progress('tracking', done, total)`` reports each completed seed track.
     """
+    if max_throws is not None and (type(max_throws) is not int or max_throws < 1):
+        raise ValueError('max_throws must be a positive integer or None')
+    if progress is not None and not callable(progress):
+        raise ValueError('progress must be callable or None')
+
+    def complete(event):
+        return (event['status'] == 'counting' and event['trajectory'].get('kind') == 'free_fall'
+                and event['coverage'] >= .9)
+
     results = []
     stamps = [stamp for stamp, _ in frames]
     slug = re.sub(r'[^A-Za-z0-9._-]+', '-', label).strip('-') or 'object'
-    for number, episode in enumerate(episodes(detections)):
+    ordered = list(enumerate(episodes(detections)))
+    total = sum(min(max_seeds, len(episode['prompts'])) for _, episode in ordered)
+    done = complete_count = 0
+    if max_throws is not None:
+        ordered.sort(key=lambda item: -item[1]['seed'][2])
+    for number, episode in ordered:
         start = next(i for i, stamp in enumerate(stamps) if stamp >= episode['first_ms'] - pad_ms)
         end = max(i for i, stamp in enumerate(stamps) if stamp <= episode['last_ms'] + pad_ms)
         images = [frames[index][1]() for index in range(start, end + 1)]
         candidates = []
         for _, index, score, box in sorted(episode['prompts'], key=lambda item: -item[2])[:max_seeds]:
             shapes = {start + i: shape for i, shape in ellipses(segmenter.track(images, [(index - start, box)])).items()}
+            done += 1
+            if progress is not None:
+                progress('tracking', done, total)
             # The followed object's ellipse per frame ([frame, cx, cy, major, minor, angle]) is the
             # evidence behind the count: a render or an audit can replay it without the models.
             trace = [[i, *(round(v, 1) for v in shapes[i])] for i in sorted(shapes) if shapes[i] is not None]
@@ -281,11 +300,17 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
                            for event in count_spins(stamps, shapes, expected_max_rev_s=expected_max_rev_s,
                                                     track_id=f'{slug}-{number + 1}')]
             best = max(candidates, key=_rank) if candidates else None
-            if (stop_when_complete and best is not None and best['status'] == 'counting'
-                    and best['trajectory'].get('kind') == 'free_fall' and best['coverage'] >= .9):
+            if stop_when_complete and best is not None and complete(best):
                 break
         if candidates:
-            results.append(max(candidates, key=_rank))
+            best = max(candidates, key=_rank)
+            results.append(best)
+            if max_throws is not None and complete(best):
+                complete_count += 1
+                if complete_count >= max_throws:
+                    break
+    if max_throws is not None:
+        results.sort(key=lambda event: event['timestamp_ms'])
     return results
 
 

@@ -159,22 +159,58 @@ class YOLOEContext:
                 self._owner = self._last = None
                 raise
 
-    def _process(self, frame):
-        import numpy as np
+    def process_batch(self, frames: list[InputFrame]) -> list[dict]:
+        with self._lock:
+            if self._closed: raise RuntimeError('YOLOE provider closed')
+            try:
+                if type(frames) is not list:
+                    raise ValueError('list of video InputFrame objects required')
+                if not frames: return []
+                predict_batch = getattr(self.backend,'predict_batch',None)
+                if not callable(predict_batch):
+                    raise ValueError('owned YOLOE backend with predict_batch required')
+                owner,last = self._owner,self._last
+                prepared = []
+                for frame in frames:
+                    item = self._prepare(frame,owner,last)
+                    prepared.append(item)
+                    owner,last = item[3:]
+                outputs = predict_batch([item[0] for item in prepared])
+                if type(outputs) is not list or len(outputs) != len(prepared):
+                    raise ValueError('YOLOE backend must return one output per input frame')
+                results = [self._result(item,output) for item,output in zip(prepared,outputs)]
+                self._owner,self._last = owner,last
+                return results
+            except Exception:
+                self._owner = self._last = None
+                raise
+
+    def _prepare(self, frame, owner, last):
         if (not isinstance(frame,InputFrame) or frame.modality != 'video' or
                 not isinstance(frame.sensor,SensorMetadata) or not frame.sensor.coordinate_frame or
                 type(frame.timestamp_ms) is not int or not 0 <= frame.timestamp_ms <= 2**53-1):
             raise ValueError('video capture time and declared image coordinates required')
         identifier(frame.subject_id)
         image = _image(frame.data)
-        h,w = image.shape[:2]
         sensor,ts = frame.sensor,frame.timestamp_ms
         seq = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
-        owner = (frame.subject_id,sensor.source_id,sensor.sensor_id,sensor.stream_epoch,
-                 sensor.coordinate_frame,sensor.calibration_id,sensor.capture_sequence is not None)
-        if owner == self._owner and self._last and (ts <= self._last[0] or seq <= self._last[1]):
+        current = (frame.subject_id,sensor.source_id,sensor.sensor_id,sensor.stream_epoch,
+                   sensor.coordinate_frame,sensor.calibration_id,sensor.capture_sequence is not None)
+        if current == owner and last and (ts <= last[0] or seq <= last[1]):
             raise ValueError('capture sequence and timestamp must advance')
-        boxes,masks = self.backend.predict(image)
+        return image,sensor,ts,current,(ts,seq)
+
+    def _process(self, frame):
+        prepared = self._prepare(frame,self._owner,self._last)
+        result = self._result(prepared,self.backend.predict(prepared[0]))
+        self._owner,self._last = prepared[3:]
+        return result
+
+    def _result(self, prepared, output):
+        import numpy as np
+        image,sensor,ts,_,_ = prepared
+        h,w = image.shape[:2]
+        boxes,masks = output
         if (type(boxes) is not np.ndarray or boxes.dtype != np.float32 or boxes.ndim != 2 or
                 boxes.shape[1:] != (6,) or len(boxes) > self.max_objects or
                 not np.isfinite(boxes).all()):
@@ -193,7 +229,7 @@ class YOLOEContext:
                 bbox=dict(x=float(x0/w),y=float(y0/h),width=float((x1-x0)/w),height=float((y1-y0)/h)),
                 mask=mask,identity_verified=False))
         objects.sort(key=lambda item:-item['score'])
-        result = self.spec.validate(dict(objects=objects,summary=dict(
+        return self.spec.validate(dict(objects=objects,summary=dict(
             prompt_mode=self.mode,labels=list(self.labels),prompt_sha256=self.prompt_hash,
             checkpoint_sha256=self.checkpoint_hash,artifact_integrity_verified=self.verified,
             model_quality_verified=False,identity_verified=False,tracked=False,
@@ -201,5 +237,3 @@ class YOLOEContext:
             input_shape=[h,w],box_units='normalized_image',returned_count=len(objects),
             native_returned_count=len(boxes),max_objects=self.max_objects,
             native_limit_reached=len(boxes)==self.max_objects,complete_scene=False)))
-        self._owner,self._last = owner,(ts,seq)
-        return result

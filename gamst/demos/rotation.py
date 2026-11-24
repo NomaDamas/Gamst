@@ -319,6 +319,8 @@ def main(argv=None):
                         help='detector only where the picture moves; stop at the first complete count')
     parser.add_argument('--refine-show', action='store_true',
                         help='open refined.mp4 (8x slow motion with the running count) when it is ready')
+    parser.add_argument('--refine-cached', metavar='TAKE_DIR',
+                        help='stage backup: ANALYZE shows this already counted take (refined.json, refined.mp4) at once')
     args = parser.parse_args(argv)
     if args.fetch_models:
         fetch_models(Path(args.models))
