@@ -190,7 +190,7 @@ through the flight, counts its flips and hands the count to an agent as
 timestamped context. Gemini Live takes video at 1 fps; on the same toss it
 answered "Zero." Korean and vertical cuts:
 [issue #355](https://github.com/NomaDamas/Gamst/issues/355#issuecomment-7125967905).
-Recipe: [`skills/gamst-coin-flip`](skills/gamst-coin-flip/SKILL.md).
+Recipe: `gamst recipe run coin-flip` ([`skills/gamst-coin-flip`](skills/gamst-coin-flip/SKILL.md)).
 
 `vision.rotation` is a generic fast-lane capability. It measures in-plane turns
 and out-of-plane flips for every tracked region, with rev/s, `counting`,
@@ -261,12 +261,15 @@ The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
 (each throw at 8× slow motion with the running count) are written next to the
 take.
 
+The `coin-flip` recipe runs this pipeline. `setup` installs only its parts: the extras, the SHA256-pinned YOLOE and
+EfficientTAM tiny weights, and EfficientTAM at its pinned revision. `check` tells whether a camera's frame rate can
+count the recipe's speed.
+
 ```bash
-pip install "gamst-sdk[rotation,yoloe,efficienttam]"
-gamst demo rotation --fetch-models   # YOLOE + EfficientTAM tiny weights, SHA256-pinned
-git clone https://github.com/yformer/EfficientTAM && git -C EfficientTAM checkout abcd061
-gamst demo rotation --iphone 9123 --device mps --refine "metal coin" --efficienttam-source EfficientTAM
-gamst demo rotation --iphone-replay take/raw.gmst --refine "metal coin" --efficienttam-source EfficientTAM
+gamst recipe setup coin-flip
+gamst recipe check coin-flip --fps 240
+gamst recipe run coin-flip --iphone 9123
+gamst recipe run coin-flip --take take-20261124-140345
 ```
 
 On one 240 fps take with 7 hand tosses, GAMST matched a person's

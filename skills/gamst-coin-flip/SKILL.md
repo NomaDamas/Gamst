@@ -31,54 +31,67 @@ One `vision.rotation.refined` observation per throw. Its object looks like this 
 | `trajectory` | `free_fall` for a real throw |
 | `started_ms`, `ended_ms` | flight start and end on the GAMST runtime clock |
 
+## The recipe
+
+The pipeline is the built-in recipe `coin-flip` (`gamst/recipes/coin-flip.json`):
+
+- capture: GAMST 240 iPhone app, live or a recorded take;
+- find: YOLOE, label `"metal coin"`;
+- follow: EfficientTAM;
+- count: flips, up to 40 rev/s, started by ANALYZE.
+
+`gamst recipe show coin-flip` prints it, what setup installs, and the frame rate it needs.
+
 ## Setup (once)
 
-1. Install the extras, then fetch the pinned weights (YOLOE and EfficientTAM tiny, SHA256-checked).
-2. Check out EfficientTAM at the pinned revision.
-3. Build `apps/ios-highspeed-camera` (`xcodegen`, iOS 15+) onto an iPhone that records 240 fps. Put the phone and the Mac
-   on the same Wi-Fi, and set the Mac's address and port 9123 in the app.
-
 ```bash
-pip install "gamst-sdk[rotation,yoloe,efficienttam]" \
-  "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
-gamst demo rotation --fetch-models
-git clone https://github.com/yformer/EfficientTAM && git -C EfficientTAM checkout abcd061
+pip install gamst-sdk
+gamst recipe setup coin-flip      # --dry-run prints the plan first
 ```
 
-## Run a take
+Setup installs only what this pipeline uses:
+
+- the `rotation`, `yoloe` and `efficienttam` extras and the pinned CLIP;
+- the YOLOE and EfficientTAM tiny weights, SHA256-checked;
+- EfficientTAM at the pinned revision in `~/.cache/gamst/sources`.
+
+Then build `apps/ios-highspeed-camera` (`xcodegen`, iOS 15+) onto an iPhone that records 240 fps. Put the phone and the
+Mac on the same Wi-Fi, and set the Mac's address and port 9123 in the app.
+
+Check a camera before relying on it. The command exits 1 if the camera's frame rate cannot count the recipe's speed:
 
 ```bash
-gamst demo rotation --iphone 9123 --device mps \
-  --refine "metal coin" --efficienttam-source EfficientTAM \
-  --record-dir gamst-takes --store gamst-coin.db
+gamst recipe check coin-flip --fps 240
+```
+
+A coin's outline repeats every half turn, so a camera counts up to `fps / 4` rev/s. Above that, a count would be an
+alias: `run` refuses a take that is too slow, and the runtime reports `undersampled` instead of a number.
+
+## Run
+
+```bash
+gamst recipe run coin-flip --iphone 9123 --store gamst-coin.db --refine-show
 ```
 
 1. Fix the phone on a stand. Keep the whole flight in frame and use even light.
 2. Optional: drag a box around the coin in the HUD. The phone then streams a native-resolution strip there, which
    keeps 240 fps when Wi-Fi cannot carry full frames.
-3. Press REC (phone or space), toss, catch, press STOP.
-4. Wait for the HUD to show the counts. On an M2 Pro MacBook Pro this takes about 45 s per toss.
-
-Use `"metal coin"` as the label. With plain `"coin"`, the detector missed the coin entirely.
-The label is what lands in context and object memory.
-
-## Live demo on stage
-
-Count one toss per take, started by the ANALYZE button (or key `a`):
-
-```bash
-gamst demo rotation --iphone 9123 --device mps \
-  --refine "metal coin" --efficienttam-source EfficientTAM \
-  --refine-on button --refine-fast --refine-show
-```
-
-1. Press REC just before the toss and STOP right after the catch. Shorter takes count faster.
-2. Press ANALYZE.
+3. Press REC (phone or space) just before the toss. Press STOP right after the catch. Shorter takes count faster.
+4. Press ANALYZE (or key `a`).
    - The panel shows "GAMST is counting", the number of frames, the current stage and a progress bar.
-   - The flips appear as soon as the count exists.
-   - `refined.mp4` (8× slow motion with the running count) opens when it is rendered.
-3. Add `--refine-cached TAKE_DIR` to make ANALYZE show an already counted take at once. Keep this as the backup if the
-   room's Wi-Fi or light ruins a live toss.
+   - The flips appear as soon as the count exists, about 30 s per toss on an M2 Pro MacBook Pro.
+   - `--refine-show` opens `refined.mp4` (8× slow motion with the running count) when it is rendered.
+
+Count a recorded take again with `gamst recipe run coin-flip --take TAKE_DIR --headless`.
+
+Other `gamst demo rotation` options pass through and win. For example:
+
+- `--refine-cached TAKE_DIR` makes ANALYZE show an already counted take at once. Keep it as the stage backup if the
+  room's Wi-Fi or light ruins a live toss.
+- `--record-dir DIR` sets where takes are saved.
+
+Keep the label `"metal coin"`; with plain `"coin"` the detector missed the coin entirely. To count another flat object,
+pass `--label`. The label is what lands in context and object memory.
 
 ## Read the result as an agent
 

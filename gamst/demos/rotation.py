@@ -56,9 +56,12 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def fetch_models(directory):
+def fetch_models(directory, names=None):
+    """Download the pinned weights (only ``names`` when given) and verify their SHA256."""
     directory.mkdir(parents=True, exist_ok=True)
     for name, (url, expected) in {**MODEL_ASSETS, **REFINE_ASSETS}.items():
+        if names is not None and name not in names:
+            continue
         target = directory / name
         temporary = target.with_suffix('.download')
         if target.exists() and _sha256(target) == expected:

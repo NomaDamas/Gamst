@@ -481,7 +481,7 @@ def render_refined(directory):
 
 
 async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
-                      detect_every=4, threshold=.2, fast=False, batch=16, warm=None):
+                      detect_every=4, threshold=.2, fast=False, batch=16, warm=None, expected_max_rev_s=40.):
     """Re-count a saved take's throws of one named object; writes ``refined.json``.
 
     YOLOE (GAMST's pinned worker, text prompt ``label``) looks at every ``detect_every``-th frame
@@ -582,7 +582,7 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
         efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
     report('tracking', 0, 1)
     results = refine(frames, detections, segmenter, label=label, stop_when_complete=fast,
-                     max_throws=1 if fast else None, progress=report)
+                     max_throws=1 if fast else None, progress=report, expected_max_rev_s=expected_max_rev_s)
     timing = dict(frames=len(frames), detector_frames=len(looked), detect_s=round(detected - began, 1),
                   track_s=round(time.perf_counter() - detected, 1), total_s=round(time.perf_counter() - began, 1))
     output = dict(label=label, detections=len(detections), results=results, timing=timing)
@@ -819,7 +819,8 @@ async def run(args):
 
     refine_args = None if not getattr(args, 'refine', None) else [
         '--label', args.refine, '--efficienttam-source', args.efficienttam_source, '--models', args.models,
-        '--device', args.device, '--worker-python', args.worker_python] + (['--fast'] if args.refine_fast else [])
+        '--device', args.device, '--worker-python', args.worker_python,
+        '--expected-max-rev-s', str(args.expected_max_rev_s)] + (['--fast'] if args.refine_fast else [])
     pending_refine = []  # takes being counted, until their refine process exits
     last_take = dict(dir=None, first=None, base=None)
 
@@ -1041,12 +1042,14 @@ def _refine_main(argv):
     parser.add_argument('--models', default=str(DEFAULT_MODELS))
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
     parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--expected-max-rev-s', type=float, default=40.)
     parser.add_argument('--fast', action='store_true',
                         help='detector only where the picture moves; stop at the first complete count')
     args = parser.parse_args(argv)
     output = asyncio.run(refine_take(args.take_dir, label=args.label, models=args.models, device=args.device,
                                      efficienttam_source=args.efficienttam_source,
-                                     worker_python=args.worker_python, fast=args.fast))
+                                     worker_python=args.worker_python, fast=args.fast,
+                                     expected_max_rev_s=args.expected_max_rev_s))
     print(json.dumps(dict(detections=output['detections'], timing=output['timing'], throws=[
         {key: event.get(key) for key in ('track_id', 'turns', 'rev_s', 'status', 'coverage', 'flight_frames')}
         | dict(trajectory=event['trajectory'].get('kind')) for event in output['results']])))
@@ -1065,6 +1068,7 @@ def _refine_server(argv):
     parser.add_argument('--models', default=str(DEFAULT_MODELS))
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
     parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--expected-max-rev-s', type=float, default=40.)
     parser.add_argument('--fast', action='store_true', help='accepted for symmetry; the server is always fast')
     args = parser.parse_args(argv)
     models = Path(args.models)
@@ -1080,7 +1084,8 @@ def _refine_server(argv):
         try:
             output = asyncio.run(refine_take(directory, label=args.label, models=models, device=args.device,
                                              efficienttam_source=args.efficienttam_source,
-                                             worker_python=args.worker_python, fast=True, warm=warm))
+                                             worker_python=args.worker_python, fast=True, warm=warm,
+                                             expected_max_rev_s=args.expected_max_rev_s))
             print(json.dumps({'refined': str(directory), 'timing': output['timing']}), flush=True)
         except Exception as error:  # one bad take must not stop the server
             (directory / 'refine.progress.json').write_text(json.dumps(dict(stage='failed', error=str(error))))

@@ -48,27 +48,48 @@ and replay are not.
 | Benchmark against ground truth | Missing as a tool: human counts and timings are recorded by hand in `docs/halo-coin.md` |
 | Swap the model without touching app code | Yes for consumers (Gemini/OpenAI-style providers, MCP clients) |
 | Local-first retention and deletion | Yes: bounded retention, `delete_data` |
+| Hardware requirements checked before a run | Yes: `gamst recipe check`; frame rate against the sampling limit |
 
 ## Executable recipes, not blog recipes
 
-A recipe is not prose that says how to wire things. It is a file the runtime runs, replays and scores:
+A recipe is not prose that says how to wire things. It is a file the runtime runs, replays and scores.
+
+What exists (2026-11-25), in `gamst/recipes/<name>.json`:
 
 ```bash
-gamst run recipes/coin-flip.yaml        # capture -> observers -> events -> records + evidence
+gamst recipe setup coin-flip            # install only the parts the pipeline uses
+gamst recipe check coin-flip --fps 240  # can this camera count the recipe's speed?
+gamst recipe run coin-flip --iphone 9123
+gamst recipe run coin-flip --take TAKE_DIR
+```
+
+Still missing:
+
+```bash
 gamst replay runs/<run>                 # same input, same records
 gamst benchmark runs/<run> --truth truth.json
 ```
 
-A recipe declares four things:
+A recipe declares:
 
-- inputs: sensors, rates and crop;
-- the observers and refiners to run;
-- the events and records to emit;
-- what to compare against ground truth.
+- hardware: the camera frame rate it was measured with, the camera and the compute;
+- a pipeline of existing GAMST parts, one per step: capture, find, follow, count;
+- the records it emits;
+- what it was measured against.
+
+The runtime stays one runtime. A recipe only chooses and connects its parts:
+
+- `setup` installs the union of the parts' extras, pinned weights and pinned source checkouts, and nothing else;
+- `run` starts the existing runtime with those parts.
+
+The sampling check is physics, not tuning. An object whose look repeats `symmetry` times per turn is countable only
+below `fps / (2 × symmetry)` rev/s. A flipping coin's outline repeats every half turn (symmetry 2), so it is countable
+below `fps / 4`.
+
+`check` and `run` refuse a known frame rate below that limit. The runtime marks counts above it `undersampled`.
 
 `skills/<name>/SKILL.md` stays as the agent-facing pointer: it tells an agent which recipe to run and how to read the
-results over MCP. Today `skills/gamst-coin-flip` is that pointer, but the recipe behind it is still a set of demo
-flags, not a file.
+results over MCP. `skills/gamst-coin-flip` points at the `coin-flip` recipe.
 
 The first recipe is **What 1 fps misses**: a high-frequency physical event that a 1 fps model cannot see. The coin
 flip is its first instance:
