@@ -249,7 +249,7 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
         for _, index, score, box in sorted(episode['prompts'], key=lambda item: -item[2])[:max_seeds]:
             shapes = {start + i: shape for i, shape in ellipses(segmenter.track(images, [(index - start, box)])).items()}
             candidates += [dict(event, label=label, seed_score=round(float(score), 3), seed_frame=index,
-                                frames=[start, end])
+                                seed_box=[round(float(v), 1) for v in box], frames=[start, end])
                            for event in count_spins(stamps, shapes, expected_max_rev_s=expected_max_rev_s,
                                                     track_id=f'{slug}-{number + 1}')]
         if candidates:
