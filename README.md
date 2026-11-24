@@ -183,6 +183,15 @@ evidence provenance, model routing, replay, and latency/cost/quality evaluation.
 <a id="rotation"></a>
 ## 🔄 Object rotation
 
+https://github.com/user-attachments/assets/401f79ff-f6f2-4988-b508-6cb59ca3b702
+
+An iPhone at 240 fps streams a coin toss to GAMST. GAMST follows the coin
+through the flight, counts its flips and hands the count to an agent as
+timestamped context. Gemini Live takes video at 1 fps; on the same toss it
+answered "Zero." Korean and vertical cuts:
+[issue #355](https://github.com/NomaDamas/Gamst/issues/355#issuecomment-7125967905).
+Recipe: [`skills/gamst-coin-flip`](skills/gamst-coin-flip/SKILL.md).
+
 `vision.rotation` is a generic fast-lane capability. It measures in-plane turns
 and out-of-plane flips for every tracked region, with rev/s, `counting`,
 `undersampled` or `idle` status, and `rotation.started` / `rotation.ended`
