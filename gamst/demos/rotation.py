@@ -313,6 +313,12 @@ def main(argv=None):
                              'and follow it with EfficientTAM to re-count its throws (needs --efficienttam-source)')
     parser.add_argument('--efficienttam-source', metavar='DIR',
                         help='checkout of yformer/EfficientTAM at the pinned revision, for --refine')
+    parser.add_argument('--refine-on', choices=['stop', 'button'], default='stop',
+                        help='count each take on Stop, or only when ANALYZE (key a) is pressed')
+    parser.add_argument('--refine-fast', action='store_true',
+                        help='detector only where the picture moves; stop at the first complete count')
+    parser.add_argument('--refine-show', action='store_true',
+                        help='open refined.mp4 (8x slow motion with the running count) when it is ready')
     args = parser.parse_args(argv)
     if args.fetch_models:
         fetch_models(Path(args.models))

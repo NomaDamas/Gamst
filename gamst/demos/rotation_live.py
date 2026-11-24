@@ -292,7 +292,7 @@ class Hud:
         throw = state['last_throw']
         if throw is None:
             t.put(canvas, '0', 1450, 150, 150, LINE, 'bold')
-            hint = ('counting the last take ...' if state['pending'] else
+            hint = (f"GAMST is counting ...  {state['pending']:.0f} s" if state['pending'] else
                     'REC, toss, STOP: counted after the take')
             t.put(canvas, hint, 1456, 340, 22, MUTED)
         else:
@@ -353,19 +353,17 @@ class VideoSink:
 class Take:
     """One Start→Stop take: the raw stream, a real-time HUD video and a summary.
 
-    With ``refine`` arguments a separate process counts the take's throws afterwards
-    (``refined.json``, ``refined.mp4``), so the analysis never competes with capture.
+    Counting runs afterwards in a separate process (``refined.json``, ``refined.mp4``), started on
+    Stop or by the HUD's ANALYZE button, so the analysis never competes with capture.
     """
 
-    def __init__(self, root, refine=None):
-        self.refine = refine
+    def __init__(self, root):
         stamp = time.strftime('%Y%m%d-%H%M%S')
         self.dir = Path(root) / f'take-{stamp}'
         self.dir.mkdir(parents=True, exist_ok=True)
         self.raw = open(self.dir / 'raw.gmst', 'wb')
         self.hud = VideoSink(self.dir / 'hud.mp4', 30, CANVAS)
         self.frames, self.first, self.last = 0, None, None
-        self.refine_process = None
 
     def add(self, header, payload, seconds):
         self.raw.write(header + payload)
@@ -380,11 +378,6 @@ class Take:
         summary = dict(frames=self.frames, seconds=round(span, 3),
                        capture_fps=round((self.frames - 1) / span, 1) if span else None)
         (self.dir / 'summary.json').write_text(json.dumps(summary, indent=2))
-        if self.refine:
-            with open(self.dir / 'refine.log', 'w') as log:
-                self.refine_process = subprocess.Popen(
-                    [sys.executable, '-m', 'gamst.demos.rotation_live', 'refine', str(self.dir), *self.refine],
-                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         return self.dir
 
 
@@ -476,28 +469,41 @@ def render_refined(directory):
 
 
 async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
-                      detect_every=4, threshold=.2):
+                      detect_every=4, threshold=.2, fast=False):
     """Re-count a saved take's throws of one named object; writes ``refined.json``.
 
     YOLOE (GAMST's pinned worker, text prompt ``label``) looks at every ``detect_every``-th frame
     in native-resolution tiles; its hits seed EfficientTAM, which follows that one object through
     each throw. See :mod:`gamst.providers.rotation_refine`.
+
+    ``fast`` (for live demos): YOLOE looks at every 2nd frame but only where the picture moves,
+    and once a seed gives a complete free-fall count the remaining seeds are skipped.
     """
+    import cv2
     import numpy as np
     from ..capabilities import SensorMetadata
     from ..plugins import InputFrame
-    from ..providers.rotation_refine import EfficientTAMVideo, refine, tiles
+    from ..providers.rotation_refine import EfficientTAMVideo, moving_frames, refine, tiles
     from .. import ProcessProvider
     from .rotation import REFINE_ASSETS, detector_config
+    began = time.perf_counter()
     directory, models = Path(directory), Path(models)
     recording = read_recording(directory / 'raw.gmst')
     frames = [(info.seconds * 1000, (lambda info=info, payload=payload: decode(info, payload)))
               for info, _, payload in recording]
+    if fast:
+        # Quarter-resolution grayscale straight from the JPEG decoder: cheap enough for every 2nd frame.
+        grays = [(index, cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_4))
+                 for index, (_, _, payload) in enumerate(recording) if index % 2 == 0]
+        moving = moving_frames([stamp for stamp, _ in frames], [item for item in grays if item[1] is not None])
+        looked = sorted(index for index in moving if index % 2 == 0)
+    else:
+        looked = list(range(0, len(frames), detect_every))
     worker = await ProcessProvider.open(worker_python, 'yoloe.local',
                                         detector_config(models, [label], device, threshold))
     detections = []
     try:
-        for index in range(0, len(frames), detect_every):
+        for index in looked:
             stamp, load = frames[index]
             image = load()
             if image is None:
@@ -516,10 +522,13 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
                         x + (box['x'] + box['width']) * w, y + (box['y'] + box['height']) * h)))
     finally:
         await worker.close()
+    detected = time.perf_counter()
     name = 'efficienttam_ti_512x512.pt'
     segmenter = EfficientTAMVideo(efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
-    results = refine(frames, detections, segmenter, label=label)
-    output = dict(label=label, detections=len(detections), results=results)
+    results = refine(frames, detections, segmenter, label=label, stop_when_complete=fast)
+    timing = dict(frames=len(frames), detector_frames=len(looked), detect_s=round(detected - began, 1),
+                  track_s=round(time.perf_counter() - detected, 1), total_s=round(time.perf_counter() - began, 1))
+    output = dict(label=label, detections=len(detections), results=results, timing=timing)
     (directory / 'refined.part.json').write_text(json.dumps(output, ensure_ascii=False, indent=2))
     (directory / 'refined.part.json').rename(directory / 'refined.json')
     render_refined(directory)
@@ -577,6 +586,8 @@ async def run(args):
             send(dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1))
         elif name == 'crop':
             clear_crop()
+        elif name == 'analyze':
+            analyze_last()
 
     def serve(listener):
         while True:
@@ -684,7 +695,7 @@ async def run(args):
 
         cv2.setMouseCallback(title, on_mouse)
     state = dict(mode='waiting', take_seconds=0., saved='', capture_fps=0., frame_size=None,
-                 last_throw=None, frames=0, history=[], feed=[], pending=False)
+                 last_throw=None, frames=0, history=[], feed=[], pending=0.)
     take = None
     first = base = None
     hud_due = take_started = None
@@ -706,6 +717,12 @@ async def run(args):
                  ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM),
                  ('crop', 'strip  ✕' if tuple(phone['crop']) != FULL else 'strip: drag a box',
                   GOOD if tuple(phone['crop']) != FULL else PANEL)]
+        if refine_args:
+            # Counting is not live: it runs on the last saved take when asked (or on Stop).
+            ready = last_take['dir'] is not None
+            label = (f"COUNTING  {state['pending']:.0f} s" if state['pending'] else
+                     'ANALYZE  ▶' if ready else 'ANALYZE')
+            items.append(('analyze', label, ACCENT if ready or state['pending'] else DIM))
         widths = [hud.text.patch(label, 24, WHITE, 'semibold')[0].shape[1] + 36 for _, label, _ in items]
         x = VIDEO[0] + (VIDEO[2] - sum(widths) - 16 * (len(items) - 1)) // 2
         y = VIDEO[1] + VIDEO[3] - 72
@@ -714,7 +731,7 @@ async def run(args):
             buttons.append((name, x, y, width, 44))
             x += width + 16
         hint = ('drag a box: the phone streams that strip at native resolution   ·   space  record   ·   '
-                'c  camera   ·   z  zoom   ·   t  full frame   ·   q  quit'
+                'c  camera   ·   z  zoom   ·   t  full frame   ·   a  analyze   ·   q  quit'
                 if connected else 'phone not connected')
         hud.text.put(image, hint, VIDEO[0] + VIDEO[2] // 2, y + 54, 16, MUTED, anchor='center')
         if drag['start'] is not None and drag['now'] is not None:
@@ -736,43 +753,72 @@ async def run(args):
             command('zoom')
         elif key == ord('t'):
             clear_crop()
+        elif key == ord('a'):
+            analyze_last()
         return key in (27, ord('q'))
 
     refine_args = None if not getattr(args, 'refine', None) else [
         '--label', args.refine, '--efficienttam-source', args.efficienttam_source, '--models', args.models,
-        '--device', args.device, '--worker-python', args.worker_python]
-    pending_refine = []  # saved takes whose refine.json has not been published yet
+        '--device', args.device, '--worker-python', args.worker_python] + (['--fast'] if args.refine_fast else [])
+    pending_refine = []  # takes being counted, until their refine process exits
+    last_take = dict(dir=None, first=None, base=None)
+
+    def start_refine(directory):
+        with open(directory / 'refine.log', 'w') as log:
+            process = subprocess.Popen(
+                [sys.executable, '-m', 'gamst.demos.rotation_live', 'refine', str(directory), *refine_args],
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        pending_refine.append(dict(dir=directory, first=last_take['first'], base=last_take['base'],
+                                   process=process, started=time.monotonic(), published=False))
+        print(json.dumps({'refine': 'started', 'dir': str(directory)}), flush=True)
+
+    def analyze_last():
+        if refine_args and last_take['dir'] is not None and not any(
+                item['dir'] == last_take['dir'] for item in pending_refine):
+            start_refine(last_take['dir'])
+
+    def take_saved(directory):
+        last_take.update(dir=directory, first=first, base=base)
+        if refine_args and args.refine_on == 'stop':
+            start_refine(directory)
 
     async def collect_refined(human):
-        """Publish finished take refinements: registered observations + named objects in ObjectMemory."""
+        """Publish finished counts (registered observations + named objects in ObjectMemory); when the
+        process has also rendered ``refined.mp4``, optionally open it for the audience."""
         from ..providers.rotation_refine import publish
         for item in list(pending_refine):
             path = item['dir'] / 'refined.json'
-            if not path.exists():
-                if item['process'].poll() is not None:
-                    pending_refine.remove(item)
-                    print(json.dumps({'refine_failed': str(item['dir']), 'log': str(item['dir'] / 'refine.log')}),
-                          flush=True)
+            if not item['published'] and path.exists():
+                item['published'] = True
+                output = json.loads(path.read_text())
+                records = await publish(human, output['results'], take_id=item['dir'].name,
+                                        clock=lambda ms, item=item: item['base'] + round((ms / 1000 - item['first']) * 1000))
+                for event, record in zip(output['results'], records):
+                    attributes = record['observation']['value']['objects'][0]['attributes']
+                    throw = dict(attributes, trajectory=attributes['trajectory'])
+                    if throw['turns'] is not None:
+                        state['history'].append(throw)
+                        state['last_throw'] = throw
+                    clock = time.strftime('%H:%M:%S', time.localtime(attributes['ended_ms'] / 1000))
+                    state['feed'].append(f"{clock}  {event['label']}  {throw['flips'] or 0:.1f} flips  "
+                                         f"{throw['rev_s'] or 0:.1f} rev/s  {throw['status']}  seen {throw['coverage']:.0%}")
+                state['feed'] = state['feed'][-8:]
+                objects = await human.find_objects(text=output['label'])
+                print(json.dumps({'refined': str(item['dir']), 'timing': output.get('timing'),
+                                  'records': [record['id'] for record in records],
+                                  'objects': [dict(entity_id=entry['entity_id'], label=entry['label'],
+                                                   track_id=entry['track_id']) for entry in objects]}), flush=True)
+            if item['process'].poll() is None:
                 continue
             pending_refine.remove(item)
-            output = json.loads(path.read_text())
-            records = await publish(human, output['results'], take_id=item['dir'].name,
-                                    clock=lambda ms, item=item: item['base'] + round((ms / 1000 - item['first']) * 1000))
-            for event, record in zip(output['results'], records):
-                attributes = record['observation']['value']['objects'][0]['attributes']
-                throw = dict(attributes, trajectory=attributes['trajectory'])
-                if throw['turns'] is not None:
-                    state['history'].append(throw)
-                    state['last_throw'] = throw
-                clock = time.strftime('%H:%M:%S', time.localtime(attributes['ended_ms'] / 1000))
-                state['feed'].append(f"{clock}  {event['label']}  {throw['flips'] or 0:.1f} flips  "
-                                     f"{throw['rev_s'] or 0:.1f} rev/s  {throw['status']}  seen {throw['coverage']:.0%}")
-            state['feed'] = state['feed'][-8:]
-            state['pending'] = bool(pending_refine)
-            objects = await human.find_objects(text=output['label'])
-            print(json.dumps({'refined': str(item['dir']), 'records': [record['id'] for record in records],
-                              'objects': [dict(entity_id=entry['entity_id'], label=entry['label'],
-                                               track_id=entry['track_id']) for entry in objects]}), flush=True)
+            video = item['dir'] / 'refined.mp4'
+            if not item['published']:
+                print(json.dumps({'refine_failed': str(item['dir']), 'log': str(item['dir'] / 'refine.log')}),
+                      flush=True)
+            elif args.refine_show and video.exists() and shutil.which('open'):
+                subprocess.Popen(['open', str(video)])
+        state['pending'] = max((time.monotonic() - item['started'] for item in pending_refine
+                                if not item['published']), default=0.)
 
     try:
         async with Gamst(consent=True, store=args.store) as human:
@@ -807,7 +853,7 @@ async def run(args):
                 if kind == 'end':
                     break
                 if kind == 'start':
-                    take = Take(record_dir, refine_args)
+                    take = Take(record_dir)
                     state.update(mode='recording', frames=0)
                     take_started = hud_due = None
                     print(json.dumps({'take': 'started', 'dir': str(take.dir)}), flush=True)
@@ -816,11 +862,8 @@ async def run(args):
                     if take is not None:
                         directory = take.close()
                         saved.append(str(directory))
-                        if refine_args:
-                            pending_refine.append(dict(dir=directory, first=first, base=base,
-                                                       process=take.refine_process))
-                        state.update(mode='saved', saved=directory.name, saved_at=time.monotonic(),
-                                     pending=bool(pending_refine))
+                        take_saved(directory)
+                        state.update(mode='saved', saved=directory.name, saved_at=time.monotonic())
                         print(json.dumps({'take': 'saved', 'dir': str(directory), 'frames': take.frames}), flush=True)
                         take = None
                     continue
@@ -858,10 +901,11 @@ async def run(args):
             if take is not None:
                 directory = take.close()
                 saved.append(str(directory))
-                if refine_args:
-                    pending_refine.append(dict(dir=directory, first=first, base=base, process=take.refine_process))
+                take_saved(directory)
             if args.iphone_replay:
-                # A replay ends with its take: wait for the refined count so it reaches GAMST too.
+                # A replay ends with its take: count it (nobody presses ANALYZE) and wait, so the
+                # refined throws reach GAMST too.
+                analyze_last()
                 while pending_refine:
                     await collect_refined(human)
                     await asyncio.sleep(.5)
@@ -886,11 +930,13 @@ def _refine_main(argv):
     parser.add_argument('--models', default=str(DEFAULT_MODELS))
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
     parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--fast', action='store_true',
+                        help='detector only where the picture moves; stop at the first complete count')
     args = parser.parse_args(argv)
     output = asyncio.run(refine_take(args.take_dir, label=args.label, models=args.models, device=args.device,
                                      efficienttam_source=args.efficienttam_source,
-                                     worker_python=args.worker_python))
-    print(json.dumps(dict(detections=output['detections'], throws=[
+                                     worker_python=args.worker_python, fast=args.fast))
+    print(json.dumps(dict(detections=output['detections'], timing=output['timing'], throws=[
         {key: event.get(key) for key in ('track_id', 'turns', 'rev_s', 'status', 'coverage', 'flight_frames')}
         | dict(trajectory=event['trajectory'].get('kind')) for event in output['results']])))
 

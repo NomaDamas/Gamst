@@ -230,7 +230,28 @@ def _rank(event):
             event['coverage'], event['duration_ms'])
 
 
-def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev_s=40.0, max_seeds=3):
+def moving_frames(stamps, grays, *, pad_ms=300, spread=4.0):
+    """Frame indices around motion, for spending detector time only where something happens.
+
+    ``grays``: [(frame_index, small grayscale image)] in time order. A sample moves when its
+    difference from the previous sample exceeds the take's own noise floor (median +
+    ``spread`` x MAD); every frame within ``pad_ms`` of a moving sample is returned.
+    """
+    import numpy as np
+    if len(grays) < 3:
+        return set(range(len(stamps)))
+    energy = [(index, float(np.mean(np.abs(image.astype(np.int16) - previous.astype(np.int16)))))
+              for (_, previous), (index, image) in zip(grays, grays[1:])]
+    values = np.array([value for _, value in energy])
+    floor = float(np.median(values))
+    threshold = floor + spread * max(float(np.median(np.abs(values - floor))), .5)
+    moving = [stamps[index] for index, value in energy if value > threshold]
+    return {index for index, stamp in enumerate(stamps)
+            if any(abs(stamp - moment) <= pad_ms for moment in moving)}
+
+
+def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev_s=40.0, max_seeds=3,
+           stop_when_complete=False):
     """Refined rotation events for one take.
 
     ``frames``: list of (timestamp_ms, decode) where ``decode()`` returns the upright BGR frame;
@@ -239,6 +260,8 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
     An open-vocabulary hit can be the wrong thing (a button, a hand). Each of an episode's best
     ``max_seeds`` hits is followed on its own and only the best-observed throw is kept: a wrong
     seed yields no throw, or one that is less complete, instead of corrupting the right one.
+    With ``stop_when_complete`` the next seeds are skipped once a seed has given a complete
+    free-fall count (seen in at least 90% of the flight), which saves most of the time.
     """
     results = []
     stamps = [stamp for stamp, _ in frames]
@@ -257,6 +280,10 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
                                 seed_box=[round(float(v), 1) for v in box], frames=[start, end], shapes=trace)
                            for event in count_spins(stamps, shapes, expected_max_rev_s=expected_max_rev_s,
                                                     track_id=f'{slug}-{number + 1}')]
+            best = max(candidates, key=_rank) if candidates else None
+            if (stop_when_complete and best is not None and best['status'] == 'counting'
+                    and best['trajectory'].get('kind') == 'free_fall' and best['coverage'] >= .9):
+                break
         if candidates:
             results.append(max(candidates, key=_rank))
     return results
