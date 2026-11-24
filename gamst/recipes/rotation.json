@@ -1,0 +1,18 @@
+{
+  "name": "rotation",
+  "summary": "Count turns and rev/s of something spinning in the image plane: a fan, a wheel, a turntable.",
+  "skill": "skills/gamst-rotation/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "camera": "a fixed camera facing the rotation axis; the frame rate must exceed 2 x symmetry x the fastest rev/s (gamst recipe check rotation tells which); a GAMST 240 take for fast fans",
+    "compute": "CPU"
+  },
+  "pipeline": [
+    {"step": "capture", "use": "camera", "sources": ["camera", "video", "take"]},
+    {"step": "find", "use": "roi"},
+    {"step": "follow", "use": "shape-tracks"},
+    {"step": "count", "use": "in-plane", "symmetry": 1, "max_rev_s": 10}
+  ],
+  "records": ["vision.rotation"],
+  "measured": "synthetic 240 fps videos of a 3-blade fan only (2026-11-25): within 1.2% of the true turns at 5, 12 (behind a static grill) and 30 rev/s; no real fan or wheel yet"
+}

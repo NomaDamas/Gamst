@@ -3,10 +3,11 @@
 A recipe composes parts GAMST already has; it adds no runtime of its own.
 
   gamst recipe list
-  gamst recipe show coin-flip
-  gamst recipe setup coin-flip [--dry-run]   install only what the pipeline uses
-  gamst recipe check coin-flip --fps 240     test a camera against the recipe
+  gamst recipe show rotation
+  gamst recipe setup coin-flip [--dry-run]           install only what the pipeline uses
+  gamst recipe check rotation --fps 240 --symmetry 3 test a camera against the recipe
   gamst recipe run coin-flip [--iphone 9123 | --take DIR] [gamst demo rotation options]
+  gamst recipe run rotation [--camera N | --video FILE | --take DIR] [--symmetry N] [demo options]
 
 ``run`` starts ``gamst demo rotation`` with the pipeline as its options; other options pass
 through and win.
@@ -17,9 +18,10 @@ it turns less than half a repeat between two frames, so
   max countable rev/s = fps / (2 * symmetry)
 
 A flipping disc's outline repeats every half turn (symmetry 2): the ``fps / 4`` rule of
-:mod:`gamst.providers.object_spin`. Above the limit the count would be an alias, so ``check`` and
-``run`` refuse a known frame rate that cannot reach the recipe's speed, and the runtime marks such
-counts ``undersampled`` instead of reporting them.
+:mod:`gamst.providers.object_spin`. A 3-blade fan turning in the image plane has symmetry 3. Above
+the limit the count would be an alias, so ``check`` and ``run`` refuse a known frame rate that
+cannot reach the recipe's speed, and the runtime marks such counts ``undersampled`` instead of
+reporting them.
 """
 from __future__ import annotations
 
@@ -44,14 +46,21 @@ SOURCE_REPOSITORIES = {
 # What each part needs installed; setup installs the union over one recipe's pipeline, nothing else.
 PARTS = {
     ('capture', 'gamst240'): dict(extras=('rotation',)),
+    ('capture', 'camera'): dict(extras=('rotation',)),
     ('find', 'yoloe'): dict(extras=('yoloe',), pip=('clip',), models=tuple(demo.MODEL_ASSETS)),
+    ('find', 'motion'): dict(),
+    ('find', 'roi'): dict(),
     ('follow', 'efficienttam'): dict(extras=('efficienttam',), models=tuple(demo.REFINE_ASSETS),
                                      sources=('EfficientTAM',)),
+    ('follow', 'shape-tracks'): dict(extras=('rotation',)),
     ('count', 'flip'): dict(extras=('rotation',)),
+    ('count', 'in-plane'): dict(extras=('rotation',)),
 }
 # The pipelines the runtime runs: count part -> (find parts, follow parts) it works with.
-FLOWS = {'flip': (('yoloe',), ('efficienttam',))}
+FLOWS = {'flip': (('yoloe',), ('efficienttam',)),
+         'in-plane': (('motion', 'roi', 'yoloe'), ('shape-tracks',))}
 SYMMETRY = {'flip': 2}
+SOURCES_BY_CAPTURE = {'gamst240': ('iphone', 'take'), 'camera': ('camera', 'video', 'take')}
 
 
 def names():
@@ -79,8 +88,11 @@ def load(name):
     finds, follows = FLOWS[steps['count']['use']]
     if steps['find']['use'] not in finds or steps['follow']['use'] not in follows:
         raise ValueError(f"{path}: {steps['count']['use']!r} counting runs with find {finds} and follow {follows}")
-    if not steps['capture'].get('sources'):
-        raise ValueError(f'{path}: capture needs its sources')
+    supported = SOURCES_BY_CAPTURE[steps['capture']['use']]
+    if not steps['capture'].get('sources') or set(steps['capture']['sources']) - set(supported):
+        raise ValueError(f"{path}: capture {steps['capture']['use']!r} reads from {supported}")
+    if type(steps['count'].get('symmetry', 1)) is not int or not 1 <= steps['count'].get('symmetry', 1) <= 64:
+        raise ValueError(f'{path}: count symmetry must be an integer in [1, 64]')
     if steps['find']['use'] == 'yoloe' and not steps['find'].get('label'):
         raise ValueError(f'{path}: find with yoloe needs a label')
     if not 0 < float(steps['count'].get('max_rev_s', 0)) <= 1000:
@@ -199,6 +211,24 @@ def _take_fps(raw):
     return (len(frames) - 1) / span if span else None
 
 
+def _source_fps(args, extra):
+    """The input's frame rate when it is known before the run (a take or a file), else None."""
+    if args.take:
+        return _take_fps(_take_recording(args.take))
+    if args.video:
+        timing = argparse.ArgumentParser(add_help=False)
+        timing.add_argument('--capture-fps', type=float)
+        override = timing.parse_known_args(extra)[0].capture_fps
+        if override:
+            return override
+        import cv2
+        video = cv2.VideoCapture(args.video)
+        fps = video.get(cv2.CAP_PROP_FPS) if video.isOpened() else 0
+        video.release()
+        return fps or None
+    return None
+
+
 def _device():
     return 'mps' if sys.platform == 'darwin' and platform.machine() == 'arm64' else 'cpu'
 
@@ -206,26 +236,38 @@ def _device():
 def demo_argv(recipe, args):
     """``gamst demo rotation`` options for this recipe and the chosen source."""
     steps = recipe['steps']
-    source = next((name for name in ('iphone', 'take') if getattr(args, name, None) is not None),
+    source = next((name for name in ('iphone', 'take', 'camera', 'video') if getattr(args, name, None) is not None),
                   steps['capture']['sources'][0])
     if source not in steps['capture']['sources']:
         raise SystemExit(f"{recipe['name']} captures from {', '.join(steps['capture']['sources'])}, not {source}")
-    argv = ['--iphone', str(args.iphone or 9123)] if source == 'iphone' else [
-        '--iphone-replay', str(_take_recording(args.take))]
-    count = steps['count']
+    find, count = steps['find'], steps['count']
+    label = args.label or find.get('label')
     max_rev_s = args.max_rev_s or count['max_rev_s']
-    argv += ['--refine', args.label or steps['find']['label'],
-             '--efficienttam-source', str(SOURCES / 'EfficientTAM'),
-             '--expected-max-rev-s', f'{max_rev_s:g}', '--device', _device()]
-    argv += ['--refine-on', 'button', '--refine-fast'] if count.get('on', 'analyze') == 'analyze' else [
-        '--refine-on', 'stop']
-    return argv
+    if count['use'] == 'flip':
+        argv = ['--iphone', str(args.iphone or 9123)] if source == 'iphone' else [
+            '--iphone-replay', str(_take_recording(args.take))]
+        argv += ['--refine', label, '--efficienttam-source', str(SOURCES / 'EfficientTAM'),
+                 '--expected-max-rev-s', f'{max_rev_s:g}', '--device', _device()]
+        return argv + (['--refine-on', 'button', '--refine-fast'] if count.get('on', 'analyze') == 'analyze' else
+                       ['--refine-on', 'stop'])
+    argv = {'camera': lambda: ['--camera', str(args.camera or 0)], 'video': lambda: ['--video', args.video],
+            'take': lambda: ['--take', str(_take_recording(args.take))]}[source]()
+    if find['use'] == 'yoloe':
+        argv += ['--detector', 'yoloe', '--targets', label, '--device', _device()]
+    else:
+        # roi: the box comes with --roi (passed through); motion: regions where the picture moves
+        argv += ['--detector', 'motion']
+    symmetry = args.symmetry or count.get('symmetry', 1)
+    return argv + ['--in-plane', 'polar', '--symmetry', str(symmetry), '--expected-max-rev-s', f'{max_rev_s:g}']
 
 
 def _speed_options(parser):
     speed = parser.add_mutually_exclusive_group()
     speed.add_argument('--max-rev-s', type=float, help="fastest turn rate to count (default: the recipe's)")
     speed.add_argument('--max-rpm', type=float, help='the same in revolutions per minute')
+    parser.add_argument('--symmetry', type=int, choices=range(1, 65), metavar='N',
+                        help='times the object looks the same per in-plane turn, e.g. blades of a fan '
+                             "(default: the recipe's)")
 
 
 def _max_rev_s(args):
@@ -252,6 +294,8 @@ def main(argv=None):
     source = start.add_mutually_exclusive_group()
     source.add_argument('--iphone', type=int, metavar='PORT', help='live GAMST 240 app (default port 9123)')
     source.add_argument('--take', metavar='DIR', help='a recorded GAMST 240 take (folder or raw.gmst)')
+    source.add_argument('--camera', type=int, metavar='INDEX', help='a local camera')
+    source.add_argument('--video', metavar='FILE', help='a video file (add --capture-fps for high-speed files)')
     start.add_argument('--label', help="what to find (default: the recipe's label)")
     _speed_options(start)
     args, extra = parser.parse_known_args(argv)
@@ -268,15 +312,16 @@ def main(argv=None):
     elif args.action == 'setup':
         setup(recipe, models=args.models, dry_run=args.dry_run)
     elif args.action == 'check':
-        verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args))
+        verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args), symmetry=args.symmetry)
         print(json.dumps(verdict, indent=2))
         if verdict.get('ok') is False:
             raise SystemExit(1)
     else:
         args.max_rev_s = _max_rev_s(args)
         options = demo_argv(recipe, args) + extra
-        fps = _take_fps(_take_recording(args.take)) if args.take else None
-        verdict = check(recipe, fps=fps, max_rev_s=args.max_rev_s)
+        if recipe['steps']['find']['use'] == 'roi' and '--roi' not in extra:
+            raise SystemExit(f"{recipe['name']} counts inside a fixed box: pass --roi x,y,width,height")
+        verdict = check(recipe, fps=_source_fps(args, extra), max_rev_s=args.max_rev_s, symmetry=args.symmetry)
         print(json.dumps(dict(recipe=recipe['name'], sampling=verdict, demo=options)), flush=True)
         if verdict.get('ok') is False:
             raise SystemExit('; '.join(verdict['problems']))

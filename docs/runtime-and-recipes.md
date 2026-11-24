@@ -61,6 +61,8 @@ gamst recipe setup coin-flip            # install only the parts the pipeline us
 gamst recipe check coin-flip --fps 240  # can this camera count the recipe's speed?
 gamst recipe run coin-flip --iphone 9123
 gamst recipe run coin-flip --take TAKE_DIR
+gamst recipe check rotation --symmetry 3 --max-rpm 1500 --fps 240
+gamst recipe run rotation --take TAKE_DIR --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 ```
 
 Still missing:
@@ -83,13 +85,18 @@ The runtime stays one runtime. A recipe only chooses and connects its parts:
 - `run` starts the existing runtime with those parts.
 
 The sampling check is physics, not tuning. An object whose look repeats `symmetry` times per turn is countable only
-below `fps / (2 × symmetry)` rev/s. A flipping coin's outline repeats every half turn (symmetry 2), so it is countable
-below `fps / 4`.
+below `fps / (2 × symmetry)` rev/s:
+
+- a flipping coin's outline repeats every half turn (symmetry 2): countable below `fps / 4`;
+- a 3-blade fan turning in the image plane (symmetry 3): countable below `fps / 6`, so 40 rev/s at 240 fps.
 
 `check` and `run` refuse a known frame rate below that limit. The runtime marks counts above it `undersampled`.
 
 `skills/<name>/SKILL.md` stays as the agent-facing pointer: it tells an agent which recipe to run and how to read the
-results over MCP. `skills/gamst-coin-flip` points at the `coin-flip` recipe.
+results over MCP:
+
+- `skills/gamst-coin-flip` points at the `coin-flip` recipe, measured against a person's counts;
+- `skills/gamst-rotation` points at the `rotation` recipe, measured on synthetic fan videos only.
 
 The first recipe is **What 1 fps misses**: a high-frequency physical event that a 1 fps model cannot see. The coin
 flip is its first instance:
