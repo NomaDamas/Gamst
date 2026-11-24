@@ -36,7 +36,6 @@ class TargetTracks:
         self.shape = None
         self.history = []  # recent grays; their per-pixel median is the static background
 
-    def _find(self, gray, center, radius):
         """Best exemplar-sized blob near ``center``: ((x, y), (major, minor), angle) or None.
 
         The object is separated from what stays still (a face, a wall, a shirt) by comparing the
@@ -61,7 +60,6 @@ class TargetTracks:
             border = np.concatenate([roi[0], roi[-1], roi[:, 0], roi[:, -1]])
             diff = cv.absdiff(roi, np.full_like(roi, int(np.median(border))))
         level, fg = cv.threshold(diff, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-        if level < 12:
             return None
         fg = cv.morphologyEx(fg, cv.MORPH_CLOSE, np.ones((3, 3), np.uint8))
         count, labels, stats, centers = cv.connectedComponentsWithStats(fg)

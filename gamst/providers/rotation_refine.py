@@ -56,7 +56,7 @@ def episodes(detections, *, gap_ms=500, min_score=.2):
 
 
 def ellipses(masks):
-    """{frame_index: mask or None} -> {frame_index: (cx, cy, major, minor) or None}."""
+    """{frame_index: mask or None} -> {frame_index: (cx, cy, major, minor, angle_deg) or None}."""
     import cv2
     import numpy as np
     output = {}
@@ -69,8 +69,9 @@ def ellipses(masks):
         if len(contour) < 5:
             output[index] = None
             continue
-        (cx, cy), (a, b), _ = cv2.fitEllipse(contour)
-        output[index] = (float(cx), float(cy), float(max(a, b)), float(min(a, b)))
+        (cx, cy), (a, b), angle = cv2.fitEllipse(contour)
+        output[index] = (float(cx), float(cy), float(max(a, b)), float(min(a, b)),
+                         float(angle if a >= b else angle + 90) % 180)
     return output
 
 
@@ -114,17 +115,18 @@ def flight_span(stamps, shapes, *, tolerance=.1):
 
 
 def count_spins(stamps, shapes, *, expected_max_rev_s=40.0, track_id='target', max_edge_frames=6,
-                min_coverage=.8):
+                min_coverage=.8, span=None):
     """Spin events from per-frame ellipses; ``stamps[i]`` is frame ``i``'s capture time (ms).
 
     A short run of frames with no mask between frames with masks is taken as edge-on (minor axis
     ~0): a segmenter loses a coin exactly when it is a one-pixel line. Longer runs are unobserved.
+    ``span`` (first, last) overrides :func:`flight_span`, e.g. to count a flight up to a frame.
     """
     import numpy as np
     seen = sorted(index for index, shape in shapes.items() if shape is not None)
     if len(seen) < 6:
         return []
-    span = flight_span(stamps, shapes)
+    span = flight_span(stamps, shapes) if span is None else span
     if span is not None:
         seen = [index for index in seen if span[0] <= index <= span[1]]
         if len(seen) < 6:
@@ -248,8 +250,11 @@ def refine(frames, detections, segmenter, *, label, pad_ms=350, expected_max_rev
         candidates = []
         for _, index, score, box in sorted(episode['prompts'], key=lambda item: -item[2])[:max_seeds]:
             shapes = {start + i: shape for i, shape in ellipses(segmenter.track(images, [(index - start, box)])).items()}
+            # The followed object's ellipse per frame ([frame, cx, cy, major, minor, angle]) is the
+            # evidence behind the count: a render or an audit can replay it without the models.
+            trace = [[i, *(round(v, 1) for v in shapes[i])] for i in sorted(shapes) if shapes[i] is not None]
             candidates += [dict(event, label=label, seed_score=round(float(score), 3), seed_frame=index,
-                                seed_box=[round(float(v), 1) for v in box], frames=[start, end])
+                                seed_box=[round(float(v), 1) for v in box], frames=[start, end], shapes=trace)
                            for event in count_spins(stamps, shapes, expected_max_rev_s=expected_max_rev_s,
                                                     track_id=f'{slug}-{number + 1}')]
         if candidates:
@@ -267,21 +272,26 @@ SPEC = CapabilitySpec(
 async def publish(human, results, *, take_id, clock):
     """Store each refined throw as a registered observation and remember its named object.
 
-    ``clock(capture_ms)`` maps a frame's capture time to the runtime's timestamp. Each throw is
-    one ``objects`` snapshot, so :class:`ObjectMemory` keeps the object with its evidence.
+    ``clock(capture_ms)`` maps a frame's capture time to the runtime's timestamp; every time an
+    agent reads (record, ``started_ms``/``ended_ms``, event) is on that clock, the capture time is
+    kept as ``capture_timestamp_ms``. ``flips`` are half turns. Each throw is one ``objects``
+    snapshot, so :class:`ObjectMemory` keeps the object with its evidence.
     """
     human.register_capability(SPEC)  # idempotent for the same contract
     epoch = re.sub(r'[^A-Za-z0-9._-]+', '-', take_id)[:128]
     records = []
     for sequence, event in enumerate(results):
+        ended = clock(event['timestamp_ms'])
         attributes = {key: event[key] for key in ('turns', 'rev_s', 'status', 'coverage', 'duration_ms')}
-        attributes['trajectory'] = event['trajectory'].get('kind')
+        attributes.update(flips=None if event['turns'] is None else round(2 * event['turns'], 1),
+                          trajectory=event['trajectory'].get('kind'),
+                          started_ms=ended - event['duration_ms'], ended_ms=ended)
         value = dict(objects=[dict(track_id=event['track_id'], label=event['label'], attributes=attributes)],
-                     events=[dict(event, type='rotation.ended', axis='flip', source='refined')])
+                     events=[dict(event, type='rotation.ended', axis='flip', source='refined', timestamp_ms=ended,
+                                  capture_timestamp_ms=event['timestamp_ms'])])
         sensor = SensorMetadata(source_id='gamst.take', sensor_id='refine', sequence=sequence,
                                 capture_sequence=sequence, coordinate_frame='image', stream_epoch=epoch)
-        record = await human.push_observation(SPEC.id, value, sensor=sensor,
-                                              timestamp_ms=clock(event['timestamp_ms']))
+        record = await human.push_observation(SPEC.id, value, sensor=sensor, timestamp_ms=ended)
         await human.remember_objects(record['id'], complete_snapshot=False)
         records.append(record)
     return records

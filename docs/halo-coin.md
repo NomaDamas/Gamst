@@ -187,3 +187,48 @@ Findings:
 - A wrong hit can still produce a short fragment, which is reported with its own short duration.
 
 Counting accuracy is still not claimed.
+
+## Seven tosses against a person's flip count (2026-11-24, take `140345`)
+
+White shirt, iPhone SE 2, 240.2 fps, native 554×1080 strip, 21.5 s, 5,173 frames.
+The thrower counted flips (half turns) frame by frame in `refined.mp4`.
+
+| Toss | Person (flips) | GAMST (flips) | GAMST turns · rev/s | Flight GAMST counted |
+|---:|---:|---:|---|---:|
+| 1 | 9 | 8.8 | 4.4 · 9.6 | 462 ms |
+| 2 | 6 | 5.2 | 2.6 · 7.4 | 354 ms |
+| 3 | 15 | 14.4 | 7.2 · 15.5 | 466 ms |
+| 4 | 15 | 8.6 | 4.3 · 15.5 | 279 ms |
+| 5 | 12 | 11.6 | 5.8 · 12.7 | 454 ms |
+| 6 | 3 | 2.4 | 1.2 · 3.6 | 346 ms |
+| 7 | 10 | 10.2 | 5.1 · 13.6 | 375 ms |
+
+Findings:
+
+- 6 of 7 tosses are within one flip of the person's count.
+- GAMST is slightly low on 6 of 7 tosses.
+- Toss 4 is low by about 6 flips because the counted flight (279 ms) is much shorter than the
+  rate implies (15 flips at 15.5 rev/s ≈ 480 ms). The parabola window stopped early; the count
+  itself is not a sampling error.
+
+Time on an Apple M2 Pro MacBook Pro (MPS), for toss 7's 169-frame (0.7 s) window:
+
+| Step | Time |
+|---|---:|
+| Decode 169 frames | 0.5 s |
+| YOLOE on every 4th frame (43 frames, 2 tiles each) | 4.7 s |
+| EfficientTAM + count, per seed | 13–14 s |
+| One toss, 3 seeds (current default) | ≈ 45 s |
+
+The whole take, 7 tosses including YOLOE over all 21.5 s, took about 8 minutes.
+
+Each throw is handed to agents as GAMST context. This is toss 7's object in the stored
+`vision.rotation.refined` observation; times are on the runtime clock, and the capture clock is
+kept in the event as `capture_timestamp_ms`:
+
+```json
+{"track_id": "metal-coin-7", "label": "metal coin",
+ "attributes": {"flips": 10.2, "turns": 5.1, "rev_s": 13.55, "status": "counting",
+                "coverage": 1.0, "duration_ms": 375, "trajectory": "free_fall",
+                "started_ms": 1795496643254, "ended_ms": 1795496643629}}
+```

@@ -1,18 +1,22 @@
-"""GAMST 240 live: an iPhone high-fps camera feeding GAMST ``vision.rotation`` with a HUD.
+"""GAMST 240 live: an iPhone high-fps camera feeding GAMST, with a HUD and throw counting.
 
 The phone streams continuously so the HUD can frame the shot; Start/Stop on the phone
-marks a *take*. Only take frames go through GAMST (every frame, never dropped), and each
-take is saved under ``--record-dir``:
+marks a *take*. The HUD is a camera monitor: it shows the stream, never a live count (a
+per-frame tracker cheap enough for 240 fps miscounted glinting coins). Each take is saved
+under ``--record-dir``:
 
 * ``raw.gmst``      the phone stream as received (replay with ``--iphone-replay``)
-* ``hud.mp4``       the HUD at real time (30 fps, 1920x1080), ready to upload
-* ``slowmo.mp4``    every captured frame with overlays at 30 fps (8x slow motion at 240 fps),
-                    rendered by a background process a few seconds after the take
-* ``measurements.jsonl``  GAMST's per-frame rotation measurement, aligned with ``raw.gmst``
-* ``summary.json``  tosses, rotation events and capture statistics
+* ``hud.mp4``       the HUD at real time (30 fps, 1920x1080)
+* ``summary.json``  capture statistics
 
-GAMST owns measurement, records, events and Watch alarms; this module only receives,
-renders and writes files.
+With ``--refine LABEL`` a separate process then counts the take's throws of that named object
+(:mod:`gamst.providers.rotation_refine`) and writes:
+
+* ``refined.json``  every throw: turns, flips, rate, flight window, coverage and the per-frame trace
+* ``refined.mp4``   each throw at 8x slow motion with the followed outline and the running count
+
+The live process stores each throw as a timestamped ``vision.rotation.refined`` observation and
+remembers the named object, so agents read the counts from GAMST context.
 """
 from __future__ import annotations
 
@@ -30,8 +34,6 @@ import time
 import typing
 from pathlib import Path
 
-from ..providers.rotation import RotationPlugin
-from ..providers.target_tracks import measure_exemplar
 
 # "GMS3" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 |
 # u16 clockwise degrees to upright | u16 x4 crop rect (sensor-normalized x65535) | u32 jpeg bytes.
@@ -41,13 +43,6 @@ from ..providers.target_tracks import measure_exemplar
 HEADER_SIZE = {b'GMS3': 36, b'GMS2': 28, b'GMST': 24}
 RECORDING, FRONT_CAMERA = 1, 2
 FULL = (0., 0., 1., 1.)
-MEASURE_PIXELS = 300_000  # GAMST measures frames scaled down to at most this many pixels
-
-
-def measured_size(frame):
-    height, width = frame.shape[:2]
-    scale = min(1., (MEASURE_PIXELS / (width * height)) ** .5)
-    return max(2, round(width * scale)), max(2, round(height * scale))
 
 
 class FrameHeader(typing.NamedTuple):
@@ -124,13 +119,6 @@ def upright_rect_to_sensor(rect, angle):
     points = [upright_to_sensor(px, py, angle) for px, py in ((x, y), (x + w, y + h))]
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
-
-
-def pixel_density(info, measured_width, frame_width):
-    """Measured pixels per unit of sqrt(full-sensor area) for this frame's mode and crop."""
-    _, _, cw, ch = info.crop
-    native = ((info.width / cw) * (info.height / ch)) ** .5
-    return native * measured_width / frame_width
 
 
 # ---------------------------------------------------------------- rendering
@@ -218,14 +206,12 @@ def _pill(image, text_engine, x, y, label, color, filled=True, size=22):
 
 
 class Hud:
-    """Composes the 1920x1080 HUD from a frame and GAMST's latest rotation measurement."""
+    """The 1920x1080 live view: camera monitor, take status and the counted throws."""
 
-    def __init__(self, *, show_all=False):
+    def __init__(self):
         import numpy as np
         self.np = np
         self.text = Text()
-        self.show_all = show_all
-        self.trails = {}
         self.base = self._static()
 
     def _static(self):
@@ -238,10 +224,10 @@ class Hud:
         cv2.rectangle(canvas, (x - 2, 900), (1888, 1052), PANEL, -1)
         t = self.text
         width = self._logo(canvas, 28, 20)
-        t.put(canvas, 'Halo  ·  vision.rotation  ·  moment capture', 28 + width + 20, 44, 22, MUTED)
-        t.put(canvas, 'LAST TOSS', 1456, 124, 18, MUTED, 'semibold')
-        t.put(canvas, 'THIS TAKE', 1456, 560, 18, MUTED, 'semibold')
-        t.put(canvas, 'GAMST CONTEXT   Watch: rotation.ended  ->  timestamped records an LLM can read later',
+        t.put(canvas, 'Halo  ·  GAMST 240  ·  moment capture', 28 + width + 20, 44, 22, MUTED)
+        t.put(canvas, 'LAST THROW', 1456, 124, 18, MUTED, 'semibold')
+        t.put(canvas, 'THIS SESSION', 1456, 560, 18, MUTED, 'semibold')
+        t.put(canvas, 'GAMST CONTEXT   vision.rotation.refined  ->  timestamped throw records an agent can read',
               48, 914, 18, MUTED, 'semibold')
         return canvas
 
@@ -257,24 +243,8 @@ class Hud:
         region[:] = (region * (1 - alpha) + rgba[..., 2::-1] * alpha).astype(np.uint8)
         return w
 
-    def update(self, value):
-        """Feed every measured frame so motion trails stay continuous (measurement coordinates)."""
-        seen = set()
-        for item in (value or {}).get('objects', []):
-            if not item['observed']:
-                continue
-            x, y, size, _ = item['box']
-            trail = self.trails.setdefault(item['track_id'], collections.deque(maxlen=48))
-            trail.append((x + size / 2, y + size / 2))
-            seen.add(item['track_id'])
-        for track_id in [key for key in self.trails if key not in seen]:
-            trail = self.trails[track_id]
-            trail.popleft()
-            if not trail:
-                del self.trails[track_id]
-
-    def video_layer(self, frame, value):
-        """The frame letterboxed into the video rect with GAMST overlays (also used for slow motion)."""
+    def video_layer(self, frame):
+        """The frame letterboxed into the video rect."""
         import cv2
         np = self.np
         _, _, w, h = VIDEO
@@ -284,37 +254,13 @@ class Hud:
         dw, dh = int(fw * scale) // 2 * 2, int(fh * scale) // 2 * 2
         ox, oy = (w - dw) // 2, (h - dh) // 2
         layer[oy:oy + dh, ox:ox + dw] = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
-        measured = measured_size(frame)
-        sx, sy = dw / measured[0], dh / measured[1]
-        for trail in self.trails.values():
-            points = [(int(ox + px * sx), int(oy + py * sy)) for px, py in trail]
-            for index in range(1, len(points)):
-                a, b = points[index - 1], points[index]
-                if abs(a[0] - b[0]) + abs(a[1] - b[1]) > 120:  # a re-seeded track, not motion
-                    continue
-                cv2.line(layer, a, b, ACCENT, 1 + 3 * index // len(points), cv2.LINE_AA)
-        for item in (value or {}).get('objects', []):
-            if not item['observed']:
-                continue
-            x, y, size, _ = item['box']
-            x0, y0 = int(ox + x * sx), int(oy + y * sy)
-            x1, y1 = int(ox + (x + size) * sx), int(oy + (y + size) * sy)
-            status = item['status']
-            color = ACCENT if status == 'counting' else WARN if status == 'undersampled' else DIM
-            corner = max(6, (x1 - x0) // 4)
-            for cx, cy, dx, dy in ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)):
-                cv2.line(layer, (cx, cy), (cx + dx * corner, cy), color, 2, cv2.LINE_AA)
-                cv2.line(layer, (cx, cy), (cx, cy + dy * corner), color, 2, cv2.LINE_AA)
-            if status != 'idle' and item.get('flip_rev_s'):
-                label = f"{item['flip_rev_s']:.1f} rev/s"
-                self.text.put(layer, label, x0, max(2, y0 - 26), 20, color, 'semibold')
         return layer
 
-    def render(self, frame, value, state):
+    def render(self, frame, state):
         canvas = self.base.copy()
         x, y, w, h = VIDEO
         if frame is not None:
-            canvas[y:y + h, x:x + w] = self.video_layer(frame, value)
+            canvas[y:y + h, x:x + w] = self.video_layer(frame)
         else:
             self.text.put(canvas, 'waiting for the iPhone', x + w // 2, y + h // 2 - 20, 34, MUTED, anchor='center')
         self._top(canvas, state)
@@ -327,8 +273,6 @@ class Hud:
         mode = state['mode']
         if mode == 'recording':
             label, color = f"●  REC  {state['take_seconds']:05.1f} s", REC
-        elif mode == 'processing':
-            label, color = f"GAMST catching up  ·  {state['lag_s']:.1f} s behind", WARN
         elif mode == 'saved':
             label, color = f"saved  {state['saved']}", GOOD
         elif mode == 'standby':
@@ -340,32 +284,30 @@ class Hud:
         right = f"camera {state['capture_fps']:.0f} fps"
         if state.get('frame_size'):
             right += f"  ·  {state['frame_size'][0]}x{state['frame_size'][1]}"
-        if state.get('target_px'):
-            right += f"  ·  target {state['target_px']:.0f} px"
         t.put(canvas, right, 1888, 34, 22, WHITE, 'semibold', anchor='right')
         t.put(canvas, f"countable up to {state['capture_fps'] / 4:.0f} rev/s flipping", 1888, 64, 18, MUTED, anchor='right')
 
     def _panel(self, canvas, state):
         t = self.text
-        toss = state['last_toss']
-        if toss is None:
-            t.put(canvas, '0.0', 1450, 150, 150, LINE, 'bold')
-            t.put(canvas, 'toss a coin through the frame', 1456, 340, 22, MUTED)
+        throw = state['last_throw']
+        if throw is None:
+            t.put(canvas, '0', 1450, 150, 150, LINE, 'bold')
+            hint = ('counting the last take ...' if state['pending'] else
+                    'REC, toss, STOP: counted after the take')
+            t.put(canvas, hint, 1456, 340, 22, MUTED)
         else:
-            number = f"{toss['turns']:.1f}"
-            width = t.put(canvas, number, 1450, 150, 150, WHITE, 'bold')
-            t.put(canvas, 'turns', 1456 + width + 8, 262, 30, MUTED, 'semibold')
-            t.put(canvas, f"{toss['rev_s']:.1f} rev/s", 1456, 338, 34, ACCENT, 'semibold')
-            t.put(canvas, f"{toss['duration_ms'] / 1000:.2f} s in view  ·  {toss['capture_fps']:.0f} fps",
+            width = t.put(canvas, f"{throw['flips']:.1f}", 1450, 150, 150, WHITE, 'bold')
+            t.put(canvas, 'flips', 1456 + width + 8, 262, 30, MUTED, 'semibold')
+            t.put(canvas, f"{throw['turns']:.1f} turns  ·  {throw['rev_s']:.1f} rev/s", 1456, 338, 34, ACCENT, 'semibold')
+            t.put(canvas, f"{throw['duration_ms'] / 1000:.2f} s in the air  ·  seen {throw['coverage']:.0%}",
                   1456, 388, 22, MUTED)
-            kind = (toss.get('trajectory') or {}).get('kind')
-            chip = {'free_fall': ('FREE FALL', GOOD), 'stationary': ('SPINNING IN PLACE', ACCENT)}.get(
-                kind, ('NOT AIRBORNE', DIM))
+            chip = (('THROW', GOOD) if throw['status'] == 'counting' and throw['trajectory'] == 'free_fall' else
+                    ('PARTIAL  ·  LOWER BOUND', WARN) if throw['status'] == 'partial' else ('NOT A THROW', DIM))
             _pill(canvas, t, 1456, 430, chip[0], chip[1], size=18)
-        t.put(canvas, f"{state['tosses']} measured", 1456, 596, 30, WHITE, 'semibold')
-        t.put(canvas, f"{state['frames']} frames  ·  {state['ignored']} motions ignored", 1456, 640, 20, MUTED)
+        t.put(canvas, f"{len(state['history'])} throws counted", 1456, 596, 30, WHITE, 'semibold')
+        t.put(canvas, f"{state['frames']} frames this take", 1456, 640, 20, MUTED)
         for index, item in enumerate(state['history'][-6:][::-1]):
-            line = f"{item['turns']:4.1f} turns   {item['rev_s']:5.1f} rev/s"
+            line = f"{item['flips']:5.1f} flips  {item['rev_s']:5.1f} rev/s"
             t.put(canvas, line, 1456, 690 + index * 30, 22, WHITE if index == 0 else MUTED, family='mono')
 
     def _feed(self, canvas, state):
@@ -409,10 +351,10 @@ class VideoSink:
 
 
 class Take:
-    """One Start→Stop take: raw stream, per-frame measurements, real-time HUD video and a summary.
+    """One Start→Stop take: the raw stream, a real-time HUD video and a summary.
 
-    ``slowmo.mp4`` is rendered by a separate process after the take closes, so it never
-    competes with GAMST for the live loop.
+    With ``refine`` arguments a separate process counts the take's throws afterwards
+    (``refined.json``, ``refined.mp4``), so the analysis never competes with capture.
     """
 
     def __init__(self, root, refine=None):
@@ -421,28 +363,23 @@ class Take:
         self.dir = Path(root) / f'take-{stamp}'
         self.dir.mkdir(parents=True, exist_ok=True)
         self.raw = open(self.dir / 'raw.gmst', 'wb')
-        self.measurements = open(self.dir / 'measurements.jsonl', 'w')
         self.hud = VideoSink(self.dir / 'hud.mp4', 30, CANVAS)
-        self.events, self.frames, self.first, self.last = [], 0, None, None
+        self.frames, self.first, self.last = 0, None, None
+        self.refine_process = None
 
-    def add(self, header, payload, seconds, value, toss):
+    def add(self, header, payload, seconds):
         self.raw.write(header + payload)
-        self.measurements.write(json.dumps(dict(objects=value['objects'], toss=toss), separators=(',', ':')) + '\n')
         self.frames += 1
         self.first = seconds if self.first is None else self.first
         self.last = seconds
 
-    def close(self, summary):
+    def close(self):
         self.raw.close()
-        self.measurements.close()
         self.hud.close()
         span = (self.last - self.first) if self.frames > 1 else 0
-        summary.update(frames=self.frames, seconds=round(span, 3),
-                       capture_fps=round((self.frames - 1) / span, 1) if span else None, events=self.events)
-        (self.dir / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
-        subprocess.Popen([sys.executable, '-m', 'gamst.demos.rotation_live', 'slowmo', str(self.dir)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        self.refine_process = None
+        summary = dict(frames=self.frames, seconds=round(span, 3),
+                       capture_fps=round((self.frames - 1) / span, 1) if span else None)
+        (self.dir / 'summary.json').write_text(json.dumps(summary, indent=2))
         if self.refine:
             with open(self.dir / 'refine.log', 'w') as log:
                 self.refine_process = subprocess.Popen(
@@ -451,28 +388,91 @@ class Take:
         return self.dir
 
 
-def render_slowmo(directory):
-    """Every captured frame of a take with its GAMST overlay at 30 fps (8x slow at 240 fps)."""
+def render_refined(directory):
+    """``refined.mp4``: each counted throw at 8x slow motion (every 240 fps frame at 30 fps).
+
+    Shows the followed object's outline, its axis-ratio signal (one dip per flip) and GAMST's
+    running count up to each frame. Replays the per-frame ellipses kept in ``refined.json``;
+    no model runs.
+    """
+    import cv2
+    import numpy as np
+    from ..providers.rotation_refine import count_spins
     directory = Path(directory)
-    hud, sink = Hud(), None
-    with open(directory / 'measurements.jsonl') as measurements:
-        for (info, _, payload), line in zip(read_recording(directory / 'raw.gmst'), measurements):
+    output = json.loads((directory / 'refined.json').read_text())
+    if not output['results']:
+        return None
+    recording = read_recording(directory / 'raw.gmst')
+    stamps = [info.seconds * 1000 for info, _, _ in recording]
+    text, sink = Text(), None
+    width, height, view_h = 1600, 1000, 960
+    for number, event in enumerate(output['results']):
+        shapes = {row[0]: tuple(row[1:]) for row in event['shapes']}
+        first, last = event['flight_frames']
+        lo, hi = max(event['frames'][0], first - 36), min(event['frames'][1], last + 30)
+        seen = [i for i in sorted(shapes) if first <= i <= last]
+        edge = {i for a, b in zip(seen, seen[1:]) if 1 < b - a <= 7 for i in range(a + 1, b)}
+        ratio = {i: shapes[i][3] / shapes[i][2] if i in shapes else 0. for i in seen + sorted(edge)}
+        running = {}
+        for i in range(first, last + 1):
+            counted = count_spins(stamps, shapes, span=(first, i))
+            running[i] = counted[0]['turns'] if counted and counted[0]['turns'] is not None else None
+        shown = 0.
+        for i in range(lo, hi + 1):
+            info, _, payload = recording[i]
             frame = decode(info, payload)
-            if frame is None:
-                continue
-            value = json.loads(line)
-            hud.update(value)
-            layer = hud.video_layer(frame, value)
-            hud.text.put(layer, 'GAMST  ·  every captured frame  ·  slow motion', 24, 20, 24, WHITE, 'semibold')
-            toss = value.get('toss')
-            if toss is not None:
-                hud.text.put(layer, f"{toss['turns']:.1f} turns  ·  {toss['rev_s']:.1f} rev/s", 24, 56, 34, ACCENT, 'bold')
+            canvas = np.full((height, width, 3), BG, np.uint8)
+            fh, fw = frame.shape[:2]
+            scale = view_h / fh
+            view = cv2.resize(frame, (int(fw * scale), view_h))
+            flying = first <= i <= last
+            if i in shapes:
+                cx, cy, major, minor, angle = shapes[i]
+                cv2.ellipse(view, (round(cx * scale), round(cy * scale)),
+                            (max(1, round(major * scale / 2)), max(1, round(minor * scale / 2))), angle, 0, 360,
+                            GOOD if flying else WARN, 2, cv2.LINE_AA)
+            canvas[20:20 + view_h, 20:20 + view.shape[1]] = view
+            x = 60 + view.shape[1]
+            near = min(shapes, key=lambda k: abs(k - i))
+            zx = int(max(0, min(fw - 110, shapes[near][0] - 55)))
+            zy = int(max(0, min(fh - 110, shapes[near][1] - 55)))
+            canvas[70:430, x:x + 360] = cv2.resize(frame[zy:zy + 110, zx:zx + 110], (360, 360),
+                                                   interpolation=cv2.INTER_CUBIC)
+            if flying and running.get(i) is not None:
+                shown = running[i]
+            final = i > last
+            turns = event['turns'] if final else shown
+            phase = 'caught  ·  final' if final else 'in the air  ·  counting' if flying else 'before release'
+            text.put(canvas, f'GAMST  ·  "{event["label"]}"  ·  one named object', x, 24, 26, WHITE, 'semibold')
+            text.put(canvas, f'throw {number + 1}/{len(output["results"])}  ·  frame {i}  ·  '
+                     f't {stamps[i] - stamps[first]:+.0f} ms', x + 380, 80, 20, MUTED)
+            text.put(canvas, '8x slow  ·  every captured frame', x + 380, 110, 20, MUTED)
+            text.put(canvas, phase, x + 380, 170, 26, GOOD if flying else ACCENT, 'semibold')
+            text.put(canvas, 'flips', x, 470, 30, MUTED, 'semibold')
+            number_text = ('–' if turns is None else f'{2 * turns:.1f}') if final or not flying else (
+                f'{2 * turns:.1f}' if turns else '…')
+            text.put(canvas, number_text, x, 505, 120, WHITE, 'bold')
+            if turns:
+                text.put(canvas, f'= {turns:.1f} turns', x + 360, 560, 30, MUTED)
+            if final:
+                text.put(canvas, f"{event['rev_s'] or 0:.1f} rev/s  ·  {event['duration_ms']} ms in the air  ·  "
+                         f"seen {event['coverage']:.0%}  ·  {event['status']}", x + 380, 230, 20, WHITE)
+            g0, g1, top, bottom = x, width - 40, 700, 880
+            cv2.rectangle(canvas, (g0, top), (g1, bottom), LINE, 1)
+            px = lambda j: int(g0 + (j - lo) / max(1, hi - lo) * (g1 - g0))  # noqa: E731
+            points = [(px(j), int(bottom - ratio[j] * (bottom - top))) for j in sorted(ratio) if j <= i]
+            if len(points) > 1:
+                cv2.polylines(canvas, [np.array(points, np.int32)], False, WARN, 2, cv2.LINE_AA)
+            cv2.line(canvas, (px(i), top), (px(i), bottom), DIM, 1)
+            cv2.line(canvas, (px(first), 920), (px(last), 920), GOOD, 6)
+            text.put(canvas, 'outline minor/major (1 = face, 0 = edge)  ·  one dip = one flip', x, 668, 18, MUTED)
             if sink is None:
-                sink = VideoSink(directory / 'slowmo.part.mp4', 30, (layer.shape[1], layer.shape[0]))
-            sink.write(layer)
-    if sink is not None:
-        sink.close()
-        (directory / 'slowmo.part.mp4').rename(directory / 'slowmo.mp4')
+                sink = VideoSink(directory / 'refined.part.mp4', 30, (width, height))
+            for _ in range(30 if i == hi else 1):
+                sink.write(canvas)
+    sink.close()
+    (directory / 'refined.part.mp4').rename(directory / 'refined.mp4')
+    return directory / 'refined.mp4'
 
 
 async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
@@ -522,43 +522,20 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
     output = dict(label=label, detections=len(detections), results=results)
     (directory / 'refined.part.json').write_text(json.dumps(output, ensure_ascii=False, indent=2))
     (directory / 'refined.part.json').rename(directory / 'refined.json')
+    render_refined(directory)
     return output
 
 
 # ---------------------------------------------------------------- run
 
-def _toss_line(event):
-    kind = (event.get('trajectory') or {}).get('kind', 'unknown')
-    turns = '-' if event.get('turns') is None else f"{event['turns']:.1f} turns"
-    rev = '' if event.get('rev_s') is None else f"  {event['rev_s']:.1f} rev/s"
-    clock = time.strftime('%H:%M:%S', time.localtime(event['timestamp_ms'] / 1000))
-    return (f"{clock}.{event['timestamp_ms'] % 1000:03d}  rotation.ended  {event['axis']}  {turns}{rev}"
-            f"  {event['status']}  {kind}  {event.get('capture_fps') or 0:.0f} fps")
-
-
-def is_toss(event, show_all=False, targeted=False):
-    """HUD policy: thrown flips, or a sustained spin in place (>=1 turn over >=250 ms) when no target
-    is set. A rate above ``expected_max_rev_s`` is not a coin flip but shape noise, so it never counts."""
-    if event.get('axis') != 'flip' or event.get('status') != 'counting' or not event.get('turns'):
-        return False
-    if show_all:
-        return True
-    if event.get('rev_s') and event.get('expected_max_rev_s') and event['rev_s'] > event['expected_max_rev_s']:
-        return False
-    kind = (event.get('trajectory') or {}).get('kind')
-    if kind == 'stationary' and not targeted:
-        return event['turns'] >= 1 and event.get('duration_ms', 0) >= 250
-    return kind == 'free_fall'
-
 
 async def run(args):
     import cv2
-    import numpy as np
     from .. import Gamst
 
     record_dir = Path(args.record_dir or 'gamst-takes')
-    # Every take frame, in order; GAMST must see the full capture cadence. Filled by a socket thread
-    # so a busy GAMST loop never stops reading and back-pressures the phone into dropping frames.
+    # Every take frame, in order, goes to raw.gmst. A socket thread fills the queue so a busy loop
+    # never stops reading and back-pressures the phone into dropping frames.
     take_queue = queue.Queue()
     latest = {'frame': None}       # standby view: newest frame only
     stats = dict(received=0, capture=collections.deque(maxlen=241))
@@ -598,8 +575,8 @@ async def run(args):
             send(dict(cmd='camera', position='back' if phone['front'] else 'front'))
         elif name == 'zoom':
             send(dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1))
-        elif name == 'target':
-            clear_target()
+        elif name == 'crop':
+            clear_crop()
 
     def serve(listener):
         while True:
@@ -652,12 +629,11 @@ async def run(args):
         threading.Thread(target=serve, args=(listener,), daemon=True).start()
         print(json.dumps({'listening': args.iphone, 'takes': str(record_dir.resolve())}), flush=True)
 
-    hud = Hud(show_all=args.show_all)
-    title = 'GAMST 240 - vision.rotation'
+    hud = Hud()
+    title = 'GAMST 240'
     buttons = []  # (name, x, y, width, height) in HUD pixels; drawn on the window only, never recorded
     drag = dict(start=None, now=None, button=None)
     view = dict(info=None, shape=None)  # header and size of the frame on screen, to map clicks
-    target = dict(norm=None, applied=None)  # exemplar size per unit of sensor density
 
     def to_frame(x, y):
         """HUD pixel -> normalized point in the frame on screen (None outside the picture)."""
@@ -670,36 +646,19 @@ async def run(args):
         fy = (y - VIDEO[1] - (VIDEO[3] - dh) // 2) / dh
         return (fx, fy) if 0 <= fx <= 1 and 0 <= fy <= 1 else None
 
-    def set_target_from_box(a, b):
-        """The user's box around the object fixes its size and moves the phone's native-resolution
-        strip over it: full frame height (the object flies up), narrow enough to keep 240 fps."""
-        info, shape = view['info'], view['shape']
+    def crop_to_box(a, b):
+        """Move the phone's native-resolution strip over the user's box: full frame height (the
+        object flies up), narrow enough to keep 240 fps."""
+        info = view['info']
         if info is None or a is None or b is None:
             return
-        fh, fw = shape[:2]
-        size_px = max(abs(a[0] - b[0]) * fw, abs(a[1] - b[1]) * fh)
-        if view.get('frame') is not None:
-            # Boxes are drawn loosely; the object's own outline inside the box gives its real size.
-            box = (min(a[0], b[0]) * fw, min(a[1], b[1]) * fh, max(a[0], b[0]) * fw, max(a[1], b[1]) * fh)
-            measured = measure_exemplar(view['frame'], box)
-            size_px = measured if measured is not None else .5 * size_px
-        measured_w = measured_size(np.empty((fh, fw, 1), np.uint8))[0]
-        if size_px * measured_w / fw < 3:
-            return
-        target.update(norm=size_px * measured_w / fw / pixel_density(info, measured_w, fw), applied=None)
         ux, _ = frame_to_upright(info, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
         left = min(max(0., ux - .2), .6)
         send(dict(cmd='crop', rect=[round(v, 4) for v in upright_rect_to_sensor((left, 0., .4, 1.), info.angle)]))
-        print(json.dumps({'target': {'size_px_on_screen_frame': round(size_px, 1), 'norm': round(target['norm'], 6)}}),
-              flush=True)
 
-    def clear_target():
-        target.update(norm=None, applied=None)
-        if plugin_ref:
-            plugin_ref[0].set_target(None)
+    def clear_crop():
         send(dict(cmd='crop', rect=list(FULL)))
 
-    plugin_ref = []
     if not args.headless:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(title, 1440, 810)
@@ -720,15 +679,14 @@ async def run(args):
                 if drag['button'] is not None:
                     command(drag['button'])
                 elif drag['start'] is not None and abs(x - drag['start'][0]) + abs(y - drag['start'][1]) > 6:
-                    set_target_from_box(to_frame(*drag['start']), to_frame(x, y))
+                    crop_to_box(to_frame(*drag['start']), to_frame(x, y))
                 drag.update(start=None, now=None, button=None)
 
         cv2.setMouseCallback(title, on_mouse)
-    pending_alarms = []
-    state = dict(mode='waiting', take_seconds=0., lag_s=0., saved='', capture_fps=0., frame_size=None,
-                 last_toss=None, tosses=0, ignored=0, frames=0, history=[], feed=[], target_px=None)
+    state = dict(mode='waiting', take_seconds=0., saved='', capture_fps=0., frame_size=None,
+                 last_throw=None, frames=0, history=[], feed=[], pending=False)
     take = None
-    first = base = last_stamp = None
+    first = base = None
     hud_due = take_started = None
     last_view = 0.
     shown_frame = None
@@ -739,14 +697,15 @@ async def run(args):
         return (len(window) - 1) / (window[-1] - window[0]) if len(window) > 1 and window[-1] > window[0] else 0.
 
     def controls(image):
-        """Phone controls for the Mac window (space/r: record, c: camera, z: zoom, t: clear target, q: quit)."""
+        """Phone controls for the Mac window (space/r: record, c: camera, z: zoom, t: full frame, q: quit)."""
         import cv2
         buttons.clear()
         connected = phone['sock'] is not None
         items = [('record', '■  STOP' if phone['recording'] else '●  REC', REC if connected else DIM),
                  ('camera', f"camera  {'front' if phone['front'] else 'back'}", PANEL if connected else DIM),
                  ('zoom', f"zoom  {phone['zoom']:g}x", PANEL if connected else DIM),
-                 ('target', 'target  ✕' if target['norm'] else 'target: drag a box', GOOD if target['norm'] else PANEL)]
+                 ('crop', 'strip  ✕' if tuple(phone['crop']) != FULL else 'strip: drag a box',
+                  GOOD if tuple(phone['crop']) != FULL else PANEL)]
         widths = [hud.text.patch(label, 24, WHITE, 'semibold')[0].shape[1] + 36 for _, label, _ in items]
         x = VIDEO[0] + (VIDEO[2] - sum(widths) - 16 * (len(items) - 1)) // 2
         y = VIDEO[1] + VIDEO[3] - 72
@@ -754,7 +713,8 @@ async def run(args):
             _pill(image, hud.text, x, y, label, color, size=24)
             buttons.append((name, x, y, width, 44))
             x += width + 16
-        hint = ('drag a box around the coin   ·   space  record   ·   c  camera   ·   z  zoom   ·   t  clear   ·   q  quit'
+        hint = ('drag a box: the phone streams that strip at native resolution   ·   space  record   ·   '
+                'c  camera   ·   z  zoom   ·   t  full frame   ·   q  quit'
                 if connected else 'phone not connected')
         hud.text.put(image, hint, VIDEO[0] + VIDEO[2] // 2, y + 54, 16, MUTED, anchor='center')
         if drag['start'] is not None and drag['now'] is not None:
@@ -775,7 +735,7 @@ async def run(args):
         elif key == ord('z'):
             command('zoom')
         elif key == ord('t'):
-            clear_target()
+            clear_crop()
         return key in (27, ord('q'))
 
     refine_args = None if not getattr(args, 'refine', None) else [
@@ -798,11 +758,17 @@ async def run(args):
             output = json.loads(path.read_text())
             records = await publish(human, output['results'], take_id=item['dir'].name,
                                     clock=lambda ms, item=item: item['base'] + round((ms / 1000 - item['first']) * 1000))
-            for event in output['results']:
-                state['feed'].append(f"refined  {event['track_id']}  {event['turns']:.1f} turns  "
-                                     f"{event['rev_s'] or 0:.1f} rev/s  {event['status']}  "
-                                     f"seen {event['coverage']:.0%}  {event['trajectory'].get('kind')}")
+            for event, record in zip(output['results'], records):
+                attributes = record['observation']['value']['objects'][0]['attributes']
+                throw = dict(attributes, trajectory=attributes['trajectory'])
+                if throw['turns'] is not None:
+                    state['history'].append(throw)
+                    state['last_throw'] = throw
+                clock = time.strftime('%H:%M:%S', time.localtime(attributes['ended_ms'] / 1000))
+                state['feed'].append(f"{clock}  {event['label']}  {throw['flips'] or 0:.1f} flips  "
+                                     f"{throw['rev_s'] or 0:.1f} rev/s  {throw['status']}  seen {throw['coverage']:.0%}")
             state['feed'] = state['feed'][-8:]
+            state['pending'] = bool(pending_refine)
             objects = await human.find_objects(text=output['label'])
             print(json.dumps({'refined': str(item['dir']), 'records': [record['id'] for record in records],
                               'objects': [dict(entity_id=entry['entity_id'], label=entry['label'],
@@ -810,22 +776,13 @@ async def run(args):
 
     try:
         async with Gamst(consent=True, store=args.store) as human:
-            plugin = RotationPlugin(human, expected_max_rev_s=args.expected_max_rev_s, region_source='motion',
-                                    region_refresh_ms=20, record_every_ms=33)
-            human.register(plugin)
-            plugin_ref.append(plugin)
-            watch = human.watches.create(owner='user', description='Tell me how many turns each rotation made.',
-                rule=dict(conditions=[dict(capability_id='vision.rotation', path='events', op='contains',
-                                           value='rotation.ended', within_ms=1000)],
-                          cooldown_ms=0, max_per_minute=600, context_window_ms=3000))
-            human.watches.add_sink(pending_alarms.append)
             while True:
                 try:
                     item = take_queue.get_nowait()
                 except queue.Empty:
                     item = None
                 if item is None:
-                    # Standby: show the newest live frame at ~30 fps, no measurement.
+                    # Standby: show the newest live frame at ~30 fps.
                     state['capture_fps'] = capture_fps()
                     if take is None and (state['mode'] == 'waiting' or (
                             state['mode'] == 'saved' and time.monotonic() - state['saved_at'] > 4)):
@@ -836,11 +793,11 @@ async def run(args):
                         if frame is not None:
                             state['frame_size'] = (frame.shape[1], frame.shape[0])
                             shown_frame = frame
-                            view.update(info=info, shape=frame.shape, frame=frame)
-                            if show(hud.render(frame, None, state)):
+                            view.update(info=info, shape=frame.shape)
+                            if show(hud.render(frame, state)):
                                 break
                     elif not args.headless and time.monotonic() - last_view > .25:
-                        if show(hud.render(shown_frame, None, state)):
+                        if show(hud.render(shown_frame, state)):
                             break
                     if pending_refine:
                         await collect_refined(human)
@@ -851,103 +808,55 @@ async def run(args):
                     break
                 if kind == 'start':
                     take = Take(record_dir, refine_args)
-                    plugin.reset()
-                    hud.trails.clear()
-                    state.update(mode='recording', last_toss=None, tosses=0, ignored=0, frames=0, history=[])
+                    state.update(mode='recording', frames=0)
                     take_started = hud_due = None
                     print(json.dumps({'take': 'started', 'dir': str(take.dir)}), flush=True)
                     continue
                 if kind == 'stop':
                     if take is not None:
-                        summary = dict(tosses=state['history'], ignored_motions=state['ignored'],
-                                       expected_max_rev_s=args.expected_max_rev_s)
-                        directory = take.close(summary)
+                        directory = take.close()
                         saved.append(str(directory))
                         if refine_args:
                             pending_refine.append(dict(dir=directory, first=first, base=base,
                                                        process=take.refine_process))
-                        state.update(mode='saved', saved=directory.name, saved_at=time.monotonic())
-                        print(json.dumps({'take': 'saved', 'dir': str(directory), 'tosses': len(state['history'])}),
-                              flush=True)
+                        state.update(mode='saved', saved=directory.name, saved_at=time.monotonic(),
+                                     pending=bool(pending_refine))
+                        print(json.dumps({'take': 'saved', 'dir': str(directory), 'frames': take.frames}), flush=True)
                         take = None
                     continue
                 _, info, header, payload = item
                 if take is None:
                     continue
+                seconds = info.seconds
+                if first is None:
+                    # Capture time -> runtime clock, so refined throws land at the moment they happened.
+                    first, base = seconds, time.time_ns() // 1_000_000 - 1000 - stats.get('span_ms', 0)
+                if take_started is None:
+                    take_started = hud_due = seconds
+                take.add(header, payload, seconds)
+                state['frames'] += 1
+                state['capture_fps'] = capture_fps()
+                state['take_seconds'] = seconds - take_started
+                # Only frames that reach the screen or hud.mp4 are decoded; raw.gmst keeps every frame.
+                live = not args.headless and time.monotonic() - last_view > 1 / 30
+                if seconds < hud_due and not live:
+                    continue
                 frame = decode(info, payload)
                 if frame is None:
                     continue
-                size = measured_size(frame)
-                measured = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
-                seconds = info.seconds
-                density = pixel_density(info, size[0], frame.shape[1])
-                if args.target_px and target['norm'] is None:
-                    target['norm'] = args.target_px / density
-                if target['norm']:
-                    # Keep the exemplar's size in this frame's pixels (crop and format change the scale).
-                    wanted = min(4096., max(4., target['norm'] * density))
-                    if target['applied'] is None or abs(wanted / target['applied'] - 1) > .05:
-                        plugin.set_target(wanted)
-                        target['applied'] = wanted
-                    state['target_px'] = wanted
-                else:
-                    state['target_px'] = None
-                if first is None:
-                    first, base = seconds, time.time_ns() // 1_000_000 - 1000 - stats.get('span_ms', 0)
-                stamp = base + round((seconds - first) * 1000)
-                if last_stamp is not None and stamp <= last_stamp:
-                    stamp = last_stamp + 1
-                last_stamp = stamp
-                if take_started is None:
-                    take_started = hud_due = seconds
-                await human.push_video(measured, timestamp_ms=stamp)
-                value = plugin.latest
-                hud.update(value)
-                for event in value['events']:
-                    if event['type'] != 'rotation.ended':
-                        continue
-                    take.events.append(event)
-                    if is_toss(event, args.show_all, bool(target['norm'])):
-                        toss = dict(turns=event['turns'], rev_s=event['rev_s'], duration_ms=event['duration_ms'],
-                                    capture_fps=event['capture_fps'] or 0, trajectory=event.get('trajectory'),
-                                    timestamp_ms=event['timestamp_ms'])
-                        state['last_toss'] = toss
-                        state['history'].append(toss)
-                        state['tosses'] += 1
-                    elif event['axis'] == 'flip':
-                        state['ignored'] += 1
-                while pending_alarms:
-                    alarm = pending_alarms.pop(0)
-                    for record in alarm['context']['records']:
-                        if record['id'] != alarm['trigger_record_id']:
-                            continue
-                        for event in record['observation']['value']['events']:
-                            if event['type'] == 'rotation.ended' and is_toss(event, args.show_all, bool(target['norm'])):
-                                state['feed'].append(_toss_line(event))
-                                print(json.dumps({'watch': watch['id'], 'rotation.ended': event}), flush=True)
-                state['feed'] = state['feed'][-8:]
-                state['frames'] += 1
                 state['frame_size'] = (frame.shape[1], frame.shape[0])
-                state['capture_fps'] = capture_fps()
-                state['take_seconds'] = seconds - take_started
-                state['lag_s'] = max(0., (stats['capture'][-1] if stats['capture'] else seconds) - seconds)
-                if not recording_flag['on']:
-                    state['mode'] = 'processing'
-                take.add(header, payload, seconds, value, state['last_toss'])
                 shown_frame = frame
-                view.update(info=info, shape=frame.shape, frame=frame)
-                if seconds >= hud_due:
-                    # hud.mp4 advances on capture time, so it plays in real time however far GAMST lags.
-                    image = hud.render(frame, value, state)
-                    while seconds >= hud_due:
-                        take.hud.write(image)
-                        hud_due += 1 / 30
-                    if time.monotonic() - last_view > 1 / 30 and show(image):
-                        break
+                view.update(info=info, shape=frame.shape)
+                image = hud.render(frame, state)
+                while seconds >= hud_due:
+                    # hud.mp4 advances on capture time, so it plays in real time.
+                    take.hud.write(image)
+                    hud_due += 1 / 30
+                if live and show(image):
+                    break
                 await asyncio.sleep(0)
             if take is not None:
-                directory = take.close(dict(tosses=state['history'], ignored_motions=state['ignored'],
-                                            expected_max_rev_s=args.expected_max_rev_s))
+                directory = take.close()
                 saved.append(str(directory))
                 if refine_args:
                     pending_refine.append(dict(dir=directory, first=first, base=base, process=take.refine_process))
@@ -956,7 +865,6 @@ async def run(args):
                 while pending_refine:
                     await collect_refined(human)
                     await asyncio.sleep(.5)
-            plugin.close()
     finally:
         if listener is not None:
             listener.close()
@@ -988,9 +896,9 @@ def _refine_main(argv):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3 and sys.argv[1] == 'slowmo':
-        render_slowmo(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == 'render':
+        render_refined(sys.argv[2])
     elif len(sys.argv) > 2 and sys.argv[1] == 'refine':
         _refine_main(sys.argv[2:])
     else:
-        raise SystemExit('usage: python -m gamst.demos.rotation_live slowmo TAKE_DIR | refine TAKE_DIR --label ...')
+        raise SystemExit('usage: python -m gamst.demos.rotation_live refine TAKE_DIR --label ... | render TAKE_DIR')

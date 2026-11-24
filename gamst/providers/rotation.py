@@ -19,7 +19,6 @@ from ..plugins import InputFrame
 from .object_rotation_bank import ObjectRotationBank
 from .object_spin import ObjectSpinCounter
 from .shape_tracks import ShapeTracks
-from .target_tracks import TargetTracks
 
 
 _OPTIONS = {
@@ -118,9 +117,6 @@ def _rows(items, targets=None):
         if type(score) not in (int, float) or not math.isfinite(score):
             score = 0.
         row = dict(label=label, score=max(0., min(1., float(score))), bbox=box)
-        size = item.get('size_px')
-        if type(size) in (int, float) and math.isfinite(size) and size > 0:
-            row['size_px'] = float(size)
         output.append(row)
     return output
 
@@ -177,8 +173,6 @@ class RotationProvider:
         self.rotation = ObjectRotationBank(max_tracks=options['max_tracks'], max_gap_ms=options['max_gap_ms'],
                                            max_points=options['max_points'], min_quality=options['min_quality'])
         self._lock = threading.RLock()
-        self._target_size = None
-        self._target_tracks = None
         self.closed = False
         self._clear()
 
@@ -209,8 +203,6 @@ class RotationProvider:
     def reset(self):
         with self._lock:
             self.tracks.reset()
-            if self._target_tracks is not None:
-                self._target_tracks.reset()
             self.spin.reset()
             self.rotation.reset()
             self._clear()
@@ -224,37 +216,6 @@ class RotationProvider:
             self.rotation.close()
             self.closed = True
 
-    def set_target(self, size_px):
-        """Follow only an object of an exemplar's size (pixels on the frames this provider receives).
-
-        Motion alone proposes every moving thing (hands, arms, heads). With a target exemplar,
-        e.g. a box the user drew around a coin, exemplar-sized motion proposals seed
-        :class:`TargetTracks`, which follows that object frame to frame along a predicted
-        path and ignores everything else. ``None`` returns to generic motion tracking.
-        """
-        if size_px is not None and (type(size_px) not in (int, float) or not math.isfinite(size_px) or
-                                    not 4 <= size_px <= 4096):
-            raise ValueError('target size must be 4..4096 pixels or None')
-        with self._lock:
-            self._target_size = None if size_px is None else float(size_px)
-            self._target_tracks = None if size_px is None else TargetTracks(
-                size_px, max_tracks=self.config['max_tracks'])
-            self.tracks.reset()
-
-    def _observe_target(self, frame):
-        """Exemplar mode: motion proposals every refresh, frame-to-frame tracking in between."""
-        import cv2
-        stamp = frame.timestamp_ms
-        proposals = []
-        if self._last_region_ts is None or stamp - self._last_region_ts >= self.config['region_refresh_ms']:
-            height, width = frame.data.shape[:2]
-            proposals = [((row['bbox']['x'] + row['bbox']['width'] / 2) * width,
-                          (row['bbox']['y'] + row['bbox']['height'] / 2) * height)
-                         for row in self._motion_regions(frame.data, stamp)]
-            self._last_region_ts = stamp
-        gray = cv2.cvtColor(frame.data, cv2.COLOR_BGR2GRAY)
-        return self._target_tracks.observe(gray, stamp, proposals)
-
     def _motion_regions(self, image, stamp):
         import cv2
         import numpy as np
@@ -263,46 +224,26 @@ class RotationProvider:
         self._motion_previous = gray
         if previous is None or previous.shape != gray.shape:
             return []
-        blurred_previous, blurred = cv2.GaussianBlur(previous, (5, 5), 0), cv2.GaussianBlur(gray, (5, 5), 0)
-        target = self._target_size
-        if target is not None:
-            # Lights flicker against a 1/1000 s shutter, so whole frames brighten and darken between
-            # captures; remove the global change before differencing.
-            shift = float(blurred.mean()) - float(blurred_previous.mean())
-            difference = cv2.absdiff(cv2.convertScaleAbs(blurred_previous, beta=shift), blurred)
-        else:
-            difference = cv2.absdiff(blurred_previous, blurred)
+        difference = cv2.absdiff(cv2.GaussianBlur(previous, (5, 5), 0), cv2.GaussianBlur(gray, (5, 5), 0))
         _, mask = cv2.threshold(difference, 24, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        grow = 9 if target is None else max(3, int(target // 4) | 1)
-        mask = cv2.dilate(mask, np.ones((grow, grow), np.uint8))
+        mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         height, width = gray.shape
-        if target is not None:
-            # The exemplar fixes the scale: a moving coin's difference blob spans about one to a few
-            # diameters (its motion smear); hands and arms are far larger. Closest to that size first.
-            boxes = [cv2.boundingRect(contour) for contour in contours]
-            boxes = [box for box in boxes if .5 * target <= max(box[2], box[3]) <= 5 * target
-                     and min(box[2], box[3]) >= .3 * target]
-            boxes.sort(key=lambda box: abs(math.log(max(box[2], box[3]) / (1.6 * target))))
-        else:
-            boxes = []
-            for contour in sorted(contours, key=cv2.contourArea, reverse=True):
-                if cv2.contourArea(contour) < max(144., height * width * .0005):
-                    break
-                x, y, w, h = cv2.boundingRect(contour)
-                if w >= 12 and h >= 12 and w * h <= height * width * .5:
-                    boxes.append((x, y, w, h))
+        boxes = []
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+            if cv2.contourArea(contour) < max(144., height * width * .0005):
+                break
+            x, y, w, h = cv2.boundingRect(contour)
+            if w >= 12 and h >= 12 and w * h <= height * width * .5:
+                boxes.append((x, y, w, h))
         rows = []
         for x, y, w, h in boxes[:self.config['max_tracks']]:
             pad_x, pad_y = w * .1, h * .1
             x0, y0 = max(0., x - pad_x), max(0., y - pad_y)
             x1, y1 = min(float(width), x + w + pad_x), min(float(height), y + h + pad_y)
-            row = dict(label='unknown', score=0., bbox=dict(
-                x=x0 / width, y=y0 / height, width=(x1 - x0) / width, height=(y1 - y0) / height))
-            if target is not None:
-                row['size_px'] = target
-            rows.append(row)
+            rows.append(dict(label='unknown', score=0., bbox=dict(
+                x=x0 / width, y=y0 / height, width=(x1 - x0) / width, height=(y1 - y0) / height)))
         return rows
 
     def _refresh_regions(self, frame, detections, detector_fresh):
@@ -338,15 +279,10 @@ class RotationProvider:
             if owner != self._motion_owner:
                 self._motion_previous = None
                 self._motion_owner = owner
-                if self._target_tracks is not None:
-                    self._target_tracks.reset()
-            if self._target_tracks is not None:
-                objects = self._observe_target(frame)
-            else:
-                if detections is not None:
-                    detector_fresh = True
-                self._refresh_regions(frame, detections, detector_fresh)
-                objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
+            if detections is not None:
+                detector_fresh = True
+            self._refresh_regions(frame, detections, detector_fresh)
+            objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
             spin = self.spin.process(InputFrame({'objects': [
                 {'track_id': item['track_id'], 'axes': item['axes'], 'observed': item['observed']}
                 for item in objects]}, 'video', frame.timestamp_ms,
@@ -510,10 +446,6 @@ class RotationPlugin:
             await self.human.push_observation(self.spec.id, value, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         return []
-
-    def set_target(self, size_px):
-        """See :meth:`RotationProvider.set_target`; sizes are in pixels of the pushed frames."""
-        self.provider.set_target(size_px)
 
     def reset(self):
         self.provider.reset()

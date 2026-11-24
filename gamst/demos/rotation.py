@@ -291,11 +291,7 @@ def main(argv=None):
                         help='live HUD for the GAMST 240 iPhone app; Start/Stop on the phone records takes')
     source.add_argument('--iphone-replay', metavar='FILE', help='run a GAMST 240 recording (.gmst) through the HUD')
     parser.add_argument('--record-dir', default='gamst-takes',
-                        help='with --iphone/--iphone-replay: one folder per take (raw.gmst, hud.mp4, slowmo.mp4)')
-    parser.add_argument('--show-all', action='store_true',
-                        help='HUD counts every measured flip, not only thrown or in-place spins')
-    parser.add_argument('--target-px', type=float,
-                        help='with --iphone-replay: target exemplar size in measured pixels (the HUD sets it by drag)')
+                        help='with --iphone/--iphone-replay: one folder per take (raw.gmst, hud.mp4, refined.json/mp4)')
     parser.add_argument('--targets', type=lambda value: [item.strip() for item in value.split(',') if item.strip()],
                         default=['coin', 'wheel', 'fan'], help='detector labels and optional rotation label filter')
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)

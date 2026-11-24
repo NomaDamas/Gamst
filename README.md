@@ -224,44 +224,47 @@ the profile behind MCP capture or the dashboard; `push_video` feeds the same plu
 
 ### Rotation counting (experimental)
 
-For a tracked flat object, `vision.rotation` measures each frame's ellipse
-(minor/major axis ratio) and fits the periodic `r^2` signal in 250 ms windows
-to integrate turns, without a learned counting model. A hand-tossed coin turns
-about 36–40 rev/s, so ≥160 fps is required and ~240 fps is recommended. Below
-that, GAMST reports `undersampled` instead of an aliased count.
+For a followed flat object, GAMST measures each frame's ellipse (minor/major
+axis ratio) and fits the periodic `r^2` signal in 250 ms windows to integrate
+turns, without a learned counting model. Counting a flip needs at least four
+frames per turn, so 240 fps counts up to 60 rev/s. Below the rate a throw needs,
+GAMST reports `undersampled` instead of an aliased count.
 
 An iPhone can supply 240 fps (iOS 15+; tested on iPhone 13 mini and iPhone SE
 2nd gen) using `apps/ios-highspeed-camera`, which streams capture-timestamped
-frames over Wi-Fi. The Mac HUD has REC/camera/zoom controls and drag-a-box
-target selection. With a tight box, the phone streams a native-resolution
-strip around the object, keeping 240 fps when Wi-Fi cannot sustain full-frame
-capture. Each take saves `raw.gmst`, `hud.mp4`, `slowmo.mp4`, and `summary.json`.
+frames over Wi-Fi. The Mac HUD is a camera monitor with REC/camera/zoom
+controls. Dragging a box makes the phone stream a native-resolution strip
+around it, which keeps 240 fps when Wi-Fi cannot carry full frames. Each take
+saves `raw.gmst`, `hud.mp4` and `summary.json`.
 
-```bash
-gamst demo rotation --iphone 9123
-gamst demo rotation --iphone-replay take/raw.gmst
-```
+Throws are counted after the take. A per-frame tracker cheap enough for 240 fps
+lost glinting coins, so the HUD shows no live count. With `--refine LABEL`:
 
-After each take, `--refine LABEL` re-counts throws offline. YOLOE, given a text
-prompt such as `"metal coin"`, finds the object in native-resolution tiles.
-EfficientTAM then follows that one object through each throw, and only the
-parabolic flight is counted. Each result is stored as a `vision.rotation.refined`
-observation, and the named object is kept in `ObjectMemory`. If the object was
-lost for a large part of the flight, the throw is reported as `partial` (a lower
-bound) instead of as a count.
+- YOLOE, given a text prompt such as `"metal coin"`, finds the object in
+  native-resolution tiles.
+- EfficientTAM follows that one object through each throw.
+- Only the parabolic flight is counted. A throw whose object was lost for a
+  large part of the flight is reported as `partial` (a lower bound).
+
+Each throw becomes a timestamped `vision.rotation.refined` observation
+(flips, turns, rev/s, flight start and end) that agents read from GAMST context.
+The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
+(each throw at 8× slow motion with the running count) are written next to the
+take.
 
 ```bash
 pip install "gamst-sdk[rotation,yoloe,efficienttam]"
 gamst demo rotation --fetch-models   # YOLOE + EfficientTAM tiny weights, SHA256-pinned
 git clone https://github.com/yformer/EfficientTAM && git -C EfficientTAM checkout abcd061
 gamst demo rotation --iphone 9123 --device mps --refine "metal coin" --efficienttam-source EfficientTAM
+gamst demo rotation --iphone-replay take/raw.gmst --refine "metal coin" --efficienttam-source EfficientTAM
 ```
 
-Accuracy is not guaranteed and has not been validated on a ground-truth set;
-tracking loss can ruin a take. Use bright, even lighting and a bright, plain
-background and clothing behind the coin. Keep the whole flight in frame, fix
-the phone on a stand, and select a tight box; avoid flickering lights and
-cracked or dirty lenses. [Details and limits](docs/halo-coin.md).
+On one 240 fps take with 7 hand tosses, GAMST matched a person's
+frame-by-frame flip count within one flip on 6 tosses; it missed the
+remaining toss by 6 flips. Accuracy is not guaranteed. Use even lighting, keep
+the whole flight in frame and fix the phone on a stand.
+[Details, measurements and limits](docs/halo-coin.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start
