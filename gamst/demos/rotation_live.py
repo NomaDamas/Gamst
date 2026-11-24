@@ -315,7 +315,8 @@ class Hud:
             chip = (('THROW', GOOD) if throw['status'] == 'counting' and throw['trajectory'] == 'free_fall' else
                     ('PARTIAL  ·  LOWER BOUND', WARN) if throw['status'] == 'partial' else ('NOT A THROW', DIM))
             _pill(canvas, t, 1456, 430, chip[0], chip[1], size=18)
-        t.put(canvas, f"{len(state['history'])} throws counted", 1456, 596, 30, WHITE, 'semibold')
+        count = len(state['history'])
+        t.put(canvas, f"{count} throw{'' if count == 1 else 's'} counted", 1456, 596, 30, WHITE, 'semibold')
         t.put(canvas, f"{state['frames']} frames this take", 1456, 640, 20, MUTED)
         for index, item in enumerate(state['history'][-6:][::-1]):
             line = f"{item['flips']:5.1f} flips  {item['rev_s']:5.1f} rev/s"
