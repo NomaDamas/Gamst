@@ -183,7 +183,7 @@ evidence provenance, model routing, replay, and latency/cost/quality evaluation.
 <a id="rotation"></a>
 ## 🔄 Object rotation
 
-https://github.com/user-attachments/assets/401f79ff-f6f2-4988-b508-6cb59ca3b702
+https://github.com/user-attachments/assets/419dba58-2668-43c7-b8a9-20a7088b1b9d
 
 An iPhone at 240 fps streams a coin toss to GAMST. GAMST follows the coin
 through the flight, counts its flips and hands the count to an agent as
