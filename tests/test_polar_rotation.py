@@ -78,9 +78,27 @@ class PolarRotationTest(unittest.TestCase):
         counted = max(results[30], key=lambda event: event['turns'] or 0)
         self.assertEqual(counted['status'], 'counting')
         self.assertAlmostEqual(counted['turns'], 4, delta=.2)
-        self.assertEqual(counted['max_countable_rev_s'], 40)
+        self.assertAlmostEqual(counted['max_countable_rev_s'], 40, delta=.2)  # 240 fps on millisecond stamps
         self.assertTrue(results[50])
         self.assertTrue(all(event['status'] == 'undersampled' and event['turns'] is None for event in results[50]))
+
+    def test_a_spin_still_running_when_the_input_ends_is_reported(self):
+        from gamst.capabilities import SensorMetadata
+        from gamst.plugins import InputFrame
+        from gamst.providers.rotation import RotationProvider
+        provider = RotationProvider(region_source='roi', roi=dict(x=.02, y=.02, width=.96, height=.96),
+                                    in_plane='polar', symmetry=3, expected_max_rev_s=10)
+        frames = fan_frames(3, still_s=.2)
+        spinning = frames[:len(frames) - round(.2 * 240)]  # the file ends mid-spin
+        for index, frame in enumerate(spinning):
+            sensor = SensorMetadata(source_id='camera', sensor_id='fan', sequence=index,
+                                    coordinate_frame='image', stream_epoch='test')
+            value = provider.process(InputFrame(frame, 'video', 1000 + round(index * 1000 / 240), sensor=sensor))
+            self.assertFalse([event for event in value['events'] if event['type'] == 'rotation.ended'])
+        ended = provider.finish()['events']
+        provider.close()
+        self.assertEqual([(event['axis'], event['reason']) for event in ended], [('in_plane', 'input_ended')])
+        self.assertAlmostEqual(ended[0]['turns'], 3, delta=.15)
 
 
 if __name__ == '__main__':

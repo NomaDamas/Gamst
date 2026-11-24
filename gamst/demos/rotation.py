@@ -300,6 +300,11 @@ async def run(args):
                 await asyncio.sleep(0)
             if detector is not None:
                 await detector.drain()
+            # A file or take can end mid-spin (a fan never stops): commit that count too.
+            final = await plugin.finish()
+            report['events'].extend(final['events'])
+            for event in final['events']:
+                print(json.dumps({'ended_with_input': event}), flush=True)
             report['capture_fps'] = round(1000 / (sum(intervals) / len(intervals)), 1) if intervals else None
             report['observed_frame_coverage'] = round(report['observed_frames'] / seq, 4) if seq else 0.
             plugin.close()

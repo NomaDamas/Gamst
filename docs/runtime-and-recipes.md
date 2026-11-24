@@ -96,7 +96,8 @@ below `fps / (2 × symmetry)` rev/s:
 results over MCP:
 
 - `skills/gamst-coin-flip` points at the `coin-flip` recipe, measured against a person's counts;
-- `skills/gamst-rotation` points at the `rotation` recipe, measured on synthetic fan videos only.
+- `skills/gamst-rotation` points at the `rotation` recipe, measured on synthetic fans and two real stock clips, not
+  yet against a human count.
 
 The first recipe is **What 1 fps misses**: a high-frequency physical event that a 1 fps model cannot see. The coin
 flip is its first instance:

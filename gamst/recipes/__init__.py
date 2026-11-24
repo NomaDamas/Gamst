@@ -52,13 +52,15 @@ PARTS = {
     ('find', 'roi'): dict(),
     ('follow', 'efficienttam'): dict(extras=('efficienttam',), models=tuple(demo.REFINE_ASSETS),
                                      sources=('EfficientTAM',)),
+    ('follow', 'fixed'): dict(),
     ('follow', 'shape-tracks'): dict(extras=('rotation',)),
     ('count', 'flip'): dict(extras=('rotation',)),
     ('count', 'in-plane'): dict(extras=('rotation',)),
 }
-# The pipelines the runtime runs: count part -> (find parts, follow parts) it works with.
-FLOWS = {'flip': (('yoloe',), ('efficienttam',)),
-         'in-plane': (('motion', 'roi', 'yoloe'), ('shape-tracks',))}
+# The pipelines the runtime runs: count part -> the (find, follow) pairs it works with. A fixed box
+# around a fixed axis is followed as is; detected or moving regions are followed by shape tracks.
+FLOWS = {'flip': {('yoloe', 'efficienttam')},
+         'in-plane': {('roi', 'fixed'), ('motion', 'shape-tracks'), ('yoloe', 'shape-tracks')}}
 SYMMETRY = {'flip': 2}
 SOURCES_BY_CAPTURE = {'gamst240': ('iphone', 'take'), 'camera': ('camera', 'video', 'take')}
 
@@ -85,9 +87,9 @@ def load(name):
         steps[step] = item
     if set(steps) != set(STEPS):
         raise ValueError(f'{path}: pipeline needs the steps {STEPS}')
-    finds, follows = FLOWS[steps['count']['use']]
-    if steps['find']['use'] not in finds or steps['follow']['use'] not in follows:
-        raise ValueError(f"{path}: {steps['count']['use']!r} counting runs with find {finds} and follow {follows}")
+    pairs = FLOWS[steps['count']['use']]
+    if (steps['find']['use'], steps['follow']['use']) not in pairs:
+        raise ValueError(f"{path}: {steps['count']['use']!r} counting runs with (find, follow) in {sorted(pairs)}")
     supported = SOURCES_BY_CAPTURE[steps['capture']['use']]
     if not steps['capture'].get('sources') or set(steps['capture']['sources']) - set(supported):
         raise ValueError(f"{path}: capture {steps['capture']['use']!r} reads from {supported}")

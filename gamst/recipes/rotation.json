@@ -10,9 +10,9 @@
   "pipeline": [
     {"step": "capture", "use": "camera", "sources": ["camera", "video", "take"]},
     {"step": "find", "use": "roi"},
-    {"step": "follow", "use": "shape-tracks"},
+    {"step": "follow", "use": "fixed"},
     {"step": "count", "use": "in-plane", "symmetry": 1, "max_rev_s": 10}
   ],
   "records": ["vision.rotation"],
-  "measured": "synthetic 240 fps videos of a 3-blade fan only (2026-11-25): within 1.2% of the true turns at 5, 12 (behind a static grill) and 30 rev/s; no real fan or wheel yet"
+  "measured": "2026-11-25: synthetic 240 fps 3-blade fans within 0.5% of the true turns (5, 12 behind a grill, 30 rev/s); a real 24 fps record clip 0.7% low against frame-rotation matching; a real 30 fps ceiling fan was at the sampling limit and is refused at a realistic speed; no human-counted real fan yet"
 }

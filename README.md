@@ -223,7 +223,8 @@ gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 For fans, wheels and turntables, the `rotation` recipe counts in-plane turns by polar registration: it correlates,
 in angle around the axis, what moved between frames, so static grills cancel and repeating blades still count. Pass the
 number of identical blades or spokes as `--symmetry`. A camera counts only below `fps / (2 × symmetry)` rev/s, and
-`check` says whether yours does. This is measured on synthetic fan videos only
+`check` says whether yours does. Measured on synthetic fan videos and two real stock clips: a record turned 0.7% less
+than frame-rotation matching found, and a 30 fps ceiling fan sat at the limit and is refused at a realistic speed
 ([`skills/gamst-rotation`](skills/gamst-rotation/SKILL.md)).
 
 ```bash

@@ -113,7 +113,11 @@ In-plane rotation has two estimators (`in_plane` option, `--in-plane`):
   so phase is not differentiated across unrelated features. On a synthetic textured 3-blade fan the points did not
   survive from frame to frame and no turn was counted.
 - `polar`: what moved between frames, correlated in angle around the axis (`PolarRotationCounter`). Static grills
-  cancel, and no feature has to survive. The `rotation` recipe uses it.
+  cancel, and no feature has to survive. The `rotation` recipe uses it. With an ROI, the box is the object and is not
+  segmented: a light fan on a light ceiling was observed in 10 of 529 frames by segmentation, and in all frames as a box.
+
+`RotationPlugin.finish()` (called by the demo when a file or take ends) reports a rotation still running at the end
+as `rotation.ended` with reason `input_ended`.
 
 Uniform samples cannot distinguish fast motion from its alias. Flip counts are
 reported only when `capture_fps / 4 >= expected_max_rev_s` (default 40 rev/s).
