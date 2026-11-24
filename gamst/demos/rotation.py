@@ -4,6 +4,7 @@ Examples:
   gamst demo rotation --video spin.mp4 --targets coin,wheel,fan
   gamst demo rotation --camera 0 --expected-max-rev-s 8
   gamst demo rotation --video motion.mp4 --detector motion
+  gamst demo rotation --take gamst-takes/take-20261125-101500 --symmetry 3 --roi .3,.3,.4,.4
 
 The application only captures and pushes frames. Tracking, measurement,
 records and events belong to GAMST; this module renders committed records only.
@@ -163,15 +164,49 @@ async def _detector_lane(args, human):
         raise
 
 
+class _TakeCapture:
+    """A GAMST 240 take read like a video file; positions are the phone's capture times."""
+
+    def __init__(self, path):
+        from .rotation_live import read_recording
+        path = Path(path)
+        self.frames = read_recording(path / 'raw.gmst' if path.is_dir() else path)
+        self.index, self.position_ms = 0, 0.
+
+    def isOpened(self):
+        return bool(self.frames)
+
+    def read(self):
+        from .rotation_live import decode
+        while self.index < len(self.frames):
+            info, _, payload = self.frames[self.index]
+            self.index += 1
+            frame = decode(info, payload)
+            if frame is not None:
+                self.position_ms = 1000 * (info.seconds - self.frames[0][0].seconds)
+                return True, frame
+        return False, None
+
+    def get(self, prop):
+        import cv2
+        span = self.frames[-1][0].seconds - self.frames[0][0].seconds
+        return {cv2.CAP_PROP_FPS: (len(self.frames) - 1) / span if span else 0.,
+                cv2.CAP_PROP_FRAME_COUNT: len(self.frames), cv2.CAP_PROP_POS_MSEC: self.position_ms}[prop]
+
+    def release(self):
+        self.frames = []
+
+
 async def run(args):
     import cv2
     from .. import Gamst
     from ..capabilities import SensorMetadata
     from ..plugins import InputFrame
 
-    source = args.video if args.video else args.camera
-    cap = cv2.VideoCapture(source, cv2.CAP_ANY if args.video else
-                           cv2.CAP_AVFOUNDATION if sys.platform == 'darwin' else cv2.CAP_ANY)
+    recorded = args.video or args.take
+    source = recorded or args.camera
+    cap = _TakeCapture(args.take) if args.take else cv2.VideoCapture(
+        source, cv2.CAP_ANY if args.video else cv2.CAP_AVFOUNDATION if sys.platform == 'darwin' else cv2.CAP_ANY)
     if not cap.isOpened():
         raise SystemExit(f'cannot open input: {source}')
     detector = None
@@ -186,7 +221,7 @@ async def run(args):
             report['detector'] = 'yoloe' if detector is not None else 'motion'
             targets = args.targets if detector is not None else None
             config = dict(expected_max_rev_s=args.expected_max_rev_s, targets=targets,
-                          region_source='auto')
+                          region_source='auto', symmetry=args.symmetry, in_plane=args.in_plane)
             if args.roi is not None:
                 x, y, width, height = args.roi
                 config.update(region_source='roi', roi=dict(x=x, y=y, width=width, height=height))
@@ -198,21 +233,21 @@ async def run(args):
                                            value='rotation.ended', within_ms=1000)],
                           cooldown_ms=0, max_per_minute=60, context_window_ms=3000))
             human.watches.add_sink(pending.append)
-            fps_video = cap.get(cv2.CAP_PROP_FPS) if args.video else 0
+            fps_video = cap.get(cv2.CAP_PROP_FPS) if recorded else 0
             start_wall = time.time_ns() // 1_000_000
             start = time.monotonic()
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) if args.video else 0
-            base = start_wall - (round(1000 * frame_count / (args.capture_fps or fps_video)) + 1000 if args.video else 0)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) if recorded else 0
+            base = start_wall - (round(1000 * frame_count / (args.capture_fps or fps_video)) + 1000 if recorded else 0)
             seq = detector_seq = 0
             last_ts = last_detection = None
             intervals = []
             while True:
                 ok, frame = cap.read()
                 if not ok:
-                    if args.video and seq:
+                    if recorded and seq:
                         break
                     raise SystemExit('no camera/video frame available')
-                if args.video:
+                if recorded:
                     offset = seq * 1000 / args.capture_fps if args.capture_fps else cap.get(cv2.CAP_PROP_POS_MSEC)
                     stamp = base + round(offset)
                 else:
@@ -226,7 +261,7 @@ async def run(args):
                     sensor = SensorMetadata(source_id='rotation-demo', sensor_id='detector', sequence=detector_seq,
                                             coordinate_frame='image')
                     await detector.submit(InputFrame(_detector_image(frame), 'video', stamp, sensor=sensor))
-                    if args.video:
+                    if recorded:
                         await detector.drain()
                     detector_seq += 1
                     last_detection = stamp
@@ -265,6 +300,11 @@ async def run(args):
                 await asyncio.sleep(0)
             if detector is not None:
                 await detector.drain()
+            # A file or take can end mid-spin (a fan never stops): commit that count too.
+            final = await plugin.finish()
+            report['events'].extend(final['events'])
+            for event in final['events']:
+                print(json.dumps({'ended_with_input': event}), flush=True)
             report['capture_fps'] = round(1000 / (sum(intervals) / len(intervals)), 1) if intervals else None
             report['observed_frame_coverage'] = round(report['observed_frames'] / seq, 4) if seq else 0.
             plugin.close()
@@ -293,11 +333,19 @@ def main(argv=None):
     source.add_argument('--iphone', type=int, metavar='PORT',
                         help='live HUD for the GAMST 240 iPhone app; Start/Stop on the phone records takes')
     source.add_argument('--iphone-replay', metavar='FILE', help='run a GAMST 240 recording (.gmst) through the HUD')
+    source.add_argument('--take', metavar='DIR',
+                        help='measure a GAMST 240 take (folder or raw.gmst) with vision.rotation at its capture times')
     parser.add_argument('--record-dir', default='gamst-takes',
                         help='with --iphone/--iphone-replay: one folder per take (raw.gmst, hud.mp4, refined.json/mp4)')
     parser.add_argument('--targets', type=lambda value: [item.strip() for item in value.split(',') if item.strip()],
                         default=['coin', 'wheel', 'fan'], help='detector labels and optional rotation label filter')
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)
+    parser.add_argument('--symmetry', type=int, default=1,
+                        help='times the object looks the same per in-plane turn (a 3-blade fan: 3); '
+                             'in-plane turns count only below capture fps / (2 * symmetry) rev/s')
+    parser.add_argument('--in-plane', choices=['points', 'polar'], default='points',
+                        help='in-plane estimator: feature points, or polar registration of what moves '
+                             '(textured or repetitive objects such as fan blades)')
     parser.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
     parser.add_argument('--detector', choices=['auto', 'yoloe', 'motion'], default='auto')
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
@@ -332,6 +380,8 @@ def main(argv=None):
         parser.error('--roi requires x,y,width,height')
     if args.refine and not args.efficienttam_source:
         parser.error('--refine requires --efficienttam-source')
+    if args.take and args.refine:
+        parser.error('--refine counts flips through the HUD: use --iphone-replay TAKE/raw.gmst')
     if args.iphone or args.iphone_replay:
         from .rotation_live import run as run_live
         asyncio.run(run_live(args))

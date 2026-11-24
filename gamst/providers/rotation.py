@@ -18,13 +18,14 @@ from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, bounded_
 from ..plugins import InputFrame
 from .object_rotation_bank import ObjectRotationBank
 from .object_spin import ObjectSpinCounter
+from .polar_rotation import PolarRotationCounter
 from .shape_tracks import ShapeTracks
 
 
 _OPTIONS = {
     'region_source', 'roi', 'targets', 'expected_max_rev_s', 'max_tracks',
     'max_gap_ms', 'search_scale', 'max_points', 'min_quality', 'min_rev_s',
-    'idle_ms', 'detector_max_age_ms', 'region_refresh_ms',
+    'idle_ms', 'detector_max_age_ms', 'region_refresh_ms', 'symmetry', 'in_plane',
 }
 
 
@@ -46,6 +47,15 @@ def _configuration(config):
     values.setdefault('idle_ms', 200)
     values.setdefault('detector_max_age_ms', 1000)
     values.setdefault('region_refresh_ms', 250)
+    # How many times the object looks the same per in-plane turn (a 3-blade fan: 3). A turn of
+    # half a repeat between frames looks like no turn, so in-plane turns are countable only below
+    # capture_fps / (2 * symmetry) rev/s.
+    values.setdefault('symmetry', 1)
+    # In-plane estimator: 'points' follows feature points (they must survive frame to frame);
+    # 'polar' registers the moving part of the region in angle (textured, repetitive objects).
+    values.setdefault('in_plane', 'points')
+    if values['in_plane'] not in ('points', 'polar'):
+        raise ValueError('in_plane must be points or polar')
     if values['region_source'] not in ('auto', 'detections', 'roi', 'motion'):
         raise ValueError('region_source must be auto, detections, roi or motion')
     if values['region_source'] == 'roi' and values['roi'] is None:
@@ -72,7 +82,7 @@ def _configuration(config):
         values['targets'] = [label.strip() for label in targets]
     for key, upper in (('max_tracks', 32), ('max_gap_ms', 5000), ('max_points', 128),
                        ('idle_ms', 5000), ('detector_max_age_ms', 10000),
-                       ('region_refresh_ms', 10000)):
+                       ('region_refresh_ms', 10000), ('symmetry', 64)):
         value = values[key]
         minimum = 4 if key == 'max_points' else 1
         if type(value) is not int or not minimum <= value <= upper:
@@ -195,6 +205,9 @@ class RotationProvider:
         self._last_region_ts = None
         self._motion_previous = None
         self._motion_owner = None
+        self._polar, self._polar_owner = {}, None
+        self._intervals, self._last_stamp = collections.deque(maxlen=120), None
+        self._last_frame = None  # (subject, sensor, timestamp) of the newest capture, for finish()
 
     def _trajectory(self, track_id, start_ms, end_ms):
         return classify_trajectory([sample for sample in self._paths.get(track_id, ())
@@ -279,19 +292,69 @@ class RotationProvider:
             if owner != self._motion_owner:
                 self._motion_previous = None
                 self._motion_owner = owner
+                self._intervals.clear()
+                self._last_stamp = None
+            if self._last_stamp is not None and frame.timestamp_ms > self._last_stamp:
+                self._intervals.append(frame.timestamp_ms - self._last_stamp)
+            self._last_stamp = frame.timestamp_ms
+            self._last_frame = (frame.subject_id, frame.sensor, frame.timestamp_ms)
             if detections is not None:
                 detector_fresh = True
-            self._refresh_regions(frame, detections, detector_fresh)
-            objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
+            if self.config['in_plane'] == 'polar' and self.config['region_source'] == 'roi':
+                # A fixed box around a fixed axis (fan, turntable) is the object itself; segmenting
+                # it would only lose frames (a light fan on a light ceiling has no contour).
+                objects = [self._roi_object(frame.data)]
+            else:
+                self._refresh_regions(frame, detections, detector_fresh)
+                objects = self.tracks.observe(frame.data, frame.timestamp_ms, owner)
             spin = self.spin.process(InputFrame({'objects': [
                 {'track_id': item['track_id'], 'axes': item['axes'], 'observed': item['observed']}
                 for item in objects]}, 'video', frame.timestamp_ms,
                 subject_id=frame.subject_id, sensor=frame.sensor))
-            rotation = self.rotation.process(InputFrame({'objects': [
-                {'track_id': item['track_id'], 'center': item['center'], 'points': item['points'],
-                 'points_epoch': item['points_epoch']} for item in objects]},
-                'video', frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor))
+            if self.config['in_plane'] == 'polar':
+                rotation = self._polar_rotation(frame, objects, owner)
+            else:
+                rotation = self.rotation.process(InputFrame({'objects': [
+                    {'track_id': item['track_id'], 'center': item['center'], 'points': item['points'],
+                     'points_epoch': item['points_epoch']} for item in objects]},
+                    'video', frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor))
             return self.spec.validate(self._combine(frame, objects, spin, rotation))
+
+    def _roi_object(self, image):
+        roi = self.config['roi']
+        height, width = image.shape[:2]
+        box_w, box_h = roi['width'] * width, roi['height'] * height
+        x, y = roi['x'] * width + box_w / 2, roi['y'] * height + box_h / 2
+        size = min(box_w, box_h)
+        return dict(track_id='roi', label=roi.get('label', 'unknown'), score=1.,
+                    box=[int(x - size / 2), int(y - size / 2), int(size), int(size)], center=[x, y],
+                    observed=True, axes=None, angle=None, points=[], points_epoch=0)
+
+    def _stream_fps(self):
+        return 1000 * len(self._intervals) / sum(self._intervals) if self._intervals else None
+
+    def _polar_rotation(self, frame, objects, owner):
+        import cv2
+        import numpy as np
+        if owner != self._polar_owner:
+            self._polar, self._polar_owner = {}, owner
+        gray = cv2.cvtColor(frame.data, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        output = []
+        for item in objects:
+            counter = self._polar.get(item['track_id'])
+            if counter is None:
+                counter = self._polar[item['track_id']] = PolarRotationCounter(
+                    symmetry=self.config['symmetry'], max_gap_ms=self.config['max_gap_ms'])
+            if item['observed']:
+                # the box is the object's extent; a little margin keeps blade tips inside
+                value = counter.process(gray, item['center'], .55 * item['box'][2], frame.timestamp_ms)
+            else:
+                value = dict(rotation_count=round(abs(counter.phase) / (2 * math.pi), 4),
+                             angular_velocity_deg_s=0., direction='unknown', confidence=0.)
+            output.append(dict(value, track_id=item['track_id']))
+        for track_id in set(self._polar) - {item['track_id'] for item in objects}:
+            del self._polar[track_id]
+        return dict(objects=output)
 
     def _combine(self, frame, objects, spin, rotation):
         stamp = frame.timestamp_ms
@@ -314,8 +377,9 @@ class RotationProvider:
             plane_active = item['observed'] and plane_rev_s >= self.config['min_rev_s'] and plane.get('confidence', 0.) > 0
             flip_status = flip['status']
             flip_active = flip_status != 'idle'
-            fps = flip.get('capture_fps')
-            plane_under = fps is not None and fps / 2 < self.config['expected_max_rev_s']
+            fps = flip.get('capture_fps') or self._stream_fps()
+            plane_limit = None if fps is None else fps / (2 * self.config['symmetry'])
+            plane_under = plane_limit is not None and plane_limit < self.config['expected_max_rev_s']
             state = self._active.get(track_id)
             if plane_active:
                 if state is None:
@@ -337,12 +401,21 @@ class RotationProvider:
                 box=item['box'], status=status, in_plane_turns=round(plane['rotation_count'], 4),
                 in_plane_rev_s=round(plane_rev_s, 4), in_plane_direction=plane['direction'],
                 flip_turns=flip['turns'], flip_rev_s=flip['rev_s'], capture_fps=fps,
-                max_countable_rev_s=flip.get('max_countable_rev_s')))
+                max_countable_rev_s=flip.get('max_countable_rev_s'),
+                in_plane_max_countable_rev_s=None if plane_limit is None else round(plane_limit, 2)))
         for track_id, state in list(self._active.items()):
             if track_id not in seen and stamp - state['last_active_ms'] > self.config['idle_ms']:
                 events.append(self._end_in_plane(track_id, state, 'lost'))
                 del self._active[track_id]
-        for event in spin['events']:
+        events += self._flip_events(spin['events'])
+        for track_id in [key for key in self._paths if key not in seen]:
+            if stamp - self._paths[track_id][-1][0] > 2 * self.config['max_gap_ms']:
+                del self._paths[track_id]
+        return dict(objects=output, events=events)
+
+    def _flip_events(self, spin_events):
+        events = []
+        for event in spin_events:
             label = self._labels.get(event['track_id'])
             if event['type'] == 'object.spin.started':
                 events.append(dict(type='rotation.started', axis='flip', track_id=event['track_id'],
@@ -357,20 +430,42 @@ class RotationProvider:
                     expected_max_rev_s=event['expected_max_rev_s'],
                     trajectory=self._trajectory(event['track_id'], event['timestamp_ms'] - event['duration_ms'],
                                                 event['timestamp_ms'])))
-        for track_id in [key for key in self._paths if key not in seen]:
-            if stamp - self._paths[track_id][-1][0] > 2 * self.config['max_gap_ms']:
-                del self._paths[track_id]
-        return dict(objects=output, events=events)
+        return events
+
+    def finish(self):
+        """End every rotation still running when the input ends (a file or a take), so its count is
+        reported instead of lost; ``rotation.ended`` carries reason ``input_ended``."""
+        with self._lock:
+            if self.closed or self._last_frame is None:
+                return dict(objects=[], events=[])
+            subject_id, sensor, stamp = self._last_frame
+            events = [self._end_in_plane(track_id, state, 'input_ended') for track_id, state in self._active.items()]
+            self._active.clear()
+            # One empty capture past the gap limit closes every flip episode the same way.
+            closing = InputFrame({'objects': []}, 'video', stamp + self.config['max_gap_ms'] + 1,
+                                 subject_id=subject_id, sensor=sensor)
+            for event in self.spin.process(closing)['events']:
+                event['reason'] = 'input_ended'
+                events += self._flip_events([event])
+            self._last_frame = None
+            return self.spec.validate(dict(objects=[], events=events))
 
     def _end_in_plane(self, track_id, state, reason):
         duration = max(0, state['last_active_ms'] - state['started_ms'])
         turns = abs(state['turns'] - state['start_turns'])
         fps = state.get('fps')
-        status = 'undersampled' if fps is not None and fps / 2 < self.config['expected_max_rev_s'] else 'counting'
+        limit = None if fps is None else fps / (2 * self.config['symmetry'])
+        # Like flips, a count the frame rate cannot vouch for is withheld, never reported as an alias.
+        if limit is not None and limit < self.config['expected_max_rev_s']:
+            status, turns, rev_s = 'undersampled', None, None
+        else:
+            status, rev_s = 'counting', round(turns / (duration / 1000), 4) if duration else None
+            turns = round(turns, 4)
         return dict(type='rotation.ended', axis='in_plane', track_id=track_id,
             label=self._labels.get(track_id), timestamp_ms=state['last_active_ms'], reason=reason,
-            status=status, turns=round(turns, 4), rev_s=round(turns / (duration / 1000), 4) if duration else None,
-            duration_ms=duration, capture_fps=fps)
+            status=status, turns=turns, rev_s=rev_s, duration_ms=duration, capture_fps=fps,
+            max_countable_rev_s=None if limit is None else round(limit, 2),
+            expected_max_rev_s=self.config['expected_max_rev_s'])
 
 
 class RotationPlugin:
@@ -403,6 +498,7 @@ class RotationPlugin:
         self._committed_at = {}
         self._detection_ids = {}
         self.latest = None
+        self._last = None  # (subject_id, timestamp_ms) of the newest frame
         self.closed = False
 
     def _latest_detections(self, frame):
@@ -439,6 +535,7 @@ class RotationPlugin:
         value = self.provider.process(InputFrame(frame.data, 'video', frame.timestamp_ms,
             subject_id=frame.subject_id, sensor=sensor), detections=detections, detector_fresh=fresh)
         self.latest = value
+        self._last = (frame.subject_id, frame.timestamp_ms)
         last = self._committed_at.get(frame.subject_id)
         if value['events'] or last is None or frame.timestamp_ms - last >= self.record_every_ms:
             self._sequences[frame.subject_id] = sequence
@@ -446,6 +543,20 @@ class RotationPlugin:
             await self.human.push_observation(self.spec.id, value, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
         return []
+
+    async def finish(self):
+        """Commit the rotations still running when the input ended (``RotationProvider.finish``)."""
+        value = self.provider.finish()
+        if value['events'] and self._last is not None:
+            subject_id, stamp = self._last
+            sequence = self._sequences[subject_id] = self._sequences.get(subject_id, -1) + 1
+            capture = self._captures[subject_id] = self._captures.get(subject_id, -1) + 1
+            sensor = SensorMetadata(source_id='gamst-plugin', sensor_id='vision-rotation', sequence=sequence,
+                                    capture_sequence=capture, coordinate_frame='image', stream_epoch=self._epoch)
+            await self.human.push_observation(self.spec.id, value, sensor=sensor, subject_id=subject_id,
+                                              timestamp_ms=stamp + 1)
+        self._last = None
+        return value
 
     def reset(self):
         self.provider.reset()

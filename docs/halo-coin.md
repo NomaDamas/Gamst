@@ -88,10 +88,12 @@ watch = human.watches.create(
 
 Each per-object value contains `track_id`, optional `label`, `observed`,
 `status`, `in_plane_turns`, `in_plane_rev_s`, `in_plane_direction`,
-`flip_turns`, `flip_rev_s`, `capture_fps` and `max_countable_rev_s`.
+`flip_turns`, `flip_rev_s`, `capture_fps`, `max_countable_rev_s` (flips) and
+`in_plane_max_countable_rev_s`.
 `counting` means motion is active within the declared sampling limit; it is
 not a claim that count accuracy has been validated. `idle` includes stationary
-or not-yet-measurable tracks. `undersampled` withholds the affected flip count.
+or not-yet-measurable tracks. `undersampled` withholds the affected flip or
+in-plane count.
 
 For a capture-timed or high-fps source, register `RotationProvider` in a
 SensorStreams lane, or open the `vision.rotation` ProcessProvider profile and
@@ -103,14 +105,25 @@ rules apply.
 An object turning about an axis in its own plane shows an ellipse whose
 minor/major ratio is `|cos(angle)|`; its square is a sinusoid at the half-turn
 rate. `ObjectSpinCounter` fits that sinusoid in short windows and integrates
-the rate, allowing the flip to slow down. In-plane rotation uses corresponding
-feature points around the tracked center. `points_epoch` marks reseeded points
-so phase is not differentiated across unrelated features.
+the rate, allowing the flip to slow down.
+
+In-plane rotation has two estimators (`in_plane` option, `--in-plane`):
+
+- `points` (default): corresponding feature points around the tracked center. `points_epoch` marks reseeded points,
+  so phase is not differentiated across unrelated features. On a synthetic textured 3-blade fan the points did not
+  survive from frame to frame and no turn was counted.
+- `polar`: what moved between frames, correlated in angle around the axis (`PolarRotationCounter`). Static grills
+  cancel, and no feature has to survive. The `rotation` recipe uses it. With an ROI, the box is the object and is not
+  segmented: a light fan on a light ceiling was observed in 10 of 529 frames by segmentation, and in all frames as a box.
+
+`RotationPlugin.finish()` (called by the demo when a file or take ends) reports a rotation still running at the end
+as `rotation.ended` with reason `input_ended`.
 
 Uniform samples cannot distinguish fast motion from its alias. Flip counts are
 reported only when `capture_fps / 4 >= expected_max_rev_s` (default 40 rev/s).
 Otherwise the event is `undersampled` and `turns`/`rev_s` are null. In-plane
-episode status uses its separate `capture_fps / 2` phase-wrap limit.
+counts are withheld the same way unless `capture_fps / (2 × symmetry) >= expected_max_rev_s`.
+`symmetry` is how many times the object looks the same per turn, for example 3 for a 3-blade fan.
 
 | Camera | Flip-countable up to | Hand-tossed coin (36-40 rev/s) |
 |---|---|---|

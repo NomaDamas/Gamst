@@ -25,7 +25,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.5 alpha.** Adds generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
+**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
@@ -218,6 +218,18 @@ pip install "gamst-sdk[rotation,yoloe]" "git+https://github.com/ultralytics/CLIP
 gamst demo rotation --fetch-models   # optional pinned YOLOE + MobileCLIP2 weights
 gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
 gamst demo rotation --video spin.mp4 --detector motion  # no detector required
+```
+
+For fans, wheels and turntables, the `rotation` recipe counts in-plane turns by polar registration: it correlates,
+in angle around the axis, what moved between frames, so static grills cancel and repeating blades still count. Pass the
+number of identical blades or spokes as `--symmetry`. A camera counts only below `fps / (2 × symmetry)` rev/s, and
+`check` says whether yours does. Measured on synthetic fan videos and two real stock clips: a record turned 0.7% less
+than frame-rotation matching found, and a 30 fps ceiling fan sat at the limit and is refused at a realistic speed
+([`skills/gamst-rotation`](skills/gamst-rotation/SKILL.md)).
+
+```bash
+gamst recipe check rotation --symmetry 3 --max-rpm 1500 --fps 240
+gamst recipe run rotation --camera 0 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 ```
 
 Role-based hardware defaults are delegated to GamstCrew:

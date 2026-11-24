@@ -63,6 +63,33 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(argv[argv.index('--refine') + 1], 'gold coin')
         self.assertEqual(argv[-2:], ['--device', 'cpu'])
 
+    def test_blade_symmetry_lowers_the_countable_speed(self):
+        recipe = recipes.load('rotation')
+        verdict = recipes.check(recipe, fps=240, symmetry=3, max_rev_s=25)  # a 3-blade fan at 1500 rpm
+        self.assertTrue(verdict['ok'])
+        self.assertEqual(verdict['max_countable_rev_s'], 40)
+        self.assertEqual(recipes.check(recipe, symmetry=3, max_rev_s=25)['required_fps'], 150)
+        self.assertFalse(recipes.check(recipe, fps=60, symmetry=3, max_rev_s=25)['ok'])
+
+    def test_rotation_setup_needs_no_models(self):
+        steps = recipes.plan(recipes.load('rotation'), self.tmp)
+        self.assertEqual(steps['extras'], ['rotation'])
+        self.assertEqual(steps['models']['files'], [])
+        self.assertEqual(steps['sources'], {})
+
+    def test_rotation_run_counts_inside_the_given_box_with_the_blade_count(self):
+        take = self.take(240.)
+        with patch.object(recipes.demo, 'main') as start:
+            with self.assertRaisesRegex(SystemExit, '--roi'):
+                recipes.main(['run', 'rotation', '--take', take])
+            recipes.main(['run', 'rotation', '--take', take, '--symmetry', '3', '--max-rpm', '1500',
+                          '--roi', '.2,.2,.6,.6'])
+        argv = start.call_args.args[0]
+        self.assertEqual(argv[argv.index('--take') + 1], str(Path(take) / 'raw.gmst'))
+        self.assertEqual(argv[argv.index('--in-plane') + 1], 'polar')
+        self.assertEqual(argv[argv.index('--symmetry') + 1], '3')
+        self.assertEqual(argv[argv.index('--expected-max-rev-s') + 1], '25')
+
 
 if __name__ == '__main__':
     unittest.main()
