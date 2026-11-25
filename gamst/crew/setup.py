@@ -471,6 +471,8 @@ def _role_config(selection, weight_paths, source_dir):
                       runtime_root=str(Path(checkpoint["path"]).parent))
     elif model.startswith("mediapipe.") or model in ("silero.vad", "yamnet", "depth_anything_v2.small"):
         config.update(path=first["path"], sha256=first["sha256"])
+    elif model.startswith(("sherpa.", "lvface.")):
+        config.update(path=first["path"], sha256=first["sha256"])
     elif model == "faster_whisper.small":
         config["model_path"] = str(Path(first["path"]).parent)
     elif model == "nemotron3":

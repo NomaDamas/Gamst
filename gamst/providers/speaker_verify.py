@@ -35,8 +35,8 @@ Scores are uncalibrated cosine similarities. The threshold must be set on the ow
 from __future__ import annotations
 
 import hashlib
+import inspect
 import math
-import threading
 
 from ..capabilities import CapabilitySpec, OutputField
 from .audio_ring import AudioRing, mono_float, rms_dbfs
@@ -186,14 +186,20 @@ def load_embedder(backend, path, **options):
     return BACKENDS[backend].from_local(path, **options)
 
 
-def enroll(embedder, clips, sample_rate=SAMPLE_RATE, *, min_dbfs=-45.):
+async def embed(embedder, *args):
+    """An in-process embedder, or one in its own worker environment (``RemoteEmbedder``)."""
+    value = embedder.embed(*args)
+    return await value if inspect.isawaitable(value) else value
+
+
+async def enroll(embedder, clips, sample_rate=SAMPLE_RATE, *, min_dbfs=-45.):
     """Enrollment embeddings of the owner's clips (silent clips are skipped). Audio is not kept."""
     embeddings = []
     for clip in clips:
         clip = mono_float(clip)
         if rms_dbfs(clip) < min_dbfs:
             continue
-        embeddings.append(embedder.embed(clip, sample_rate))
+        embeddings.append(await embed(embedder, clip, sample_rate))
     if not embeddings:
         raise ValueError('no enrollment clip had speech above the energy gate')
     return dict(kind='voice', model=embedder.model_id, dim=len(embeddings[0]), embeddings=embeddings)
@@ -228,7 +234,7 @@ class SpeakerVerify:
              OutputField('model', 'object')),
             'window', window_ms=self.segment_ms, stateful=True, reset_on_gap=True, freshness_ms=5000,
             interpretation='estimate', devices=('cpu',), license='Apache-2.0 adapter; model weights per backend')
-        self._lock = threading.RLock()
+        self._samples = None
         self.reset()
 
     def bind(self, pipeline):
@@ -245,68 +251,83 @@ class SpeakerVerify:
                 raise ValueError(f"voice reference was enrolled with {value.get('model')!r}; this module runs "
                                  f'{self.embedder.model_id!r} (re-enroll with the same model)')
             embeddings = value['embeddings']
+            self.target, self._samples = centroid(embeddings), None
+        elif value.get('samples'):
+            self.target, self._samples = None, value   # embedded once, at the first frame, then dropped
         else:
-            embeddings = enroll(self.embedder, value.get('samples') or (),
-                                int(value.get('sample_rate', SAMPLE_RATE)), min_dbfs=self.min_dbfs)['embeddings']
-        self.target = centroid(embeddings)
+            raise ValueError('a voice reference is {"model", "embeddings"} or {"samples", "sample_rate"}')
 
     def reset(self):
-        with self._lock:
-            self.ring.reset()
-            self.state = Hysteresis(self.threshold, self.threshold - self.hysteresis)
-            self._next_segment_ms = None
-            self._checked = {}
+        self.ring.reset()
+        self.state = Hysteresis(self.threshold, self.threshold - self.hysteresis)
+        self._next_segment_ms = None
+        self._checked = {}
 
-    def score(self, samples):
+    async def score(self, samples):
         """Cosine score of samples against the enrolled centroid, None below the energy gate."""
+        if self._samples is not None:
+            try:
+                enrolled = await enroll(self.embedder, self._samples['samples'],
+                                        int(self._samples.get('sample_rate', SAMPLE_RATE)), min_dbfs=self.min_dbfs)
+            except ValueError as error:
+                raise RuntimeError(f'voice reference: {error}') from error
+            self.target, self._samples = centroid(enrolled['embeddings']), None
         if self.target is None:
             raise RuntimeError('no voice reference bound')
         if rms_dbfs(samples) < self.min_dbfs:
             return None
-        return round(cosine(self.embedder.embed(samples, SAMPLE_RATE), self.target), 5)
+        embedding = await embed(self.embedder, samples, SAMPLE_RATE)
+        if len(embedding) != len(self.target):
+            raise RuntimeError('the voice reference has another embedding size than this model')
+        return round(cosine(embedding, self.target), 5)
+
+    async def close(self):
+        close = getattr(self.embedder, 'close', None)
+        value = close() if callable(close) else None
+        if inspect.isawaitable(value):
+            await value
 
     def _model(self):
         return dict(id=self.embedder.model_id, threshold=self.threshold, hysteresis=self.hysteresis)
 
-    def process(self, frame):
-        with self._lock:
-            if isinstance(frame.data, dict):
-                return self._utterance(frame)
-            if frame.modality != 'audio' or frame.data is None:
-                return None
-            if frame.sample_rate != SAMPLE_RATE:
-                raise ValueError('speaker_verify needs 16 kHz mono audio')
-            end_ms = int(frame.timestamp_ms)
-            if self.ring.append(frame.data, end_ms, SAMPLE_RATE):   # capture gap: no history across it
-                self.state.active = False
-                self._next_segment_ms = None
-            if not self.segments:
-                return None
-            end_ms = self.ring.end_ms
-            if self._next_segment_ms is None:
-                self._next_segment_ms = self.ring.start_ms + self.segment_ms
-            outputs = []
-            while self._next_segment_ms <= end_ms:
-                segment_end = self._next_segment_ms
-                self._next_segment_ms += self.hop_ms
-                start = segment_end - self.segment_ms
-                if not self.ring.covers(start, segment_end):
-                    continue
-                try:
-                    score = self.score(self.ring.span(start, segment_end))
-                except ValueError:
-                    score = None   # too short for the model: no evidence either way
-                active = self.state.update(score)
-                value = dict(kind='segment', reference=self.reference_name, start_ms=int(start),
-                             end_ms=int(segment_end), match=bool(active and score is not None),
-                             state='silent' if score is None else ('match' if active else 'other'),
-                             model=self._model())
-                if score is not None:
-                    value['score'] = score
-                outputs.append(self.spec.validate(value))
-            return outputs or None
+    async def process(self, frame):
+        if isinstance(frame.data, dict):
+            return await self._utterance(frame)
+        if frame.modality != 'audio' or frame.data is None:
+            return None
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('speaker_verify needs 16 kHz mono audio')
+        end_ms = int(frame.timestamp_ms)
+        if self.ring.append(frame.data, end_ms, SAMPLE_RATE):   # capture gap: no history across it
+            self.state.active = False
+            self._next_segment_ms = None
+        if not self.segments:
+            return None
+        end_ms = self.ring.end_ms
+        if self._next_segment_ms is None:
+            self._next_segment_ms = self.ring.start_ms + self.segment_ms
+        outputs = []
+        while self._next_segment_ms <= end_ms:
+            segment_end = self._next_segment_ms
+            self._next_segment_ms += self.hop_ms
+            start = segment_end - self.segment_ms
+            if not self.ring.covers(start, segment_end):
+                continue
+            try:
+                score = await self.score(self.ring.span(start, segment_end))
+            except ValueError:
+                score = None   # too short for the model: no evidence either way
+            active = self.state.update(score)
+            value = dict(kind='segment', reference=self.reference_name, start_ms=int(start),
+                         end_ms=int(segment_end), match=bool(active and score is not None),
+                         state='silent' if score is None else ('match' if active else 'other'),
+                         model=self._model())
+            if score is not None:
+                value['score'] = score
+            outputs.append(self.spec.validate(value))
+        return outputs or None
 
-    def _utterance(self, frame):
+    async def _utterance(self, frame):
         value = frame.data
         if value.get('status') != 'final' or not value.get('text'):
             return None
@@ -329,7 +350,7 @@ class SpeakerVerify:
         if last - first >= self.min_utterance_ms and self.ring.covers(first, min(last, (self.ring.end_ms or 0) + 500)
                                                                       - 500):
             try:
-                score = self.score(self.ring.span(first, last))
+                score = await self.score(self.ring.span(first, last))
             except ValueError:
                 score = None
         match = score is not None and score >= self.threshold

@@ -24,6 +24,10 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    from .providers.model_workers import PROFILES
+    if profile in PROFILES:
+        from .providers.model_workers import capability as model_capability
+        return model_capability(profile, config)
     if profile == 'streamingvlm.local':
         from .providers.streaming_semantic import StreamingSemanticContext
         required={'endpoint','model','revision'}

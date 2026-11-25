@@ -33,6 +33,7 @@ module keeps it in memory only. A person reference needs a consent record (``Pip
 from __future__ import annotations
 
 import hashlib
+import inspect
 from pathlib import Path
 
 from .audio_ring import AudioRing, mono_float, resample
@@ -43,6 +44,11 @@ SAMPLE_RATE = 16000
 def _np():
     import numpy as np
     return np
+
+
+async def _call(function, *args):
+    value = function(*args)
+    return await value if inspect.isawaitable(value) else value
 
 
 def _verify(path, expected):
@@ -217,7 +223,7 @@ class Blocks:
             return []
         start, end = self._next_ms - self.block_ms, self.ring.end_ms
         self._next_ms = None
-        return [self._block(start, end)] if end - start >= 100 else []
+        return [self._block(start, end)] if end - start >= 1 else []
 
     def _block(self, start, end):
         window = self.ring.span(max(self.ring.start_ms, start - self.context_ms), end)
@@ -253,24 +259,29 @@ class TargetSpeech:
     def reset(self):
         self.blocks.reset()
 
-    def process(self, frame):
+    async def process(self, frame):
         if frame.modality != 'audio' or frame.data is None or isinstance(frame.data, dict):
             return []
         if frame.sample_rate != SAMPLE_RATE:
             raise ValueError('target_speech needs 16 kHz mono audio')
         if self.enrollment is None:
             raise RuntimeError('no enrolled voice clip bound')
-        return self._extract(self.blocks.push(frame.data, int(frame.timestamp_ms)))
+        return await self._extract(self.blocks.push(frame.data, int(frame.timestamp_ms)))
 
-    def finish(self):
-        return self._extract(self.blocks.flush())
+    async def finish(self):
+        return await self._extract(self.blocks.flush())
 
-    def _extract(self, blocks):
+    async def _extract(self, blocks):
         output = []
         for start_ms, _, window, keep in blocks:
-            estimate = self.extractor.extract(window, self.enrollment)
+            estimate = await _call(self.extractor.extract, window, self.enrollment)
             output += derived_chunks(self.emits, estimate[-keep:], start_ms)
         return output
+
+    async def close(self):
+        close = getattr(self.extractor, 'close', None)
+        if callable(close):
+            await _call(close)
 
 
 class SpeakerGate:
@@ -373,66 +384,75 @@ def span_anchors(spans, window_start_ms, window_end_ms, *, include_other=True, m
     return result
 
 
+class SAMSpanBackend:
+    """GAMST's SAM-Audio loader asked for one anchored 16 kHz block at a time."""
+
+    def __init__(self, native, prompt):
+        self.native, self.prompt = native, prompt
+
+    @classmethod
+    def from_local(cls, config):
+        from .sam_audio_context import configuration
+        from .sam_audio_native import SAMAudioNative
+        config = configuration(config)
+        return cls(SAMAudioNative.from_local(config), config['prompt'])
+
+    def separate(self, window, anchors):
+        from ..sam_audio_windows import SAMPLE_RATE as SAM_RATE, prepare_window
+        np = _np()
+        pcm = np.clip(resample(window, SAMPLE_RATE, SAM_RATE), -1., 1.).astype(np.float32)
+        prepared = prepare_window(pcm, sample_rate=SAM_RATE, prompt=self.prompt, anchors=list(anchors),
+                                  hop_length=self.native.hop_length)
+        target, _, _, _ = self.native.predict(prepared)
+        return _fit(resample(np.frombuffer(target, dtype=np.float32), SAM_RATE, SAMPLE_RATE), len(window))
+
+    def close(self):
+        self.native.close()
+
+
 class SAMSpanSpeech:
     """Pipeline module: 16 kHz mixture + ``audio.speaker_match`` segments in, Derived voice blocks out.
 
-    The SAM-Audio backend is GAMST's existing :class:`SAMAudioNative` (complete 48 kHz windows of
-    1..4 s). Windows with no ``+`` span emit silence for the person (nothing of theirs to keep).
+    ``backend`` is :class:`SAMSpanBackend` (complete windows of 1..4 s) or its worker client. Windows
+    with no ``+`` span emit silence for the person (nothing of theirs to keep).
     """
 
-    def __init__(self, backend, *, prompt='speech', reference='voice', emits=None, window_ms=2000,
-                 include_other=True):
+    def __init__(self, backend, *, reference='voice', emits=None, window_ms=2000, include_other=True):
         if not 1000 <= window_ms <= 4000:
             raise ValueError('SAM-Audio windows are 1..4 s')
-        self.backend, self.prompt, self.reference_name = backend, prompt, reference
+        self.backend, self.reference_name = backend, reference
         self.emits = emits or f'voice:{reference}'
         self.include_other = include_other
         self.blocks = Blocks(block_ms=window_ms, context_ms=0)
         self.spans = []
         self.name, self.version = 'sam_span_speech', 'sam-audio.span'
 
-    @classmethod
-    def from_local(cls, config, **options):
-        from .sam_audio_context import configuration
-        from .sam_audio_native import SAMAudioNative
-        config = configuration(config)
-        options.setdefault('prompt', config['prompt'])
-        return cls(SAMAudioNative.from_local(config), **options)
-
     def reset(self):
         self.blocks.reset()
         self.spans = []
 
-    def process(self, frame):
-        from ..sam_audio_windows import SAMPLE_RATE as SAM_RATE, prepare_window
-        np = _np()
+    async def process(self, frame):
         value = frame.data
         if isinstance(value, dict):
             if value.get('kind') == 'segment' and value.get('reference') == self.reference_name \
                     and value.get('state') != 'silent':
-                self.spans.append((value['start_ms'], value['end_ms'], bool(value.get('match'))))
-                self.spans = self.spans[-256:]
+                self.spans = self.spans[-255:] + [(value['start_ms'], value['end_ms'], bool(value.get('match')))]
             return []
         if frame.modality != 'audio' or value is None:
             return []
         if frame.sample_rate != SAMPLE_RATE:
             raise ValueError('sam span speech needs 16 kHz mono audio')
+        np = _np()
         output = []
-        for start_ms, end_ms, window, keep in self.blocks.push(value, int(frame.timestamp_ms)):
+        for start_ms, end_ms, window, _ in self.blocks.push(value, int(frame.timestamp_ms)):
             anchors = span_anchors(self.spans, start_ms, end_ms, include_other=self.include_other)
-            if not any(token == '+' for token, _, _ in anchors):
-                output += derived_chunks(self.emits, np.zeros(keep, np.float32), start_ms)
-                continue
-            pcm = np.clip(resample(window[-keep:], SAMPLE_RATE, SAM_RATE), -1., 1.).astype(np.float32)
-            prepared = prepare_window(pcm, sample_rate=SAM_RATE, prompt=self.prompt, anchors=list(anchors),
-                                      hop_length=self.backend.hop_length)
-            target, _, _, _ = self.backend.predict(prepared)
-            estimate = np.frombuffer(target, dtype=np.float32)
-            output += derived_chunks(self.emits, _fit(resample(estimate, SAM_RATE, SAMPLE_RATE), keep), start_ms)
+            if any(token == '+' for token, _, _ in anchors):
+                estimate = await _call(self.backend.separate, window, anchors)
+            else:
+                estimate = np.zeros(len(window), np.float32)
+            output += derived_chunks(self.emits, estimate, start_ms)
             self.spans = [span for span in self.spans if span[1] > end_ms - 4000]
         return output
 
-    def close(self):
-        close = getattr(self.backend, 'close', None)
-        if callable(close):
-            close()
+    async def close(self):
+        await _call(self.backend.close)

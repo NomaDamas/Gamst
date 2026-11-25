@@ -87,12 +87,14 @@ class Sapiens2PosePlugin(PerceptionPlugin):
     modalities = ('video',)
 
     def __init__(self, pose, processor, detector, detector_processor, *, device, version, max_poses=4,
-                 bbox_threshold=.3, nms_threshold=.3, flip_test=True, tracker='ocsort'):
+                 bbox_threshold=.3, nms_threshold=.3, flip_test=True, tracker='ocsort',
+                 remote=None):
         self.pose, self.processor = pose, processor
         self.detector, self.detector_processor = detector, detector_processor
         self.device, self.version, self.max_poses = device, version, int(max_poses)
         self.bbox_threshold, self.nms_threshold, self.flip_test = bbox_threshold, nms_threshold, flip_test
         self.tracker, self.tracker_name = create_tracker(tracker), tracker
+        self.remote = remote   # RemotePose: the models live in their own environment
         self._native_lock = threading.Lock()
 
     @classmethod
@@ -164,7 +166,8 @@ class Sapiens2PosePlugin(PerceptionPlugin):
         return to_poses(keypoints, scores, boxes, width, height)
 
     async def process(self, frame):
-        poses = await asyncio.to_thread(self.infer, frame.data)
+        poses = await (self.remote.infer(frame.data) if self.remote is not None
+                       else asyncio.to_thread(self.infer, frame.data))
         boxes = [pose['bbox'] for pose in poses if pose['bbox'] is not None]
         tracks = self.tracker.update(boxes, frame.timestamp_ms, stream_id=frame.subject_id + ':body')
         for pose in poses:
@@ -178,3 +181,7 @@ class Sapiens2PosePlugin(PerceptionPlugin):
 
     def reset(self):
         self.tracker.reset()
+
+    async def close(self):
+        if self.remote is not None:
+            await self.remote.close()

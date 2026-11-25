@@ -8,6 +8,7 @@ import tempfile
 from .capabilities import bounded_json
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
 from .provider_profiles import capability
+from .providers.model_workers import PRIVATE_AUDIO
 from .streams import _finish
 
 
@@ -22,6 +23,7 @@ class ProcessProvider:
     # Legacy transports can initialize their process fields directly instead
     # of calling open(). Only the explicit SAM open path installs an owner.
     _separation_owner = None
+    profile = None
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
@@ -150,7 +152,8 @@ class ProcessProvider:
             from .separation_media import MAX_PAIR_BYTES, MEDIA_HEADER_LIMIT
             if head_size > MEDIA_HEADER_LIMIT or payload_size > MAX_PAIR_BYTES:
                 raise ValueError('separation response exceeds private wire bounds')
-        if payload_size and (owner is None or operation != 'process'):
+        private_audio = operation == 'process' and self.profile in PRIVATE_AUDIO
+        if payload_size and not private_audio and (owner is None or operation != 'process'):
             raise ValueError('worker response cannot contain raw sensor payload')
         response = parse_header(await process.stdout.readexactly(head_size))
         if type(response) is not dict or type(response.get('id')) is not int or response.get('id') != sequence or type(response.get('ok')) is not bool:
@@ -172,6 +175,16 @@ class ProcessProvider:
                 raise ValueError('separation response length differs from request')
             binary = await process.stdout.readexactly(payload_size)
             return unpack_pair(result, response['separation'], binary, binding, self.spec), binding
+        if private_audio:
+            # Waveform for the module that owns this worker; it is never validated into a record.
+            shape = fields['frame']['layout'].get('shape') or [0]
+            if result is not None or payload_size not in (0, 4 * shape[0]):
+                raise ValueError('private audio response differs from its request')
+            import numpy as np
+            samples = np.frombuffer(await process.stdout.readexactly(payload_size), dtype='<f4').copy()
+            if not np.isfinite(samples).all():
+                raise ValueError('private audio response must be finite')
+            return samples
         if 'separation' in response:
             raise ValueError('unnegotiated separation metadata')
         if owner is not None and operation != 'start' and result is not None:

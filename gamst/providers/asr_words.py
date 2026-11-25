@@ -52,9 +52,11 @@ async def _call(function, *args):
 def words_capability(version='1'):
     return CapabilitySpec(
         'speech.transcript_words', 'speech.transcript_words', 'audio', 'gamst.asr_words', version,
-        (OutputField('utterance_id', 'string'), OutputField('revision', 'integer'), OutputField('text', 'string'),
+        (OutputField('utterance_id', 'string'), OutputField('revision', 'integer', required=False),
+         OutputField('text', 'string'),
          OutputField('status', 'string'), OutputField('start_ms', 'integer'), OutputField('end_ms', 'integer'),
-         OutputField('language', 'string'), OutputField('words', 'array'), OutputField('aligned', 'boolean'),
+         OutputField('language', 'string', required=False), OutputField('words', 'array'),
+         OutputField('aligned', 'boolean', required=False),
          OutputField('aligner', 'object', required=False), OutputField('finalization_reason', 'string', required=False)),
         'native', stateful=True, reset_on_gap=True, freshness_ms=30000, interpretation='semantic_description',
         devices=('cpu', 'cuda'), license='Apache-2.0')
@@ -195,16 +197,19 @@ class AlignedASR:
             samples = self.ring.span(value['start_ms'], value['end_ms'])
             language = value['language'] if value['language'] != 'und' else self.language
             if len(samples) and language:
-                items = await asyncio.to_thread(self.aligner.align, samples, SAMPLE_RATE, value['text'], language)
+                arguments = (samples, SAMPLE_RATE, value['text'], language)
+                items = await (self.aligner.align(*arguments) if inspect.iscoroutinefunction(self.aligner.align)
+                               else asyncio.to_thread(self.aligner.align, *arguments))
                 value['words'] = offset_words(items, value['start_ms'])
                 value['aligned'] = True
                 value['aligner'] = dict(id=self.aligner.model_id)
         return [self.spec.validate(value)]
 
     async def close(self):
-        close = getattr(self.asr, 'close', None)
-        if callable(close):
-            await _call(close)
+        for owned in (self.asr, self.aligner):
+            close = getattr(owned, 'close', None)
+            if callable(close):
+                await _call(close)
 
 
 class WhisperWords:

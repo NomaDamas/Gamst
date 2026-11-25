@@ -98,6 +98,10 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
         spec = getattr(plugin, 'spec', None)
         return dict(module=plugin, spec=None, modality=tuple(plugin.modalities)[0],
                     capability=None if spec is None else spec.id, in_process=True)
+    from ..providers.model_workers import PROFILES as MODEL_PROFILES
+    if entry.get('provider_profile') in MODEL_PROFILES:
+        raise RoleUnavailable('answers one recipe module (enrolled reference and consent needed); '
+                              'its embeddings or audio are never context')
     python = python or entry.get('python')
     if not python or not entry.get('provider_profile'):
         raise RoleUnavailable('no isolated worker in profile; register its in-process adapter explicitly')

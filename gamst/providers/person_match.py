@@ -35,9 +35,8 @@ from __future__ import annotations
 from collections import deque
 import hashlib
 import math
-import threading
 
-from .speaker_verify import centroid, cosine, l2_normalize
+from .speaker_verify import centroid, cosine, embed, l2_normalize
 
 # ArcFace / InsightFace 112x112 destination points: image-left eye, image-right eye, nose,
 # image-left mouth corner, image-right mouth corner (insightface ``face_align.arcface_dst``).
@@ -271,7 +270,7 @@ class SOLIDERBodyEmbedder:
         return [float(v) for v in feature.detach().cpu().reshape(-1).tolist()]
 
 
-def enroll_person(face_embedder, body_embedder, images, poses, face_indices=MEDIAPIPE_FACE_POINTS):
+async def enroll_person(face_embedder, body_embedder, images, poses, face_indices=MEDIAPIPE_FACE_POINTS):
     """Face/body embeddings of the owner's enrollment frames (one visible person each). Images are not kept."""
     faces, bodies = [], []
     for image, pose in zip(images, poses):
@@ -280,11 +279,11 @@ def enroll_person(face_embedder, body_embedder, images, poses, face_indices=MEDI
         if face_embedder is not None:
             face = align_face(image, face_points(landmarks, width, height, face_indices))
             if face is not None:
-                faces.append(face_embedder.embed(face))
+                faces.append(await embed(face_embedder, face))
         if body_embedder is not None and pose.get('bbox'):
             crop = body_crop(image, pose['bbox'])
             if crop is not None:
-                bodies.append(body_embedder.embed(crop))
+                bodies.append(await embed(body_embedder, crop))
     if not faces and not bodies:
         raise ValueError('no usable face or body in the enrollment frames')
     return dict(kind='person', face_model=getattr(face_embedder, 'model_id', None),
@@ -309,7 +308,6 @@ class TargetPerson:
         self.emits, self.crop_pad, self.face_indices = emits, crop_pad, tuple(face_indices)
         self.version = f"1.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
         self.gallery = None
-        self._lock = threading.RLock()
         self.reset()
 
     def bind(self, pipeline):
@@ -333,14 +331,13 @@ class TargetPerson:
         self.gallery = PersonGallery(face=face, body=body)
 
     def reset(self):
-        with self._lock:
-            self._poses = {}
-            self._tracks = {}
-            self._locked = self._confirmed_ms = None
-            if self.gallery is not None:
-                self.gallery.session.clear()
+        self._poses = {}
+        self._tracks = {}
+        self._locked = self._confirmed_ms = None
+        if self.gallery is not None:
+            self.gallery.session.clear()
 
-    def _score(self, track, pose, image, ts):
+    async def _score(self, track, pose, image, ts):
         height, width = image.shape[:2]
         state = self._tracks.setdefault(track, dict(face=None, face_ms=None, body=None, body_ms=None))
         state['seen_ms'] = ts
@@ -348,12 +345,12 @@ class TargetPerson:
                 (state['face_ms'] is None or ts - state['face_ms'] >= self.face_every_ms):
             crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, self.face_indices))
             if crop is not None:
-                state['face'], state['face_ms'] = self.gallery.face_score(self.face.embed(crop)), ts
+                state['face'], state['face_ms'] = self.gallery.face_score(await embed(self.face, crop)), ts
         if self.body is not None and pose.get('bbox') and \
                 (state['body_ms'] is None or ts - state['body_ms'] >= self.body_every_ms):
             crop = body_crop(image, pose['bbox'])
             if crop is not None:
-                embedding = self.body.embed(crop)
+                embedding = await embed(self.body, crop)
                 state['body_embedding'] = embedding
                 state['body'], state['body_ms'] = self.gallery.body_score(embedding), ts
         for key in ('face', 'body'):   # a score is evidence about now, not about a minute ago
@@ -361,47 +358,54 @@ class TargetPerson:
                 state[key] = None
         return state
 
-    def process(self, frame):
+    async def process(self, frame):
         from ..plugins import InputFrame, _signal
         from ..pipeline import Derived
-        with self._lock:
-            if self.gallery is None:
-                raise RuntimeError('no person reference bound')
-            if isinstance(frame.data, list):           # the pose record arrives before its camera frame
-                self._poses[frame.timestamp_ms] = frame.data
-                while len(self._poses) > 8:
-                    self._poses.pop(next(iter(self._poses)))
-                return []
-            if frame.modality != 'video' or not hasattr(frame.data, 'shape'):
-                return []
-            ts = frame.timestamp_ms
-            poses = self._poses.pop(ts, None)
-            if poses is None:
-                return []
-            candidates = {}
-            for index, pose in enumerate(poses):
-                if not isinstance(pose, dict) or not pose.get('bbox'):
-                    continue
-                track = pose.get('track_id') or f'frame:{ts}:{index}'
-                candidates[track] = (pose, self._score(track, pose, frame.data, ts))
-            for track in [key for key, state in self._tracks.items() if ts - state['seen_ms'] > 5000]:
-                del self._tracks[track]
-            target, state_name = self._select(candidates, ts)
-            pose, scores = candidates[target] if target is not None else (None, {})
-            if state_name == 'face' and scores.get('body_embedding') is not None:
-                self.gallery.remember_body(scores['body_embedding'])
-            value = dict(reference=self.reference_name, state=state_name, track_id=target,
-                         bbox=pose.get('bbox') if pose else None, face_score=scores.get('face'),
-                         body_score=scores.get('body'), candidates=len(candidates))
-            frame_like = InputFrame(None, 'video', ts, frame.subject_id)
-            output = [_signal(frame_like, 'vision.target_person', value, self.name, self.version),
-                      _signal(frame_like, 'scene.target_poses', [pose] if pose else [], self.name, self.version)]
-            if self.emits and pose is not None:
-                box = body_box(pose['bbox'], frame.data.shape[1], frame.data.shape[0], pad=self.crop_pad)
-                if box is not None:
-                    x0, y0, x1, y1 = box
-                    output.append(Derived(self.emits, frame.data[y0:y1, x0:x1].copy(), 'video'))
-            return output
+        if self.gallery is None:
+            raise RuntimeError('no person reference bound')
+        if isinstance(frame.data, list):           # the pose record arrives before its camera frame
+            self._poses[frame.timestamp_ms] = frame.data
+            while len(self._poses) > 8:
+                self._poses.pop(next(iter(self._poses)))
+            return []
+        if frame.modality != 'video' or not hasattr(frame.data, 'shape'):
+            return []
+        ts = frame.timestamp_ms
+        poses = self._poses.pop(ts, None)
+        if poses is None:
+            return []
+        candidates = {}
+        for index, pose in enumerate(poses):
+            if not isinstance(pose, dict) or not pose.get('bbox'):
+                continue
+            track = pose.get('track_id') or f'frame:{ts}:{index}'
+            candidates[track] = (pose, await self._score(track, pose, frame.data, ts))
+        for track in [key for key, state in self._tracks.items() if ts - state['seen_ms'] > 5000]:
+            del self._tracks[track]
+        target, state_name = self._select(candidates, ts)
+        pose, scores = candidates[target] if target is not None else (None, {})
+        if state_name == 'face' and scores.get('body_embedding') is not None:
+            self.gallery.remember_body(scores['body_embedding'])
+        value = dict(reference=self.reference_name, state=state_name, track_id=target,
+                     bbox=pose.get('bbox') if pose else None, face_score=scores.get('face'),
+                     body_score=scores.get('body'), candidates=len(candidates))
+        frame_like = InputFrame(None, 'video', ts, frame.subject_id)
+        output = [_signal(frame_like, 'vision.target_person', value, self.name, self.version),
+                  _signal(frame_like, 'scene.target_poses', [pose] if pose else [], self.name, self.version)]
+        if self.emits and pose is not None:
+            box = body_box(pose['bbox'], frame.data.shape[1], frame.data.shape[0], pad=self.crop_pad)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                output.append(Derived(self.emits, frame.data[y0:y1, x0:x1].copy(), 'video'))
+        return output
+
+    async def close(self):
+        for embedder in (self.face, self.body):
+            close = getattr(embedder, 'close', None)
+            if callable(close):
+                value = close()
+                if hasattr(value, '__await__'):
+                    await value
 
     def _select(self, candidates, ts):
         """(track_id, state): best matching face; else the locked track while it holds; else best body."""

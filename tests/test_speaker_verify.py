@@ -70,6 +70,11 @@ class MathTest(unittest.TestCase):
         hops, gap = clock.push(np.zeros(600, np.float32), 1037)
         self.assertFalse(gap)
         self.assertEqual([end for end, _ in hops], [1018, 1038])
+        jittered = AudioRing(16000, 5)             # a live callback arrives early or late by a few ms
+        for i, jitter in enumerate((0, 7, -9, 4)):
+            self.assertFalse(jittered.append(np.zeros(1600, np.float32), 1000 + 100 * i + jitter))
+        self.assertEqual(jittered.end_ms - jittered.start_ms, 400)
+        self.assertTrue(jittered.append(np.zeros(1600, np.float32), 5000))
         hops, gap = clock.push(np.zeros(320, np.float32), 2000)    # capture jumped: discontinuity
         self.assertTrue(gap)
 
@@ -87,7 +92,7 @@ class MathTest(unittest.TestCase):
 class ModuleTest(unittest.IsolatedAsyncioTestCase):
     async def test_segments_follow_the_enrolled_voice_and_terms_count_only_its_utterances(self):
         embedder = ToneEmbedder()
-        reference = enroll(embedder, [tone(220, 1.), tone(220, 1.5)])
+        reference = await enroll(embedder, [tone(220, 1.), tone(220, 1.5)])
         self.assertEqual(reference['model'], 'test-tone')
         self.assertNotIn('samples', reference)
         async with Gamst(consent=True) as human:
@@ -120,6 +125,15 @@ class ModuleTest(unittest.IsolatedAsyncioTestCase):
             counted = await human.count_events('speech.term_events', window='24h')
             self.assertEqual(counted['count'], 1)
 
+    async def test_text_patterns_are_terms(self):
+        terms = TermEvents(terms=['re:(거든요|잖아요)$'])
+        value = terms.process(InputFrame(dict(utterance_id='a', status='final', text='제가 했거든요!', start_ms=1, end_ms=2),
+                                         'audio', 2))
+        self.assertEqual([event['spoken'] for event in value['events']], ['거든요'])
+        self.assertEqual(TermEvents(terms=[r're:\S']).terms, {r're:\S': [r're:\S']})
+        with self.assertRaises(ValueError):
+            TermEvents(terms=['re:('])
+
     def test_a_reference_enrolled_with_another_model_is_refused(self):
         verify = SpeakerVerify(ToneEmbedder())
         with self.assertRaises(ValueError):
@@ -135,10 +149,10 @@ def _tts(directory, voice, text, name):
 
 
 @unittest.skipUnless(CAMPP.is_file(), f'CAM++ ONNX not installed at {CAMPP}')
-class CamPlusPlusTest(unittest.TestCase):
+class CamPlusPlusTest(unittest.IsolatedAsyncioTestCase):
     """Runs the real CAM++ model (sherpa-onnx). Voices are macOS Korean TTS voices, not people."""
 
-    def test_same_voice_scores_above_other_voice(self):
+    async def test_same_voice_scores_above_other_voice(self):
         try:
             import sherpa_onnx  # noqa: F401
         except ImportError:
@@ -153,7 +167,7 @@ class CamPlusPlusTest(unittest.TestCase):
             yuna = [_tts(directory, 'Yuna', line, f'yuna{i}') for i, line in enumerate(lines)]
             eddy = [_tts(directory, 'Eddy (Korean (South Korea))', line, f'eddy{i}') for i, line in enumerate(lines)]
         self.assertEqual(embedder.dim, len(embedder.embed(yuna[0])))
-        target = centroid(enroll(embedder, yuna[:2])['embeddings'])
+        target = centroid((await enroll(embedder, yuna[:2]))['embeddings'])
         same = cosine(embedder.embed(yuna[2]), target)
         other = cosine(embedder.embed(eddy[2]), target)
         print(f'\nCAM++ zh_en advanced: same-voice {same:.3f}, other-voice {other:.3f}')
