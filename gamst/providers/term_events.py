@@ -1,6 +1,7 @@
 """Owner-declared terms in final transcripts: one event per spoken occurrence (text math, no model).
 
-Consumes ``speech.transcript_update`` values. Only ``final`` revisions count, once per utterance, so a
+Consumes ``speech.transcript_update`` values, or plain ``text.transcript`` strings of a windowed ASR
+(each window is a final utterance). Only ``final`` revisions count, once per utterance, so a
 partial hypothesis that is later revised never adds to the count. Text is normalized before
 matching: Unicode NFKC, lower case, whitespace and punctuation removed. Korean particles that follow
 a word ("대박이", "대박을") still contain the term, so they match; a term is counted at each
@@ -92,7 +93,13 @@ class TermEvents:
 
     def process(self, frame):
         with self._lock:
-            value = frame.data if isinstance(frame.data, dict) else {}
+            value = frame.data
+            if isinstance(value, str):
+                # A fixed-window transcript (e.g. ``text.transcript`` of a windowed ASR) is final
+                # when emitted; each window is its own utterance.
+                value = dict(utterance_id=f'window:{frame.timestamp_ms}', status='final', text=value,
+                             end_ms=frame.timestamp_ms)
+            value = value if isinstance(value, dict) else {}
             if value.get('status') != 'final' or not value.get('text'):
                 return None
             key = (value.get('utterance_id'), frame.subject_id)

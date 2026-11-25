@@ -140,10 +140,15 @@ def subsequence_dtw(template, series):
 
 
 class ExemplarEvents:
-    """Match a pose-feature stream against a demonstrated exemplar; one event per match."""
+    """Match a feature-channel stream against a demonstrated exemplar; one event per match.
+
+    Any fixed-length channel stream works: pose channels (video), voice-style channels (audio), IMU.
+    ``modality`` and ``capability_id`` name the record so a video and an audio matcher can run together.
+    """
 
     def __init__(self, *, reference='exemplar', mode='hold', enter=.12, exit=.18, min_hold_ms=200,
-                 refractory_ms=None, window_s=None, max_gap_ms=1000):
+                 refractory_ms=None, window_s=None, max_gap_ms=1000, modality='video',
+                 capability_id='temporal.exemplar_events'):
         if mode not in ('hold', 'sequence'):
             raise ValueError("mode must be 'hold' or 'sequence'")
         if not 0 < enter <= exit:
@@ -153,7 +158,7 @@ class ExemplarEvents:
         self.refractory_ms, self.window_s, self.max_gap_ms = refractory_ms, window_s, max_gap_ms
         self.template = None
         self.spec = CapabilitySpec(
-            'temporal.exemplar_events', 'temporal.exemplar_events', 'video', 'gamst.exemplar_events',
+            capability_id, 'temporal.exemplar_events', modality, 'gamst.exemplar_events',
             f'1.{mode}', (OutputField('count', 'integer'), OutputField('status', 'string'),
                           OutputField('distance', 'number', required=False), OutputField('events', 'array')),
             'native', stateful=True, reset_on_gap=True, freshness_ms=max_gap_ms, interpretation='estimate',
