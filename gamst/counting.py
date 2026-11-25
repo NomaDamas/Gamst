@@ -11,9 +11,23 @@ import csv
 import json
 
 from .capabilities import bounded_json
-from .revisions import depends_on, level, replaced_events
+from .revisions import depends_on
 
 MAX_SCAN = 20000
+GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames that never reached a module
+
+
+def gaps_of(records, capability=None):
+    """The gap records whose loss affects ``capability`` (None: all of them)."""
+    return [record for record in records if capability in (None, GAP_CAPABILITY) or any(
+        capability in event.get('capabilities', ()) for event in record['observation']['value']['events'])]
+
+
+def lost(records):
+    """``{gaps, frames, longest_ms}`` of gap records; one record may hold several gaps."""
+    events = [event for record in records for event in record['observation']['value']['events']]
+    return dict(gaps=sum(event['gaps'] for event in events), frames=sum(event['lost_frames'] for event in events),
+                longest_ms=max((event['end_ms'] - event['start_ms'] for event in events), default=0))
 
 
 def _lookup(value, path):
@@ -29,15 +43,14 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     """``rows`` are current stored records (oldest first). Returns the count, groups and bounded evidence."""
     where = where or {}
     count, groups, evidence = 0, {}, []
-    levels, replaced = dict(final=0, provisional=0), replaced_events(rows)
     for record in rows:
         observation = record.get('observation') or {}
         value = observation.get('value')
         events = value.get('events') if isinstance(value, dict) else None
         if not isinstance(events, list):
             continue
-        for index, item in enumerate(events):
-            if not isinstance(item, dict) or (record.get('id'), index) in replaced:
+        for item in events:
+            if not isinstance(item, dict):
                 continue
             name = item.get('event', item.get('type'))
             if event is not None and name != event:
@@ -45,7 +58,6 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
             if any(_lookup(item, path) != (True, expected) for path, expected in where.items()):
                 continue
             count += 1
-            levels[level(record)] += 1
             if group_by == '@event':
                 groups[name] = groups.get(name, 0) + 1
             elif group_by is not None:
@@ -55,9 +67,9 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
             if len(evidence) < max_evidence:
                 evidence.append(dict(record_id=record.get('id'), timestamp_ms=record.get('timestamp_ms'),
                                      capability_id=(observation.get('capability') or {}).get('id'),
-                                     event=item, level=level(record),
+                                     event=item,
                                      **({'depends_on': sources[:8]} if (sources := depends_on(record, item)) else {})))
-    result = dict(count=count, **levels, evidence=evidence, evidence_truncated=count > len(evidence))
+    result = dict(count=count, evidence=evidence, evidence_truncated=count > len(evidence))
     if group_by is not None:
         result['groups'] = groups
     return result
@@ -66,7 +78,7 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
 # ---------------------------------------------------------------- events as data (JSONL / CSV)
 
 COLUMNS = ('capability', 'event', 'label', 'method', 'confirmed', 'reference', 'reference_id', 'index', 'example',
-           'start_ms', 'end_ms', 'duration_ms', 'distance', 'best_distance', 'person', 'timestamp_ms', 'subject_id',
+           'start_ms', 'end_ms', 'duration_ms', 'gap_frames', 'distance', 'best_distance', 'person', 'timestamp_ms', 'subject_id',
            'source_id', 'sensor_id', 'record_id')
 
 
@@ -99,7 +111,7 @@ def event_rows(records, *, capability=None, event=None):
                    item.get('start_ms'))
             if phase == 'ended' and key in open_matches:
                 row = open_matches.pop(key)
-                for field in ('end_ms', 'best_distance', 'cut'):
+                for field in ('end_ms', 'best_distance', 'cut', 'gap_frames'):
                     if field in item:
                         row[field] = item[field]
                 row['duration_ms'] = row['end_ms'] - row['start_ms']

@@ -182,6 +182,7 @@ class PoseWorkerPlugin(PerceptionPlugin):
     """
     name = "mediapipe_pose_landmarker"
     modalities = ("video",)
+    owns_process = True
 
     def __init__(self, worker, *, joints=None, tracker='iou', **tracker_options):
         self.worker, self.joints, self.version = worker, joints, f"mediapipe:{worker.spec.version}"

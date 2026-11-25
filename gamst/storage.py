@@ -49,7 +49,6 @@ class Store:
                 self.connection.execute("ALTER TABLE record_offsets ADD COLUMN known_ms INTEGER")
             self.connection.execute("CREATE INDEX IF NOT EXISTS known_time ON record_offsets(known_ms)")
             self.connection.execute("CREATE INDEX IF NOT EXISTS record_revisions ON records(json_extract(payload,'$.supersedes')) WHERE json_type(payload,'$.supersedes')='text'")
-            self.connection.execute("CREATE INDEX IF NOT EXISTS provisional_signals ON records(subject,ts) WHERE json_extract(payload,'$.quality.level')='provisional'")
             self.connection.execute("CREATE INDEX IF NOT EXISTS clocked_signals ON records(subject,ts) WHERE json_type(payload,'$.observation.sensor.clock_id')='text'")
             self.connection.execute("DELETE FROM record_offsets WHERE record_id NOT IN (SELECT id FROM records)")
             self.connection.execute("INSERT INTO record_offsets(record_id) SELECT id FROM records WHERE id NOT IN (SELECT record_id FROM record_offsets) ORDER BY rowid")
@@ -214,15 +213,6 @@ class Store:
         if known_until is not None:
             sql, args = sql + " AND " + self._KNOWN, [*args, self._opened_ms, known_until]
         return self.connection.execute(sql + " ORDER BY position", args).fetchall()
-
-    def provisional(self, subject, name, start, end):
-        """Provisional signals of one name captured in [start, end], newest first."""
-        rows = self.connection.execute(
-            "SELECT payload FROM records WHERE subject=? AND ts>=? AND ts<=?"
-            " AND json_extract(payload,'$.quality.level')='provisional'"
-            " AND json_extract(payload,'$.observation.name')=? ORDER BY ts DESC, rowid DESC LIMIT 1000",
-            (subject, start, end, name)).fetchall()
-        return [json.loads(row[0]) for row in rows]
 
     def known_times(self, ids):
         return dict(self.connection.execute("SELECT record_id,known_ms FROM record_offsets WHERE record_id IN"

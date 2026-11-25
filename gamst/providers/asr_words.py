@@ -122,6 +122,7 @@ def _seconds(item, key):
 
 class AlignedASR:
     """Pipeline module: 16 kHz audio in, ``speech.transcript_words`` (final utterances with word times) out."""
+    owns_process = True    # the engine and the aligner run in their workers
 
     def __init__(self, asr, aligner=None, *, language=None, partials=False, ring_seconds=40.,
                  hop_ms=None, max_drift_ms=250):

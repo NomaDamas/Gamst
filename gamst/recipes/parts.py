@@ -82,10 +82,11 @@ async def _yoloe(options, context):
     _check_worker_dependencies(python)
     labels = context.get('labels') or [options['label']]
     models = context.get('models') or Path(entry['config']['checkpoint_path']).parent
-    module = await open_worker(python, entry['provider_profile'], detector_config(models, labels,
-                                                                                  context.get('device', 'cpu')))
+    # One frame's result depends on that frame only, so "replicas": N workers may share the frames.
+    config = dict(detector_config(models, labels, context.get('device', 'cpu')), stateless=True)
+    module = await open_worker(python, entry['provider_profile'], config, replicas=int(options.get('replicas', 1)))
     context['detector'] = True
-    return dict(module=module, spec=module.spec, every_ms=int(options.get('every_ms', 100)))
+    return dict(module=module, spec=module.spec, every_ms=options.get('every_ms'))   # every frame, unless declared
 
 
 async def _mediapipe_pose(options, context):
@@ -95,8 +96,9 @@ async def _mediapipe_pose(options, context):
     entry = context['installed'](options)
     worker = await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
                                        entry['provider_profile'],
-                                       dict(entry['config'], max_entities=int(options.get('max_poses', 1))))
-    # No lane: VIDEO tracking needs every frame in order, so the input waits for this module.
+                                       dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
+                                            allow_skips=True))
+    # allow_skips: a frame lost on a loaded machine must not rebuild the detector (docs/landmarker-video.md).
     return dict(module=PoseWorkerPlugin(worker, joints=options.get('joints'),
                                         tracker=options.get('tracker', 'iou')))
 

@@ -36,7 +36,7 @@ Answer: `columns` (one per capability, source, sensor and clock), `rows`, `evide
   evidence in it was learned), `cells`;
 - cell: `status`, `ref` (the value), `records` (more than one in this step: the last is shown), `intervals` (refs),
   `age_ms` (the value is from an earlier step), `across_gap`, `reason`;
-- evidence: `at_ms`, or `start_ms` and `end_ms`; `value`; `known_ms`; `evidence_id`; `level` (only if provisional);
+- evidence: `at_ms`, or `start_ms` and `end_ms`; `value`; `known_ms`; `evidence_id`; `quality`, `level` (only if given);
   `supersedes`, `revision`, `depends_on`, `depends_on_changed`; `flags` (`truncated`, `raw_fields_removed`, `value_omitted`).
 
 | Status | Meaning |
@@ -59,7 +59,7 @@ interpolation option). Joints, embeddings, media, and unregistered values whose 
 
 Completeness comes from the Pipeline, through one function (`gamst.timeline.progress`). It reads per module
 `complete_until_ms`, `gap_intervals`, `gaps`, `sampled`, `enabled`, `paused` and, if present, `complete_from_ms`
-(where the account starts) and `holding_from_ms` (oldest capture time of evidence still held, e.g. an open utterance).
+(where the account starts; the Pipeline does not report it yet) and `holding_from_ms` (oldest capture time of evidence still held, e.g. an open utterance; not reported yet either).
 What is missing is `unknown`. Without `complete_from_ms`, rows before the point where a module was first seen complete
 are `unknown`.
 
@@ -71,7 +71,7 @@ bound: a complete row there can still gain an interval. The cursor reports that.
 A row is `complete` only if every column is done with it. A column that is off does not hold a row back. Columns with
 unknown completeness, an uncalibrated clock or removed records do.
 
-## Two times, revisions, quality levels
+## Two times and revisions
 
 - **Capture time** is when it happened. **Knowledge time** (`known_ms`) is when the Store learned it. `as_of_ms` is a
   knowledge time: records learned later, later revisions, later calibrations and later completeness are left out. Reading
@@ -79,12 +79,11 @@ unknown completeness, an uncalibrated clock or removed records do.
 - **Records are append-only.** A correction is a new record with the fields of `TemporalEvent`: `supersedes` (the ID of
   the first record) and `revision`. `push_observation(..., supersedes=record_id)`; `retract_observation(record_id, reason)`
   adds a revision that says it was not there. Utterances keep `utterance_id` / `revision`.
-- **Levels.** `quality={'status': ..., 'level': 'provisional'}` marks reduced processing; everything else is final. A final
-  record of the same capability, source, sensor and capture interval replaces the provisional one, whichever was learned
-  first, and is linked as its revision. A provisional event is also replaced by a final event of the same kind and interval.
+- `quality={'status': ..., 'level': ...}`: the level is stored and shown as given. Nothing produces one today and nothing
+  reacts to it.
 - `get_context`, the temporal packet, `count_events` and the timeline use the current revision. `get_observations`,
   `get_observation_page` and `inspect_interval` return every revision.
-- `count_events` returns `final` and `provisional` next to `count`, takes `as_of_ms`, and never counts a superseded event.
+- `count_events` takes `as_of_ms` (window and gaps as of then) and never counts an event of a superseded record.
 - `depends_on` lists the record IDs a result says it came from; `depends_on_changed` those revised or retracted since.
   GAMST does not recompute a module.
 
@@ -110,21 +109,22 @@ linear fit places its records, with the fit in the column. Before that, its cell
 
 ## Cost
 
-Synthetic store, 5 capabilities, 60 s, M2 Pro, Python 3.11, other work running. Medians of 9, SDK call without MCP JSON.
+Synthetic store, 5 capabilities, 60 s, M2 Pro, Python 3.11, load average about 8 from other work. Medians of 9, SDK call
+without MCP JSON.
 
 | Read | 1k records | 5k | 10k |
 |---|---|---|---|
-| 60 s at 100 ms, first 64 KB page | 29 ms | 159 ms | 417 ms |
-| 60 s at 1 s | 25 ms | 137 ms | 412 ms |
-| 60 s at 100 ms, one capability | 16 ms | 69 ms | 148 ms |
-| last 10 s at 200 ms (the default) | 12 ms | 47 ms | 101 ms |
-| delta of that | 19 ms | 80 ms | 154 ms |
-| delta covering 601 rows | 76 ms | 319 ms | 583 ms |
-| `get_context(window='60s')` on the same store | 6 ms | 36 ms | 62 ms |
+| 60 s at 100 ms, first 64 KB page | 48 ms | 176 ms | 430 ms |
+| 60 s at 1 s | 43 ms | 153 ms | 377 ms |
+| 60 s at 100 ms, one capability | 26 ms | 81 ms | 188 ms |
+| last 10 s at 200 ms (the default) | 23 ms | 58 ms | 131 ms |
+| delta of that | 30 ms | 112 ms | 207 ms |
+| delta covering 601 rows | 105 ms | 438 ms | 814 ms |
+| `get_context(window='60s')` on the same store | 9 ms | 53 ms | 61 ms |
 
 The read runs in the event loop, so a live capture waits that long; keep the window short or name capabilities.
-A 64 KB page holds about 50 rows of 5 capabilities with one value each, and 27 with many records and events. An idle delta
-is about 2 KB. `Store.add`: 24 to 25 us before and after, 32 to about 40 us when every insert evicts.
+A 64 KB page held 63 rows of 5 capabilities at 1k records and 27 at 10k (a value and up to 8 intervals per cell). An idle
+delta was 2.1 KB. `Store.add`: 22.5 us before, 24 to 28 us after; when every insert evicts, 30 us before, 36 us after.
 
 ## Limits
 
@@ -133,8 +133,9 @@ is about 2 KB. `Store.add`: 24 to 25 us before and after, 32 to about 40 us when
 - Records written before knowledge time was stored count as known from when the file was opened.
 - Retention is by capture time in the record's own clock and by count; what it removed makes rows `unknown`.
 - Signals only: `observation.event` records and the semantic state chain (`get_semantic_state`) are not columns.
-- `get_trends` averages every stored revision. A Watch sees provisional records like any other and does not un-fire.
+- `get_trends` averages every stored revision. A Watch does not un-fire when a record is corrected.
 - An interval record committed more than five minutes after the window is not found. At most 20000 records are scanned per
   window (`scan_truncated`).
-- `Pipeline` does not pass a quality level from a module to its records, or from a provisional input to a derived result.
+- A module that failed or was off has a gap; the Pipeline lists its last 64, gap records in the Store cover older ones,
+  merged per second, so a row between two merged gaps can read `gap` although it was processed and empty.
 - No model, network source or real remote clock was run; the tests use fake modules.

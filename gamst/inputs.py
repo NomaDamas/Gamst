@@ -5,6 +5,10 @@ Each module has ``frames()``, an async iterator of :class:`gamst.plugins.InputFr
 hosts that own capture themselves keep using ``Gamst.push_video`` / ``push_audio`` or
 ``Pipeline.push``. Third-party inputs plug in the same way (any object with ``frames()``).
 
+A source may say more: ``live`` (default True; a recorded source waits for the modules, a live one
+cannot), ``missed`` (how many frames or chunks it lost so far; the Pipeline turns an increase into a gap
+before the next frame) and ``status()``.
+
 ``IPhone240Input`` is the GAMST 240 iPhone app (live over TCP, or a ``raw.gmst`` replayed): its
 frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
 
@@ -34,34 +38,120 @@ def _now_ms():
     return time.time_ns() // 1_000_000
 
 
+class _DeviceReader:
+    """A thread that takes everything a device delivers, so a busy event loop never makes the device drop.
+
+    ``read()`` runs in the thread and returns (item, bytes), or None at the end. Items wait in order up to
+    ``max_bytes``; beyond that the oldest is given up, and the count travels with the item after it.
+    """
+
+    def __init__(self, read, max_bytes, name):
+        self.read, self.max_bytes = read, max_bytes
+        self.waiting, self.bytes, self.lock = collections.deque(), 0, threading.Lock()
+        self.stop, self.ended, self.error = threading.Event(), False, None
+        self.loop, self.ready = asyncio.get_running_loop(), asyncio.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True, name=name)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            while not self.stop.is_set():
+                found = self.read()
+                if found is None:
+                    break
+                with self.lock:
+                    self.waiting.append([*found, 0])
+                    self.bytes += found[1]
+                    while self.bytes > self.max_bytes and len(self.waiting) > 1:
+                        _, size, lost = self.waiting.popleft()
+                        self.bytes -= size
+                        self.waiting[0][2] += lost + 1
+                self.loop.call_soon_threadsafe(self.ready.set)
+        except BaseException as error:   # raised by items(), never lost in the thread
+            self.error = error
+        self.ended = True
+        try:
+            self.loop.call_soon_threadsafe(self.ready.set)
+        except RuntimeError:             # the loop is already closed
+            pass
+
+    async def items(self):
+        """(item, items lost just before it), until the device ends."""
+        while True:
+            self.ready.clear()
+            with self.lock:
+                found = self.waiting.popleft() if self.waiting else None
+                if found is not None:
+                    self.bytes -= found[1]
+            if found is not None:
+                yield found[0], found[2]
+            elif self.ended:
+                if self.error is not None and not self.stop.is_set():
+                    raise self.error
+                return
+            else:
+                await self.ready.wait()
+
+    def close(self):
+        """True when the thread is out of the device, so the device may be released."""
+        self.stop.set()
+        if self.thread is not threading.current_thread():
+            self.thread.join(2)
+        return not self.thread.is_alive()
+
+
 class CameraInput:
-    """A local camera (OpenCV). Capture time is the host's monotonic clock at read."""
+    """A local camera (OpenCV). Capture time is the host's monotonic clock at read.
+
+    Every frame the driver delivers is read and waits for the consumer (up to ``MAX_WAITING_BYTES``;
+    beyond that the oldest is given up and counted in ``missed``). Frames the camera or its driver
+    dropped before the read are not visible here and are not counted.
+    """
     modality = 'video'
+    live = True
+    MAX_WAITING_BYTES = 256 * 1024 * 1024
 
     def __init__(self, index=0, *, max_frames=None):
-        self.index, self.max_frames = index, max_frames
-        self._cap = None
+        self.index, self.max_frames, self.missed = index, max_frames, 0
+        self._cap = self._reader = None
 
     async def frames(self):
         import cv2
         backend = cv2.CAP_AVFOUNDATION if sys.platform == 'darwin' else cv2.CAP_ANY
-        self._cap = cv2.VideoCapture(self.index, backend)
-        if not self._cap.isOpened():
+        cap = self._cap = cv2.VideoCapture(self.index, backend)
+        if not cap.isOpened():
             raise RuntimeError(f'cannot open camera {self.index}')
         base, start, last, count = _now_ms(), time.monotonic(), None, 0
-        while self.max_frames is None or count < self.max_frames:
-            ok, frame = await asyncio.to_thread(self._cap.read)
-            if not ok:
-                break
-            stamp = base + round(1000 * (time.monotonic() - start))
-            stamp = stamp if last is None or stamp > last else last + 1
-            last, count = stamp, count + 1
-            yield InputFrame(frame, 'video', stamp)
+
+        def read():
+            ok, frame = cap.read()
+            return ((base + round(1000 * (time.monotonic() - start)), frame), frame.nbytes) if ok else None
+
+        self._reader = _DeviceReader(read, self.MAX_WAITING_BYTES, f'gamst-camera-{self.index}')
+        try:
+            async for (stamp, frame), lost in self._reader.items():
+                if self.max_frames is not None and count >= self.max_frames:
+                    break
+                self.missed += lost
+                stamp = stamp if last is None or stamp > last else last + 1
+                last, count = stamp, count + 1
+                yield InputFrame(frame, 'video', stamp)
+                if count == self.max_frames:
+                    break
+        finally:
+            self.close()
+
+    def status(self):
+        reader = self._reader
+        oldest = reader.waiting[0][0][0] if reader is not None and reader.waiting else None
+        return dict(waiting=len(reader.waiting) if reader is not None else 0,
+                    backlog_ms=0 if oldest is None else max(0, _now_ms() - oldest))
 
     def close(self):
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        reader, self._reader = self._reader, None
+        cap, self._cap = self._cap, None
+        if cap is not None and (reader is None or reader.close()):
+            cap.release()   # never while a read is still inside the driver
 
 
 class VideoFileInput:
@@ -71,6 +161,7 @@ class VideoFileInput:
     first frame, so ``timestamp_ms - origin_ms`` is a position in the file whichever part is read.
     """
     modality = 'video'
+    live = False
 
     def __init__(self, path, *, capture_fps=None, max_frames=None, start_s=0., end_s=None):
         self.path, self.capture_fps, self.max_frames = str(path), capture_fps, max_frames
@@ -223,6 +314,7 @@ def upright_rect_to_sensor(rect, angle):
 class TakeInput:
     """A GAMST 240 take (folder or ``raw.gmst``); capture times are the phone's sensor times."""
     modality = 'video'
+    live = False
 
     def __init__(self, path, *, max_frames=None):
         path = Path(path)
@@ -498,6 +590,7 @@ class IPhone240Input:
 class AudioFileInput:
     """A PCM WAV file as mono float32 chunks at its own sample rate (16 kHz expected by speech modules)."""
     modality = 'audio'
+    live = False
 
     def __init__(self, path, *, chunk_ms=100):
         self.path, self.chunk_ms = str(path), int(chunk_ms)
@@ -528,12 +621,25 @@ class AudioFileInput:
 
 
 class MicrophoneInput:
-    """The default microphone as mono float32 chunks (needs ``sounddevice``)."""
+    """The default microphone as mono float32 chunks (needs ``sounddevice``).
+
+    A chunk's time is the capture time of its last sample on the device's sample clock: it starts at the
+    first read (arrival minus what still waits in the device buffer and the latency the device reports) and
+    advances by samples, so scheduling delays do not move it. An overflow reported by the device, or a
+    sample clock more than ``resync_ms`` away from arrival (loss the device did not report, or clock
+    drift), is a gap: what was buffered around an overflow is dropped, the clock starts again, and
+    ``missed`` grows by the lost time in chunks (at least one).
+    """
     modality = 'audio'
+    live = True
+    resync_ms = 250
+    MAX_WAITING_BYTES = 64 * 1024 * 1024
 
     def __init__(self, *, sample_rate=16000, chunk_ms=100, device=None, max_chunks=None, stream_factory=None):
         self.sample_rate, self.chunk_ms, self.device = sample_rate, chunk_ms, device
         self.max_chunks, self._factory, self._stream = max_chunks, stream_factory, None
+        self.missed = self.overflows = self.resyncs = self.lost_ms = 0
+        self._reader = None
 
     async def frames(self):
         if self._factory is None:
@@ -544,24 +650,66 @@ class MicrophoneInput:
             factory = lambda **options: sounddevice.InputStream(**options)
         else:
             factory = self._factory
-        chunk = self.sample_rate * self.chunk_ms // 1000
-        self._stream = factory(samplerate=self.sample_rate, channels=1, dtype='float32',
-                               blocksize=chunk, device=self.device)
-        self._stream.start()
-        count = 0
+        rate = self.sample_rate
+        chunk = rate * self.chunk_ms // 1000
+        stream = self._stream = factory(samplerate=rate, channels=1, dtype='float32', blocksize=chunk,
+                                        device=self.device)
+        stream.start()
+        clock = dict(anchor=None, done=0, last=None, lost=False)
+
+        def read():
+            while True:
+                samples, overflowed = stream.read(chunk)
+                waiting = int(getattr(stream, 'read_available', 0) or 0)
+                arrived = _now_ms() - 1000 * waiting / rate - 1000 * float(getattr(stream, 'latency', 0) or 0)
+                if not overflowed:
+                    break
+                self.overflows += 1
+                clock.update(anchor=None, lost=True)
+                if waiting:
+                    stream.read(waiting)   # the loss is at an unknown place in it
+            samples = samples.reshape(-1).copy()
+            clock['done'] += len(samples)
+            if clock['anchor'] is not None and abs(
+                    arrived - clock['anchor'] - 1000 * clock['done'] / rate) > self.resync_ms:
+                self.resyncs += 1
+                clock.update(anchor=None, lost=True)
+            if clock['anchor'] is None:
+                clock.update(done=len(samples), anchor=arrived - 1000 * len(samples) / rate)
+            stamp, last = round(clock['anchor'] + 1000 * clock['done'] / rate), clock['last']
+            if last is not None and stamp <= last:
+                stamp = last + 1
+            missed = 0
+            if clock['lost']:
+                gone = 0 if last is None else max(0, round(stamp - 1000 * len(samples) / rate - last))
+                self.lost_ms += gone
+                missed = max(1, round(gone / self.chunk_ms))
+            clock.update(last=stamp, lost=False)
+            return (samples, stamp, missed), samples.nbytes
+
+        self._reader, count = _DeviceReader(read, self.MAX_WAITING_BYTES, 'gamst-microphone'), 0
         try:
-            while self.max_chunks is None or count < self.max_chunks:
-                samples, _ = await asyncio.to_thread(self._stream.read, chunk)
+            async for (samples, stamp, missed), lost in self._reader.items():
+                self.missed += missed + lost
                 count += 1
-                yield InputFrame(samples.reshape(-1).copy(), 'audio', _now_ms(), sample_rate=self.sample_rate)
+                yield InputFrame(samples, 'audio', stamp, sample_rate=rate)
+                if count == self.max_chunks:
+                    break
         finally:
             self.close()
 
+    def status(self):
+        return dict(overflows=self.overflows, resyncs=self.resyncs, lost_ms=self.lost_ms,
+                    waiting=len(self._reader.waiting) if self._reader is not None else 0)
+
     def close(self):
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        reader, self._reader = self._reader, None
+        stream, self._stream = self._stream, None
+        if reader is not None:
+            reader.close()
+        if stream is not None:
+            stream.stop()
+            stream.close()
 
 
 def open_source(kind, value=None, **options):

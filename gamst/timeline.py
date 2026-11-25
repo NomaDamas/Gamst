@@ -30,9 +30,9 @@ import math
 
 from .capabilities import is_raw_key as _is_raw_key
 from .context import compact_observation, is_context_observation
+from .counting import GAP_CAPABILITY as GAPS
 from .observation_pages import _encode as seal_cursor, _open as open_cursor
-from .revisions import (LATE_MS, RETRACTION, current, depends_on, level, record_span, replaced_events, span_of,
-                        time_ms)
+from .revisions import LATE_MS, RETRACTION, depends_on, named, record_span, span_of, time_ms
 
 MAX_ROWS, MAX_COLUMNS, MAX_SCAN = 601, 32, 20_000      # 601: 600 steps that do not start on the grid
 MIN_STEP_MS, MAX_STEP_MS = 20, 60_000
@@ -43,7 +43,6 @@ MAX_LISTED = 8              # gaps listed per column
 MAX_AFFECTED = 64           # changed intervals listed in one delta
 MAX_DELTA_SCAN = 5000
 HISTORY, SAMPLE_MS = 1500, 200      # Pipeline completeness kept for as_of_ms and cursors (5 minutes)
-GAPS = 'pipeline.gaps'      # records of gamst.pipeline: captured frames that never reached a module
 OFF_REASONS = frozenset(('disabled', 'paused', 'capture_paused'))
 ITEM_FIELDS = ('events', 'words', 'segments')
 DEFAULT_FRESHNESS_MS = 5000
@@ -262,13 +261,13 @@ class _Item:
             entry = dict(capability=key, kind=self.kind)
             entry.update(dict(at_ms=self.start) if self.instant else dict(start_ms=self.start, end_ms=self.end))
             entry['value'] = value
-            if level(record) != 'final':
-                entry['level'] = level(record)
             if self.items:
                 entry['items_as_intervals'] = self.items
             if flags:
                 entry['flags'] = flags
             quality = record.get('quality') or {}
+            if quality.get('level'):
+                entry['level'] = quality['level']
             if quality.get('status') not in (None, 'sufficient'):
                 entry['quality'] = quality['status']
             if self.clock is not None:
@@ -290,7 +289,7 @@ class _Item:
         return self._built
 
 
-def _evidence(record, clock, known=None, gone=frozenset(), replaced=frozenset()):
+def _evidence(record, clock, known=None, gone=frozenset()):
     """``(instant or None, intervals)`` of one record, in local capture time."""
     observation, at = record['observation'], record['timestamp_ms']
     value, span = observation.get('value'), record_span(record)
@@ -302,9 +301,7 @@ def _evidence(record, clock, known=None, gone=frozenset(), replaced=frozenset())
             entries, rest = value.get(name), []
             if not isinstance(entries, list) or not entries:
                 continue
-            for index, entry in enumerate(entries):
-                if name == 'events' and (record['id'], index) in replaced:
-                    continue
+            for entry in entries:
                 pair = span_of(entry)
                 if pair is None and isinstance(entry, dict) and span is None and name == 'events':
                     pair = at, at       # an event without its own time happened at its record's capture time
@@ -348,15 +345,15 @@ class _Column:
                 rank = revision if type(revision) is int else 0, record['timestamp_ms'], order
                 if utterance not in latest or rank > latest[utterance][0]:
                     latest[utterance] = rank, record['id']
-        matched, replaced = {}, frozenset(replaced_events(self.records))
+        matched = {}
         for record in self.records:
             value = record['observation'].get('value')
             utterance = value.get('utterance_id') if isinstance(value, dict) else None
             if isinstance(utterance, str) and utterance in latest and latest[utterance][1] != record['id']:
                 continue
-            which = record['id'], self.clock and (self.clock.offset, self.clock.rate), gone, replaced
+            which = record['id'], self.clock and (self.clock.offset, self.clock.rate), gone
             if which not in cache:
-                cache[which] = _evidence(record, self.clock, known.get(record['id']), gone, replaced)
+                cache[which] = _evidence(record, self.clock, known.get(record['id']), gone)
             instant, intervals = cache[which]
             if instant is not None:
                 self.instants.append(instant)
@@ -536,12 +533,12 @@ class _Query:
                     records.append(record)
         # -- columns: one per capability (or signal), source, sensor and clock
         columns = {}
-        for record in current(records, gone):
-            if not self._selected(record):
+        for record in records:
+            if record['id'] in gone or not self._selected(record):
                 continue
             observation = record['observation']
             sensor, key = observation.get('sensor') or {}, foreign_clock(observation)
-            which = ((observation.get('capability') or {}).get('id') or observation['name'], sensor.get('source_id'),
+            which = (named(record), sensor.get('source_id'),
                      sensor.get('sensor_id'), key)
             if which not in columns:
                 columns[which] = _Column(*which[:3], clock=clocks.get(key))
@@ -630,7 +627,7 @@ class _Query:
                 if key is not None and not clocks.get(key, {}).get('calibrated'):
                     continue
                 instant, intervals = _evidence(item, None if key is None else _Clock(key, clocks[key]))
-                name = (item['observation'].get('capability') or {}).get('id') or item['observation']['name']
+                name = named(item)
                 for part in ([instant] if instant is not None else []) + intervals:
                     if part.start < before:
                         found[name, change].append((part.start, part.end))

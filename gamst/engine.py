@@ -20,7 +20,7 @@ from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from .watch import WatchManager
-from .revisions import LEVELS, RETRACTION, current, identity, revision_fields
+from .revisions import RETRACTION, identity, revision_fields
 from .temporal import TemporalAligner
 from dataclasses import asdict
 
@@ -321,9 +321,8 @@ class Gamst:
                           capability_id=None, sensor=None, supersedes=None):
         """Commit one signal.
 
-        ``quality`` may carry ``level='provisional'`` (reduced processing); a final record of the same
-        capability and capture interval replaces it. ``supersedes`` is the ID of a retained record this one
-        corrects. Both add a revision; no stored record changes (:mod:`gamst.revisions`).
+        ``supersedes`` is the ID of a retained record this one corrects: it adds a revision, no stored record
+        changes (:mod:`gamst.revisions`). ``quality`` may carry ``level``, which is kept and shown as given.
         """
         self._check()
         contract = None
@@ -355,10 +354,10 @@ class Gamst:
         if quality is not None:
             if not isinstance(quality, dict) or quality.get("status") not in ("sufficient", "insufficient", "unavailable"):
                 raise ValueError("quality status must be sufficient, insufficient, or unavailable")
-            if quality.get("level", "final") not in LEVELS:
-                raise ValueError("quality level must be provisional or final")
+            if "level" in quality:
+                identifier(quality["level"], "quality level")
             quality = {"status": quality["status"], "flags": list(quality.get("flags", [])),
-                       **({"level": "provisional"} if quality.get("level") == "provisional" else {})}
+                       **({"level": quality["level"]} if "level" in quality else {})}
         observation = {"name": name, "value": value, "modality": modality}
         if contract is not None:
             sensor_data = asdict(sensor)
@@ -368,7 +367,8 @@ class Gamst:
         record = self._record("observation.signal", subject_id, ts,
             observation=observation,
             models=[{"id": model_id, "version": model_version, "backend": "plugin"}], quality=quality)
-        record.update(revision_fields(self.store, record, supersedes))
+        if supersedes is not None:
+            record.update(revision_fields(self.store, record, supersedes))
         self._emit(record)
         if name == "speech.activity" and isinstance(value, bool) and record["quality"]["status"] == "sufficient":
             activity = [r for r in self.store.query(subject_id, end=ts, kind="observation.signal", name=name)
@@ -856,9 +856,10 @@ class Gamst:
                            where=None, group_by=None, max_evidence=20, as_of_ms=None):
         """Count events of retained records of one capability, with bounded evidence record IDs.
 
-        Events of a record that a revision, a retraction or a final answer replaced are not counted; ``final``
-        and ``provisional`` split ``count`` by the quality level of the records. ``as_of_ms`` counts what was
-        known at that knowledge time, over the window that ended then.
+        ``complete`` is False when the Pipeline lost frames this capability depends on in the window (``lost``
+        says how much), or when not every record was scanned: the true count may differ. Events of a record
+        that a revision or retraction replaced are not counted. ``as_of_ms`` counts what was known at that
+        knowledge time, over the window that ended then.
         """
         if self.closed:
             raise RuntimeError('runtime is closed')
@@ -867,18 +868,24 @@ class Gamst:
             raise ValueError('where must be an object of at most 16 path: value pairs')
         if type(max_evidence) is not int or not 0 <= max_evidence <= 100:
             raise ValueError('max_evidence must be 0..100')
-        from .counting import MAX_SCAN, count_events
+        from .counting import GAP_CAPABILITY, MAX_SCAN, count_events, gaps_of, lost
+        if self.pipeline is not None and as_of_ms is None:
+            await self.pipeline.commit_gaps(force=True)
         self._prune()
         now = self._as_of(as_of_ms)
         start = max(0, now - _window_ms(window))
         rows = self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN + 1,
                                 registered_only=True, capability_id=capability_id, known_until=as_of_ms)
         truncated = len(rows) > MAX_SCAN
+        gaps = gaps_of(self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN, registered_only=True,
+                                        capability_id=GAP_CAPABILITY, known_until=as_of_ms), capability_id)
         rows = rows[-MAX_SCAN:]
-        scanned, rows = len(rows), current(rows, self.store.superseded(subject_id, as_of_ms))
+        replaced, scanned = self.store.superseded(subject_id, as_of_ms), len(rows)
+        rows = [record for record in rows if record['id'] not in replaced]
         result = count_events(rows, event=event, where=where, group_by=group_by, max_evidence=max_evidence)
         return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
                     scanned_records=scanned, scan_truncated=truncated,
+                    complete=not gaps and not truncated, lost=lost(gaps),
                     **({} if as_of_ms is None else dict(as_of_ms=as_of_ms, removed_since=bool(
                         self.store.lost_until_ms is not None and self.store.lost_until_ms >= start))))
 

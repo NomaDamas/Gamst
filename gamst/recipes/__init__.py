@@ -348,8 +348,13 @@ def _reference_value(reference, args):
     raise SystemExit(f'reference kind {kind!r} is not enrollable from the command line yet')
 
 
-async def build_pipeline(recipe, args, human, *, source=None, modules=None):
-    """The recipe's Pipeline on ``human``: input, user-defined references, modules (no view)."""
+async def build_pipeline(recipe, args, human, *, source=None, modules=None, lanes=True):
+    """The recipe's Pipeline on ``human``: input, user-defined references, modules (no view).
+
+    Modules that own a process run in their own lane (``gamst.pipeline``; an item may set ``"queue"``), and
+    the recipe's ``"optional"`` ones pause while others are behind. ``lanes=False`` runs everything on the
+    frame itself: enrollment pairs each frame with its own result and keeps no real time.
+    """
     from ..inputs import open_source
     from ..pipeline import Pipeline
     pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
@@ -394,8 +399,10 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         try:
             built = await build(item, context)
             pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
-                                every_ms=built.get('every_ms'), queue=item.get('queue', built.get('queue')),
-                                emits=tuple(item.get('emits', ())), enabled=item.get('enabled', True))
+                                every_ms=built.get('every_ms'),
+                                queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
+                                optional=bool(item.get('optional')), emits=tuple(item.get('emits', ())),
+                                enabled=item.get('enabled', True))
         except BaseException:
             await pipeline.close()   # workers of the modules already built
             raise
@@ -428,7 +435,9 @@ async def run_pipeline(recipe, args):
                     observation.get('value'), dict) and observation['value'].get('events'):
                 committed[record['id']] = record
 
-    async with Gamst(consent=True, **store_options(args)) as human:
+    # Every record is committed; the engine's trend aggregation over the window (its cost grows with the window:
+    # 3 to 19 ms a record in the first 1800, measured) runs once a second instead of on every record.
+    async with Gamst(consent=True, sensor_inference_interval_ms=1000, **store_options(args)) as human:
         stored = [record for capability in wanted for record in human.store.query(
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
@@ -456,25 +465,33 @@ async def run_pipeline(recipe, args):
             for capability in wanted:   # plus the records of modules that commit their own
                 keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
                                        limit=MAX_SCAN, registered_only=True, capability_id=capability))
-            report['counts'], report['events'] = {}, {}
+            report['counts'], report['events'], report['lost'] = {}, {}, {}
             rows = sorted(committed.values(), key=lambda record: record['timestamp_ms'])
             for capability in recipe.get('records', ()):
                 own = [row for row in rows if row['observation']['capability']['id'] == capability]
                 counted = count_events(own, group_by='@event', max_evidence=100)
                 report['counts'][capability] = counted['groups']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
+                report['lost'][capability] = pipeline.lost(capability)
+            # Complete: no frame the count depends on was lost, failed or captured while a module was off.
+            report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
             if truth:
                 from ..scoring import score
                 found = [event for row in rows if row['observation']['capability']['id'] == truth['capability']
                          for event in row['observation']['value']['events']]
-                report['score'] = score(truth, found, start_ms=report.get('start_ms', 0))
+                report['score'] = dict(score(truth, found, start_ms=report.get('start_ms', 0)),
+                                       complete=not pipeline.lost(truth['capability'])['gaps'])
             report['pipeline'] = pipeline.status()
+            report['errors'] = {name: item['last_error'] for name, item in report['pipeline']['modules'].items()
+                                if item['errors']}
         finally:
             if idle is not None:
                 idle.cancel()
             view.close()
             await pipeline.close()
-    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'counts', 'score') if key in report},
+    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'counts', 'complete', 'lost', 'errors', 'score')
+                      if key in report and (key not in ('lost', 'errors') or key == 'lost' and not report['complete']
+                                            or key == 'errors' and report['errors'])},
                      ensure_ascii=False), flush=True)
     if getattr(args, 'report', None):
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))

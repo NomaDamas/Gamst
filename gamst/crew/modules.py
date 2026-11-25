@@ -18,6 +18,7 @@ started.
 """
 from __future__ import annotations
 
+import asyncio
 import importlib
 
 from ..plugins import InputFrame
@@ -41,6 +42,7 @@ def bounded_image(image, max_pixels=1_048_576, max_side=2048):
 
 class WorkerModule:
     """One owned ProcessProvider worker as a Pipeline provider module."""
+    owns_process = True
 
     def __init__(self, worker):
         if getattr(worker, 'private', False):
@@ -50,10 +52,13 @@ class WorkerModule:
         self.modalities = (self.spec.modality,)
 
     async def process(self, frame):
+        return await self._ask(self.worker, frame)
+
+    async def _ask(self, worker, frame):
         data = frame.data
         if self.spec.modality == 'video' and hasattr(data, 'shape'):
             data = bounded_image(data)
-        return await self.worker.process(InputFrame(data, frame.modality, frame.timestamp_ms,
+        return await worker.process(InputFrame(data, frame.modality, frame.timestamp_ms,
                                                     subject_id=frame.subject_id, sensor=frame.sensor,
                                                     sample_rate=frame.sample_rate))
 
@@ -64,6 +69,43 @@ class WorkerModule:
 
     async def close(self):
         await self.worker.close()
+
+
+class ReplicatedWorker(WorkerModule):
+    """N workers of one stateless spec sharing a lane's frames; the Pipeline commits them in capture order.
+
+    ``process`` hands the frame to a free worker, so each frame runs once. A worker that failed (its process
+    ended) is not used again; the frame it had is reported by the Pipeline as failed, like any other.
+    """
+
+    def __init__(self, workers):
+        specs = [worker.spec for worker in workers]
+        if not workers or any(spec != specs[0] for spec in specs):
+            raise ValueError('replicas are workers of one spec')
+        if specs[0].stateful:
+            raise ValueError(f'{specs[0].id} is stateful: its frames cannot be shared between replicas')
+        super().__init__(workers[0])
+        self.workers, self.replicas = list(workers), len(workers)
+        self._free = asyncio.Queue()
+        for worker in workers:
+            self._free.put_nowait(worker)
+
+    async def process(self, frame):
+        if all(worker.closed for worker in self.workers):
+            raise RuntimeError('every replica has ended')
+        worker = await self._free.get()
+        while worker.closed:
+            worker = await self._free.get()
+        try:
+            return await self._ask(worker, frame)
+        finally:
+            self._free.put_nowait(worker)   # a closed one is skipped above
+
+    async def reset(self):
+        pass   # stateless
+
+    async def close(self):
+        await asyncio.gather(*(worker.close() for worker in self.workers))
 
 
 def candidate_for(role, model):
@@ -84,12 +126,24 @@ async def open_private_worker(python, provider_profile, config, *, startup_timeo
                                       inference_timeout=inference_timeout, private=True)
 
 
-async def open_worker(python, provider_profile, config, *, startup_timeout=120, inference_timeout=30):
-    """Start one isolated worker and wrap it as a :class:`WorkerModule`."""
-    from ..process_provider import ProcessProvider
-    worker = await ProcessProvider.open(python, provider_profile, config, startup_timeout=startup_timeout,
-                                        inference_timeout=inference_timeout)
-    return WorkerModule(worker)
+async def open_worker(python, provider_profile, config, *, startup_timeout=120, inference_timeout=30, replicas=1):
+    """Start one isolated worker (``replicas``: N of a stateless spec) and wrap it as a :class:`WorkerModule`."""
+    from ..process_provider import ProcessProvider, capability
+    if type(replicas) is not int or not 1 <= replicas <= 16:
+        raise ValueError('replicas must be an integer from 1 to 16')
+    if replicas > 1 and capability(provider_profile, config).stateful:
+        raise ValueError(f'{provider_profile} is stateful: its frames cannot be shared between replicas')
+    workers = []
+    try:
+        for _ in range(replicas):
+            workers.append(await ProcessProvider.open(python, provider_profile, config,
+                                                      startup_timeout=startup_timeout,
+                                                      inference_timeout=inference_timeout))
+    except BaseException:
+        for worker in workers:
+            await worker.close()
+        raise
+    return WorkerModule(workers[0]) if replicas == 1 else ReplicatedWorker(workers)
 
 
 async def role_module(human, role, entry, *, config=None, python=None, startup_timeout=120,

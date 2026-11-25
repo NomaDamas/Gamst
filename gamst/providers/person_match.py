@@ -294,6 +294,8 @@ class TargetPerson:
     """Pipeline plugin module: camera + the pose module's joints of the same capture in, the enrolled person out."""
 
     name = 'target_person'
+    # Its face model has a worker, but it declares no process of its own: it pairs a camera frame with the joints
+    # of the same capture, so it runs in the pose module's lane (gamst.pipeline), never beside it.
 
     def __init__(self, face=None, body=None, *, reference='person', face_threshold=.35, face_reject=.15,
                  body_threshold=.6, face_every_ms=200, body_every_ms=500, hold_ms=10000, emits=None, joints=None, crop_pad=.15,

@@ -43,26 +43,6 @@ class Module:
         return self.value(frame) if (self.seen - 1) % self.every == 0 else None
 
 
-class ReportingPipeline(Pipeline):
-    """The completeness report of feat/realtime-pipeline, on this branch's Pipeline (which has none)."""
-
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.gaps, self.extra, self.start = {}, {}, {}
-
-    async def _run_module(self, name, entry, frame):
-        self.start.setdefault(name, frame.timestamp_ms)
-        return await super()._run_module(name, entry, frame)
-
-    def status(self):
-        status = super().status()
-        for name, state in status['modules'].items():
-            gaps = self.gaps.get(name, [])
-            state.update(complete_until_ms=self.modules[name]['last_run_ms'], complete_from_ms=self.start.get(name),
-                         gap_intervals=gaps, gaps=len(gaps), **self.extra.get(name, {}))
-        return status
-
-
 class Source:
     modality = 'video'
 
@@ -117,7 +97,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
 class PipelineTimelineTest(Base):
     async def test_three_module_speeds_are_aligned_by_capture_time_and_pending_is_not_none(self):
         start = grid()
-        pipeline = ReportingPipeline(self.human, 'p')
+        pipeline = Pipeline(self.human, 'p')
         pipeline.add_input('camera')
         for name, delay, every in (('fast', 0, 1), ('slow', .03, 1), ('rare', 0, 5)):
             module = Module(name, delay, every, freshness=0 if name == 'rare' else 150)
@@ -162,12 +142,50 @@ class PipelineTimelineTest(Base):
         pipeline.add_module('fast', module, consumes='camera', spec=module.spec)
         pipeline.add_module('quiet', Module('quiet', value=lambda frame: None), consumes='camera', spec=spec('quiet'))
         await pipeline.run()
+        await pipeline.close()      # nobody says any more what was processed
         answer, rows = await self.rows(start, start + 500)
         self.assertEqual(self.statuses(rows, 'fast'), ['exact', 'unknown', 'exact', 'unknown', 'unknown'])
-        self.assertEqual(self.statuses(rows, 'quiet'), ['unknown'] * 5)
+        self.assertNotIn('quiet', rows[0]['cells'])
         self.assertIsNone(answer['complete_until_ms'])
         self.assertFalse(any(row['complete'] for row in rows.values()))
+        _, rows = await self.rows(start, start + 500, capabilities=['quiet'])
+        self.assertEqual(self.statuses(rows, 'quiet'), ['unknown'] * 5)
+
+    async def test_real_pipeline_reports_off_failed_and_sampled(self):
+        start = grid()
+        pipeline = Pipeline(self.human, 'p')
+        pipeline.add_input('camera')
+
+        def picky(frame):
+            if frame.data == 7:
+                raise RuntimeError('lost')
+            return dict(value=float(frame.data), events=[dict(event='seen')])
+
+        ordered, vlm = Module('ordered', value=picky, freshness=0), Module('vlm', freshness=400)
+        pipeline.add_module('ordered', ordered, consumes='camera', spec=ordered.spec, queue=8)
+        pipeline.add_module('vlm', vlm, consumes='camera', spec=vlm.spec, every_ms=300, queue=1)
+        before = None
+        for index in range(11):
+            if index == 2:
+                await pipeline.drain()
+                pipeline.disable('ordered')
+            if index == 4:
+                pipeline.enable('ordered')
+                before = (await self.rows(start, start + 200))[0]['known_ms']
+            await pipeline.push('camera', index, timestamp_ms=start + 100 * index, modality='video')
+            await pipeline.drain()
+        answer, rows = await self.rows(start, start + 1000)
+        self.assertEqual(self.statuses(rows, 'ordered'), ['exact'] * 2 + ['off'] * 2 + ['exact'] * 3 + ['gap'] + ['exact'] * 2)
+        self.assertEqual(self.statuses(rows, 'vlm'), (['exact'] + ['sampled'] * 2) * 3 + ['exact'])
+        self.assertEqual((rows[200]['cells']['ordered']['reason'], rows[700]['cells']['ordered']['reason']), ('disabled', 'error'))
+        count = await self.human.count_events('ordered')
+        self.assertEqual((count['count'], count['complete']), (8, False))
+        self.assertEqual(count['lost']['frames'], 3)
+        past = await self.human.count_events('ordered', as_of_ms=before)
+        self.assertEqual((past['count'], past['complete'], past['lost']['frames']), (2, True, 0))
         await pipeline.close()
+        answer, rows = await self.rows(start, start + 1000)     # the gap records remain
+        self.assertEqual(rows[700]['cells']['ordered']['status'], 'gap')
 
     async def test_off_paused_gap_and_sampled(self):
         start = grid()
@@ -398,35 +416,30 @@ class RevisionTest(Base):
         answer = await self.human.get_timeline(window='1s', capabilities=['match'])
         return answer['known_ms']
 
-    async def test_provisional_replaced_by_final_agree_disagree_retracted(self):
+    async def test_correction_agrees_disagrees_or_retracts(self):
         start = grid()
-        one = await self.match(start + 100, start + 100, level='provisional')
-        two = await self.match(start + 400, start + 400, level='provisional')
-        three = await self.match(start + 700, start + 700, level='provisional')
+        one, two, three = [await self.match(start + at, start + at) for at in (100, 400, 700)]
         first, rows = await self.rows(start, start + 1000)
-        result = await self.count(max_evidence=0)
-        self.assertEqual((result['count'], result['final'], result['provisional']), (3, 0, 3))
-        self.assertEqual({entry.get('level') for entry in first['evidence'].values()}, {'provisional'})
-        agree = await self.match(start + 100, start + 100)
-        disagree = await self.match(start + 400, 0, value=False)
-        retraction = await self.human.retract_observation(three['id'], 'full processing found nothing')
+        self.assertEqual((await self.count(max_evidence=0))['count'], 3)
+        agree = await self.match(start + 100, start + 100, supersedes=one['id'])
+        disagree = await self.match(start + 400, 0, value=False, supersedes=two['id'])
+        retraction = await self.human.retract_observation(three['id'], 'it was a shadow')
         for record, root in ((agree, one), (disagree, two), (retraction, three)):
             self.assertEqual((record['supersedes'], record['revision']), (root['id'], 1))
         self.assertEqual(self.human.store.get_many([one['id']]), [one])     # nothing stored was changed
         result = await self.count()
-        self.assertEqual((result['count'], result['final'], result['provisional']), (1, 1, 0))
-        self.assertEqual((result['evidence'][0]['record_id'], result['evidence'][0]['level']), (agree['id'], 'final'))
-        before = await self.count(as_of_ms=first['known_ms'])
-        self.assertEqual((before['count'], before['provisional'], before['final']), (3, 3, 0))
+        self.assertEqual((result['count'], result['complete']), (1, True))
+        self.assertEqual(result['evidence'][0]['record_id'], agree['id'])
+        self.assertEqual((await self.count(as_of_ms=first['known_ms']))['count'], 3)
         delta = await self.human.get_timeline(start_ms=start, end_ms=start + 1000, step_ms=100, cursor=first['next_cursor'])
         changed = {row['t_ms'] - start: row for row in delta['rows']}
-        self.assertEqual({key: row['change'] for key, row in changed.items()}, {100: 'revised', 400: 'revised', 700: 'retracted'})
-        agreed = changed[100]
-        old, new = (delta['evidence'][agreed[side]['match']['intervals'][0]] for side in ('was', 'cells'))
-        self.assertEqual((old['level'], old['current'], new.get('level'), old['value']), ('provisional', False, None, new['value']))
-        self.assertEqual((new['supersedes'], new['revision']), (one['id'], 1))
-        self.assertEqual(changed[400]['was']['match']['status'], 'exact')
+        # A correction with the same content changes no row, but the interval is named.
+        self.assertEqual({key: row['change'] for key, row in changed.items()}, {400: 'revised', 700: 'retracted'})
+        old = delta['evidence'][changed[400]['was']['match']['intervals'][0]]
+        self.assertEqual((old['evidence_id'], old['current'], old['value']['event']), (two['id'], False, 'matched'))
         self.assertNotIn('intervals', changed[400]['cells']['match'])
+        new = delta['evidence'][changed[400]['cells']['match']['ref']]
+        self.assertEqual((new['supersedes'], new['revision'], new['value']['count']), (two['id'], 1, 0))
         self.assertEqual(changed[700]['cells']['match']['status'], 'unknown')
         self.assertEqual({(item['change'], item['start_ms'] - start) for item in delta['affected']['intervals']},
                          {('revised', 100), ('revised', 400), ('retracted', 700)})
@@ -435,16 +448,14 @@ class RevisionTest(Base):
         again = await self.human.get_timeline(start_ms=start, end_ms=start + 1000, step_ms=100, cursor=delta['next_cursor'])
         self.assertEqual((again['rows'], again['affected']['intervals']), ([], []))
 
-    async def test_final_first_late_provisional_and_moved_events_are_not_counted_twice(self):
+    async def test_quality_level_is_passed_through_and_nothing_reacts_to_it(self):
         start = grid()
-        await self.match(start + 100, start + 100)
-        await self.match(start + 100, start + 100, level='provisional')     # learned later, still worth less
-        await self.match(start + 300, start + 300, level='provisional')
-        await self.match(start + 340, start + 300)                          # same event, recognized at another time
-        result = await self.count()
-        self.assertEqual((result['count'], result['final'], result['provisional']), (2, 2, 0))
-        answer, rows = await self.rows(start, start + 600)
-        self.assertEqual([len(rows[key]['cells']['match'].get('intervals', [])) for key in (100, 300)], [1, 1])
+        record = await self.match(start, start, level='provisional')
+        await self.match(start, start)
+        self.assertEqual(record['quality']['level'], 'provisional')
+        self.assertEqual((await self.count())['count'], 2)
+        answer, _ = await self.rows(start, start + 100)
+        self.assertEqual({entry.get('level') for entry in answer['evidence'].values()}, {'provisional', None})
 
     async def test_late_match_between_two_earlier_ones_as_of_and_affected(self):
         start = grid()
@@ -489,7 +500,7 @@ class RevisionTest(Base):
             with self.assertRaises(ValueError):
                 await self.put(bad.get('name', 'pose'), dict(value=1.), start, supersedes=bad['supersedes'])
         with self.assertRaises(ValueError):
-            await self.put('pose', dict(value=1.), start, level='guess')
+            await self.put('pose', dict(value=1.), start, level='no such level!')
         with self.assertRaises(ValueError):
             await self.human.retract_observation('nope')
         await self.human.retract_observation(pose['id'])
