@@ -30,29 +30,44 @@
 
 ## 2. 아키텍처 변화 요약
 
-```mermaid
-flowchart LR
-  subgraph New[신규 코어]
-    R[References<br/>owner가 등록: voice / face / body / exemplar]
-    M[Reference matching<br/>관찰에 reference_match 부착]
-    D[Derived lanes<br/>레퍼런스로 조건 건 가상 센서]
-    C[count_events<br/>공통 이벤트 집계 질의]
-  end
-  Cam[카메라] --> P1[기존 vision provider<br/>pose / hand / face / tracking]
-  Mic[마이크] --> P2[기존 audio provider<br/>VAD / ASR / diarization]
-  R --> M
-  P1 --> M
-  P2 --> M
-  R --> D
-  Mic --> D
-  Cam --> D
-  D -->|대상 인물의 음성과 영상만| P1
-  D --> P2
-  M --> E[이벤트 provider<br/>exemplar_events / term_events / 기존 repetitions, rotation]
-  E --> S[(Store)]
-  S --> C
-  S --> W[Watch / MCP / Halo]
-  C --> W
+기존 구조를 바꾸지 않고, 표시한 칸만 **추가**합니다(★는 신규, ◆는 작은 수정입니다).
+Watch는 코어 안에 있습니다. 저장되는 모든 레코드는 `engine.py`에서 `watches.observe`를 거칩니다.
+MCP와 Python SDK는 같은 코어를 여는 두 개의 입구이고, Halo는 SDK를 직접 쓰는 앱입니다.
+
+```text
+ [카메라] [마이크] [IMU…]
+    │       │
+    ▼       ▼
+ ┌──────────────────────────────────────────────┐
+ │ SensorStreams (lane마다 캡처 시계)               │◀──┐ ◆ provider 출력을
+ └──────────────────────────────────────────────┘   │   새 lane 입력으로
+    │                                                │   (derived lane)
+    ▼                                                │
+ ┌──────────────────────────────────────────────┐   │
+ │ Providers (플러그인, 나란히 꽂힘)                  │   │
+ │  기존: pose · hand · tracking · rotation ·       │   │
+ │        VAD · ASR · diarization · prosody …      │   │
+ │  ★ speaker_match · person_match  (일치 판정)      │   │
+ │  ★ target_speech · target_person ───────────────┼───┘
+ │  ★ exemplar_events · term_events (이벤트)         │
+ └──────────────────────────────────────────────┘
+    │ 레코드
+    ▼
+ ┌─────────────────────── GAMST 코어 ─────────────┐
+ │ Store ──▶ Watch 엔진 (레코드마다 규칙 평가 → 알람) │
+ │ ★ References (등록: 목소리·얼굴·몸·시연·단어)      │
+ │ ★ count_events (Store 이벤트 집계 질의)            │
+ └──────────────────────────────────────────────┘
+    │                       │
+    ▼                       ▼
+ ┌──────────────┐     ┌────────────────────────┐
+ │ Python SDK   │     │ MCP 서버 (stdio)         │
+ │ (in-process) │     │ get_observations,       │
+ └──────────────┘     │ create_watch … ★count   │
+    │                 └────────────────────────┘
+    ▼                       │
+  Halo, 대시보드              ▼
+  (앱)                     LLM 에이전트
 ```
 
 | 구분 | 무엇 | 위치 | 성격 |
