@@ -133,3 +133,6 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
 - 병렬 실행 실측(M2 Pro, 별도 프로세스, 480×854, 각 12초, 다른 작업이 함께 도는 상태): 포즈 단독 59.1 fps / YOLOE(MPS) 단독 51.8 → 포즈 1 + YOLOE 1: 57.5 / 49.8 → YOLOE 2개: 43.2~43.3 → 포즈 2 + YOLOE 2: 포즈 42.9~43.1, YOLOE 38.8. 프로세스 메모리: 포즈 약 320MB, YOLOE 약 610MB. GAMST worker 전송 비용은 포함하지 않은 값입니다.
 - owner 결정: 동작 지정 두 방식(예시 영상, 텍스트)을 모두 구현합니다. 예시 영상은 owner가 실제 실행 전에 준비합니다. 사용자 확인 단계는 설명 후 답을 기다립니다.
 - 원격 실행: semantic lane만 hosted 엔드포인트(https+키, 명시적 opt-in) 코드가 있고 미검증입니다. 일반 모듈을 원격 GPU 서버에서 돌리는 네트워크 worker는 없습니다(ProcessProvider는 로컬 파이프, crew transport는 유닉스 소켓).
+- E(dd09e02)를 합쳤습니다. 테스트 1362개, 오류는 원래 있던 15개입니다. `keypoints` 우회는 비공개 통로(`gamst/private_payload.py`)로 바뀌었습니다.
+- 남은 owner 결정: 예전 MediaPipe 얼굴/포즈 플러그인과 MediaPipe 그래프 모듈은 관절·얼굴 좌표를 Store에 남기고, MCP `get_state`/`inspect_interval`로 읽힙니다(`get_context`는 아님). 비공개 통로로 옮기면 대시보드 오버레이 그리기를 바꿔야 합니다.
+- F: `feat/movement-spec`(wt-movement). 예시 여러 개 + 텍스트로 동작 지정. 확인 단계는 기본 켬(끌 수 있음), owner 답을 받으면 바꿉니다.
