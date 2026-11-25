@@ -136,3 +136,12 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
 - E(dd09e02)를 합쳤습니다. 테스트 1362개, 오류는 원래 있던 15개입니다. `keypoints` 우회는 비공개 통로(`gamst/private_payload.py`)로 바뀌었습니다.
 - 남은 owner 결정: 예전 MediaPipe 얼굴/포즈 플러그인과 MediaPipe 그래프 모듈은 관절·얼굴 좌표를 Store에 남기고, MCP `get_state`/`inspect_interval`로 읽힙니다(`get_context`는 아님). 비공개 통로로 옮기면 대시보드 오버레이 그리기를 바꿔야 합니다.
 - F: `feat/movement-spec`(wt-movement). 예시 여러 개 + 텍스트로 동작 지정. 확인 단계는 기본 켬(끌 수 있음), owner 답을 받으면 바꿉니다.
+
+## 9. 실시간과 서버 이전 (2026-11-25, 논의)
+
+- 코인 회귀(E까지 합친 코드, 데모 환경 Python): 7개 결과가 옮기기 전과 완전히 같습니다.
+- 동시 실행 한계 실측(M2 Pro, 480×854, 12초, 다른 작업이 함께 도는 상태, GAMST 전달 비용 제외): 포즈2+YOLOE2 = 44/30 fps, 포즈4+YOLOE2 = 40/30, 포즈4+YOLOE4 = 34/16, 포즈8+YOLOE4 = 30/9. 같은 포즈2+YOLOE2가 앞선 측정에서는 43/39였습니다(부하 차이).
+- `make_plan(['all'])`: 역할 26개, 환경 19개, RAM 95.6GB / VRAM 49.2GB / 디스크 128.9GB(대부분 추정치). 이 Mac은 RAM 32GB, 디스크 여유 10.5GB. 3개 역할은 CUDA 전용. 전부 동시 실행은 불가능합니다.
+- 격리의 실제 범위: venv = 패키지, 별도 프로세스 = 메모리와 크래시. CPU/GPU/RAM 사용량 제한과 보안 격리는 아닙니다. 사용량 제한은 Linux cgroup만 지원합니다(`crew/host_limits.py`).
+- 네트워크 실측: 720p JPEG q85 30fps = 19~22 Mbps(인코딩 약 2ms), 360p = 7~8.5 Mbps. 16kHz 16bit 모노 = 0.256 Mbps(계산값).
+- 제안(G, F 다음): (1) 모듈별 실시간 목표(초당 횟수, p95 지연, 프레임을 버려도 되는지) (2) 이 컴퓨터에서 재는 `gamst bench` (3) 실행 전 예산 검사와 거부, 우선순위와 자동 낮춤 (4) 묶음(pack): local / speech / person / semantic, 묶음 단위로 서버 배치 (5) 네트워크 worker(TLS, 인증, 캡처 시각 유지, 끊김 처리). 서버 비용은 시작 전에 보고합니다.
