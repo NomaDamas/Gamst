@@ -13,6 +13,7 @@ import threading
 
 from ..plugins import PerceptionPlugin, InputFrame, _signal, _version
 from ..tracking import create_tracker
+from ..visualization import drawing_of
 
 
 def _image_size(data):
@@ -44,10 +45,13 @@ def associate(poses, tracker, frame):
 
 
 class MediaPipePosePlugin(PerceptionPlugin):
+    """MediaPipe body on single images in this process. Records carry boxes, tracks and geometry; joint positions
+    stay here for the local screen and leave only as the derived input ``joints``, when a Pipeline asks for it."""
     name = "mediapipe_pose_landmarker"
     modalities = ("video",)
+    joints = None
 
-    def __init__(self, model_path: str, max_poses: int = 4, tracker: str = 'iou', **tracker_options):
+    def __init__(self, model_path: str, max_poses: int = 4, tracker: str = 'iou', joints=None, **tracker_options):
         path = Path(model_path)
         if not path.is_file():
             raise ValueError("Supply an existing local pose_landmarker.task file")
@@ -59,7 +63,7 @@ class MediaPipePosePlugin(PerceptionPlugin):
             from mediapipe.tasks.python import vision
         except ImportError as exc:
             raise RuntimeError("Install gamst-sdk[mediapipe]") from exc
-        self.mp = mp
+        self.mp, self.joints = mp, joints
         self.max_poses = max_poses
         self.model_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         self.detector = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
@@ -143,14 +147,14 @@ class MediaPipePosePlugin(PerceptionPlugin):
                     track_id=None, association_quality="unavailable",
                     identity_verified=False, speaker_association="unavailable", **size))
             tracks = associate(poses, self.tracker, frame)
-            version = f"{_version('mediapipe')}:sha256:{self.model_hash}"
-            return [_signal(frame, "scene.poses", poses, self.name, version),
-                    _signal(frame, "scene.pose_count", len(poses), self.name, version),
-                    _signal(frame, "scene.body_tracks", tracks, self.name + ":" + getattr(self, 'tracker_name', 'iou') + "-tracker", "0.1")]
+            drawing_of(self).put("scene.poses", frame, [pose["landmarks"] for pose in poses])
+            return committed(frame, poses, tracks, self.name, f"{_version('mediapipe')}:sha256:{self.model_hash}",
+                             getattr(self, 'tracker_name', 'iou'), self.joints)
 
     def reset(self):
         self._generation += 1
         self.tracker.reset()
+        drawing_of(self).clear()
 
     async def close(self):
         self.reset()
@@ -166,7 +170,7 @@ def committed(frame, poses, tracks, name, version, tracker_name, joints=None):
     the derived input ``joints`` (when the recipe asked for them)."""
     from ..pipeline import Derived
     from ..private_payload import PrivatePoses, public_pose
-    output = [_signal(frame, "scene.poses", [public_pose(pose) for pose in poses], name, version),
+    output = [_signal(frame, "scene.poses", [dict(public_pose(pose), landmark_count=len(pose["landmarks"])) for pose in poses], name, version),
               _signal(frame, "scene.pose_count", len(poses), name, version),
               _signal(frame, "scene.body_tracks", tracks, f"{name}:{tracker_name}-tracker", "0.1")]
     if joints is not None:

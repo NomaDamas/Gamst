@@ -277,6 +277,9 @@ class Pipeline:
         tasks = []
         for entry in self.modules.values():
             entry['needs_reset'] = True
+            drawing = getattr(entry['module'], 'drawing', None)     # what a screen draws is discarded at once
+            if callable(getattr(drawing, 'clear', None)):
+                drawing.clear()
         for lane in self._lanes:
             if lane['task'] is not None and not lane['task'].done():
                 lane['task'].cancel()

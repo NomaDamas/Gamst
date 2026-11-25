@@ -108,7 +108,8 @@ async def _mediapipe_graph(options, context):
     from ..mediapipe_graph import MediaPipeGraphModule
     config = context['installed'](options)['config']
     return dict(module=MediaPipeGraphModule.from_manifest(
-        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets')))
+        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets'),
+        derived={**({'poses': options['joints']} if options.get('joints') else {}), **(options.get('derived') or {})}))
 
 
 def _pose_source(options):

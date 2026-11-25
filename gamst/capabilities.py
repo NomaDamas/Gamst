@@ -16,12 +16,12 @@ MODALITIES = frozenset(('video', 'audio', 'text', 'thermal', 'radar', 'csi',
                         'imu', 'tactile', 'environment', 'events'))
 STREAMING_MODES = frozenset(('native', 'window', 'frame', 'offline'))
 RAW_KEYS = frozenset(('raw', 'frame', 'samples', 'jpeg', 'image', 'audio', 'landmarks'))
-# Joint positions, identity vectors and waveforms under any usual name, compared without case or
-# separators (``key_points`` is ``keypoints``). Like RAW_KEYS they are never context; unlike the legacy
-# ``landmarks`` of the in-process pose and face plugins, an unregistered signal may not carry them either.
+# Joint and face positions, identity vectors and waveforms under any usual name, compared without case or
+# separators (``key_points`` is ``keypoints``). Like RAW_KEYS they are never context, and an unregistered
+# signal may not carry them either.
 PRIVATE_KEYS = frozenset((
     'keypoint', 'keypoints', 'keypoints2d', 'keypoints3d', 'joint', 'joints', 'joints2d', 'joints3d', 'jointpositions',
-    'jointcoordinates', 'skeleton', 'skeletons', 'landmark', 'landmarks2d', 'landmarks3d', 'poselandmarks', 'handlandmarks',
+    'jointcoordinates', 'skeleton', 'skeletons', 'landmark', 'landmarks', 'worldlandmarks', 'landmarks2d', 'landmarks3d', 'poselandmarks', 'handlandmarks',
     'facelandmarks', 'lefthandlandmarks', 'righthandlandmarks', 'poseworldlandmarks',
     'embedding', 'embeddings', 'voiceprint', 'faceprint', 'waveform', 'pcm'))
 
@@ -32,7 +32,9 @@ def is_private_key(key):
 
 def is_raw_key(key):
     """A field name that never enters a context value."""
-    return key.lower() in RAW_KEYS or re.sub('[^a-z0-9]', '', key.lower()) == 'worldlandmarks' or is_private_key(key)
+    return key.lower() in RAW_KEYS or is_private_key(key)
+
+
 _KINDS = {'string': str, 'number': (int, float), 'integer': int,
           'boolean': bool, 'object': dict, 'array': list}
 

@@ -141,7 +141,7 @@ class OpenCVPersonPlugin(PerceptionPlugin):
 
 
 class MediaPipeFacePlugin(PerceptionPlugin):
-    """Face landmarks/blendshapes from an explicitly supplied local Tasks model.
+    """Face blendshapes from an explicitly supplied local Tasks model; the face points stay here for the local screen.
 
     Blendshape values are expression measurements, never emotion probabilities.
     Faces are frame-local indexes, not identities or linked audio speakers.
@@ -179,16 +179,23 @@ class MediaPipeFacePlugin(PerceptionPlugin):
                     raise RuntimeError("MediaPipeFacePlugin is closed")
                 return self.detector.detect(image)
         result = await asyncio.to_thread(detect)
-        faces = []
+        faces, points = [], []
         for i, landmarks in enumerate(result.face_landmarks):
             blendshapes = result.face_blendshapes[i] if i < len(result.face_blendshapes) else []
-            faces.append({"frame_face_index": i,
-                          "landmarks": [{"x": p.x, "y": p.y, "z": p.z} for p in landmarks],
+            points.append([{"x": p.x, "y": p.y, "z": p.z} for p in landmarks])
+            faces.append({"frame_face_index": i, "landmark_count": len(points[-1]),
                           "blendshapes": {p.category_name: float(p.score) for p in blendshapes}})
+        from .visualization import drawing_of
+        drawing_of(self).put("scene.faces", frame, points)
         return [_signal(frame, "scene.faces", faces, self.name,
                         f"{_version('mediapipe')}:sha256:{self.model_hash}")]
 
+    def reset(self):
+        from .visualization import drawing_of
+        drawing_of(self).clear()
+
     async def close(self):
+        self.reset()
         def close_native():
             with self._native_lock:
                 if not self._closed:

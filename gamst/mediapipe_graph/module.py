@@ -14,9 +14,11 @@ in parallel with, and independent of, the other modules. The lane is the only GA
 - control: graph file, side packets (a fresh graph run), branch switches (``enable_<branch>`` input
   streams, from the next frame, no restart), process start/reset/stop. Over MCP:
   ``configure_pipeline_module(name, enabled, options)``, limited to what the owner declared here.
-- records: landmarks become ``scene.poses`` (the shape of :class:`MediaPipePosePlugin`, so
-  ``pose_exemplar.PoseChannels`` reads them unchanged), ``scene.hands`` and
-  ``scene.face_landmarks``; images never leave the runner.
+- records: ``scene.poses``, ``scene.hands`` and ``scene.face_landmarks`` with boxes, geometry and how many points
+  were found, never where; of a custom landmark stream only the number of points. The points themselves stay in
+  this module (for the local screen) and leave it only on the derived inputs named in ``derived``
+  (:class:`gamst.private_payload.PrivatePoses`, the shape ``pose_exemplar.PoseChannels`` reads), which a Pipeline
+  never commits. Images never leave the runner.
 
 The runner is owned like a ProcessProvider worker: no shell, no implicit restart after a failure,
 native error text kept out of context. Protocol reference: docs/mediapipe-graph.md.
@@ -32,10 +34,14 @@ from pathlib import Path
 import time
 
 from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, identifier
+from ..pipeline import Derived
+from ..plugins import InputFrame
+from ..private_payload import PrivatePoses, public_pose
 from ..process_provider import stop_child
 from ..provider_wire import HEADER_LIMIT, parse_header
 from ..providers.pose import MediaPipePosePlugin
 from ..streams import _finish
+from ..visualization import drawing_of
 
 HERE = Path(__file__).resolve().parent
 PIN = json.loads((HERE / 'pin.json').read_text())
@@ -119,7 +125,7 @@ class MediaPipeGraphModule:
 
     def __init__(self, runner, graph, *, side_packets=None, branches=None, outputs=None, streams=None,
                  resource_root=None, runner_sha256=None, revision=None, capability_id='vision.mediapipe_graph',
-                 devices=('cpu',), startup_timeout=120., frame_timeout=10., close_timeout=5., env=None):
+                 derived=None, devices=('cpu',), startup_timeout=120., frame_timeout=10., close_timeout=5., env=None):
         self.argv = [str(runner)] if isinstance(runner, (str, Path)) else [str(item) for item in runner]
         if not self.argv or not os.path.isfile(self.argv[0]) or not os.access(self.argv[0], os.X_OK):
             raise ValueError('runner must be an existing executable (the built gamst_graph_runner)')
@@ -138,6 +144,8 @@ class MediaPipeGraphModule:
         self._check_in_flight(self.side_packets)
         self.branches = {identifier(k, 'branch'): bool(v) for k, v in (branches or {}).items()}
         self.outputs = dict(outputs or {})
+        # {'poses' | 'hands' | 'face' | a landmark stream: derived input}
+        self.derived = {identifier(k, 'output'): identifier(v, 'derived input') for k, v in (derived or {}).items()}
         self.streams = {identifier(k, 'stream'): identifier(v, 'record name') for k, v in (streams or {}).items()}
         self.resource_root = Path(resource_root).expanduser().resolve() if resource_root else None
         self.startup_timeout, self.frame_timeout, self.close_timeout = startup_timeout, frame_timeout, close_timeout
@@ -248,6 +256,7 @@ class MediaPipeGraphModule:
         if self._process is not None and not self.failed:
             await self._uninterrupted(self._restart_run())
         self._records_ready.clear()
+        drawing_of(self).clear()
 
     async def configure(self, options):
         """``branches``: {name: bool} (next frame); ``side_packets``: {name: value} (fresh run);
@@ -375,6 +384,7 @@ class MediaPipeGraphModule:
                     entry['future'].set_result(None)
             self._pending.clear()
             self._packets.clear()
+            drawing_of(self).clear()
 
     # ------------------------------------------------------------------ internals
 
@@ -535,6 +545,16 @@ class MediaPipeGraphModule:
     def _records(self, entry, packets):
         """One finished frame -> GAMST records (a switched-off branch commits nothing)."""
         signals, counts, on = [], {}, entry['branches']
+        frame = InputFrame(None, 'video', entry['ms'], subject_id=entry['subject_id'])
+
+        def public(group, name, items):
+            """The record of ``items`` without their points, which go to the screen and the derived input."""
+            if name == 'scene.poses':       # the only one of them a screen draws
+                drawing_of(self).put(name, frame, [item['landmarks'] for item in items])
+            if group in self.derived:
+                signals.append(Derived(self.derived[group], PrivatePoses(items), 'video', timestamp_ms=entry['ms']))
+            return self._signal(entry, name, [dict(public_pose(item), landmark_count=len(item['landmarks'])) for item in items])
+
         poses_out = self.outputs.get('poses')
         if poses_out and on.get(poses_out['branch'], True):
             poses = []
@@ -552,7 +572,7 @@ class MediaPipeGraphModule:
                     pose['world_landmarks'] = world  # meters, hip-centred
                 poses.append(pose)
             counts['poses'] = len(poses)
-            signals += [self._signal(entry, 'scene.poses', poses), self._signal(entry, 'scene.pose_count', len(poses))]
+            signals += [public('poses', 'scene.poses', poses), self._signal(entry, 'scene.pose_count', len(poses))]
         hands_out = self.outputs.get('hands')
         if hands_out and on.get(hands_out['branch'], True):
             hands = []
@@ -561,7 +581,7 @@ class MediaPipeGraphModule:
                 if points is not None:
                     hands.append(dict(handedness=side, landmarks=points, bbox=_box(points)))
             counts['hands'] = len(hands)
-            signals += [self._signal(entry, 'scene.hands', hands), self._signal(entry, 'scene.hand_count', len(hands))]
+            signals += [public('hands', 'scene.hands', hands), self._signal(entry, 'scene.hand_count', len(hands))]
         face_out = self.outputs.get('face')
         if face_out and on.get(face_out['branch'], True):
             faces = []
@@ -569,15 +589,18 @@ class MediaPipeGraphModule:
             if points is not None:
                 faces.append(dict(frame_face_index=0, landmarks=points, bbox=_box(points)))
             counts['faces'] = len(faces)
-            signals += [self._signal(entry, 'scene.face_landmarks', faces),
+            signals += [public('face', 'scene.face_landmarks', faces),
                         self._signal(entry, 'scene.face_count', len(faces))]
         for stream, record in self.streams.items():
             if stream in packets:
                 kind, value = packets[stream]
-                if kind in ('landmarks', 'world_landmarks'):
-                    value = _points((kind, value))
-                elif kind == 'landmarks_list':
-                    value = [_points(('landmarks', item)) for item in value]
+                if kind in ('landmarks', 'world_landmarks', 'landmarks_list'):
+                    lists = value if kind == 'landmarks_list' else [value]
+                    found = [_points(('landmarks', item)) or [] for item in (lists if isinstance(lists, list) else [])]
+                    if stream in self.derived:
+                        signals.append(Derived(self.derived[stream], PrivatePoses([dict(landmarks=item) for item in found]),
+                                               'video', timestamp_ms=entry['ms']))
+                    value = dict(landmark_counts=[len(item) for item in found])
                 elif kind in ('image', 'opaque'):
                     continue  # never media, never an untyped blob
                 signals.append(self._signal(entry, record, value))
