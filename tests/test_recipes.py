@@ -1,3 +1,4 @@
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -5,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from gamst import recipes
+
+HAS_CV = all(importlib.util.find_spec(name) for name in ('cv2', 'numpy'))
 
 
 class RecipeTest(unittest.TestCase):
@@ -42,7 +45,7 @@ class RecipeTest(unittest.TestCase):
 
     def test_a_pipeline_the_runtime_cannot_run_is_rejected(self):
         recipe = json.loads((recipes.RECIPES / 'coin-flip.json').read_text())
-        recipe['pipeline'][2]['use'] = 'optical-flow'
+        recipe['modules'][2]['use'] = 'optical-flow'
         path = self.tmp / 'bad.json'
         path.write_text(json.dumps(recipe))
         with self.assertRaisesRegex(ValueError, 'unknown part'):
@@ -77,19 +80,52 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(steps['models']['files'], [])
         self.assertEqual(steps['sources'], {})
 
-    def test_rotation_run_counts_inside_the_given_box_with_the_blade_count(self):
-        take = self.take(240.)
-        with patch.object(recipes.demo, 'main') as start:
-            with self.assertRaisesRegex(SystemExit, '--roi'):
-                recipes.main(['run', 'rotation', '--take', take])
-            recipes.main(['run', 'rotation', '--take', take, '--symmetry', '3', '--max-rpm', '1500',
-                          '--roi', '.2,.2,.6,.6'])
-        argv = start.call_args.args[0]
-        self.assertEqual(argv[argv.index('--take') + 1], str(Path(take) / 'raw.gmst'))
-        self.assertEqual(argv[argv.index('--in-plane') + 1], 'polar')
-        self.assertEqual(argv[argv.index('--symmetry') + 1], '3')
-        self.assertEqual(argv[argv.index('--expected-max-rev-s') + 1], '25')
+    def test_rotation_run_needs_the_box(self):
+        with self.assertRaisesRegex(SystemExit, '--roi'):
+            recipes.main(['run', 'rotation', '--video', str(self.tmp / 'missing.avi'), '--headless'])
 
+    @unittest.skipUnless(HAS_CV, 'needs opencv and numpy (the rotation extra)')
+    def test_rotation_recipe_counts_a_fan_through_the_pipeline(self):
+        import cv2
+        from tests.test_polar_rotation import fan_frames
+        path = self.tmp / 'fan.avi'
+        frames = fan_frames(12, blades=3)  # 12 rev/s for 1 s between still periods, 240 fps
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*'MJPG'), 30, frames[0].shape[1::-1])
+        for frame in frames:
+            writer.write(frame)
+        writer.release()
+        report_path = self.tmp / 'report.json'
+        with self.assertRaisesRegex(SystemExit, '30 fps counts at most 5.0'):  # file timing: 30 fps
+            recipes.main(['run', 'rotation', '--video', str(path), '--roi', '.02,.02,.96,.96', '--symmetry', '3',
+                          '--max-rev-s', '20', '--headless'])
+        report = recipes.main(['run', 'rotation', '--video', str(path), '--capture-fps', '240',
+                               '--roi', '.02,.02,.96,.96', '--symmetry', '3', '--max-rev-s', '20', '--headless',
+                               '--report', str(report_path)])
+        self.assertEqual(report['frames'], len(frames))
+        ended = [event for event in report['events']['vision.rotation']
+                 if event['type'] == 'rotation.ended' and event['axis'] == 'in_plane']
+        self.assertEqual(len(ended), 1)
+        self.assertAlmostEqual(ended[0]['turns'], 12, delta=.2)
+        self.assertEqual(report['pipeline']['modules']['rotation']['processed'], len(frames))
+        self.assertTrue(json.loads(report_path.read_text())['counts']['vision.rotation'] >= 1)
+
+    def test_person_action_recipe_needs_an_enrolled_exemplar(self):
+        recipe = recipes.load('person-action-count')
+        self.assertEqual(recipes.check(recipe, fps=30)['ok'], True)
+        self.assertFalse(recipes.check(recipe, fps=3)['ok'])
+        steps = recipes.plan(recipe)
+        self.assertIn('mediapipe', steps['extras'])
+        self.assertEqual(set(steps['models']['files']), {'pose_landmarker_full.task', 'pose_landmarker_heavy.task'})
+        with self.assertRaisesRegex(SystemExit, 'gamst recipe enroll'):
+            recipes.main(['run', 'person-action-count', '--video', str(self.tmp / 'x.mp4'), '--headless'])
+
+    def test_a_module_consuming_an_unknown_source_is_rejected(self):
+        recipe = json.loads((recipes.RECIPES / 'person-action-count.json').read_text())
+        recipe['modules'][1]['consumes'] = ['nowhere']
+        path = self.tmp / 'bad.json'
+        path.write_text(json.dumps(recipe))
+        with self.assertRaisesRegex(ValueError, 'consumes'):
+            recipes.load(str(path))
 
 if __name__ == '__main__':
     unittest.main()

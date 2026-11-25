@@ -281,8 +281,8 @@ class Pipeline:
                 continue
             output = await _call(finish)
             last = entry['last_run_ms']
-            if output is None or last is None:
-                continue
+            if output is None or last is None or (entry['spec'] is None and not isinstance(output, list)):
+                continue  # a plugin that commits its own records returns its final value only
             frame = self._frame(name, None, 'record', last)
             records += await self._commit(name, entry, frame, output)
         return records

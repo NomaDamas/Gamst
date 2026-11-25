@@ -7,12 +7,13 @@
     "camera": "an iPhone that records 240 fps, running the GAMST 240 app (apps/ios-highspeed-camera, iOS 15+), on a stand, on the Mac's Wi-Fi",
     "compute": "Apple silicon with MPS; one toss counts in about 30 s on an M2 Pro"
   },
-  "pipeline": [
-    {"step": "capture", "use": "gamst240", "sources": ["iphone", "take"]},
-    {"step": "find", "use": "yoloe", "label": "metal coin"},
-    {"step": "follow", "use": "efficienttam"},
-    {"step": "count", "use": "flip", "max_rev_s": 40, "on": "analyze"}
+  "inputs": [{"id": "camera", "use": "gamst240", "sources": ["iphone", "take"]}],
+  "modules": [
+    {"name": "find", "use": "yoloe", "label": "metal coin", "consumes": ["camera"]},
+    {"name": "follow", "use": "efficienttam", "consumes": ["camera"]},
+    {"name": "count", "use": "flip", "max_rev_s": 40, "on": "analyze", "consumes": ["camera"]}
   ],
+  "view": "halo-coin",
   "records": ["vision.rotation.refined"],
   "measured": "6 of 7 tosses within one flip of a person's frame-by-frame count (docs/halo-coin.md)"
 }

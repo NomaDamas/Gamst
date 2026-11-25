@@ -1,0 +1,22 @@
+{
+  "name": "person-action-count",
+  "summary": "Count how many times a person makes a pose or movement they demonstrated once; no training.",
+  "skill": "skills/gamst-person-action/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
+    "compute": "CPU (MediaPipe Pose Landmarker, real time)"
+  },
+  "inputs": [{"id": "camera", "use": "camera", "sources": ["camera", "video", "take"]}],
+  "references": [{"name": "exemplar", "kind": "exemplar", "label": "the demonstrated pose or movement"}],
+  "modules": [
+    {"name": "pose", "use": "mediapipe-pose", "model": "pose_landmarker_full.task", "max_poses": 1, "consumes": ["camera"]},
+    {"name": "pose_channels", "use": "pose-channels", "consumes": ["pose:scene.poses"]},
+    {"name": "exemplar", "use": "exemplar", "mode": "hold", "max_reps_s": 2, "consumes": ["pose_channels"]},
+    {"name": "repetition", "use": "repetition", "max_reps_s": 2, "consumes": ["pose_channels"]}
+  ],
+  "view": "count",
+  "records": ["temporal.exemplar_events", "temporal.repetitions"],
+  "limits": "one person: the most visible pose; binding the count to one enrolled person (face and body match) is the next module",
+  "measured": "not yet"
+}
