@@ -502,6 +502,7 @@ Add it to your MCP client's server configuration, replacing the absolute paths:
 | --- | --- |
 | `get_state`, `get_events`, `get_context`, `get_trends` | Read current and temporal observations |
 | `inspect_interval` | Inspect retained evidence |
+| `get_timeline` | Values of all modules at the same capture time, with what is pending, lost or off, and what changed since the last read ([docs](docs/aligned-timeline.md)) |
 | `push_text`, `push_claim` | Supply conversation and structured assertions |
 | `start_capture`, `stop_capture`, `get_capture_status` | Control local devices |
 | `pause_capture`, `resume_capture`, `delete_data` | Control observation and retention |
