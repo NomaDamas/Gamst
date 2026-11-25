@@ -1,5 +1,7 @@
 # 새 레시피 두 개: `pose-count`와 `voice-keyword`의 아키텍처
 
+> **대체됨(2026-11-25):** 상위 설계는 [references-and-targeted-perception.md](references-and-targeted-perception.md)입니다. 이 문서의 두 레시피는 그 일반 기능 위의 사용 예이고, 모델 선택도 그 문서의 8절이 우선입니다.
+
 상태: 설계 문서입니다. 아직 구현하지 않았고, 측정한 값도 없습니다.
 모델 선택의 근거는 [research/speaker-pose-sota-2026-11/report.md](research/speaker-pose-sota-2026-11/report.md)와 같은 폴더의 `notes/`에 있습니다.
 리서치는 2026-11-25에 했습니다.
