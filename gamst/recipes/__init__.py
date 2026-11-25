@@ -435,8 +435,8 @@ async def run_pipeline(recipe, args):
                     observation.get('value'), dict) and observation['value'].get('events'):
                 committed[record['id']] = record
 
-    # Every record is committed; the engine's trend aggregation over the window (its cost grows with the window:
-    # 3 to 19 ms a record in the first 1800, measured) runs once a second instead of on every record.
+    # Every record is committed; the engine's human.inference record is made once a second instead of with every
+    # one. Not for speed (0.3 ms): each is stored, so it would halve how long a run's own records are retained.
     async with Gamst(consent=True, sensor_inference_interval_ms=1000, **store_options(args)) as human:
         stored = [record for capability in wanted for record in human.store.query(
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]

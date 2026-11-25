@@ -160,7 +160,7 @@ class Pipeline:
         if source is not None and not callable(getattr(source, 'frames', None)):
             raise TypeError('an input source needs frames()')
         self.inputs[input_id] = dict(source=source, modality=modality or getattr(source, 'modality', None),
-                                     derived_from=derived_from, frames=0, last_ms=None, done_ms=None, missed=0, gaps=0, off=None)
+                                     derived_from=derived_from, frames=0, first_ms=None, last_ms=None, done_ms=None, missed=0, gaps=0, off=None)
         return self
 
     def add_reference(self, name, kind, value, *, label=None, consent=None):
@@ -218,6 +218,8 @@ class Pipeline:
                                   last_error=None, last_latency_ms=None, needs_reset=False, emits=tuple(emits),
                                   last_admit_ms=None, lane=lane, optional=bool(optional), paused=False, pauses=0,
                                   off=None, skipped=0, gaps=0, gap_frames=0, gap_out=False, gap_log=deque(maxlen=LOG),
+                                  from_ms=1 + max((value['last_ms'] for value in self.inputs.values()
+                                                   if value['last_ms'] is not None), default=-1),
                                   newest_ms=None, until=None, latency=deque(maxlen=LOG), lag=deque(maxlen=LOG))
         return self
 
@@ -322,6 +324,8 @@ class Pipeline:
             entry = self.inputs[source]
             entry['frames'] += 1
             entry['last_ms'] = frame.timestamp_ms
+            if entry['first_ms'] is None:
+                entry['first_ms'] = frame.timestamp_ms
             if entry['off'] is not None:
                 off, entry['off'] = entry['off'], None
                 gap = True
@@ -535,7 +539,9 @@ class Pipeline:
 
     def _declare_off(self, name, entry):
         off, entry['off'] = entry['off'], None
-        if entry['last_run_ms'] is not None or entry['last_admit_ms'] is not None:   # else it starts here
+        if entry['last_run_ms'] is None and entry['last_admit_ms'] is None:   # it starts here
+            entry['from_ms'] = max(entry['from_ms'], off['end_ms'] + 1)
+        else:
             self._gap(name, [name], off['start_ms'], off['end_ms'], off['frames'], off['reason'],
                       subject_id=off['subject_id'])
 
@@ -617,12 +623,27 @@ class Pipeline:
                        if name in item.names]
         if entry['off'] is not None:
             bounds.append(entry['off']['start_ms'] - 1)
-        held = getattr(entry['module'], 'pending_since_ms', None)   # results a module still holds inside
+        held = self._holding_from(entry)
         if held is not None:
-            bounds.append(int(held) - 1)
+            bounds.append(held - 1)
         value = min(bounds)
         entry['until'] = value if entry['until'] is None else max(entry['until'], value)
         return entry['until']
+
+    def _complete_from(self, name):
+        """Capture time from which ``complete_until_ms`` accounts for everything, or None before the first frame."""
+        if name in self.inputs:
+            entry = self.inputs[name]
+            return entry['first_ms'] if entry['derived_from'] is None else self._complete_from(entry['derived_from'])
+        entry = self.modules[name]
+        sources = [self._complete_from(src) for src, _ in entry['links'] if src in self.inputs or src in self.modules]
+        return None if not sources or None in sources else max(entry['from_ms'], *sources)
+
+    @staticmethod
+    def _holding_from(entry):
+        """Oldest capture time of evidence a module still holds inside (an open utterance, frames in a native graph)."""
+        held = getattr(entry['module'], 'pending_since_ms', None)
+        return None if held is None else int(held)
 
     async def drain(self):
         """Wait until every queued module has processed what it was given."""
@@ -699,6 +720,9 @@ class Pipeline:
             link = self._frame(name, observation.get('value'), observation.get('modality') or frame.modality,
                                record.get('timestamp_ms', frame.timestamp_ms), subject_id=frame.subject_id,
                                sensor=frame.sensor if record.get('timestamp_ms') == frame.timestamp_ms else None)
+            if frame.sensor is not None and link.sensor.clock_id != frame.sensor.clock_id:   # its times are in that clock
+                link = replace(link, sensor=replace(link.sensor, clock_id=frame.sensor.clock_id,
+                                                    clock_epoch=frame.sensor.clock_epoch))
             records += await self.feed(name, link, output=observation.get('name'), context=context)
         for item in derived:
             if item.input not in entry['emits']:
@@ -849,8 +873,9 @@ class Pipeline:
         """What is connected, on, behind, lost and complete; times are capture times in ms.
 
         Ages (``backlog_ms``, ``newest_result_age_ms``, ``capture_to_result_ms``) exist for live input only.
-        ``complete_until_ms``: everything captured up to then was processed by the module or declared in
-        ``gap_intervals``; a module that answers about a window may still add results for that window.
+        ``complete_until_ms``: everything captured from ``complete_from_ms`` (its first frame) up to then was
+        processed by the module or declared in ``gap_intervals``; ``holding_from_ms``: it still holds evidence
+        from then on (a module's ``pending_since_ms``, already counted in ``complete_until_ms``); a module that answers about a window may still add results for that window.
         """
         now = _now_ms()
         return dict(
@@ -872,7 +897,8 @@ class Pipeline:
                                else max(0, now - value['newest_ms']),
                                gaps=value['gaps'], gap_frames=value['gap_frames'], complete=not value['gaps'],
                                gap_intervals=list(value['gap_log'])[-64:],
-                               complete_until_ms=self._complete_until(key),
+                               complete_until_ms=self._complete_until(key), complete_from_ms=self._complete_from(key),
+                               holding_from_ms=self._holding_from(value),
                                replicas=int(getattr(value['module'], 'replicas', 1)),
                                optional=value['optional'], paused=value['paused'], pauses=value['pauses'],
                                **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'])}

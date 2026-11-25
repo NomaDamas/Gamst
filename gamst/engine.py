@@ -103,6 +103,7 @@ class Gamst:
         from .timeline import History
         self.clocks = TemporalAligner()
         self._timeline_history = History()
+        self._timeline_lock = asyncio.Lock()
         # Owner-declared Watches are the only alarm path; there is no hidden trigger.
         self.watches = WatchManager(
             lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
@@ -932,10 +933,20 @@ class Gamst:
         now = min(timestamp(), known) if as_of_ms is None else as_of_ms
         if not explicit:
             start_ms, end_ms = max(0, now - _window_ms('10s' if window is None else window)), now
-        return timeline.read(self.store, self._timeline_history, subject_id=subject_id, start_ms=start_ms,
-                             end_ms=max(start_ms, min(end_ms, now)), known_ms=known, as_of_ms=as_of_ms, now_ms=now,
-                             step_ms=step_ms, capabilities=capabilities, settled_only=settled_only, cursor=cursor,
-                             max_bytes=max_bytes, contracts=self.perception_capabilities._specs)
+        async with self._timeline_lock:     # one read at a time: its records are held in memory
+            key = self.store._cursor_key
+            try:
+                answer = await timeline.read(
+                    self.store, self._timeline_history, subject_id=subject_id, start_ms=start_ms,
+                    end_ms=max(start_ms, min(end_ms, now)), known_ms=known, as_of_ms=as_of_ms, now_ms=now, step_ms=step_ms,
+                    capabilities=capabilities, settled_only=settled_only, cursor=cursor, max_bytes=max_bytes,
+                    contracts=self.perception_capabilities._specs)
+            except Exception:
+                if not self.closed:
+                    raise
+            if self.closed or self.store._cursor_key != key:
+                raise RuntimeError('timeline discarded after deletion or close')
+            return answer
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
                                    max_bytes=65536, capability_id=None, source_id=None,

@@ -59,13 +59,13 @@ interpolation option). Joints, embeddings, media, and unregistered values whose 
 
 Completeness comes from the Pipeline, through one function (`gamst.timeline.progress`). It reads per module
 `complete_until_ms`, `gap_intervals`, `gaps`, `sampled`, `enabled`, `paused` and, if present, `complete_from_ms`
-(where the account starts; the Pipeline does not report it yet) and `holding_from_ms` (oldest capture time of evidence still held, e.g. an open utterance; not reported yet either).
+(where the account starts) and `holding_from_ms` (oldest capture time of evidence a module says it still holds in `pending_since_ms`, e.g. an open utterance).
 What is missing is `unknown`. Without `complete_from_ms`, rows before the point where a module was first seen complete
 are `unknown`.
 
 `complete_until_ms` of a column is the Pipeline's value minus the capability's declared `lookahead_ms` and (window mode)
 `window_ms`, and stops before a `partial` utterance; `processed_until_ms` shows the Pipeline's own value when it differs.
-`late_intervals: true` marks a column whose intervals are reported when they are over (speech, matches) with no declared
+`asr_words` holds from the start of an utterance while its engine reports partial text; `late_intervals: true` marks a column whose intervals are reported when they are over (speech, matches) with no declared
 bound: a complete row there can still gain an interval. The cursor reports that.
 
 A row is `complete` only if every column is done with it. A column that is off does not hold a row back. Columns with
@@ -109,22 +109,28 @@ linear fit places its records, with the fit in the column. Before that, its cell
 
 ## Cost
 
-Synthetic store, 5 capabilities, 60 s, M2 Pro, Python 3.11, load average about 8 from other work. Medians of 9, SDK call
+Synthetic store, 5 capabilities, 60 s, M2 Pro, Python 3.11, load average about 5 from other work. Medians of 9, SDK call
 without MCP JSON.
 
 | Read | 1k records | 5k | 10k |
 |---|---|---|---|
-| 60 s at 100 ms, first 64 KB page | 48 ms | 176 ms | 430 ms |
-| 60 s at 1 s | 43 ms | 153 ms | 377 ms |
-| 60 s at 100 ms, one capability | 26 ms | 81 ms | 188 ms |
-| last 10 s at 200 ms (the default) | 23 ms | 58 ms | 131 ms |
-| delta of that | 30 ms | 112 ms | 207 ms |
-| delta covering 601 rows | 105 ms | 438 ms | 814 ms |
-| `get_context(window='60s')` on the same store | 9 ms | 53 ms | 61 ms |
+| 60 s at 100 ms, first 64 KB page | 29 ms | 95 ms | 204 ms |
+| 60 s at 1 s | 25 ms | 89 ms | 196 ms |
+| 60 s at 100 ms, one capability | 14 ms | 41 ms | 89 ms |
+| last 10 s at 200 ms (the default) | 11 ms | 20 ms | 35 ms |
+| delta of that | 12 ms | 27 ms | 44 ms |
+| delta covering 601 rows | 81 ms | 232 ms | 366 ms |
 
-The read runs in the event loop, so a live capture waits that long; keep the window short or name capabilities.
+The event loop does not wait for a read. It runs the queries in steps of at most 200 records (at most 4.6 ms each,
+measured); a thread decodes the records, builds the rows and gives the interpreter back every 0.3 ms. The read is one
+state: records learned after it began are not in it; if records are removed meanwhile, `removed_until_ms` says so; if data
+is deleted or the runtime closed, the read raises. One read runs at a time. With a 30 fps Pipeline on a 10k store the longest loop
+stall during 15 reads was 8 ms and the longest frame interval 37.5 ms (33.3 without reads); before, a read held the loop
+for its whole time, up to 529 ms, and reads made one after another added up (1790 ms). Memory and file stores work the same.
+The building thread does slow other Python code while it runs.
+
 A 64 KB page held 63 rows of 5 capabilities at 1k records and 27 at 10k (a value and up to 8 intervals per cell). An idle
-delta was 2.1 KB. `Store.add`: 22.5 us before, 24 to 28 us after; when every insert evicts, 30 us before, 36 us after.
+delta was 2.1 KB.
 
 ## Limits
 

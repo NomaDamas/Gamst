@@ -139,6 +139,7 @@ class AlignedASR:
 
     def _restart(self):
         self._epoch, self._sequence = uuid.uuid4().hex, 0
+        self.pending_since_ms = None    # capture start of the utterance still being recognized, if the engine says
 
     async def reset(self):
         self.clock.reset()
@@ -183,7 +184,13 @@ class AlignedASR:
         return outputs
 
     async def _emit(self, update, reason=None):
-        if not isinstance(update, dict) or not update.get('text') and update.get('status') != 'final':
+        if not isinstance(update, dict):
+            return []
+        if update.get('status') == 'final':
+            self.pending_since_ms = None
+        elif type(update.get('start_ms')) is int:
+            self.pending_since_ms = update['start_ms']
+        if not update.get('text') and update.get('status') != 'final':
             return []
         final = update.get('status') == 'final'
         if not final and not self.partials:

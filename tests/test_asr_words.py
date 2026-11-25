@@ -47,7 +47,26 @@ class Aligner:
         return [dict(text='대박', start_s=.1, end_s=.4), dict(text='진짜', start_s=.5, end_s=.9)]
 
 
+class PartialEngine(Engine):
+    def process(self, frame):
+        final = super().process(frame)
+        return final if final or self.count < 10 else dict(utterance_id='u', status='partial', text='대', start_ms=self.start)
+
+
 class AlignedTest(unittest.IsolatedAsyncioTestCase):
+    async def test_an_open_utterance_is_declared_held_until_it_is_final(self):
+        module, held = AlignedASR(PartialEngine()), []
+        audio = tone(200, 1.2)
+        for end in range(100, 1201, 100):
+            at = (end - 100) * 16
+            values = await module.process(InputFrame(audio[at:at + 1600], 'audio', 5000 + end, sample_rate=16000))
+            held.append((module.pending_since_ms, bool(values)))      # partial text itself is not emitted
+        self.assertEqual(held[0], (None, False))
+        self.assertEqual(held[2:9], [(5000, False)] * 7)
+        self.assertEqual(held[9], (None, True))
+        await module.finish()
+        self.assertIsNone(module.pending_since_ms)
+
     async def test_jittery_chunks_become_exact_hops_and_words_get_capture_times(self):
         aligner = Aligner()
         module = AlignedASR(Engine(), aligner)

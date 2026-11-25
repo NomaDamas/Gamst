@@ -16,23 +16,31 @@ Cell statuses, in the order they are decided for a row ``[t, t + step)``:
 ``none``     processed, and there was nothing to report;
 ``unknown``  nothing says whether this was processed.
 
+Only the Store is read on the event loop, in short steps; records are decoded and rows built in a thread. What is
+learned during a read is not in it, so every step sees the same state.
+
 Values are never interpolated. Rows, cells and evidence are bounded; what is cut says so.
 """
 from __future__ import annotations
 
+import asyncio
 from bisect import bisect_left, bisect_right
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from functools import lru_cache
 import hashlib
+import itertools
 import json
 import math
+import threading
+import time
+from types import SimpleNamespace
 
 from .capabilities import is_raw_key as _is_raw_key
 from .context import compact_observation, is_context_observation
 from .counting import GAP_CAPABILITY as GAPS
 from .observation_pages import _encode as seal_cursor, _open as open_cursor
-from .revisions import LATE_MS, RETRACTION, depends_on, named, record_span, span_of, time_ms
+from .revisions import LATE_MS, RETRACTION, depends_on, record_span, span_of, time_ms
 
 MAX_ROWS, MAX_COLUMNS, MAX_SCAN = 601, 32, 20_000      # 601: 600 steps that do not start on the grid
 MIN_STEP_MS, MAX_STEP_MS = 20, 60_000
@@ -42,6 +50,7 @@ MAX_VALUE_BYTES = 2048      # one value, as ASCII JSON
 MAX_LISTED = 8              # gaps listed per column
 MAX_AFFECTED = 64           # changed intervals listed in one delta
 MAX_DELTA_SCAN = 5000
+TURN_S, REST_S = .0003, .00005      # a building thread works this long, then lets the event loop run
 HISTORY, SAMPLE_MS = 1500, 200      # Pipeline completeness kept for as_of_ms and cursors (5 minutes)
 OFF_REASONS = frozenset(('disabled', 'paused', 'capture_paused'))
 ITEM_FIELDS = ('events', 'words', 'segments')
@@ -159,6 +168,27 @@ class History:
         return self._states[index] if index >= 0 else None
 
 
+_turn = threading.local()
+
+
+def rest():
+    """In a building thread: give the interpreter to the event loop after a short turn.
+
+    Without it the loop waits up to 5 ms (Python's switch interval) each time it needs the interpreter back,
+    that is, at every database call of every record it commits.
+    """
+    now = time.perf_counter()
+    if now - getattr(_turn, 'since', 0.) > TURN_S:
+        time.sleep(REST_S)
+        _turn.since = time.perf_counter()
+
+
+def _breathe(items):
+    for item in items:
+        rest()
+        yield item
+
+
 # ---------------------------------------------------------------- clocks
 
 def clock_key(clock_id, clock_epoch):
@@ -233,36 +263,112 @@ def summary(value, name=None):
     return result, sorted(flags)
 
 
-@dataclass
+def _split(value, at, span):
+    """``(body, items)``: the entries of a value that name their own time, ``(kind, index, start, end)``, taken out of it."""
+    if not isinstance(value, dict) or not any(value.get(name) for name in ITEM_FIELDS):
+        return value, []
+    body, items = dict(value), []
+    for name in ITEM_FIELDS:
+        entries, rest = value.get(name), []
+        if not isinstance(entries, list) or not entries:
+            continue
+        for index, entry in enumerate(entries):
+            pair = span_of(entry)
+            if pair is None and isinstance(entry, dict) and span is None and name == 'events':
+                pair = at, at       # an event without its own time happened at its record's capture time
+            if pair is None:
+                rest.append(entry)
+            else:
+                items.append((name, index, *pair))
+        if rest:
+            body[name] = rest
+        else:
+            body.pop(name)
+    return body, items
+
+
+class _Record:
+    """What placing a record needs. Its value stays text until it is shown.
+
+    A read holds up to tens of thousands of these. Decoded, they would be millions of objects, and one garbage
+    collection or release of them stops every thread, the capture too.
+    """
+    __slots__ = ('id', 'payload', 'known', 'ts', 'type', 'capability', 'name', 'named', 'source', 'sensor', 'clock',
+                 'model', 'models', 'context', 'freshness', 'declared', 'modality', 'supersedes', 'utterance',
+                 'revision', 'partial', 'span', 'items', 'gap_events')
+
+    def __init__(self, payload, known, record=None, shared=None):
+        record = json.loads(payload) if record is None else record
+        observation = record['observation']
+        sensor, contract = observation.get('sensor') or {}, observation.get('capability') or {}
+        value, shared = observation.get('value'), {} if shared is None else shared
+
+        def same(item):     # the same few names and contracts in every record
+            return shared.setdefault(item, item)
+
+        self.id, self.payload, self.known, self.ts, self.type = record['id'], payload, known, record['timestamp_ms'], same(record['type'])
+        self.capability, self.name = same(contract.get('id')), same(observation.get('name'))
+        self.named = self.capability or self.name
+        self.source, self.sensor = same(sensor.get('source_id')), same(sensor.get('sensor_id'))
+        self.clock, self.modality = same(foreign_clock(observation)), same(observation.get('modality'))
+        self.models = same(tuple(f"{model['id']}:{model['version']}"[:200] for model in record.get('models', [])[:2]))
+        self.model = same((record.get('models') or [{}])[0].get('id'))
+        self.context = record['type'] == RETRACTION or is_context_observation(record)
+        self.declared = same((contract.get('freshness_ms', DEFAULT_FRESHNESS_MS), contract.get('interpretation'),
+                              contract.get('window_ms', 0)))
+        self.freshness = self.declared[0]
+        self.supersedes = record.get('supersedes')
+        self.span = record_span(record)
+        self.utterance = self.revision = None
+        self.partial, self.gap_events = False, ()
+        if isinstance(value, dict):
+            if isinstance(value.get('utterance_id'), str) and self.span is not None:
+                self.utterance = value['utterance_id']
+                self.revision = value['revision'] if type(value.get('revision')) is int else 0
+            self.partial = value.get('status') == 'partial'
+            if self.capability == GAPS:
+                self.gap_events = value.get('events') or ()
+        items = []
+        for kind, index, start, end in _split(value, self.ts, self.span)[1]:
+            phase = match = None
+            if kind == 'events':
+                event = value[kind][index]
+                family, _, phase = str(event.get('event', event.get('type'))).rpartition('.')
+                if phase in ('matched', 'ended'):
+                    match = json.dumps([family, event.get('reference'), event.get('reference_id'), event.get('index'),
+                                        event.get('start_ms')], default=str)
+            items.append((kind, index, start, end, phase if match else None, match))
+        self.items = tuple(items)
+
+    def decoded(self):
+        return json.loads(self.payload)
+
+
 class _Item:
     """One thing a column says, at a time (an instant) or over an interval; local capture time."""
-    start: int
-    end: int
-    kind: str                # record | events | words | segments
-    record: dict
-    value: object
-    known: int | None = None # knowledge time of its record
-    clock: _Clock | None = None
-    instant: bool = False
-    items: int = 0           # of its list entries, those that became intervals of their own
-    gone: frozenset = frozenset()
-    _built: tuple = None
+    __slots__ = ('start', 'end', 'kind', 'index', 'record', 'clock', 'instant', 'gone', '_built')
 
-    @property
-    def freshness(self):
-        contract = self.record['observation'].get('capability') or {}
-        return contract.get('freshness_ms', DEFAULT_FRESHNESS_MS)
+    def __init__(self, start, end, kind, index, record, clock, instant, gone):
+        self.start, self.end, self.kind, self.index, self.record = start, end, kind, index, record
+        self.clock, self.instant, self.gone, self._built = clock, instant, gone, None
 
     def built(self, key):
         """``(ref, entry, digest)``: the digest covers content only, so equal evidence has an equal revision."""
         if self._built is None or self._built[1]['capability'] != key:
-            observation, record = self.record['observation'], self.record
-            value, flags = summary(self.value, None if observation.get('capability') else observation.get('name'))
+            rest()
+            record = self.record.decoded()
+            observation, value, taken = record['observation'], record['observation'].get('value'), 0
+            if self.kind == 'record':
+                value, items = _split(value, self.record.ts, self.record.span)
+                taken = len(items)
+            else:
+                value = value[self.kind][self.index]
+            shown, flags = summary(value, None if observation.get('capability') else observation.get('name'))
             entry = dict(capability=key, kind=self.kind)
             entry.update(dict(at_ms=self.start) if self.instant else dict(start_ms=self.start, end_ms=self.end))
-            entry['value'] = value
-            if self.items:
-                entry['items_as_intervals'] = self.items
+            entry['value'] = shown
+            if taken:
+                entry['items_as_intervals'] = taken
             if flags:
                 entry['flags'] = flags
             quality = record.get('quality') or {}
@@ -271,14 +377,14 @@ class _Item:
             if quality.get('status') not in (None, 'sufficient'):
                 entry['quality'] = quality['status']
             if self.clock is not None:
-                entry['source_time_ms'] = record['timestamp_ms']
-            sources = depends_on(record, self.value)
+                entry['source_time_ms'] = self.record.ts
+            sources = depends_on(record, value)
             changed = [item for item in sources if item in self.gone]
             if changed:     # what it was derived from has been revised or retracted since; GAMST does not recompute it
                 entry['depends_on_changed'] = changed[:8]
             digest = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
-            ref = hashlib.sha256(f"{record['id']}|{self.kind}|{digest}".encode()).hexdigest()[:10]
-            entry.update(known_ms=self.known, evidence_id=record['id'])
+            ref = hashlib.sha256(f"{self.record.id}|{self.kind}|{digest}".encode()).hexdigest()[:10]
+            entry.update(known_ms=self.record.known, evidence_id=self.record.id)
             if sources:
                 entry['depends_on'] = sources[:8]
                 if len(sources) > 8:
@@ -289,35 +395,15 @@ class _Item:
         return self._built
 
 
-def _evidence(record, clock, known=None, gone=frozenset()):
+def _evidence(record, clock, gone=frozenset()):
     """``(instant or None, intervals)`` of one record, in local capture time."""
-    observation, at = record['observation'], record['timestamp_ms']
-    value, span = observation.get('value'), record_span(record)
     local = (lambda ms: ms) if clock is None else clock.local
-    intervals, body, taken = [], value, 0
-    if isinstance(value, dict) and any(value.get(name) for name in ITEM_FIELDS):
-        body = dict(value)
-        for name in ITEM_FIELDS:
-            entries, rest = value.get(name), []
-            if not isinstance(entries, list) or not entries:
-                continue
-            for entry in entries:
-                pair = span_of(entry)
-                if pair is None and isinstance(entry, dict) and span is None and name == 'events':
-                    pair = at, at       # an event without its own time happened at its record's capture time
-                if pair is None:
-                    rest.append(entry)
-                else:
-                    taken += 1
-                    intervals.append(_Item(local(pair[0]), local(pair[1]), name, record, entry, known, clock, gone=gone))
-            if rest:
-                body[name] = rest
-            else:
-                body.pop(name)
-    if span is not None:
-        intervals.append(_Item(local(span[0]), local(span[1]), 'record', record, body, known, clock, False, taken, gone))
+    intervals = [_Item(local(start), local(end), kind, index, record, clock, False, gone)
+                 for kind, index, start, end, _, _ in record.items]
+    if record.span is not None:
+        intervals.append(_Item(*map(local, record.span), 'record', None, record, clock, False, gone))
         return None, intervals
-    return _Item(local(at), local(at), 'record', record, body, known, clock, True, taken, gone), intervals
+    return _Item(local(record.ts), local(record.ts), 'record', None, record, clock, True, gone), intervals
 
 
 @dataclass
@@ -334,47 +420,37 @@ class _Column:
     processed: int | None = None
     key: str = ''
 
-    def place(self, known, gone, cache):
+    def place(self, gone, cache):
         """Replace superseded evidence: a newer revision of an utterance, an event whose end is now known."""
         latest = {}
-        for order, record in enumerate(self.records):
-            value = record['observation'].get('value')
-            utterance = value.get('utterance_id') if isinstance(value, dict) else None
-            if isinstance(utterance, str) and record_span(record) is not None:
-                revision = value.get('revision')
-                rank = revision if type(revision) is int else 0, record['timestamp_ms'], order
-                if utterance not in latest or rank > latest[utterance][0]:
-                    latest[utterance] = rank, record['id']
+        for order, record in enumerate(_breathe(self.records)):
+            if record.utterance is not None:
+                rank = record.revision, record.ts, order
+                if record.utterance not in latest or rank > latest[record.utterance][0]:
+                    latest[record.utterance] = rank, record.id
         matched = {}
-        for record in self.records:
-            value = record['observation'].get('value')
-            utterance = value.get('utterance_id') if isinstance(value, dict) else None
-            if isinstance(utterance, str) and utterance in latest and latest[utterance][1] != record['id']:
+        for record in _breathe(self.records):
+            if record.utterance is not None and latest[record.utterance][1] != record.id:
                 continue
-            which = record['id'], self.clock and (self.clock.offset, self.clock.rate), gone
+            which = record.id, self.clock and (self.clock.offset, self.clock.rate), gone
             if which not in cache:
-                cache[which] = _evidence(record, self.clock, known.get(record['id']), gone)
+                cache[which] = _evidence(record, self.clock, gone)
             instant, intervals = cache[which]
             if instant is not None:
                 self.instants.append(instant)
-            for item in intervals:
-                if item.kind == 'events':
-                    event = item.value
-                    family, _, phase = str(event.get('event', event.get('type'))).rpartition('.')
-                    which = json.dumps([family, event.get('reference'), event.get('reference_id'),
-                                        event.get('index'), event.get('start_ms')], default=str)
-                    if phase == 'ended' and which in matched:
-                        self.intervals[matched.pop(which)] = item    # same match, final end
-                        continue
-                    if phase == 'matched':
-                        matched[which] = len(self.intervals)
+            for item, (_, _, _, _, phase, match) in zip(intervals, record.items):
+                if phase == 'ended' and match in matched:
+                    self.intervals[matched.pop(match)] = item    # same match, final end
+                    continue
+                if phase == 'matched':
+                    matched[match] = len(self.intervals)
                 self.intervals.append(item)
+            self.intervals += intervals[len(record.items):]
         self.instants.sort(key=lambda item: item.start)
 
     def open_from(self):
         """Where an utterance that is still being revised begins: nothing from there on is settled."""
-        return min((item.start for item in self.intervals if item.kind == 'record' and isinstance(item.value, dict)
-                    and item.value.get('status') == 'partial'), default=None)
+        return min((item.start for item in self.intervals if item.kind == 'record' and item.record.partial), default=None)
 
 
 # ---------------------------------------------------------------- rows
@@ -402,14 +478,14 @@ def _column_cells(column, starts, step, lost_until):
     floor = max(math.inf if done.since is None else done.since, -math.inf if done.gaps_since is None else done.gaps_since,
                 -math.inf if lost_until is None else lost_until + 1)
     cells = []
-    for index, start in enumerate(starts):
+    for index, start in enumerate(_breathe(starts)):
         stop = start + step
         finished = done.until is not None and done.until >= stop - 1
         gap = next((gap for gap in done.gaps if gap[0] < stop and gap[1] >= start), None)
         off = gap[2] in OFF_REASONS if gap is not None else done.off and not finished
         known = finished and start >= floor
         position = bisect_left(times, start) - 1
-        held = last[position] if position >= 0 and start - times[position] <= last[position][1].freshness else None
+        held = last[position] if position >= 0 and start - times[position] <= last[position][1].record.freshness else None
         instant = None
         if exact.get(index) or over.get(index):
             cell, held = dict(status='exact'), None
@@ -447,7 +523,7 @@ def _declared_gaps(records):
     """``(start, end, reason, {modules and capabilities})`` of gap records (earlier runs, or no longer listed)."""
     result = []
     for record in records:
-        for event in (record['observation'].get('value') or {}).get('events') or ():
+        for event in record.gap_events:
             span = span_of(event)
             if span is not None:
                 reasons = [str(item) for item in event.get('reasons') or ()]
@@ -459,11 +535,11 @@ def _declared_gaps(records):
 
 
 class _Query:
-    """What one read asks for, and the records it needs; :meth:`table` builds the rows as of a knowledge time."""
+    """What one read asks for; :meth:`load` gets the records, :meth:`table` builds the rows as of a knowledge time."""
 
-    def __init__(self, store, *, subject_id, first, stop, step_ms, capabilities, contracts, known_ms, states):
-        self.store, self.subject, self.first, self.stop, self.step = store, subject_id, first, stop, step_ms
-        self.capabilities, self.contracts = capabilities, contracts
+    def __init__(self, *, subject_id, first, stop, step_ms, capabilities, contracts, states):
+        self.subject, self.first, self.stop, self.step = subject_id, first, stop, step_ms
+        self.capabilities, self.contracts, self.states = capabilities, contracts, states
         self.cache, self.gone = {}, None        # evidence built once, for both knowledge times of a delta
         self.lookback = LOOKBACK_MS if not contracts else max(
             DEFAULT_FRESHNESS_MS, *(spec.freshness_ms for spec in contracts.values()))
@@ -471,77 +547,109 @@ class _Query:
         if capabilities is not None:
             self.wanted = set(capabilities).union(*(modules[name].outputs for modules, _, _ in states
                                                     for name in capabilities if name in modules))
-        bounds = dict(any_of=None if self.wanted is None else sorted(self.wanted), known_until=known_ms, with_known=True,
-                      limit=MAX_SCAN + 1)
-        rows = store.query(subject_id, first, stop - 1, 'observation.signal', **bounds)
-        late = store.query(subject_id, stop, stop + LATE_MS, 'observation.signal', spans_only=True, **bounds)
-        self.scan_truncated = len(rows) > MAX_SCAN or len(late) > MAX_SCAN
-        self.lost_until = store.lost_until_ms
-        if len(rows) > MAX_SCAN:
-            rows = rows[-MAX_SCAN:]
-            self.lost_until = max(self.lost_until or 0, rows[0][0]['timestamp_ms'])
-        self.records = [pair for pair in rows + late if foreign_clock(pair[0]['observation']) is None]
-        self.foreign = {}
-        for source in store.source_clocks(subject_id, known_ms):
+
+    async def load(self, store, known_ms, base_ms=None):
+        """Everything the answer needs from the Store, as stored text; the only part that touches it."""
+        any_of = None if self.wanted is None else sorted({*self.wanted, GAPS})
+        self.scan_truncated, self.cut, self.at = False, [], {}
+
+        async def scan(start, end, **about):
+            found = []
+            for rows in store.scan(self.subject, start, end, known_until=known_ms, any_of=any_of, **about):
+                found += rows
+                if len(found) > MAX_SCAN:
+                    break
+                await asyncio.sleep(0)
+            return found
+
+        # What is current, and the values before the window, as of each knowledge time.
+        for moment in {known_ms, base_ms} - {None}:
+            carried = store.latest_signals(self.subject, max(0, self.first - self.lookback), self.first - 1,
+                                           known_until=moment)
+            self.at[moment] = dict(
+                gone=frozenset(store.superseded(self.subject, moment)), sources=store.source_clocks(self.subject, moment),
+                carried=carried, times=store.known_times([record['id'] for record in carried]))
+            await asyncio.sleep(0)
+        self.window = await scan(self.first, self.stop - 1)
+        self.late = await scan(self.stop, self.stop + LATE_MS, spans_only=True)
+        self.clocked = {}
+        for source in self.at[known_ms]['sources']:
             key = clock_key(source['clock_id'], source['clock_epoch'])
-            fits = [_Clock(key, clocks[key]) for _, clocks, _ in states if clocks.get(key, {}).get('calibrated')]
-            if not fits or key in self.foreign:
-                continue
-            extra = store.query(subject_id, max(0, min(fit.source(first - self.lookback) for fit in fits)),
-                                max(fit.source(stop + LATE_MS) for fit in fits), 'observation.signal',
-                                clock_id=source['clock_id'], **bounds)
-            if len(extra) > MAX_SCAN:
-                self.scan_truncated, extra = True, extra[-MAX_SCAN:]
-                self.lost_until = max(self.lost_until or 0, fits[0].local(extra[0][0]['timestamp_ms']))
-            self.foreign[key] = [pair for pair in extra if foreign_clock(pair[0]['observation']) == key]
-        self.gap_records = store.query(subject_id, first, stop + LATE_MS, 'observation.signal', registered_only=True,
-                                       capability_id=GAPS, known_until=known_ms, with_known=True, limit=1000)
+            fits = [_Clock(key, clocks[key]) for _, clocks, _ in self.states if clocks.get(key, {}).get('calibrated')]
+            if fits and key not in self.clocked:
+                self.clocked[key] = fits[0], await scan(
+                    max(0, min(fit.source(self.first - self.lookback) for fit in fits)),
+                    max(fit.source(self.stop + LATE_MS) for fit in fits), clock_id=source['clock_id'])
+        self.learned, self.roots = [], []
+        if base_ms is not None:
+            for rows in store.scan_learned(self.subject, base_ms, known_ms, ('observation.signal', RETRACTION)):
+                self.learned += rows
+                if len(self.learned) > MAX_DELTA_SCAN:
+                    break
+                await asyncio.sleep(0)
+            # What a revision replaced, also when it was stored before: its interval changed too.
+            roots = sorted({row[0] for row in store.revisions(self.subject, known_ms, known_after=base_ms)})[:500]
+            self.roots = store.get_many(roots)
+        self.removed_until, self.removed_known = store.lost_until_ms, store.lost_known_ms
+
+    def decode(self):
+        """Stored text -> records (a worker thread)."""
+        self.lost_until, self.shared = self.removed_until, {}
+
+        def records(rows, local=lambda ms: ms):
+            cut, rows = len(rows) > MAX_SCAN, rows[:MAX_SCAN]
+            found = [_Record(payload, known, shared=self.shared) for payload, known in _breathe(reversed(rows))]
+            if cut:
+                self.scan_truncated = True
+                self.lost_until = max(self.lost_until or 0, local(found[0].ts))
+            return found
+
+        rows = records(self.window)
+        self.scan_truncated = self.scan_truncated or len(self.late) > MAX_SCAN
+        rows += records(self.late[:MAX_SCAN])
+        self.gap_records = [record for record in _breathe(rows) if record.capability == GAPS]
+        self.records = [record for record in rows if record.clock is None]
+        self.foreign = {key: [record for record in records(found, fit.local) if record.clock == key]
+                        for key, (fit, found) in self.clocked.items()}
+        self.window = self.late = self.clocked = None
 
     def _selected(self, record):
-        observation = record['observation']
-        if not is_context_observation(record):
+        if not record.context:
             return False
-        capability, name = (observation.get('capability') or {}).get('id'), observation.get('name')
         if self.wanted is None:
-            return capability != GAPS
-        model = (record.get('models') or [{}])[0].get('id')
-        return bool({capability, name} & self.wanted) or not capability and model in self.wanted
+            return record.capability != GAPS
+        return bool({record.capability, record.name} & self.wanted) or not record.capability and record.model in self.wanted
 
     def table(self, known_ms, state, stop=None):
         modules, calibrations, _ = state
         stop = self.stop if stop is None else stop
         starts = list(range(self.first, stop, self.step))
-        gone = frozenset(self.store.superseded(self.subject, known_ms))
+        now = self.at[known_ms]
+        gone = now['gone']
         self.gone = gone = self.gone if gone == self.gone else gone
-        known, clocks, uncalibrated, records = {}, {}, {}, []
-        carried = self.store.latest_signals(self.subject, max(0, self.first - self.lookback), self.first - 1,
-                                            known_until=known_ms)
-        for source in self.store.source_clocks(self.subject, known_ms):
+        clocks, uncalibrated = {}, {}
+        for source in now['sources']:
             key = clock_key(source['clock_id'], source['clock_epoch'])
             if calibrations.get(key, {}).get('calibrated'):
                 clocks[key] = _Clock(key, calibrations[key])
             else:
                 uncalibrated.setdefault(key, []).append(source)
-        times = self.store.known_times([record['id'] for record in carried])
-        groups = [((record, times.get(record['id'])) for record in carried
-                   if foreign_clock(record['observation']) is None), self.records,
-                  *(pairs for key, pairs in self.foreign.items() if key in clocks)]
-        for group in groups:
-            for record, learned in group:
-                if (learned is None or learned <= known_ms) and record['id'] not in known:
-                    known[record['id']] = learned
-                    records.append(record)
+        carried = [_Record(None, now['times'].get(record['id']), record, self.shared) for record in now['carried']]
+        for record, source in zip(carried, now['carried']):
+            record.payload = json.dumps(source)
+        groups = [[record for record in carried if record.clock is None], self.records,
+                  *(found for key, found in self.foreign.items() if key in clocks)]
+        columns, seen = {}, set()
         # -- columns: one per capability (or signal), source, sensor and clock
-        columns = {}
-        for record in records:
-            if record['id'] in gone or not self._selected(record):
+        for record in _breathe(itertools.chain(*groups)):
+            if record.known is not None and record.known > known_ms or record.id in seen:
                 continue
-            observation = record['observation']
-            sensor, key = observation.get('sensor') or {}, foreign_clock(observation)
-            which = (named(record), sensor.get('source_id'),
-                     sensor.get('sensor_id'), key)
+            seen.add(record.id)
+            if record.id in gone or not self._selected(record):
+                continue
+            which = record.named, record.source, record.sensor, record.clock
             if which not in columns:
-                columns[which] = _Column(*which[:3], clock=clocks.get(key))
+                columns[which] = _Column(*which[:3], clock=clocks.get(record.clock))
             columns[which].records.append(record)
         for key, sources in uncalibrated.items():
             for source in sources:
@@ -551,12 +659,11 @@ class _Query:
                         name, source['source_id'], source['sensor_id'], uncalibrated=key)
         answered, covered = set(), set()
         for column in columns.values():
-            column.place(known, gone, self.cache)
-            models = {record['models'][0]['id'] for record in column.records
-                      if record.get('models') and not record['observation'].get('capability')}
+            column.place(gone, self.cache)
+            models = {record.model for record in column.records if record.model and not record.capability}
             parts = [part for part in modules.values() if part.outputs & ({column.name} | models)]
             covered.update(part.module for part in parts)
-            answered.update((column.name, *models, *(record['observation']['name'] for record in column.records[:1])))
+            answered.update((column.name, *models, *(record.name for record in column.records[:1])))
             column.progress = _joined(parts) if parts else None
         # A module that has said nothing yet is a column too: that is what tells "pending" from "nothing there".
         for part in modules.values():
@@ -580,7 +687,7 @@ class _Query:
             while column.key in used:
                 column.key += '+'
             used.add(column.key)
-        gaps = _declared_gaps([record for record, learned in self.gap_records if learned is None or learned <= known_ms])
+        gaps = _declared_gaps([record for record in self.gap_records if record.known is None or record.known <= known_ms])
         for column in ordered:
             self._complete(column, gaps)
         return _Table(starts, self.step, ordered, omitted, uncalibrated,
@@ -608,26 +715,21 @@ class _Query:
             tuple(sorted([(local(gap[0]), local(gap[1]), gap[2]) for gap in part.gaps] + more)),
             None if part.gaps_since is None else local(part.gaps_since), part.sampled, part.off)
 
-    def affected(self, after_ms, known_ms, before, clocks, limit):
-        """Capture intervals before ``before`` that records learned in (after_ms, known_ms] changed, newest first."""
-        bounds = dict(known_after=after_ms, known_until=known_ms, limit=MAX_DELTA_SCAN + 1)
-        any_of = None if self.wanted is None else sorted(self.wanted)
-        records = self.store.query(self.subject, None, None, 'observation.signal', any_of=any_of, **bounds)
-        retractions = self.store.query(self.subject, None, None, RETRACTION, **bounds)
-        truncated = len(records) > MAX_DELTA_SCAN or len(retractions) > MAX_DELTA_SCAN
-        roots = {record['id']: record for record in self.store.get_many(
-            list({record['supersedes'] for record in records + retractions if record.get('supersedes')})[:500])}
+    def affected(self, before, clocks, limit):
+        """Capture intervals before ``before`` that records learned since the cursor changed, newest first."""
+        truncated = len(self.learned) > MAX_DELTA_SCAN
+        roots = {record['id']: _Record('', None, record, self.shared) for record in self.roots}
         found = defaultdict(list)
-        for record in records + retractions:
-            change = 'retracted' if record['type'] == RETRACTION else 'revised' if record.get('supersedes') else 'added'
-            for item in ([] if change == 'retracted' else [record]) + [roots.get(record.get('supersedes'))]:
+        for payload in _breathe(self.learned[:MAX_DELTA_SCAN]):
+            record = _Record(payload, None, shared=self.shared)
+            change = 'retracted' if record.type == RETRACTION else 'revised' if record.supersedes else 'added'
+            for item in ([] if change == 'retracted' else [record]) + [roots.get(record.supersedes)]:
                 if item is None or not self._selected(item):
                     continue
-                key = foreign_clock(item['observation'])
-                if key is not None and not clocks.get(key, {}).get('calibrated'):
+                if item.clock is not None and not clocks.get(item.clock, {}).get('calibrated'):
                     continue
-                instant, intervals = _evidence(item, None if key is None else _Clock(key, clocks[key]))
-                name = named(item)
+                instant, intervals = _evidence(item, None if item.clock is None else _Clock(item.clock, clocks[item.clock]))
+                name = item.named
                 for part in ([instant] if instant is not None else []) + intervals:
                     if part.start < before:
                         found[name, change].append((part.start, part.end))
@@ -700,7 +802,10 @@ def _open(store, cursor, scope):
     return value
 
 
-def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, now_ms, step_ms, capabilities, settled_only,
+NOT_READ = 'records learned after this cursor were removed before they were read'
+
+
+async def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, now_ms, step_ms, capabilities, settled_only,
          cursor, max_bytes, contracts):
     """One answer of ``Gamst.get_timeline``: rows on the absolute step grid, or what changed since ``cursor``."""
     scope = hashlib.sha256(json.dumps([subject_id, step_ms, sorted(capabilities) if capabilities else None,
@@ -737,19 +842,36 @@ def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, no
             if first > seen['first']:       # still reported in ``affected``, not row by row
                 not_covered.append(dict(start_ms=seen['first'], end_ms=min(first, base_stop)))
             at = first
-        if base is not None and store.lost_known_ms is not None and store.lost_known_ms > base:
-            return restart('retention', 'records learned after this cursor were removed before they were read')
+        if base is not None and (store.lost_known_ms or 0) > base:
+            return restart('retention', NOT_READ)
         if state is None or base is not None and history.at(base) is None:
             return restart('completeness_history', 'what was complete then is no longer kept; read again without cursor')
     before = None if base is None else history.at(base)
     states = [item for item in (state, before) if item is not None] or [EMPTY]
-    query = _Query(store, subject_id=subject_id, first=first, stop=stop, step_ms=step_ms, capabilities=capabilities,
-                   contracts=contracts, known_ms=known, states=states)
+    query = _Query(subject_id=subject_id, first=first, stop=stop, step_ms=step_ms, capabilities=capabilities,
+                   contracts=dict(contracts), states=states)
+    signer = SimpleNamespace(_cursor_key=store._cursor_key)     # a new key after a deletion: this answer is then void
+    await query.load(store, known, base)
+    if base is not None and (query.removed_known or 0) > base:
+        return restart('retention', NOT_READ)
+    lost = query.removed_until or 0
+    if cursor is not None and seen['to'] is not None and lost > seen['lost'] and lost >= at:
+        return restart('retention', 'records of the remaining rows were removed; read again without cursor')
+    return await asyncio.to_thread(
+        _answer, query, signer, scope=scope, at=at, base=base, base_stop=base_stop, known=known, state=state, before=before,
+        not_covered=not_covered, lost=lost, now_ms=now_ms, settled_only=settled_only, max_bytes=max_bytes)
+
+
+def _answer(query, signer, *, scope, at, base, base_stop, known, state, before, not_covered, lost, now_ms, settled_only,
+            max_bytes):
+    """Rows and evidence of a loaded query (a worker thread: no Store, no runtime)."""
+    query.decode()
+    subject_id, first, stop, step_ms, contracts = query.subject, query.first, query.stop, query.step, query.contracts
     table = query.table(known, state or EMPTY)
     old = None if base is None or base_stop <= first else query.table(base, before, base_stop)
 
     def rows():
-        for start in table.starts:
+        for start in _breathe(table.starts):
             if start < at or settled_only and not table.complete(start):
                 continue
             row, complete, revision = table.row(start)
@@ -771,7 +893,7 @@ def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, no
                                   newest_source_ms=max(source['newest_ms'] for source in sources),
                                   sources=sorted({source['source_id'] for source in sources if source['source_id']})[:8])
                              for key, sources in sorted(table.uncalibrated.items())[:8]],
-        scan_truncated=query.scan_truncated, removed_until_ms=store.lost_until_ms, rows=[], evidence={},
+        scan_truncated=query.scan_truncated, removed_until_ms=query.removed_until, rows=[], evidence={},
         rows_total=len(table.starts), rows_complete=sum(map(table.complete, table.starts)), has_more=True, byte_budget=max_bytes,
         next_cursor='', values='retained records; summarized, never interpolated')
     if state is None:
@@ -780,13 +902,12 @@ def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, no
         result['completeness_error'] = state[2]
     if base is not None:
         result['since_known_ms'] = base
-        result['affected'] = query.affected(base, known, base_stop, (state or EMPTY)[1],
-                                            min(MAX_AFFECTED, max_bytes // 512))
+        result['affected'] = query.affected(base_stop, (state or EMPTY)[1], min(MAX_AFFECTED, max_bytes // 512))
         if not_covered:
             result['not_covered'] = not_covered
 
     def seal(**values):
-        return seal_cursor(store, dict(kind='timeline', scope=scope, lost=lost, first=first, **values))
+        return seal_cursor(signer, dict(kind='timeline', scope=scope, lost=lost, first=first, **values))
 
     more = dict(base=base, base_stop=base_stop, to=known, stop=stop)
     result['next_cursor'] = seal(**more, at=stop)
@@ -834,7 +955,7 @@ def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, no
     else:
         result['next_cursor'] = seal(**more, at=rest)
     if base is not None:
-        gone = store.superseded(subject_id, known)
+        gone = query.at[known]['gone']
         for entry in result['evidence'].values():
             if entry['evidence_id'] in gone:
                 entry['current'] = False
@@ -844,20 +965,20 @@ def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, no
 def _describe(column, contracts, first, stop):
     done, contract = column.progress, contracts.get(column.name)
     newest = column.records[-1] if column.records else None
-    observed = (newest or {}).get('observation', {})
-    declared = observed.get('capability') or ({} if contract is None else dict(
-        freshness_ms=contract.freshness_ms, interpretation=contract.interpretation, window_ms=contract.window_ms))
+    freshness, interpretation, window = newest.declared if newest is not None else (
+        (contract.freshness_ms, contract.interpretation, contract.window_ms) if contract is not None
+        else (DEFAULT_FRESHNESS_MS, None, 0))
     result = dict(key=column.key, capability=column.name, module=done.module if done and done.module else None,
                   complete_until_ms=done.until if done else None,
-                  freshness_ms=declared.get('freshness_ms', DEFAULT_FRESHNESS_MS))
+                  freshness_ms=freshness)
     if column.processed not in (None, result['complete_until_ms']):
         result['processed_until_ms'] = column.processed   # later, but results for this time may still come
     for key, value in (('source_id', column.source), ('sensor_id', column.sensor),
-                       ('interpretation', declared.get('interpretation')), ('modality', observed.get('modality'))):
+                       ('interpretation', interpretation), ('modality', newest and newest.modality)):
         if value:
             result[key] = value
     if newest is not None:
-        result['models'] = [f"{model['id']}:{model['version']}"[:200] for model in newest.get('models', [])[:2]]
+        result['models'] = list(newest.models)
     for key, value in (('sampled', done and done.sampled), ('off', done and done.off)):
         if value:
             result[key] = True
@@ -865,7 +986,7 @@ def _describe(column, contracts, first, stop):
         result['uncalibrated_clock'] = column.uncalibrated
     if column.clock is not None:
         result['clock'] = dict(id=column.clock.key, **column.clock.status)
-    if any(not item.instant and item.end > item.start for item in column.intervals) and not declared.get('window_ms'):
+    if any(not item.instant and item.end > item.start for item in column.intervals) and not window:
         result['late_intervals'] = True     # reported when it is over: a complete row can still gain one
     gaps = [gap for gap in done.gaps if gap[0] < stop and gap[1] >= first] if done is not None else []
     if gaps:

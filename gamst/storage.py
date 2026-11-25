@@ -139,6 +139,7 @@ class Store:
             self.lost_until_ms = self.known_now() if oldest is None else oldest - 1
         with self._transaction():
             self._enforce_limits()
+        self._live()        # now, not during the first record of a capture
 
     @classmethod
     def open_read_only(cls, uri):
@@ -245,6 +246,66 @@ class Store:
             self._enforce_limits()
         return True
 
+    @staticmethod
+    def _about(any_of=None, spans_only=False, clock_id=None):
+        """Conditions on what a record is about: ``(clauses, arguments)``."""
+        clauses, args = [], []
+        if any_of is not None:
+            slots = ",".join("?" for _ in any_of)
+            clauses.append(f"(json_extract(payload,'$.observation.capability.id') IN ({slots})"
+                           f" OR json_extract(payload,'$.observation.name') IN ({slots})"
+                           f" OR (json_type(payload,'$.observation.capability') IS NULL"
+                           f" AND json_extract(payload,'$.models[0].id') IN ({slots})))")
+            args += [*any_of]*3
+        if spans_only:
+            clauses.append("instr(json_extract(payload,'$.observation.value'),'end_ms')>0")
+        if clock_id is not None:
+            clauses += ["json_type(payload,'$.observation.sensor.clock_id')='text'",
+                        "json_extract(payload,'$.observation.sensor.clock_id')=?"]
+            args.append(clock_id)
+        return clauses, args
+
+    def scan(self, subject, start, end, *, known_until, kind='observation.signal', step=200, **about):
+        """Newest first, in steps of at most ``step`` records looked at: lists of ``(payload JSON, known_ms)``.
+
+        A step is short whatever it finds, so a caller on an event loop can wait between steps; what is
+        learned meanwhile is excluded by ``known_until``.
+        """
+        clauses, args = self._about(**about)
+        where = "subject=? AND kind=? AND ts>=?"
+        last = (end, 2**63 - 1)         # every row up to here, in (ts, rowid) order
+        while True:
+            edge = self.connection.execute(
+                f"SELECT ts,rowid FROM records INDEXED BY subject_kind_time WHERE {where} AND (ts,rowid)<=(?,?)"
+                " ORDER BY ts DESC,rowid DESC LIMIT 1 OFFSET ?", (subject, kind, start, *last, step - 1)).fetchone()
+            rows = self.connection.execute(
+                "SELECT payload,known_ms FROM records INDEXED BY subject_kind_time JOIN record_offsets ON record_id=id"
+                f" WHERE {where} AND (ts,records.rowid)<=(?,?) AND (ts,records.rowid)>=(?,?) AND {self._KNOWN}"
+                + ''.join(f" AND {clause}" for clause in clauses) + " ORDER BY ts DESC,records.rowid DESC",
+                (subject, kind, start, *last, *(edge or (start, -2**63)), self._opened_ms, known_until, *args)).fetchall()
+            yield rows
+            if edge is None:
+                return
+            last = (edge[0], edge[1] - 1)
+
+    def scan_learned(self, subject, after_ms, until_ms, kinds, *, step=200, **about):
+        """Records learned in (after_ms, until_ms], newest learned first, in steps: lists of payload JSON."""
+        clauses, args = self._about(**about)
+        last = 2**63 - 1
+        while True:
+            edges = self.connection.execute(
+                "SELECT MIN(position),COUNT(*) FROM (SELECT position FROM record_offsets INDEXED BY known_time WHERE"
+                " known_ms>? AND known_ms<=? AND position<? ORDER BY known_ms DESC,position DESC LIMIT ?)",
+                (after_ms, until_ms, last, step)).fetchone()
+            if not edges[1]:
+                return
+            yield [row[0] for row in self.connection.execute(
+                "SELECT payload FROM record_offsets JOIN records ON id=record_id WHERE position>=? AND position<?"
+                f" AND known_ms>? AND known_ms<=? AND subject=? AND kind IN ({','.join('?' for _ in kinds)})"
+                + ''.join(f" AND {clause}" for clause in clauses) + " ORDER BY position DESC",
+                (edges[0], last, after_ms, until_ms, subject, *kinds, *args))]
+            last = edges[0]
+
     def query(self, subject=None, start=None, end=None, kind=None, limit=1000, name=None,
               registered_only=False, capability_id=None, source_id=None, sensor_id=None,
               any_of=None, spans_only=False, clock_id=None, known_after=None, known_until=None, with_known=False):
@@ -267,19 +328,9 @@ class Store:
             if value is not None:
                 clauses.append("json_extract(payload, '$.observation."+field+"') = ?")
                 args.append(value)
-        if any_of is not None:
-            slots = ",".join("?" for _ in any_of)
-            clauses.append(f"(json_extract(payload,'$.observation.capability.id') IN ({slots})"
-                           f" OR json_extract(payload,'$.observation.name') IN ({slots})"
-                           f" OR (json_type(payload,'$.observation.capability') IS NULL"
-                           f" AND json_extract(payload,'$.models[0].id') IN ({slots})))")
-            args += [*any_of]*3
-        if spans_only:
-            clauses.append("instr(json_extract(payload,'$.observation.value'),'end_ms')>0")
-        if clock_id is not None:
-            clauses += ["json_type(payload,'$.observation.sensor.clock_id')='text'",
-                        "json_extract(payload,'$.observation.sensor.clock_id')=?"]
-            args.append(clock_id)
+        more, values = self._about(any_of, spans_only, clock_id)
+        clauses += more
+        args += values
         if known_after is not None:
             clauses.append("known_ms>?")
             args.append(known_after)
@@ -299,18 +350,20 @@ class Store:
             return [(json.loads(row[0]), row[1]) for row in reversed(rows)]
         return [json.loads(row[0]) for row in reversed(rows)]
 
-    def revisions(self, subject, known_until=None, *, of=None):
+    def revisions(self, subject, known_until=None, *, of=None, known_after=None):
         """Stored revisions and retractions, ``(identity, id, revision, retracted)`` in the order learned.
 
         ``of``: only those of one identity."""
         sql = ("SELECT json_extract(payload,'$.supersedes'),id,json_extract(payload,'$.revision'),"
-               "kind='observation.retraction' FROM records JOIN record_offsets ON record_id=id"
+               "kind='observation.retraction' FROM records INDEXED BY record_revisions JOIN record_offsets ON record_id=id"
                " WHERE json_type(payload,'$.supersedes')='text' AND subject=?")
         args = [subject]
         if of is not None:
             sql, args = sql + " AND json_extract(payload,'$.supersedes')=?", [*args, of]
         if known_until is not None:
             sql, args = sql + " AND " + self._KNOWN, [*args, self._opened_ms, known_until]
+        if known_after is not None:
+            sql, args = sql + " AND known_ms>?", [*args, known_after]
         return self.connection.execute(sql + " ORDER BY position", args).fetchall()
 
     def known_times(self, ids):

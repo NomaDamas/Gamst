@@ -214,6 +214,63 @@ class PipelineTimelineTest(Base):
         self.assertTrue(column['vlm']['sampled'] and column['stopped']['off'])
         self.assertEqual(answer['complete_until_ms'], start + 899)      # a module that is off does not hold it back
 
+    async def test_real_pipeline_says_where_its_account_starts_and_what_is_still_held(self):
+        start = grid()
+        pipeline = Pipeline(self.human, 'p')
+        pipeline.add_input('camera')
+        quiet, late, holder = (Module(name, value=lambda frame: None) for name in ('quiet', 'late', 'holder'))
+        follower, added = Module('follower', value=lambda frame: None), Module('added', value=lambda frame: None)
+        for module in (quiet, late, holder):
+            pipeline.add_module(module.spec.id, module, consumes='camera', spec=module.spec, enabled=module is not late)
+        pipeline.add_module('follower', follower, consumes='holder', spec=follower.spec)
+        self.assertIsNone(pipeline.status()['modules']['quiet']['complete_from_ms'])
+        for index in range(10):
+            if index == 3:
+                pipeline.enable('late')
+            if index == 5:
+                pipeline.add_module('added', added, consumes='camera', spec=added.spec)
+                holder.pending_since_ms = start + 450
+            await pipeline.push('camera', index, timestamp_ms=start + 100 * index, modality='video')
+        await pipeline.push('camera', 10, timestamp_ms=start + 999, modality='video')
+        state = pipeline.status()['modules']
+        self.assertEqual({name: entry['complete_from_ms'] - start for name, entry in state.items()},
+                         dict(quiet=0, late=201, holder=0, follower=0, added=401))
+        self.assertEqual((state['holder']['holding_from_ms'], state['holder']['complete_until_ms']), (start + 450, start + 449))
+        self.assertIsNone(state['quiet']['holding_from_ms'])
+        _, rows = await self.rows(start, start + 1000)      # the first read: nothing had been sampled before it
+        self.assertEqual(self.statuses(rows, 'quiet'), ['none'] * 10)
+        self.assertEqual(self.statuses(rows, 'late'), ['unknown'] * 3 + ['none'] * 7)
+        self.assertEqual(self.statuses(rows, 'added'), ['unknown'] * 5 + ['none'] * 5)
+        self.assertEqual(self.statuses(rows, 'holder'), ['none'] * 4 + ['pending'] * 6)
+        self.assertEqual(self.statuses(rows, 'follower'), ['none'] * 4 + ['pending'] * 6)
+        await pipeline.close()
+
+    async def test_linked_records_keep_the_clock_their_times_are_in(self):
+        start = grid()
+        pipeline = Pipeline(self.human, 'p')
+        pipeline.add_input('glasses')
+        first, second = Module('first'), Module('second', value=lambda frame: dict(value=1.))
+
+        class Earlier:
+            """A plugin that answers for a capture before the frame it was given (a module running in parallel)."""
+            name, version, spec = 'earlier', '1', spec('first')
+
+            def process(self, frame):
+                return [dict(name='first', value=dict(value=1.), timestamp_ms=frame.timestamp_ms - 100, modality='video',
+                             model_id='fake.first', model_version='1', capability_id='first', sensor=frame.sensor)]
+
+        self.human.register_capability(first.spec)
+        pipeline.add_module('first', Earlier(), consumes='glasses')
+        pipeline.add_module('second', second, consumes='first', spec=second.spec)
+        frame = InputFrame(1, 'video', start + 100, sensor=SensorMetadata('g', 's', 1, clock_id='glasses', clock_epoch='e'))
+        await pipeline.feed('glasses', frame)
+        await pipeline.push('glasses', 2, timestamp_ms=start + 200, modality='video')
+        sensors = [record['observation']['sensor'] for record in self.human.store.query(name='second')]
+        self.assertEqual([(sensor['clock_id'], sensor['clock_epoch']) for sensor in sensors], [('glasses', 'e'), (None, None)])
+        answer, _ = await self.rows(start, start + 300)
+        self.assertEqual({item['clock'] for item in answer['uncalibrated_clocks']}, {'glasses@e'})
+        await pipeline.close()
+
     async def test_rows_before_the_module_started_and_gaps_no_longer_listed_are_unknown(self):
         start = grid()
         await self.put('pose', dict(value=1.), start + 500, freshness=0)

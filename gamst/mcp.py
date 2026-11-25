@@ -278,7 +278,8 @@ class MCPServer:
         # deletion so two concurrent clients cannot open duplicate devices.
         # Finalization owns its manager's lifecycle lock. Do not hold the global
         # tool lock while draining: deletion must invalidate a pending final.
-        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream"):
+        # A timeline read waits for a thread and is void when data is deleted meanwhile.
+        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream", "get_timeline"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)
