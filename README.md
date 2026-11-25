@@ -7,8 +7,6 @@
   </picture>
 </h1>
 
-<img src="docs/images/live-observability.png" alt="Live observability with face landmarks, body joints and measurement gauges" width="100%">
-
 ### Continuous multimodal observation and decision context for agents.
 
 Turn high-frequency vision, sound, physical, environmental, and spatial streams into time-aligned state, semantic episodes, and bounded decisions for your existing AI agent. GAMST keeps observing continuously, fuses evidence across time, and invokes an expensive VLM or LLM only when the world changes or the evidence is insufficient.
