@@ -10,6 +10,8 @@ from __future__ import annotations
 import importlib
 import sys
 
+from ..crew.modules import WorkerModule
+
 
 def _entry(options, context, profile):
     """(config, python, profile): the item's own ``"config"``, else what setup installed for its role."""
@@ -143,13 +145,45 @@ async def _sapiens2_pose(options, context):
                                           tracker=options.get('tracker', 'ocsort')))
 
 
+class SegmentModule(WorkerModule):
+    """A worker that answers once per segment; says since when a segment is open, and closes the last one."""
+
+    def __init__(self, worker):
+        super().__init__(worker)
+        self.pending_since_ms = None
+
+    async def process(self, frame):
+        if self.pending_since_ms is None:
+            self.pending_since_ms = frame.timestamp_ms
+        value = await super().process(frame)
+        if value is not None:
+            self.pending_since_ms = None
+        return value
+
+    async def finish(self):
+        self.pending_since_ms = None
+        return await self.worker.finish()
+
+    async def reset(self):
+        self.pending_since_ms = None
+        await super().reset()
+
+
 async def _semantic_scene(options, context):
-    """The existing streaming VLM client, isolated in its worker so a slow reply never blocks capture."""
-    from ..crew.modules import open_worker
+    """The existing streaming VLM client, isolated in its worker so a slow reply never blocks capture.
+
+    It interprets segments: ``segment_s`` seconds of frames taken every ``every_ms`` go to the model together.
+    The lane keeps the frames of the next segments while a reply is pending.
+    """
+    from ..process_provider import ProcessProvider
     config, python, profile = _entry(options, context, 'streamingvlm.local')
-    config.setdefault('window_frames', 1)
-    module = await open_worker(python, profile, config, inference_timeout=90)
-    return dict(module=module, spec=module.spec, every_ms=int(options.get('every_ms', 1000)), queue=1)
+    every_ms = int(options.get('every_ms', 500))
+    frames = max(2, min(64, round(1000 * float(options.get('segment_s', 4)) / every_ms)))
+    config.setdefault('window_frames', frames)
+    config.setdefault('window_ms', min(60000, config['window_frames'] * every_ms))
+    config.setdefault('max_gap_ms', max(2000, min(10000, 3 * every_ms)))
+    module = SegmentModule(await ProcessProvider.open(python, profile, config, inference_timeout=90))
+    return dict(module=module, spec=module.spec, every_ms=every_ms, queue=min(64, 3 * config['window_frames']))
 
 
 def _math(path):

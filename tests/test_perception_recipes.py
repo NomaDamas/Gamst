@@ -227,7 +227,7 @@ class SemanticLaneTest(unittest.IsolatedAsyncioTestCase):
             OpenAIStreamingBackend(url, 'm', 'r', 'GAMST_TEST_UNSET_KEY', allow_remote=True)
 
     @unittest.skipUnless(HAS_CV, 'needs opencv')
-    async def test_one_description_per_second_in_its_own_process_and_it_can_be_switched_off(self):
+    async def test_one_interpretation_per_segment_in_its_own_process_and_it_can_be_switched_off(self):
         seen = []
 
         class Server(BaseHTTPRequestHandler):
@@ -247,26 +247,40 @@ class SemanticLaneTest(unittest.IsolatedAsyncioTestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        built = await PARTS['semantic-scene'].build(dict(every_ms=1000, config=dict(
+        # segments of 2 s, 4 frames each, described as a whole; every reply is slower than a frame
+        built = await PARTS['semantic-scene'].build(dict(every_ms=500, segment_s=2, config=dict(
             endpoint=f'http://127.0.0.1:{server.server_port}/v1', model='m', revision='r')), {})
         async with Gamst(consent=True) as human:
             pipeline = Pipeline(human, 'glasses')
             pipeline.add_input('camera', modality='video')
             pipeline.add_module('semantic', built['module'], consumes='camera', spec=built['spec'],
                                 every_ms=built['every_ms'], queue=built['queue'])
-            start, image = now() - 9000, np.zeros((48, 64, 3), np.uint8)
-            for i in range(50):              # 5 s at 10 fps
+            start, image = now() - 20000, np.zeros((48, 64, 3), np.uint8)
+            for i in range(90):              # 9 s at 10 fps; up to three segments may wait for the model
                 await pipeline.push('camera', image, timestamp_ms=start + 100 * i)
-                if i % 10 == 0:
+                if i == 49:
                     await pipeline.drain()
+            await pipeline.drain()
+            self.assertEqual(len(seen), 4)
+            images = [sum(item['type'] == 'image_url' for item in call['messages'][0]['content']) for call in seen]
+            self.assertEqual(images, [4, 4, 4, 4])
+            open_since = pipeline.status()['modules']['semantic']
+            self.assertEqual(open_since['holding_from_ms'], start + 8000)   # the fifth segment is still open
+            await pipeline.finish()          # ... and is described when the input ends
             self.assertEqual(len(seen), 5)
-            self.assertEqual(sum(item['type'] == 'image_url' for item in seen[0]['messages'][0]['content']), 1)
+            rows = [r for r in await human.get_history() if r['observation'].get('name') == 'vision.semantic_state']
+            windows = sorted((r['observation']['value']['window']['start_ms'] - start,
+                              r['observation']['value']['window']['end_ms'] - start) for r in rows)
+            # consecutive segments, none missing, each about its interval and not about one frame
+            self.assertEqual(windows, [(0, 1500), (2000, 3500), (4000, 5500), (6000, 7500), (8000, 8500)])
+            timeline = await human.get_timeline(start_ms=start, end_ms=start + 2000, step_ms=500,
+                                                capabilities=['vision.streaming_semantic'])
+            self.assertIn('summary', json.dumps(timeline, default=str))
+            self.assertEqual(built['spec'].window_ms, 2000)
             pipeline.disable('semantic')
-            await pipeline.push('camera', image, timestamp_ms=start + 7000)
+            await pipeline.push('camera', image, timestamp_ms=start + 12000)
             await pipeline.drain()
             self.assertEqual(len(seen), 5)
-            history = await human.get_history()
-            self.assertEqual(len([r for r in history if r['observation'].get('name') == 'vision.semantic_state']), 5)
             await pipeline.close()
 
 

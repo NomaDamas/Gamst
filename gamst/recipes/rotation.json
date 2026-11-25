@@ -10,7 +10,8 @@
   "inputs": [{"id": "camera", "use": "camera", "sources": ["camera", "video", "take"]}],
   "modules": [
     {"name": "rotation", "use": "rotation", "regions": "roi", "in_plane": "polar", "symmetry": 1, "max_rev_s": 10,
-     "consumes": ["camera"]}
+     "consumes": ["camera"]},
+    {"name": "semantic", "use": "semantic-scene", "optional": "off", "every_ms": 500, "segment_s": 4, "consumes": ["camera"]}
   ],
   "view": "rotation-view",
   "records": ["vision.rotation"],

@@ -101,7 +101,8 @@
       "name": "semantic",
       "use": "semantic-scene",
       "optional": "off",
-      "every_ms": 1000,
+      "every_ms": 500,
+      "segment_s": 4,
       "consumes": [
         "camera"
       ]
