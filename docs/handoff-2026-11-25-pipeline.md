@@ -199,3 +199,4 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
 - owner: 모든 perception이 같은 방식으로 시각에 맞춰 context에 들어가야 합니다. VLM은 semantic perception이며 기본 꺼짐. 전사는 VLM에도 줄 수 있어야 합니다.
 - 근거: Video-MME(arXiv 2405.21075)와 arXiv 2510.12299는 자막을 함께 주면 정확도가 오른다고 보고합니다(녹화 영상의 질문 답하기. 실시간·한국어 전사는 확인 안 함).
 - K: `feat/multi-input`(wt-multi-input)에서 여러 입력, 역할 부품, 전사를 VLM에 주기, 종합 레시피를 구현합니다.
+- 결정 사항은 `docs/perception-context-decisions.md`에 정리했습니다. 설계의 기준 문서입니다.
