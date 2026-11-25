@@ -17,14 +17,16 @@ Recipe file::
   {"name", "summary", "skill", "hardware": {"min_fps", "camera", "compute"},
    "inputs": [{"id": "camera", "use": "camera", "sources": ["camera", "video", "take"]}],
    "references": [{"name": "exemplar", "kind": "exemplar"}],        user-defined inputs
-   "modules": [{"name": "pose", "use": "mediapipe-pose", "consumes": ["camera"], ...options}],
+   "modules": [{"name": "pose", "use": "mediapipe-pose", "consumes": ["camera"], ...options},
+               {"name": "find", "use": "yoloe", "in": "count"}],     a stage that runs inside "count"
    "view": "count" | "rotation-view" | "halo-coin",
    "records": ["temporal.exemplar_events"], "measured": "..."}
 
 ``run`` builds the Pipeline, feeds it the chosen source and shows the view; agents read the same
 records over MCP (``get_observations``, ``count_events``) and switch modules with
-``configure_pipeline_module``. The ``halo-coin`` view is the GAMST 240 live app: it owns the
-iPhone connection and the after-take counting, so ``run`` starts it with the recipe's options.
+``configure_pipeline_module``. ``coin-flip`` is the GAMST 240 app: the ``gamst240`` input (the
+iPhone, or a take replayed), a take recorder, the after-take flip counter (YOLOE and EfficientTAM
+are its stages, in its own process) and the ``halo-coin`` HUD.
 
 Sampling limit. A part's ``sampling`` rule says which frame rate counts its target without
 aliasing, e.g. an object whose look repeats ``symmetry`` times per turn is countable only below
@@ -80,6 +82,8 @@ def load(name):
         part = PARTS.get(item.get('use'))
         if part is None or part.kind != 'module':
             raise ValueError(f'{path}: unknown part {item.get("use")!r}')
+        if item.get('in') and item['in'] not in {other['name'] for other in recipe['modules']}:
+            raise ValueError(f"{path}: module {item['name']!r} runs in {item['in']!r}, which is not a module")
         for source in item.get('consumes', ()):
             if source.split(':', 1)[0] not in known:
                 raise ValueError(f"{path}: module {item['name']!r} consumes {source!r}, which no input or "
@@ -205,15 +209,8 @@ def _take_recording(path):
 
 
 def _take_fps(raw):
-    summary = raw.parent / 'summary.json'
-    if summary.is_file():
-        fps = json.loads(summary.read_text()).get('capture_fps')
-        if fps:
-            return float(fps)
-    from ..demos.rotation_live import read_recording
-    frames = read_recording(raw)
-    span = frames[-1][0].seconds - frames[0][0].seconds if len(frames) > 1 else 0
-    return (len(frames) - 1) / span if span else None
+    from ..inputs import TakeInput
+    return TakeInput(raw).fps()
 
 
 def _source_fps(args):
@@ -244,26 +241,24 @@ def _source(recipe, args):
     return item, chosen
 
 
-def demo_argv(recipe, args):
-    """``gamst demo rotation`` options for the halo-coin view (the GAMST 240 live app)."""
-    _, chosen = _source(recipe, args)
-    modules = {item['use']: item for item in recipe['modules']}
-    label = args.label or modules['yoloe']['label']
-    max_rev_s = args.max_rev_s or modules['flip']['max_rev_s']
-    argv = ['--iphone', str(args.iphone or 9123)] if chosen == 'iphone' else [
-        '--iphone-replay', str(_take_recording(args.take))]
-    detector = installed(recipe, modules['yoloe'], getattr(args, 'profile', None))
-    refiner = installed(recipe, modules['efficienttam'], getattr(args, 'profile', None))
-    if getattr(args, 'models', None) is None:
-        argv += ['--models', str(Path(detector['config']['checkpoint_path']).parent)]
-    argv += ['--refine', label, '--efficienttam-source', refiner['config']['source_dir'],
-             '--expected-max-rev-s', f'{max_rev_s:g}', '--device', _device()]
-    argv += (['--refine-on', 'button', '--refine-fast'] if modules['flip'].get('on', 'analyze') == 'analyze'
-             else ['--refine-on', 'stop'])
-    for option in ('device', 'models', 'worker_python', 'capture_fps', 'frames'):
-        if getattr(args, option, None) is not None:  # given on the command line: it wins
-            argv += ['--' + option.replace('_', '-'), str(getattr(args, option))]
-    return argv
+def from_rotation_demo(args):
+    """``gamst demo rotation --iphone/--iphone-replay`` options -> (the coin-flip recipe, its run options).
+
+    The demo keeps its own defaults: count each take on Stop (``--refine-on button``: on ANALYZE),
+    one process per take that counts every throw unless ``--refine-fast``, and no counting at all
+    without ``--refine`` (a camera monitor that records takes).
+    """
+    recipe = load('coin-flip')
+    if not args.refine:
+        recipe = dict(recipe, modules=[item for item in recipe['modules'] if item['use'] == 'take-recorder'],
+                      records=[])
+    options = argparse.Namespace(
+        iphone=args.iphone, take=args.iphone_replay, label=args.refine, max_rev_s=args.expected_max_rev_s,
+        device=args.device, models=args.models, worker_python=args.worker_python, store=args.store,
+        headless=args.headless, report=args.report, record_dir=args.record_dir, refine_show=args.refine_show,
+        refine_cached=args.refine_cached, efficienttam_source=args.efficienttam_source,
+        count_on='analyze' if args.refine_on == 'button' else 'stop', fast=args.refine_fast)
+    return recipe, options
 
 
 def _reference_value(reference, args):
@@ -289,11 +284,14 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
     item, chosen = _source(recipe, args)
     if source is None:
         value = dict(camera=getattr(args, 'camera', None), video=getattr(args, 'video', None),
-                     take=getattr(args, 'take', None), audio=getattr(args, 'audio', None)).get(chosen)
+                     take=getattr(args, 'take', None), audio=getattr(args, 'audio', None),
+                     iphone=getattr(args, 'iphone', None)).get(chosen)
         options = dict(capture_fps=args.capture_fps) if chosen == 'video' and args.capture_fps else {}
         if getattr(args, 'frames', None) and chosen in ('camera', 'video', 'take'):
             options['max_frames'] = args.frames
-        source = open_source(chosen, value, **options)
+        # A GAMST 240 take replays through the phone's input, so its Start/Stop marks stay.
+        kind = 'gamst240-take' if item['use'] == 'gamst240' and chosen == 'take' else chosen
+        source = open_source(kind, value, **options)
     pipeline.add_input(item['id'], source)
     for reference in recipe.get('references', ()):
         pipeline.add_reference(reference['name'], reference['kind'], _reference_value(reference, args),
@@ -305,8 +303,16 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
                    worker_python=getattr(args, 'worker_python', None),
                    installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)),
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
-                   exit=getattr(args, 'exit', None))
-    for item in modules or recipe['modules']:
+                   exit=getattr(args, 'exit', None), inputs={item['id']: source},
+                   record_dir=getattr(args, 'record_dir', None), replay=chosen == 'take',
+                   efficienttam_source=getattr(args, 'efficienttam_source', None),
+                   count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
+                   show=getattr(args, 'refine_show', False), cached=getattr(args, 'refine_cached', None))
+    modules = modules or recipe['modules']
+    context['stages'] = {item['name']: item for item in modules if item.get('in')}
+    for item in modules:
+        if item.get('in'):
+            continue  # runs inside the module it names (its build reads context['stages'])
         build = PARTS[item['use']].build
         if build is None:
             raise SystemExit(f"part {item['use']!r} runs inside the {recipe['view']} view")
@@ -317,19 +323,33 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
     return pipeline
 
 
+def _view_class(name):
+    if name == 'halo-coin':
+        from ..halo import HaloCoinView
+        return HaloCoinView
+    from ..views import CountView, RotationView
+    return RotationView if name == 'rotation-view' else CountView
+
+
 async def run_pipeline(recipe, args):
     from .. import Gamst
-    from ..views import CountView, RotationView
     report = dict(recipe=recipe['name'], frames=0)
     async with Gamst(consent=True, store=args.store) as human:
         pipeline = await build_pipeline(recipe, args, human)
-        view_class = RotationView if recipe['view'] == 'rotation-view' else CountView
-        view = view_class(pipeline, headless=args.headless, capabilities=recipe.get('records', ()))
+        view, idle = None, None
+        try:
+            view = _view_class(recipe['view'])(pipeline, headless=args.headless,
+                                               capabilities=recipe.get('records', ()))
+        except BaseException:
+            await pipeline.close()
+            raise
 
         async def on_frame(input_id, frame, records):
             report['frames'] += 1
             return await view.update(input_id, frame, records)
 
+        if callable(getattr(view, 'idle', None)):
+            idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
         try:
             await pipeline.run(on_frame=on_frame)
             report['counts'], report['events'] = {}, {}
@@ -339,6 +359,8 @@ async def run_pipeline(recipe, args):
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
             report['pipeline'] = pipeline.status()
         finally:
+            if idle is not None:
+                idle.cancel()
             view.close()
             await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'counts') if key in report},
@@ -456,7 +478,7 @@ def main(argv=None):
     learn.add_argument('--seconds', type=float, default=1.5, help='length of the demonstration')
     learn.add_argument('--mode', choices=['hold', 'sequence'], help="hold: one pose; sequence: a movement")
     learn.add_argument('--out', required=True, help='exemplar JSON to write')
-    start = actions.add_parser('run', help='run the recipe (halo-coin: extra options go to gamst demo rotation)')
+    start = actions.add_parser('run', help='run the recipe')
     start.add_argument('recipe')
     _source_options(start)
     _speed_options(start)
@@ -467,9 +489,19 @@ def main(argv=None):
     start.add_argument('--store', default=':memory:', help='SQLite store for the records (default: memory)')
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
     start.add_argument('--report', help='write frames, counts and pipeline status as JSON')
-    args, extra = parser.parse_known_args(argv)
-    if extra and not (args.action == 'run' and load(args.recipe)['view'] == 'halo-coin'):
-        parser.error(f'unrecognized arguments: {" ".join(extra)}')
+    takes = start.add_argument_group('GAMST 240 takes (coin-flip)')
+    takes.add_argument('--record-dir', help='one folder per take: raw.gmst, hud.mp4, refined.json/mp4 '
+                                            '(default gamst-takes)')
+    takes.add_argument('--refine-show', action='store_true',
+                       help='open refined.mp4 (8x slow motion with the running count) when it is ready')
+    takes.add_argument('--refine-cached', metavar='TAKE_DIR',
+                       help='stage backup: ANALYZE shows this already counted take at once')
+    takes.add_argument('--all-throws', action='store_true',
+                       help='count every throw of a take, one process per take (default: the best-named throw, '
+                            'models kept loaded)')
+    args = parser.parse_args(argv)
+    if getattr(args, 'all_throws', False):
+        args.fast = False
     if args.action == 'list':
         for name in names():
             print(f"{name:20} {load(name)['summary']}")
@@ -493,10 +525,5 @@ def main(argv=None):
                         max_reps_s=args.max_reps_s)
         if verdict.get('ok') is False:
             raise SystemExit('; '.join(verdict['problems']))
-        if recipe['view'] == 'halo-coin':
-            options = demo_argv(recipe, args) + extra
-            print(json.dumps(dict(recipe=recipe['name'], sampling=verdict, demo=options)), flush=True)
-            demo.main(options)
-            return
         print(json.dumps(dict(recipe=recipe['name'], sampling=verdict)), flush=True)
         return asyncio.run(run_pipeline(recipe, args))

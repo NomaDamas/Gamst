@@ -149,6 +149,39 @@ async def _terms(options, context):
 VIDEO = dict(role='input.video', candidate='opencv')
 ROTATION = dict(role='vision.rotation', candidate='gamst.rotation')
 
+
+async def _take_recorder(options, context):
+    from ..takes import TakeRecorder
+    source = context['inputs'][options['consumes'][0]]
+    emits = options.get('emits') or ['take']
+    return dict(module=TakeRecorder(context.get('record_dir') or 'gamst-takes', source=source, emits=emits[0]))
+
+
+async def _flip(options, context):
+    """After-take flip count of one named object; its ``yoloe`` and ``efficienttam`` stages run inside it."""
+    from ..demos.rotation import DEFAULT_MODELS
+    from ..takes import TakeFlips
+    stages = list(context.get('stages', {}).values())
+    find = next((item for item in stages if item['use'] == 'yoloe'), None)
+    follow = next((item for item in stages if item['use'] == 'efficienttam'), None)
+    if find is None or follow is None:
+        raise SystemExit('the flip count runs a yoloe and an efficienttam stage ("in": "<this module>")')
+    models, source = context.get('models'), context.get('efficienttam_source')
+    if source is None:  # a recipe run: weights and sources are where `gamst recipe setup` put them
+        detector, refiner = context['installed'](find), context['installed'](follow)
+        models = models or str(Path(detector['config']['checkpoint_path']).parent)
+        source = refiner['config']['source_dir']
+    on = context.get('count_on') or options.get('on', 'analyze')
+    fast = context['fast'] if context.get('fast') is not None else options.get('fast', on == 'analyze')
+    counter = TakeFlips(
+        context['human'], label=','.join(context['labels']) if context.get('labels') else find['label'],
+        models=models or DEFAULT_MODELS, device=context.get('device', 'cpu'),
+        efficienttam_source=source, worker_python=context.get('worker_python'),
+        expected_max_rev_s=float(context.get('max_rev_s') or options['max_rev_s']), on=on, fast=fast,
+        count_at_end=bool(context.get('replay')), show=bool(context.get('show')), cached=context.get('cached'),
+        log_dir=context.get('record_dir') or 'gamst-takes')
+    return dict(module=counter.open())
+
 PARTS = {
     # inputs
     'camera': Part('input', **VIDEO),
@@ -159,7 +192,8 @@ PARTS = {
     'gamst240': Part('input', **VIDEO),
     # perception modules
     'rotation': Part('module', **ROTATION, build=_rotation, sampling=rotation_sampling),
-    'flip': Part('module', **ROTATION, sampling=rotation_sampling),
+    'take-recorder': Part('module', **VIDEO, build=_take_recorder),
+    'flip': Part('module', **ROTATION, build=_flip, sampling=rotation_sampling),
     'yoloe': Part('module', role='vision.detect', candidate='yoloe.26s', build=_yoloe),
     'efficienttam': Part('module', role='vision.video_segmentation', candidate='efficienttam.ti_512'),
     'mediapipe-pose': Part('module', role='vision.pose', candidate='mediapipe.pose_full', build=_mediapipe_pose),

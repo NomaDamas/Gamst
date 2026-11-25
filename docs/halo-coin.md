@@ -201,6 +201,51 @@ Findings:
 
 Counting accuracy is still not claimed.
 
+## The coin-flip recipe on the Pipeline
+
+`gamst recipe run coin-flip` and `gamst demo rotation --iphone/--iphone-replay` build the same
+`gamst.pipeline.Pipeline`. There is one implementation; the demo only keeps its own defaults
+(count on Stop, every throw).
+
+```text
+camera (gamst240)  IPhone240Input      gamst/inputs.py   the app's TCP stream or a raw.gmst replayed;
+                                                         phone commands record, camera, zoom, crop
+  -> record        TakeRecorder        gamst/takes.py    raw.gmst, summary.json (+ hud.mp4 from the view)
+  --take-->        derived input: a finished take folder (media, never in context)
+  -> count         TakeFlips           gamst/takes.py    refine_take in its own process (find: YOLOE,
+                                                         follow: EfficientTAM), then vision.rotation.refined
+view halo-coin     HaloCoinView        gamst/halo.py     keys and mouse -> commands; throws read from records
+```
+
+While it runs, `get_pipeline` lists `record` and `count`; `configure_pipeline_module` can switch
+`count` off, and takes are still recorded. `python -m gamst.takes refine TAKE_DIR ...` counts a
+saved take without a runtime, and `python -m gamst.takes render TAKE_DIR` re-draws `refined.mp4`.
+
+The move did not change the count. Take `140345` (below) was replayed through the code before the
+move (commit `30b705f`) and through the Pipeline, headless, same weights, MPS, on 2026-11-25:
+
+| Toss | Before (flips) | Pipeline (flips) | Flight frames (both) |
+|---:|---:|---:|---|
+| 1 | 8.8 | 8.8 | 424–536 |
+| 2 | 5.2 | 5.2 | 1157–1243 |
+| 3 | 14.4 | 14.4 | 1786–1899 |
+| 4 | 8.6 | 8.6 | 2435–2503 |
+| 5 | 11.6 | 11.6 | 3109–3219 |
+| 6 | 2.4 | 2.4 | 3736–3820 |
+| 7 | 10.2 | 10.2 | 4384–4475 |
+
+- Every throw: `refined.json` results are equal field for field, including the per-frame
+  ellipses. That holds for `gamst recipe run coin-flip --all-throws` and for
+  `gamst demo rotation --iphone-replay ... --refine "metal coin"`. The 7 stored `vision.rotation.refined` records carry the same flips. Both match the
+  table below, which was counted on 2026-11-24.
+- The recipe's default (one throw per take, models kept loaded) counted toss 5 at 11.4 flips
+  both before and after. It found 55 detections in both runs.
+- The take each run saved again has the same `raw.gmst` bytes (sha256) as the original.
+- Wall time for the whole 21.5 s take on an M2 Pro, one run each: every throw 6 min 50 s before
+  and 7 min 37 s after; the default 1 min 28 s before and 1 min 39 s after. The 90 s test suite
+  ran on the same machine during the Pipeline runs, so these times do not show a slowdown or rule
+  one out.
+
 ## Seven tosses against a person's flip count (2026-11-24, take `140345`)
 
 White shirt, iPhone SE 2, 240.2 fps, native 554×1080 strip, 21.5 s, 5,173 frames.

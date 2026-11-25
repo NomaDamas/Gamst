@@ -33,14 +33,18 @@ One `vision.rotation.refined` observation per throw. Its object looks like this 
 
 ## The recipe
 
-The pipeline is the built-in recipe `coin-flip` (`gamst/recipes/coin-flip.json`):
+The pipeline is the built-in recipe `coin-flip` (`gamst/recipes/coin-flip.json`), run on a `gamst.pipeline.Pipeline`:
 
-- capture: GAMST 240 iPhone app, live or a recorded take;
-- find: YOLOE, label `"metal coin"`;
-- follow: EfficientTAM;
-- count: flips, up to 40 rev/s, started by ANALYZE.
+- input `camera`: the GAMST 240 iPhone app, live or a recorded take (`IPhone240Input`, `gamst/inputs.py`);
+- `record`: writes each take (REC → STOP) to its own folder and hands the finished take on (`TakeRecorder`, `gamst/takes.py`);
+- `count`: flips, up to 40 rev/s, started by ANALYZE, in a separate process (`TakeFlips`). Inside it:
+  - `find`: YOLOE, label `"metal coin"`;
+  - `follow`: EfficientTAM;
+- view `halo-coin`: the HUD (`gamst/halo.py`). It sends REC, camera, zoom, crop and ANALYZE as commands and shows the
+  throws read back from the `vision.rotation.refined` records. It measures nothing.
 
-`gamst recipe show coin-flip` prints it, what setup installs, and the frame rate it needs.
+`gamst recipe show coin-flip` prints it, what setup installs, and the frame rate it needs. While it runs, an agent sees
+the modules with `get_pipeline` and can switch `count` off with `configure_pipeline_module`; takes are still recorded.
 
 ## Setup (once)
 
@@ -82,13 +86,16 @@ gamst recipe run coin-flip --iphone 9123 --store gamst-coin.db --refine-show
    - The flips appear as soon as the count exists, about 30 s per toss on an M2 Pro MacBook Pro.
    - `--refine-show` opens `refined.mp4` (8× slow motion with the running count) when it is rendered.
 
-Count a recorded take again with `gamst recipe run coin-flip --take TAKE_DIR --headless`.
+Count a recorded take again with `gamst recipe run coin-flip --take TAKE_DIR --headless`. The take is replayed through
+the same Pipeline and saved again as a new take under `--record-dir`; the original folder is not changed.
 
-Other `gamst demo rotation` options pass through and win. For example:
+More options:
 
 - `--refine-cached TAKE_DIR` makes ANALYZE show an already counted take at once. Keep it as the stage backup if the
   room's Wi-Fi or light ruins a live toss.
-- `--record-dir DIR` sets where takes are saved.
+- `--record-dir DIR` sets where takes are saved (default `gamst-takes`).
+- `--all-throws` counts every throw of a take, one process per take. By default only the most confidently named throw
+  is counted, with the models kept loaded, which is faster for one toss per take.
 
 Keep the label `"metal coin"`; with plain `"coin"` the detector missed the coin entirely. To count another flat object,
 pass `--label`. The label is what lands in context and object memory.
@@ -111,7 +118,9 @@ memory, so read the label from the observation.
 
 - `refined.mp4` in the take folder replays each throw at 8× slow motion with the outline GAMST followed and the running
   count.
-- `python -m gamst.demos.rotation_live render TAKE_DIR` re-renders it from `refined.json` without running a model.
+- `python -m gamst.takes render TAKE_DIR` re-renders it from `refined.json` without running a model.
+- `python -m gamst.takes refine TAKE_DIR --label "metal coin" --efficienttam-source DIR --models DIR --device mps`
+  counts a saved take without a runtime and writes `refined.json`.
 
 ## Limits (measured, not guaranteed)
 

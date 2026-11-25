@@ -8,6 +8,7 @@ A view is application UI, outside GAMST's context boundary. It does two things:
   records an agent reads over MCP. A view never computes a measurement itself.
 
 ``gamst recipe run`` picks the view a recipe names. ``--headless`` replaces it with JSON lines.
+The GAMST 240 HUD of the coin-flip recipe (``halo-coin``) is :class:`gamst.halo.HaloCoinView`.
 """
 from __future__ import annotations
 
