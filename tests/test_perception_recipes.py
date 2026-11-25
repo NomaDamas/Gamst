@@ -12,7 +12,8 @@ import wave
 import numpy as np
 
 from gamst import Gamst, recipes
-from gamst.pipeline import Pipeline
+from gamst.pipeline import Derived, Pipeline
+from gamst.private_payload import PrivatePoses
 from gamst.providers.asr_words import words_capability
 from gamst.providers.streaming_semantic import OpenAIStreamingBackend
 from gamst.recipes.parts import PARTS
@@ -143,7 +144,8 @@ class SpeechRecipeTest(unittest.TestCase):
             async def process(self, frame):
                 self.count += 1
                 people = [person(.25, 'a')] + ([person(.75, 'b')] if self.count % 2 else [])
-                return [_signal(frame, 'scene.poses', people, 'pose', '1')]
+                return [_signal(frame, 'scene.pose_count', len(people), 'pose', '1'),
+                        Derived('pose_joints', PrivatePoses(people), 'video')]
 
         async def build(options, context):
             return dict(module=Pose())
@@ -176,7 +178,7 @@ class SpeechRecipeTest(unittest.TestCase):
             recipes.load('person-term-count', ['semantic'])
         action = recipes.load('person-action-count', exclude=['target_person'])
         channels = next(item for item in action['modules'] if item['name'] == 'pose_channels')
-        self.assertEqual(channels['consumes'], ['pose:scene.poses'])
+        self.assertEqual(channels['consumes'], ['pose_joints'])
         self.assertEqual([item['name'] for item in action['references']], ['exemplar'])
 
     def test_every_recipe_role_exists_in_the_one_registry(self):

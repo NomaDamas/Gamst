@@ -3,8 +3,9 @@
 The enrolled-person models need packages that conflict with each other (transformers 4 and 5, onnx
 runtimes, vLLM), so each runs in the interpreter of its registry ``environment``. A worker here is
 *not* a Pipeline module by itself: it answers one module (``SpeakerVerify``, ``TargetPerson``,
-``TargetSpeech`` ...) and its answer is never committed as a record. Embeddings identify a person and
-separated audio is raw media; only the module's scores and counts become context.
+``TargetSpeech`` ...) and its answer is never committed as a record. Embeddings identify a person, joint
+positions and separated audio are raw: they travel as private payloads (:mod:`gamst.private_payload`),
+never as fields of a value; only the module's scores and counts become context.
 
 =========================  ==================================================  ====================
 profile                    worker (real model)                                  client (this process)
@@ -32,7 +33,7 @@ from ..capabilities import CapabilitySpec, OutputField, SensorMetadata, bounded_
 from ..plugins import InputFrame
 
 SAMPLE_RATE = 16000
-EMBEDDING = (OutputField('usable', 'boolean'), OutputField('embedding', 'array', required=False))
+EMBEDDING = (OutputField('usable', 'boolean'),)
 FIELDS = {
     'speaker.embedding': ('audio', EMBEDDING),
     'face.embedding': ('video', EMBEDDING),
@@ -40,11 +41,10 @@ FIELDS = {
     'target_speech.local': ('audio', (OutputField('samples_returned', 'integer'),)),
     'qwen3.forced_aligner': ('audio', (OutputField('items', 'array'),)),
     'faster_whisper.words': ('audio', (OutputField('transcripts', 'array'),)),
-    'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'))),
+    'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
+                                OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
 }
 PROFILES = frozenset(FIELDS)
-# The only profile whose response carries waveform bytes, to its owning module alone.
-PRIVATE_AUDIO = frozenset(('target_speech.local',))
 
 
 def model_id(profile, config):
@@ -75,17 +75,7 @@ def capability(profile, config):
 
 # ---------------------------------------------------------------- worker side
 
-class _Embedding:
-    def __init__(self, embed):
-        self.embed = embed
-
-    def process(self, frame):
-        try:
-            values = self.embed(frame)
-        except ValueError:          # too short, silent or no face: no evidence, not a failure
-            values = None
-        return dict(usable=False) if values is None else dict(usable=True, embedding=values)
-
+class _Worker:
     def reset(self):
         pass
 
@@ -93,43 +83,60 @@ class _Embedding:
         pass
 
 
-class _Extraction(_Embedding):
-    """The first frame (sensor ``enrollment``) is the enrolled clip; every other one is a mixture block."""
+def _numpy():
+    import numpy as np
+    return np
+
+
+class _Embedding(_Worker):
+    def __init__(self, embed):
+        self.embed = embed
+
+    def query(self, frame, request):
+        try:
+            values = self.embed(frame)
+        except ValueError:          # too short, silent or no face: no evidence, not a failure
+            values = None
+        return dict(usable=values is not None), _numpy().asarray([] if values is None else values, dtype='<f4')
+
+
+def _speech(samples):
+    samples = _numpy().asarray(samples, dtype='<f4')
+    return dict(samples_returned=len(samples)), samples
+
+
+class _Extraction(_Worker):
+    """``{"role": "enrollment"}`` hands over the enrolled clip; every other query is a mixture block."""
 
     def __init__(self, extractor):
         self.extractor, self.enrollment = extractor, None
 
-    def process(self, frame):
-        import numpy as np
-        if frame.sensor.sensor_id == 'enrollment':
+    def query(self, frame, request):
+        if (request or {}).get('role') == 'enrollment':
             self.enrollment = frame.data
-            return np.zeros(0, np.float32)
+            return _speech([])
         if self.enrollment is None:
             raise RuntimeError('no enrolled clip')
-        return np.asarray(self.extractor.extract(frame.data, self.enrollment), dtype=np.float32)
+        return _speech(self.extractor.extract(frame.data, self.enrollment))
 
     def close(self):
         self.enrollment = None
 
 
-class _SpanExtraction(_Embedding):
-    """SAM-Audio: a JSON frame with the anchors, then the mixture block they belong to."""
+class _SpanExtraction(_Worker):
+    """SAM-Audio: a mixture block with the ``anchors`` that belong to it."""
 
     def __init__(self, module):
-        self.module, self.anchors = module, []
+        self.module = module
 
-    def process(self, frame):
-        import numpy as np
-        if isinstance(frame.data, dict):
-            self.anchors = [tuple(anchor) for anchor in frame.data['anchors']]
-            return np.zeros(0, np.float32)
-        return np.asarray(self.module.separate(frame.data, self.anchors), dtype=np.float32)
+    def query(self, frame, request):
+        return _speech(self.module.separate(frame.data, [tuple(anchor) for anchor in request['anchors']]))
 
     def close(self):
         self.module.close()
 
 
-class _Aligner(_Embedding):
+class _Aligner(_Worker):
     def __init__(self, aligner):
         self.aligner = aligner
 
@@ -137,7 +144,7 @@ class _Aligner(_Embedding):
         return dict(items=self.aligner.align(frame.data, frame.sample_rate, evidence['text'], evidence['language']))
 
 
-class _Whisper(_Embedding):
+class _Whisper(_Worker):
     """The async plugin on this worker's own event loop."""
 
     def __init__(self, module):
@@ -161,15 +168,17 @@ class _Whisper(_Embedding):
         self.loop.close()
 
 
-class _Pose(_Embedding):
+class _Pose(_Worker):
     def __init__(self, plugin):
         self.plugin = plugin
 
-    def process(self, frame):
-        poses = [dict(bbox=pose['bbox'], keypoints=[[round(point['x'], 5), round(point['y'], 5),
-                                                     round(point['visibility'], 4)] for point in pose['landmarks']])
-                 for pose in self.plugin.infer(frame.data)]
-        return dict(poses=poses, model=self.plugin.version)
+    def query(self, frame, request):
+        np, found = _numpy(), self.plugin.infer(frame.data)
+        height, width = frame.data.shape[:2]
+        joints = np.asarray([[[point['x'], point['y'], point['visibility']] for point in pose['landmarks']]
+                             for pose in found], dtype='<f4').reshape(len(found), 308, 3)
+        return dict(poses=[dict(bbox=pose['bbox']) for pose in found], model=self.plugin.version,
+                    image_width=int(width), image_height=int(height)), joints
 
 
 def load(profile, config):
@@ -218,16 +227,16 @@ class _Client:
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=600, inference_timeout=120):
+        from ..private_payload import CONTRACTS
         from ..process_provider import ProcessProvider
         worker = await ProcessProvider.open(python, profile, config, startup_timeout=startup_timeout,
-                                            inference_timeout=inference_timeout)
+                                            inference_timeout=inference_timeout, private=profile in CONTRACTS)
         return cls(worker, profile, config)
 
     def _frame(self, data, modality, *, sample_rate=None, timestamp_ms=0, sensor_id='input'):
         import numpy as np
         self._sequence += 1
-        data = data if isinstance(data, dict) else np.ascontiguousarray(data)
-        return InputFrame(data, modality, int(timestamp_ms), 'local-user', sample_rate,
+        return InputFrame(np.ascontiguousarray(data), modality, int(timestamp_ms), 'local-user', sample_rate,
                           SensorMetadata(source_id='gamst.model', sensor_id=sensor_id, sequence=self._sequence))
 
     async def close(self):
@@ -237,10 +246,10 @@ class _Client:
 class RemoteEmbedder(_Client):
     async def embed(self, data, sample_rate=None):
         modality = 'audio' if sample_rate else 'video'
-        result = await self.worker.process(self._frame(data, modality, sample_rate=sample_rate))
-        if not result or not result['usable']:
+        result, private = await self.worker.query(self._frame(data, modality, sample_rate=sample_rate))
+        if not result['usable']:
             raise ValueError('too short, silent or unclear for the embedding model')
-        return result['embedding']
+        return private.take('embedding').tolist()
 
 
 class RemoteAligner(_Client):
@@ -253,16 +262,18 @@ class RemoteAligner(_Client):
 class RemoteExtractor(_Client):
     _sent = None
 
+    async def _query(self, samples, request):
+        _, private = await self.worker.query(self._frame(samples, 'audio', sample_rate=SAMPLE_RATE), request)
+        return private.take('waveform')
+
     async def extract(self, mixture, enrollment):
         if self._sent is not enrollment:
-            await self.worker.process(self._frame(enrollment, 'audio', sample_rate=SAMPLE_RATE, sensor_id='enrollment'))
+            await self._query(enrollment, dict(role='enrollment'))
             self._sent = enrollment
-        return await self.worker.process(self._frame(mixture, 'audio', sample_rate=SAMPLE_RATE, sensor_id='mixture'))
+        return await self._query(mixture, dict(role='mixture'))
 
     async def separate(self, window, anchors):
-        await self.worker.process(self._frame(dict(anchors=[list(anchor) for anchor in anchors]), 'audio',
-                                              sample_rate=SAMPLE_RATE, sensor_id='anchors'))
-        return await self.worker.process(self._frame(window, 'audio', sample_rate=SAMPLE_RATE, sensor_id='mixture'))
+        return await self._query(window, dict(anchors=[list(anchor) for anchor in anchors]))
 
 
 class RemoteWhisper(_Client):
@@ -295,8 +306,11 @@ class RemotePose(_Client):
 
     async def infer(self, image):
         from ..crew.modules import bounded_image
-        result = await self.worker.process(self._frame(bounded_image(image), 'video'))
+        from ..private_payload import CONTRACTS, landmarks
+        result, private = await self.worker.query(self._frame(bounded_image(image), 'video'))
+        columns = CONTRACTS['sapiens2.pose'].columns
         return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='goliath308', track_id=None,
                      association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
-                     landmarks=[dict(x=x, y=y, visibility=score, presence=1.) for x, y, score in pose['keypoints']])
-                for index, pose in enumerate(result['poses'])]
+                     image_width=result['image_width'], image_height=result['image_height'],
+                     landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
+                for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]

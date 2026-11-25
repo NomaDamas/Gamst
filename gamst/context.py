@@ -1,6 +1,6 @@
 """Bounded, JSON-serializable sensor context for any LLM/VLM client."""
 import math
-from .capabilities import bounded_json
+from .capabilities import bounded_json, is_raw_key
 
 
 def compact_observation(name, value):
@@ -30,7 +30,7 @@ def compact_observation(name, value):
         return [compact_observation('', item) for item in value[:8]]
     if isinstance(value, dict):
         return {str(k)[:100]: compact_observation('', v) for k, v in list(value.items())[:16]
-                if k not in ('landmarks', 'raw', 'frame', 'samples', 'jpeg', 'image', 'audio')}
+                if not is_raw_key(str(k))}
     return None
 
 

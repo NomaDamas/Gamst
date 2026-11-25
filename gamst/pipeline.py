@@ -107,6 +107,8 @@ class Pipeline:
             raise ValueError(f'{name!r} is already an input or module')
         if not callable(getattr(module, 'process', None)):
             raise TypeError('a module needs process(frame)')
+        if getattr(module, 'private', False):
+            raise PermissionError('a private worker answers its owning module only')
         consumes = [consumes] if isinstance(consumes, str) else list(consumes)
         if not consumes:
             raise ValueError('a module consumes at least one input or module')

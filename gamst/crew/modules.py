@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 
 from ..plugins import InputFrame
+from ..private_payload import PRIVATE_ONLY
 from .registry import ROLES
 
 
@@ -42,6 +43,8 @@ class WorkerModule:
     """One owned ProcessProvider worker as a Pipeline provider module."""
 
     def __init__(self, worker):
+        if getattr(worker, 'private', False):
+            raise PermissionError('a private worker answers its owning module only')
         self.worker, self.spec = worker, worker.spec
         self.name, self.version = self.spec.provider, self.spec.version
         self.modalities = (self.spec.modality,)
@@ -74,6 +77,13 @@ def _import(path):
     return getattr(importlib.import_module(module), name)
 
 
+async def open_private_worker(python, provider_profile, config, *, startup_timeout=120, inference_timeout=30):
+    """Start one worker for the module that owns it: ``query`` only (:mod:`gamst.private_payload`)."""
+    from ..process_provider import ProcessProvider
+    return await ProcessProvider.open(python, provider_profile, config, startup_timeout=startup_timeout,
+                                      inference_timeout=inference_timeout, private=True)
+
+
 async def open_worker(python, provider_profile, config, *, startup_timeout=120, inference_timeout=30):
     """Start one isolated worker and wrap it as a :class:`WorkerModule`."""
     from ..process_provider import ProcessProvider
@@ -90,8 +100,8 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
     plugin module. ``config`` / ``python`` override the profile's values (a recipe narrows
     labels or the device). Raises :class:`RoleUnavailable` with the reason.
     """
-    if ROLES.get(role) is not None and ROLES[role].kind == 'input':
-        raise RoleUnavailable('input role: its packages serve an input source; it runs no model')
+    if ROLES.get(role) is not None and ROLES[role].kind != 'module':
+        raise RoleUnavailable(f'{ROLES[role].kind} role: its packages serve the Pipeline process; it runs no model')
     config = dict(entry.get('config') or {}) if config is None else dict(config)
     chosen = candidate_for(role, entry.get('model'))
     if chosen is not None and chosen.in_process:
@@ -101,7 +111,7 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
                     capability=None if spec is None else spec.id, in_process=True,
                     owns_process=bool(getattr(plugin, 'owns_process', False)))
     from ..providers.model_workers import PROFILES as MODEL_PROFILES
-    if entry.get('provider_profile') in MODEL_PROFILES:
+    if entry.get('provider_profile') in MODEL_PROFILES | PRIVATE_ONLY:
         raise RoleUnavailable('answers one recipe module (enrolled reference and consent needed); '
                               'its embeddings or audio are never context')
     python = python or entry.get('python')

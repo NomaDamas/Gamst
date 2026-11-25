@@ -1,5 +1,9 @@
 # Handoff: feat/absorb-gamstcrew (GamstCrew absorbed into GAMST)
 
+> Superseded in part by [handoff-feat-one-env-per-model.md](handoff-feat-one-env-per-model.md): the owner decisions
+> below are settled there. Correction: the demo venv holds both opencv-python 4.11.0.86 and opencv-contrib-python
+> 5.1.0.95, so a `current` apply would not have added a second OpenCV; it already has two.
+
 Worktree `.local-run/wt-crew`, branch `feat/absorb-gamstcrew` (from `feat/target-speaker-keyword-and-pose-count`
 @ 30b705f). Owner decision: "흡수해. 분리하는 건 의미없다. 세팅까지 gamst에서." The owner archives the Crew repo
 later; agents do not. Not pushed; no PR.

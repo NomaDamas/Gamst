@@ -130,6 +130,15 @@ class MediaPipeVideoContext:
                     self.formatter.close()
 
     def process(self, frame):
+        return self._run(frame)[0]
+
+    def query(self, frame, request=None):
+        """Body only: (public value, joint rows) for the module that owns this worker."""
+        if self.kind != 'body':
+            raise ValueError('only body video has a private payload')
+        return self._run(frame, private=True)
+
+    def _run(self, frame, private=False):
         with self.lock:
             if self.closed: raise RuntimeError('video provider is closed')
             try:
@@ -149,7 +158,7 @@ class MediaPipeVideoContext:
                             ts-self.last_ts > self.max_gap_ms or shape != self.shape):
                         self._reset()
                 self.current_ts = ts
-                result = self.formatter.process(frame)
+                result, joints = self.formatter.query(frame) if private else (self.formatter.process(frame), None)
                 result['summary'].update(running_mode='VIDEO', temporal_tracking=True,
                     persistent_track_ids='unavailable', smoothing='runtime_default',
                     state_segment=self.segment_id, native_timestamp_ms=ts-self.origin_ts)
@@ -157,7 +166,7 @@ class MediaPipeVideoContext:
                     result['summary']['smoothing'] = 'none_by_adapter'
                 result = self.spec.validate(result)
                 self.owner, self.last_sequence, self.last_ts, self.shape = owner, sensor.sequence, ts, shape
-                return result
+                return result, joints
             except BaseException:
                 self._reset()
                 raise

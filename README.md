@@ -208,7 +208,7 @@ committed records and Watch alarms:
 
 ```bash
 pip install "gamst-sdk[rotation,yoloe]" "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
-gamst demo rotation --fetch-models   # optional pinned YOLOE + MobileCLIP2 weights
+gamst demo rotation --fetch-models   # optional pinned weights, into ~/.cache/gamst/models/<model>/
 gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
 gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 ```

@@ -5,7 +5,7 @@
   "hardware": {
     "min_fps": null,
     "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
-    "compute": "CPU (MediaPipe Pose Landmarker; LVFace face matching with target_person)"
+    "compute": "CPU (MediaPipe Pose Landmarker in VIDEO mode and LVFace face matching, each in its own process and environment)"
   },
   "inputs": [
     {
@@ -40,6 +40,10 @@
       "tracker": "ocsort",
       "consumes": [
         "camera"
+      ],
+      "joints": "pose_joints",
+      "emits": [
+        "pose_joints"
       ]
     },
     {
@@ -49,18 +53,22 @@
       "reference": "person",
       "consumes": [
         "camera",
-        "pose:scene.poses"
+        "pose_joints"
+      ],
+      "joints": "target_joints",
+      "emits": [
+        "target_joints"
       ]
     },
     {
       "name": "pose_channels",
       "use": "pose-channels",
       "consumes": [
-        "target_person:scene.target_poses"
+        "target_joints"
       ],
       "consumes_without": {
         "target_person": [
-          "pose:scene.poses"
+          "pose_joints"
         ]
       }
     },

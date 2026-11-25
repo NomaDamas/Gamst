@@ -9,7 +9,7 @@ The pipeline is the built-in recipe `person-action-count` (`gamst/recipes/person
 
 - input: a camera, a video file or a GAMST 240 take;
 - user-defined input: an **exemplar**, the pose or movement demonstrated once (`gamst recipe enroll`);
-- modules: MediaPipe Pose Landmarker (real time) → pose channels (joint angles and wrist positions in
+- modules: MediaPipe Pose Landmarker (VIDEO mode, in its own process and environment) → pose channels (joint angles and wrist positions in
   shoulder widths, independent of where the person stands) → exemplar matching (hold or sequence) and
   the periodic repetition counter.
 
@@ -22,6 +22,9 @@ gamst recipe setup person-action-count
 gamst recipe enroll person-action-count --video demo.mp4 --start 2.0 --seconds 1.0 --out pose.json
 gamst recipe enroll person-action-count --camera 0 --start 3 --seconds 1.5 --mode sequence --out pass.json
 ```
+
+Exemplars enrolled before 2026-11-25 are refused: pose channels now correct for the image's aspect ratio. Enroll them
+again.
 
 `hold` takes the median pose of the window; `sequence` keeps the movement as up to 30 frames.
 

@@ -162,6 +162,8 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
                     declared = getattr(provider, 'spec', None)
                     if isinstance(declared, CapabilitySpec) and declared != spec:
                         raise ValueError('provider contract differs from registered capability')
+                    if getattr(provider, 'private', False):
+                        raise PermissionError('a private worker answers its owning module only')
                     if not callable(getattr(provider, 'process', None)):
                         raise ValueError('provider must implement process')
                     if spec.stateful and not callable(getattr(provider, 'reset', None)):

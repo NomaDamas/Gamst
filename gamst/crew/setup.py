@@ -7,12 +7,18 @@ the planned packages, downloads only pinned weights through :func:`download_weig
 (SHA256 and, where pinned, size verified) and writes the shared GAMST profile that
 :class:`gamst.profile.ProfileRuntime` and recipes read.
 
-Two install targets:
+Where packages go is a property of the registry entry, not of the caller:
 
-* ``isolation="venv"`` (default): one virtual environment per registry environment under
-  ``<prefix>/venvs``; roles run as isolated ProcessProvider workers in it.
-* ``isolation="current"``: the planned packages go into the running interpreter (what a
-  recipe's in-process modules import); workers use the same interpreter.
+* a model candidate goes into its registry ``environment``, one virtual environment per
+  environment under ``<prefix>/venvs``, and runs there as an isolated ProcessProvider worker;
+  the environment also installs the caller's GAMST (:func:`gamst_requirement`);
+* what the Pipeline process itself imports (``kind`` "input" / "view" roles and ``in_process``
+  candidates, :func:`gamst.crew.registry.runs_in_host`) goes into the running interpreter.
+
+``isolation="current"`` is the explicit alternative: everything into the running interpreter.
+
+Weights live under one root, ``~/.cache/gamst/models/<model>/<file>`` (``GAMST_MODELS`` overrides
+the root); see :func:`model_directory`.
 """
 from __future__ import annotations
 
@@ -30,11 +36,12 @@ import subprocess
 import sys
 import urllib.request
 
+from .. import __version__
 from ..profile import default_profile_path
 from .diagnostics import Requirement, check as diagnose
 from .host_limits import HOST_LIMIT_MODES
 from .os_profiles import profile as os_profile
-from .registry import BASE, GOALS, ROLES, TIERS, Weight
+from .registry import GOALS, ROLES, TIERS, Weight, cv2_distributions, runs_in_host, candidate as registry_candidate
 from .resources import ResourceCapacity, ResourceRequest
 
 PROFILE_VERSION = 1
@@ -79,6 +86,55 @@ def _cuda_bytes():
         return max(sizes, default=0)
     except (OSError, ValueError, subprocess.SubprocessError):
         return 0
+
+
+def models_root():
+    """The one weight root: ``GAMST_MODELS``, else ``~/.cache/gamst/models``."""
+    return Path(os.environ.get("GAMST_MODELS") or Path.home() / ".cache" / "gamst" / "models").expanduser().absolute()
+
+
+def model_directory(model, names, models=None):
+    """Directory that holds one model's files: ``<models or the root>/<model>``.
+
+    ``models`` may also be an existing flat directory (an older ``--models DIR``): it is used as it
+    is only when it holds every one of ``names`` and the per-model directory does not. Nothing new
+    is ever written flat, because names such as ``config.json`` collide across models.
+    """
+    root = models_root() if models is None else Path(models).expanduser().absolute()
+    own = root / model
+    if not all((own / name).is_file() for name in names) and names and all((root / name).is_file() for name in names):
+        return root
+    return own
+
+
+def gamst_requirement():
+    """What a worker environment installs as GAMST: exactly what the caller is running.
+
+    A source checkout is installed in place (editable, so the worker and the caller can never run
+    different code); a release or a pinned git install is pinned.
+    """
+    root = Path(__file__).resolve().parents[2]
+    project = root / "pyproject.toml"
+    if project.is_file() and re.search(r'^name\s*=\s*"gamst-sdk"', project.read_text(encoding="utf-8"), re.MULTILINE):
+        commit = None
+        if (root / ".git").exists():
+            try:
+                commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True,
+                                        text=True, timeout=10).stdout.strip() or None
+            except (OSError, subprocess.SubprocessError):
+                commit = None
+        return {"kind": "checkout", "path": str(root), "commit": commit}
+    requirement = "gamst-sdk==" + __version__
+    try:
+        from importlib import metadata
+        distribution = metadata.distribution("gamst-sdk")
+        origin = json.loads(distribution.read_text("direct_url.json") or "{}")
+        commit = (origin.get("vcs_info") or {}).get("commit_id")
+        if distribution.version == __version__ and commit and origin["vcs_info"].get("vcs") == "git":
+            requirement = f"gamst-sdk @ git+{origin['url']}@{commit}"
+    except (metadata.PackageNotFoundError, KeyError, ValueError):
+        pass
+    return {"kind": "release", "requirement": requirement}
 
 
 def detect_hardware():
@@ -179,20 +235,28 @@ def _version_tuple(value):
     return tuple(int(part) for part in match.groups()) if match else (0, 0)
 
 
+def _environment(role_id, model, isolation):
+    """The install environment of one role, decided by the registry (never by a saved plan)."""
+    if isolation == CURRENT or runs_in_host(role_id, model):
+        return CURRENT
+    chosen = registry_candidate(role_id, model)
+    return chosen.environment or chosen.id
+
+
 def _install_entries(roles, isolation):
-    """Install environments for planned role selections (venv: one per environment)."""
+    """Install entries for planned role selections: one per environment, plus the running interpreter."""
     install = {}
     for role_id, selection in roles.items():
         packages = selection.get("packages") or []
         if not packages:
             continue
-        if isolation == CURRENT:
-            environment, python, base = CURRENT, platform.python_version(), []
-        else:
-            environment, python, base = selection.get("environment"), selection.get("python"), list(BASE)
+        environment = _environment(role_id, selection["model"], isolation)
+        current = environment == CURRENT
         entry = install.setdefault(environment, {
-            "environment": environment, "python": python,
-            "packages": base, "roles": [], "models": [],
+            "environment": environment,
+            "python": platform.python_version() if current else registry_candidate(role_id, selection["model"]).python,
+            "gamst": None if current else gamst_requirement(),
+            "packages": [], "roles": [], "models": [],
         })
         for package in packages:
             if package not in entry["packages"]:
@@ -281,6 +345,12 @@ def make_plan(goals=(), overrides=(), hardware=None, *, roles=None, dependencies
         warnings.append(f"plan reserves {vram / 1024 ** 3:.1f} GiB VRAM, above detected {host['vram_bytes'] / 1024 ** 3:.1f} GiB")
     if host["disk_free_bytes"] and disk > host["disk_free_bytes"]:
         warnings.append(f"plan needs about {disk / 1024 ** 3:.1f} GiB disk, above available {host['disk_free_bytes'] / 1024 ** 3:.1f} GiB")
+    install = _install_entries(roles, isolation)
+    for entry in install:
+        mixed = cv2_distributions(entry["packages"])
+        if len(mixed) > 1:
+            warnings.append(f"environment {entry['environment']} would hold {' and '.join(sorted(mixed))}, which overwrite each "
+                            "other's cv2 files; plan with isolation venv to keep them apart")
     if "accounting" not in HOST_LIMIT_MODES:
         raise AssertionError("accounting host-limit mode disappeared")
     return {
@@ -289,7 +359,7 @@ def make_plan(goals=(), overrides=(), hardware=None, *, roles=None, dependencies
         "goals": goals,
         "isolation": isolation,
         "roles": roles,
-        "install": _install_entries(roles, isolation),
+        "install": install,
         "totals": {"ram_bytes": ram, "vram_bytes": vram, "disk_bytes": disk},
         "warnings": list(dict.fromkeys(warnings)),
         "host_limits": "accounting; setup does not claim cgroup or OS enforcement",
@@ -311,6 +381,10 @@ def _validate_plan(plan):
         candidate = ROLES[role_id].candidates[model]
         if model != "custom" and selection.get("packages") != list(candidate.packages):
             raise SetupError(f"planned packages differ from the registry for {role_id}")
+        declared = candidate.as_dict()
+        for key in ("provider_profile", "environment", "python", "source", "in_process"):
+            if selection.get(key) != declared[key]:
+                raise SetupError(f"planned {key} differs from the registry for {role_id}")
         if model != "custom" and selection.get("weights") != [weight.as_dict() for weight in candidate.weights]:
             raise SetupError(f"planned weights differ from the registry for {role_id}")
         if not candidate.automatic:
@@ -323,12 +397,18 @@ def _validate_plan(plan):
     isolation = plan.get("isolation", "venv")
     if isolation not in ISOLATION:
         raise SetupError("plan isolation must be one of " + ", ".join(ISOLATION))
-    if isolation == CURRENT:
-        # The packages land in the running interpreter; the plan must have been made for it.
-        expected = {entry.get("python") for entry in plan.get("install", [])}
-        if expected - {platform.python_version()}:
-            raise SetupError("plan installs into a different interpreter than this one")
-    if plan.get("install") != _install_entries(plan["roles"], isolation):
+    install = plan.get("install")
+    if not isinstance(install, list) or any(not isinstance(entry, dict) for entry in install):
+        raise SetupError("plan has no install environments")
+    gamst = gamst_requirement()
+    for entry in install:
+        if entry.get("environment") == CURRENT:
+            # The packages land in the running interpreter; the plan must have been made for it.
+            if entry.get("python") != platform.python_version():
+                raise SetupError("plan installs into a different interpreter than this one")
+        elif entry.get("gamst") != gamst:
+            raise SetupError(f"plan was made for another GAMST ({entry.get('gamst')}); this one is {gamst}. Make a new plan")
+    if install != _install_entries(plan["roles"], isolation):
         raise SetupError("planned install environments differ from the selected roles")
     return plan
 
@@ -400,7 +480,7 @@ def download_weight(weight, destination):
 
 
 def _install_current(entry):
-    """Install planned requirements into the running interpreter (``isolation="current"``)."""
+    """Install planned requirements into the running interpreter."""
     packages = list(entry["packages"])
     if any(not isinstance(package, str) or package.startswith("-") or "\n" in package for package in packages):
         raise SetupError("unsafe package requirement")
@@ -408,8 +488,8 @@ def _install_current(entry):
     return sys.executable, "installed"
 
 
-def _install_environment(entry, prefix, isolation="venv"):
-    if isolation == CURRENT:
+def _install_environment(entry, prefix):
+    if entry["environment"] == CURRENT:
         return _install_current(entry)
     environment = entry["environment"]
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,63}", environment):
@@ -420,7 +500,10 @@ def _install_environment(entry, prefix, isolation="venv"):
     target = prefix / "venvs" / environment
     python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     marker = target / ".gamst-crew-install.json"
-    desired = {"packages": expected_packages}
+    gamst = entry["gamst"]
+    # A checkout is installed in place, so a new commit needs no reinstall.
+    base = ["-e", gamst["path"]] if gamst["kind"] == "checkout" else [gamst["requirement"]]
+    desired = {"packages": expected_packages, "gamst": base}
     if marker.exists() and json.loads(marker.read_text()) == desired and python.is_file():
         return str(python), "cached"
     if not python.is_file():
@@ -429,7 +512,7 @@ def _install_environment(entry, prefix, isolation="venv"):
         if not base_python:
             raise SetupError(f"Python {required}+ is required to create {environment}")
         _run([base_python, "-m", "venv", target])
-    _run([python, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", *expected_packages])
+    _run([python, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", *base, *expected_packages])
     marker.write_text(json.dumps(desired, sort_keys=True), encoding="utf-8")
     return str(python), "installed"
 
@@ -487,20 +570,27 @@ def _role_config(selection, weight_paths, source_dir):
     return config
 
 
-def weight_destination(model, name, *, prefix=None, models_dir=None):
-    """Where apply puts one weight: ``<prefix>/models/<model>/<name>``, or ``<models_dir>/<name>``.
+def weights_directory(model, weights, models_dir, bundle=False):
+    """Where apply keeps one model's files: its own directory, or an existing flat one that verifies.
 
-    A flat ``models_dir`` (one directory for every planned file, e.g. what ``gamst demo
-    rotation --models`` reads) is safe: an existing file under the same name with another
-    digest is refused by :func:`download_weight`, never overwritten.
+    A ``bundle`` (its loader reads the whole directory) always gets its own.
     """
-    if models_dir is not None:
-        return Path(models_dir).expanduser().absolute() / name
-    return Path(prefix or DEFAULT_PREFIX).expanduser().absolute() / "models" / model.replace(".", "-") / name
+    names = [weight["name"] for weight in weights]
+    directory = model_directory(model, names, models_dir)
+    own = (models_root() if models_dir is None else Path(models_dir).expanduser().absolute()) / model
+    if bundle:
+        return own
+    if directory != own and any(_sha256(directory / weight["name"]) != weight["sha256"] for weight in weights):
+        return own  # another model's file under the same name
+    return directory
 
 
 def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
-    """Apply exactly a validated plan and atomically write the shared GAMST profile."""
+    """Apply exactly a validated plan and atomically write the shared GAMST profile.
+
+    ``models_dir`` replaces the weight root; a flat directory that already holds a model's verified
+    files is read in place, never moved and never written to.
+    """
     _validate_plan(plan)
     isolation = plan.get("isolation", "venv")
     prefix = Path(prefix or DEFAULT_PREFIX).expanduser().absolute()
@@ -509,7 +599,7 @@ def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
     pythons = {}
     environments = []
     for entry in plan.get("install", []):
-        python, status = _install_environment(entry, prefix, isolation)
+        python, status = _install_environment(entry, prefix)
         pythons[entry["environment"]] = python
         environments.append({"environment": entry["environment"], "python": python, "status": status})
 
@@ -518,9 +608,11 @@ def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
     for role_id, selection in plan["roles"].items():
         model = selection["model"]
         downloaded = []
-        for weight in selection.get("weights", []):
-            result = download_weight(weight, weight_destination(model, weight["name"], prefix=prefix,
-                                                                models_dir=models_dir))
+        weights = selection.get("weights", [])
+        directory = weights_directory(model, weights, models_dir, registry_candidate(role_id, model).bundle) \
+            if weights else None
+        for weight in weights:
+            result = download_weight(weight, directory / weight["name"])
             downloaded.append(result)
             artifacts.append(result)
         source_dir = _install_source(selection.get("source"), prefix, model.replace(".", "-"))
@@ -528,7 +620,7 @@ def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
         profile_roles[role_id] = {
             "model": model,
             "provider_profile": selection.get("provider_profile"),
-            "python": pythons.get(CURRENT if isolation == CURRENT else selection.get("environment")),
+            "python": pythons.get(_environment(role_id, model, isolation)),
             "config": config,
         }
 
@@ -555,7 +647,12 @@ def format_plan(plan):
     if plan["install"]:
         lines.append("Install:")
         for entry in plan["install"]:
-            lines.append(f"  {entry['environment']} (Python {entry['python']}+): {', '.join(entry['packages'])}")
+            if entry["environment"] == CURRENT:
+                where = f"this interpreter (Python {entry['python']})"
+            else:
+                gamst = entry["gamst"]
+                where = f"{entry['environment']} (Python {entry['python']}+, GAMST {gamst.get('path') or gamst['requirement']})"
+            lines.append(f"  {where}: {', '.join(entry['packages'])}")
     totals = plan["totals"]
     lines.append("Totals (planning reservations):")
     lines.append(f"  disk {totals['disk_bytes'] / 1024 ** 3:.2f} GiB; RAM {totals['ram_bytes'] / 1024 ** 3:.2f} GiB; VRAM {totals['vram_bytes'] / 1024 ** 3:.2f} GiB")
@@ -572,18 +669,22 @@ def main(argv=None):
     plan_parser = subparsers.add_parser("plan", help="select roles and show the explicit install plan")
     plan_parser.add_argument("--goals", required=True, help="comma-separated goals: " + ", ".join(GOALS))
     plan_parser.add_argument("--override", action="append", default=[], metavar="ROLE=MODEL")
+    plan_parser.add_argument("--isolation", choices=ISOLATION, default="venv",
+                             help="venv: one environment per model (default); current: everything into this interpreter")
     plan_parser.add_argument("--json", action="store_true")
     apply_parser = subparsers.add_parser("apply", help="install only a saved plan")
     apply_parser.add_argument("plan", type=Path)
     apply_parser.add_argument("--prefix", type=Path)
     apply_parser.add_argument("--profile", type=Path)
+    apply_parser.add_argument("--models", type=Path, help="weight root (default GAMST_MODELS or ~/.cache/gamst/models)")
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            plan = make_plan(args.goals, args.override)
+            plan = make_plan(args.goals, args.override, isolation=args.isolation)
             print(json.dumps(plan, indent=2) if args.json else format_plan(plan))
         else:
-            result = apply_plan(json.loads(args.plan.read_text(encoding="utf-8")), prefix=args.prefix, profile_path=args.profile)
+            result = apply_plan(json.loads(args.plan.read_text(encoding="utf-8")), prefix=args.prefix, profile_path=args.profile,
+                                models_dir=args.models)
             print(json.dumps(result, indent=2))
         return 0
     except (OSError, ValueError, SetupError, subprocess.CalledProcessError, json.JSONDecodeError) as error:

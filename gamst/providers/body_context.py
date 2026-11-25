@@ -88,6 +88,13 @@ class MediaPipeBodyContext:
         return round(math.degrees(math.acos(cosine)),3)
 
     def process(self, frame):
+        return self._infer(frame)[0]
+
+    def query(self, frame, request=None):
+        """(public geometry, joint rows) for the module that owns this worker (``gamst.private_payload``)."""
+        return self._infer(frame)
+
+    def _infer(self, frame):
         if self.closed: raise RuntimeError('body provider is closed')
         try:
             import numpy as np
@@ -104,9 +111,10 @@ class MediaPipeBodyContext:
         raw=result.pose_landmarks
         if not isinstance(raw,(list,tuple)) or len(raw)>self.max_poses:
             raise ValueError('pose detector exceeded selected output bound')
-        poses=[]
+        poses,joints=[],[]
         for index,body in enumerate(raw):
             points=self._points(body)
+            joints.append([[p['x'],p['y'],p['visibility'],p['presence']] for p in points])
             geometry=MediaPipePosePlugin._gestures(points)
             # Off-image joints are not enough evidence for projected comparisons.
             for side,shoulder,wrist in (('left',11,15),('right',12,16)):
@@ -117,10 +125,11 @@ class MediaPipeBodyContext:
                 geometry[name+'_projected_angle_deg']=self._angle(points,ids,width,height)
             poses.append(dict(frame_pose_index=index,bbox=MediaPipePosePlugin._bbox(points),
                 geometry=geometry,visible_joint_count=sum(min(p['visibility'],p['presence'])>=.5 for p in points)))
-        return self.spec.validate(dict(poses=poses,summary=dict(count=len(poses),max_poses=self.max_poses,
+        value=self.spec.validate(dict(poses=poses,summary=dict(count=len(poses),max_poses=self.max_poses,
             coordinate_frame='normalized_image_xy',angle_space='pixel_plane',
             image_width=width,image_height=height,mirror_status='unspecified',
             identity='unavailable',temporal_tracking=False,metric_3d=False)))
+        return value,np.asarray(joints,dtype=np.float32).reshape(len(joints),33,4)
 
     def close(self):
         if not self.closed:

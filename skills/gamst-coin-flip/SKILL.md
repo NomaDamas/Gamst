@@ -55,9 +55,10 @@ gamst recipe setup coin-flip      # --dry-run prints the plan first
 
 Setup installs only what this pipeline uses:
 
-- the `rotation`, `yoloe` and `efficienttam` extras and the pinned CLIP;
-- the YOLOE and EfficientTAM tiny weights, SHA256-checked;
-- EfficientTAM at the pinned revision in `~/.cache/gamst/sources`.
+- one environment for YOLOE, the pinned CLIP and EfficientTAM (`~/.local/share/gamst/venvs/yoloe-efficienttam`); only
+  OpenCV, NumPy and Pillow go into this Python;
+- the YOLOE and EfficientTAM tiny weights, SHA256-checked, under `~/.cache/gamst/models/<model>/`;
+- EfficientTAM at the pinned revision in `~/.local/share/gamst/sources`.
 
 Then build `apps/ios-highspeed-camera` (`xcodegen`, iOS 15+) onto an iPhone that records 240 fps. Put the phone and the
 Mac on the same Wi-Fi, and set the Mac's address and port 9123 in the app.

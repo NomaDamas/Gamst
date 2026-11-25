@@ -291,12 +291,12 @@ async def enroll_person(face_embedder, body_embedder, images, poses, face_indice
 
 
 class TargetPerson:
-    """Pipeline plugin module: camera + ``scene.poses`` of the same capture in, the enrolled person out."""
+    """Pipeline plugin module: camera + the pose module's joints of the same capture in, the enrolled person out."""
 
     name = 'target_person'
 
     def __init__(self, face=None, body=None, *, reference='person', face_threshold=.35, face_reject=.15,
-                 body_threshold=.6, face_every_ms=200, body_every_ms=500, hold_ms=10000, emits=None, crop_pad=.15,
+                 body_threshold=.6, face_every_ms=200, body_every_ms=500, hold_ms=10000, emits=None, joints=None, crop_pad=.15,
                  face_indices=MEDIAPIPE_FACE_POINTS):
         if face is None and body is None:
             raise ValueError('target_person needs a face or a body embedder')
@@ -305,6 +305,7 @@ class TargetPerson:
         self.face, self.body, self.reference_name = face, body, reference
         self.face_threshold, self.face_reject, self.body_threshold = face_threshold, face_reject, body_threshold
         self.face_every_ms, self.body_every_ms, self.hold_ms = int(face_every_ms), int(body_every_ms), int(hold_ms)
+        self.joints = joints   # derived input that receives the matched person's joints (never a record)
         self.emits, self.crop_pad, self.face_indices = emits, crop_pad, tuple(face_indices)
         self.version = f"1.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
         self.gallery = None
@@ -361,10 +362,12 @@ class TargetPerson:
     async def process(self, frame):
         from ..plugins import InputFrame, _signal
         from ..pipeline import Derived
+        from ..private_payload import PrivatePoses, poses_of, public_pose
         if self.gallery is None:
             raise RuntimeError('no person reference bound')
-        if isinstance(frame.data, list):           # the pose record arrives before its camera frame
-            self._poses[frame.timestamp_ms] = frame.data
+        found = poses_of(frame.data)
+        if found is not None:                      # the joints arrive before their camera frame
+            self._poses[frame.timestamp_ms] = found
             while len(self._poses) > 8:
                 self._poses.pop(next(iter(self._poses)))
             return []
@@ -391,7 +394,9 @@ class TargetPerson:
                      body_score=scores.get('body'), candidates=len(candidates))
         frame_like = InputFrame(None, 'video', ts, frame.subject_id)
         output = [_signal(frame_like, 'vision.target_person', value, self.name, self.version),
-                  _signal(frame_like, 'scene.target_poses', [pose] if pose else [], self.name, self.version)]
+                  _signal(frame_like, 'scene.target_poses', [public_pose(pose)] if pose else [], self.name, self.version)]
+        if self.joints and pose is not None:
+            output.append(Derived(self.joints, PrivatePoses([pose]), 'video'))
         if self.emits and pose is not None:
             box = body_box(pose['bbox'], frame.data.shape[1], frame.data.shape[0], pad=self.crop_pad)
             if box is not None:

@@ -120,7 +120,7 @@ LOADERS = {
     'face.embedding': 'person_match', 'body.embedding': 'person_match', 'target_speech.local': 'target_speech',
     'sapiens2.pose': 'sapiens2_pose', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None,
-    'pg.physical.local': None, 'opencv': None, 'sounddevice': None,   # no version check in a provider file
+    'pg.physical.local': None, 'opencv': None, 'sounddevice': None, 'pillow': None,   # no version check in a provider file
 }
 VERSION = re.compile(r'\d+(\.\d+)+')
 

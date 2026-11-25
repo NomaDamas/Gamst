@@ -200,7 +200,8 @@ class TakeFlips:
     """
     name, version = 'vision.rotation.refined', '1'
 
-    def __init__(self, human, *, label, models, device, efficienttam_source, worker_python=None,
+    def __init__(self, human, *, label, models, device, efficienttam_source, python=None, worker_python=None,
+                 efficienttam_checkpoint=None,
                  expected_max_rev_s=40., on='analyze', fast=True, count_at_end=False, show=False,
                  cached=None, log_dir='gamst-takes'):
         if on not in ('analyze', 'stop'):
@@ -208,9 +209,13 @@ class TakeFlips:
         self.human, self.label, self.on, self.fast = human, label, on, bool(fast)
         self.count_at_end, self.show, self.cached = count_at_end, show, cached
         self.log_dir = Path(log_dir)
+        # The counting process imports YOLOE and EfficientTAM together: the interpreter that has both.
+        self.python = str(python or sys.executable)
         self.refine_args = [
-            '--label', label, '--efficienttam-source', str(efficienttam_source), '--models', str(models),
-            '--device', device, '--worker-python', worker_python or sys.executable,
+            '--label', label, '--efficienttam-source', str(efficienttam_source),
+            *(['--models', str(models)] if models else []),
+            *(['--efficienttam-checkpoint', str(efficienttam_checkpoint)] if efficienttam_checkpoint else []),
+            '--device', device, '--worker-python', worker_python or self.python,
             '--expected-max-rev-s', str(expected_max_rev_s)] + (['--fast'] if self.fast else [])
         self.last = None       # the newest take
         self.started = set()   # take folders whose count was started
@@ -224,7 +229,7 @@ class TakeFlips:
         if self.fast and self.server is None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             self.server = subprocess.Popen(
-                [sys.executable, '-m', 'gamst.takes', 'refine-server', *self.refine_args], stdin=subprocess.PIPE,
+                [self.python, '-m', 'gamst.takes', 'refine-server', *self.refine_args], stdin=subprocess.PIPE,
                 stdout=open(self.log_dir / 'refine-server.log', 'w'), stderr=subprocess.STDOUT, text=True,
                 start_new_session=True)
         return self
@@ -242,7 +247,7 @@ class TakeFlips:
             self.server.stdin.flush()
             return _ServerJob(directory, self.server)
         with open(directory / 'refine.log', 'w') as log:
-            return subprocess.Popen([sys.executable, '-m', 'gamst.takes', 'refine', str(directory), *self.refine_args],
+            return subprocess.Popen([self.python, '-m', 'gamst.takes', 'refine', str(directory), *self.refine_args],
                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
     def start(self, take):
@@ -340,7 +345,8 @@ class TakeFlips:
 # ---------------------------------------------------------------- counting a saved take (separate process)
 
 async def refine_take(directory, *, label, models, device, efficienttam_source, worker_python,
-                      detect_every=4, threshold=.2, fast=False, batch=16, warm=None, expected_max_rev_s=40.):
+                      detect_every=4, threshold=.2, fast=False, batch=16, warm=None, expected_max_rev_s=40.,
+                      efficienttam_checkpoint=None):
     """Re-count a saved take's throws of one named object; writes ``refined.json``.
 
     YOLOE (GAMST's pinned worker, text prompt ``label``) looks at every ``detect_every``-th frame
@@ -359,12 +365,12 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
     import cv2
     import numpy as np
     from .capabilities import SensorMetadata
-    from .demos.rotation import REFINE_ASSETS, detector_config
+    from .demos.rotation import detector_config, refiner_checkpoint
     from .halo import render_refined
     from .plugins import InputFrame
     from .providers.rotation_refine import EfficientTAMVideo, moving_frames, refine, tiles
     began = time.perf_counter()
-    directory, models = Path(directory), Path(models)
+    directory = Path(directory)
 
     def report(stage, done, total):
         (directory / 'refine.progress.part.json').write_text(json.dumps(dict(stage=stage, done=done, total=total)))
@@ -437,9 +443,9 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
         finally:
             await worker.close()
     detected = time.perf_counter()
-    name = 'efficienttam_ti_512x512.pt'
+    checkpoint, digest = refiner_checkpoint(models)
     segmenter = (warm or {}).get('segmenter') or EfficientTAMVideo(
-        efficienttam_source, models / name, REFINE_ASSETS[name][1], device=device)
+        efficienttam_source, Path(efficienttam_checkpoint or checkpoint), digest, device=device)
     report('tracking', 0, 1)
     results = refine(frames, detections, segmenter, label=label, stop_when_complete=fast,
                      max_throws=1 if fast else None, progress=report, expected_max_rev_s=expected_max_rev_s)
@@ -457,12 +463,12 @@ async def refine_take(directory, *, label, models, device, efficienttam_source, 
 
 def _refine_main(argv):
     import argparse
-    from .demos.rotation import DEFAULT_MODELS
     parser = argparse.ArgumentParser(prog='python -m gamst.takes refine')
     parser.add_argument('take_dir')
     parser.add_argument('--label', required=True, help='open-vocabulary text for the object to follow')
     parser.add_argument('--efficienttam-source', required=True)
-    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--models', help='weight root or an existing flat directory (default: the GAMST weight root)')
+    parser.add_argument('--efficienttam-checkpoint', help='EfficientTAM weight file (default: found under --models)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
     parser.add_argument('--worker-python', default=sys.executable)
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)
@@ -471,6 +477,7 @@ def _refine_main(argv):
     args = parser.parse_args(argv)
     output = asyncio.run(refine_take(args.take_dir, label=args.label, models=args.models, device=args.device,
                                      efficienttam_source=args.efficienttam_source,
+                                     efficienttam_checkpoint=args.efficienttam_checkpoint,
                                      worker_python=args.worker_python, fast=args.fast,
                                      expected_max_rev_s=args.expected_max_rev_s))
     print(json.dumps(dict(detections=output['detections'], timing=output['timing'], throws=[
@@ -482,30 +489,30 @@ def _refine_server(argv):
     """Keep YOLOE (batched, in this process) and EfficientTAM loaded; count each take directory
     read from stdin with the fast path. Saves the model loading time on every ANALYZE."""
     import argparse
-    from .demos.rotation import DEFAULT_MODELS, REFINE_ASSETS, detector_config
+    from .demos.rotation import detector_config, refiner_checkpoint
     from .providers.rotation_refine import EfficientTAMVideo
     from .providers.yoloe_native import load_in_process
     parser = argparse.ArgumentParser(prog='python -m gamst.takes refine-server')
     parser.add_argument('--label', required=True)
     parser.add_argument('--efficienttam-source', required=True)
-    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--models', help='weight root or an existing flat directory (default: the GAMST weight root)')
+    parser.add_argument('--efficienttam-checkpoint', help='EfficientTAM weight file (default: found under --models)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'], default='cpu')
     parser.add_argument('--worker-python', default=sys.executable)
     parser.add_argument('--expected-max-rev-s', type=float, default=40.)
     parser.add_argument('--fast', action='store_true', help='accepted for symmetry; the server is always fast')
     args = parser.parse_args(argv)
-    models = Path(args.models)
-    name = 'efficienttam_ti_512x512.pt'
-    warm = dict(detector=load_in_process(detector_config(models, [args.label], args.device, .2)),
-                segmenter=EfficientTAMVideo(args.efficienttam_source, models / name, REFINE_ASSETS[name][1],
-                                            device=args.device))
+    checkpoint, digest = refiner_checkpoint(args.models)
+    warm = dict(detector=load_in_process(detector_config(args.models, [args.label], args.device, .2)),
+                segmenter=EfficientTAMVideo(args.efficienttam_source, Path(args.efficienttam_checkpoint or checkpoint),
+                                            digest, device=args.device))
     print(json.dumps({'refine_server': 'ready'}), flush=True)
     for line in sys.stdin:
         if not line.strip():
             continue
         directory = Path(line.strip())
         try:
-            output = asyncio.run(refine_take(directory, label=args.label, models=models, device=args.device,
+            output = asyncio.run(refine_take(directory, label=args.label, models=args.models, device=args.device,
                                              efficienttam_source=args.efficienttam_source,
                                              worker_python=args.worker_python, fast=True, warm=warm,
                                              expected_max_rev_s=args.expected_max_rev_s))

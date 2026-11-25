@@ -16,6 +16,23 @@ MODALITIES = frozenset(('video', 'audio', 'text', 'thermal', 'radar', 'csi',
                         'imu', 'tactile', 'environment', 'events'))
 STREAMING_MODES = frozenset(('native', 'window', 'frame', 'offline'))
 RAW_KEYS = frozenset(('raw', 'frame', 'samples', 'jpeg', 'image', 'audio', 'landmarks'))
+# Joint positions, identity vectors and waveforms under any usual name, compared without case or
+# separators (``key_points`` is ``keypoints``). Like RAW_KEYS they are never context; unlike the legacy
+# ``landmarks`` of the in-process pose and face plugins, an unregistered signal may not carry them either.
+PRIVATE_KEYS = frozenset((
+    'keypoint', 'keypoints', 'keypoints2d', 'keypoints3d', 'joint', 'joints', 'joints2d', 'joints3d', 'jointpositions',
+    'jointcoordinates', 'skeleton', 'skeletons', 'landmark', 'landmarks2d', 'landmarks3d', 'poselandmarks', 'handlandmarks',
+    'facelandmarks', 'lefthandlandmarks', 'righthandlandmarks', 'poseworldlandmarks',
+    'embedding', 'embeddings', 'voiceprint', 'faceprint', 'waveform', 'pcm'))
+
+
+def is_private_key(key):
+    return re.sub('[^a-z0-9]', '', key.lower()) in PRIVATE_KEYS
+
+
+def is_raw_key(key):
+    """A field name that never enters a context value."""
+    return key.lower() in RAW_KEYS or re.sub('[^a-z0-9]', '', key.lower()) == 'worldlandmarks' or is_private_key(key)
 _KINDS = {'string': str, 'number': (int, float), 'integer': int,
           'boolean': bool, 'object': dict, 'array': list}
 
@@ -56,7 +73,7 @@ def bounded_json(value, *, max_bytes=65536, forbid_raw=False):
             for key, child in item.items():
                 if not isinstance(key, str) or not 1 <= len(key) <= 128:
                     raise ValueError('observation keys must be bounded strings')
-                if forbid_raw and key.lower() in RAW_KEYS:
+                if forbid_raw and is_raw_key(key):
                     raise ValueError('raw media fields are not context observations')
                 result[key] = walk(child, depth+1)
             return result
@@ -77,7 +94,7 @@ class OutputField:
 
     def __post_init__(self):
         identifier(self.name, 'field name')
-        if self.name.lower() in RAW_KEYS or self.kind not in _KINDS:
+        if is_raw_key(self.name) or self.kind not in _KINDS:
             raise ValueError('invalid context field or field kind')
         if type(self.required) is not bool:
             raise ValueError('required must be boolean')

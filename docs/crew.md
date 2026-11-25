@@ -11,7 +11,7 @@ rings only.
 |---|---|
 | `gamst setup plan --goals … [--override role=model] [--json]` / `gamst setup apply PLAN.json` | `gamst.crew.setup.main`, run in-process |
 | MCP `plan_setup` / `apply_setup` (`gamst mcp`) | `gamst.mcp._setup_tool` -> `make_plan` / `apply_plan` |
-| `gamst recipe setup <recipe> [--models DIR] [--profile P] [--dry-run]` | `gamst.recipes.plan` -> `make_plan(roles=…, dependencies=False, isolation="current")` -> `apply_plan(models_dir=…)` |
+| `gamst recipe setup <recipe> [--isolation venv\|current] [--models DIR] [--profile P] [--dry-run]` | `gamst.recipes.plan` -> `make_plan(roles=…, dependencies=False)` -> `apply_plan` |
 | `gamst demo rotation --fetch-models` | `gamst.crew.setup.download_weight` for the registry's `yoloe.26s` and `efficienttam.ti_512` files |
 
 The role registry (`gamst/crew/registry.py`) is the only place that names a weight URL and its
@@ -21,17 +21,47 @@ overwritten). `gamst/demos/rotation.py`'s `MODEL_ASSETS` / `REFINE_ASSETS` are v
 registry; `gamst/recipes/parts.py` keeps only how to build a Pipeline module, the sampling rule and
 the `role` / `candidate` it needs.
 
-Plan options added during the absorption (both generic, not recipe-specific):
+### Environments: one per model environment
 
-- `roles={role: model}` and `dependencies=False`: plan exactly these roles. A recipe composes its
-  own modules, so `vision.rotation` does not pull in `vision.detect` for the fan recipe.
-- `isolation="current"`: the planned packages go into the running interpreter (what a recipe's
-  in-process modules import), without the `gamst-sdk` base requirement; workers use that
-  interpreter. The default `"venv"` keeps Crew's one-venv-per-environment behaviour. A
-  `current` plan made for another interpreter version is refused.
-- `apply_plan(models_dir=DIR)`: every weight lands flat in one directory (the coin-flip view reads
-  the detector and the refiner from one `--models` directory). Default stays
-  `<prefix>/models/<model>/`.
+The registry entry decides where its packages go; a saved plan cannot move them (`_validate_plan`
+recomputes the environments and compares `environment`, `python`, `source`, `in_process` and
+`provider_profile` with the registry).
+
+| Registry entry | Installed into | Why |
+|---|---|---|
+| model candidate | `<prefix>/venvs/<environment>` | it runs as an isolated `ProcessProvider` worker there |
+| `kind="input"` / `kind="view"` role, `in_process` candidate (`gamst.rotation`) | the running interpreter | the Pipeline process itself imports it (decoding, microphone, HUD drawing, rotation math) |
+
+This is the default for `gamst setup`, MCP and `gamst recipe setup`. `isolation="current"`
+(`--isolation current`) is the explicit alternative: everything into the running interpreter, with a
+warning when that would mix two OpenCV distributions.
+
+- **Shared environment.** `yoloe.26s` and `efficienttam.ti_512` share `yoloe-efficienttam`, because the
+  after-take coin count (`python -m gamst.takes refine|refine-server`) loads both in one process.
+  `gamst recipe run coin-flip` starts that process with the environment's Python from the profile, and
+  asks for setup when the two entries point at different interpreters.
+- **GAMST in a worker environment.** From a source checkout it is installed in place
+  (`pip install -e <checkout>`; the plan records the path and the git commit, and a plan made for another
+  path or commit is refused). From an installed release it is `gamst-sdk==<version>`, from a git install the
+  same commit.
+- **OpenCV.** mediapipe pulls in opencv-contrib-python and ultralytics opencv-python, which overwrite each
+  other's `cv2`. `registry.cv2_distributions` knows both, and a test asserts that no environment holds two.
+
+`make_plan(roles={role: model}, dependencies=False)` plans exactly a recipe's roles: a recipe composes its own
+modules, so `vision.rotation` does not pull in `vision.detect` for the fan recipe.
+
+### Weights: one root
+
+`~/.cache/gamst/models/<model>/<file>`, `GAMST_MODELS` overrides the root. `gamst setup`,
+`gamst recipe setup`, `gamst demo rotation` and `gamst.takes` all use it
+(`setup.models_root` / `setup.model_directory`). Nothing is written flat, because names such as `config.json`
+and `model.safetensors` collide across models.
+
+`--models DIR` replaces the root. An existing flat directory (for example one filled by an older version) still
+works for reading: it is used for a model only when it holds all of that model's files and `DIR/<model>` does not;
+apply also requires their SHA256 to match. A `bundle` candidate (its loader reads the whole directory, e.g. faster-whisper) always
+gets its own. It is never moved or written to. Weights from the former default
+`~/.cache/gamst/models/yoloe` can be read with `--models ~/.cache/gamst/models/yoloe`.
 
 Apply writes `~/.config/gamst/profile.json` (`$XDG_CONFIG_HOME` honoured, the same path
 `gamst.profile` reads). `gamst recipe run` reads its roles' entries (weight paths, source checkout,
@@ -59,8 +89,8 @@ show and switch profile roles too.
 
 | GamstCrew module | Now | Why |
 |---|---|---|
-| `registry.py` | kept: `gamst.crew.registry` | GAMST had no role/candidate registry. Added `mediapipe.pose_full`, role `vision.video_segmentation` (`efficienttam.ti_512`), input roles `input.video` / `input.microphone`, `Role.kind`, `RoleCandidate.in_process`, `candidate()`, `weight_assets()`. `BASE` is now the caller's `gamst-sdk` version instead of a fixed 0.5.0. |
-| `setup.py` | kept: `gamst.crew.setup` | the one plan/apply; additions above, `verified_file`, `weight_destination`, EfficientTAM in `_role_config`. |
+| `registry.py` | kept: `gamst.crew.registry` | GAMST had no role/candidate registry. Added `mediapipe.pose_full`, role `vision.video_segmentation` (`efficienttam.ti_512`), input roles `input.video` / `input.microphone`, `Role.kind`, `RoleCandidate.in_process`, `candidate()`, `weight_assets()`. Crew's fixed `gamst-sdk==0.5.0` base is now the caller's own GAMST (above). Role `view.hud` (Pillow and OpenCV for the HUD). |
+| `setup.py` | kept: `gamst.crew.setup` | the one plan/apply; additions above, `verified_file`, EfficientTAM in `_role_config`. |
 | `mcp.py` (standalone stdio server) | replaced by `gamst.mcp` tools `plan_setup` / `apply_setup` | one MCP server; the tools call the same functions. |
 | `os_profiles.py`, `diagnostics.py`, `resources.py`, `host_limits.py` | kept unchanged | GAMST lacked them. |
 | `manager.py`, `process_runtime.py`, `launcher.py` | kept | supervised packet runtimes for any argv (e.g. a container command), restarts, reservations, host limits; GAMST's `ProcessProvider` only runs GAMST provider workers. |
@@ -88,8 +118,10 @@ Crew's other docs moved to [docs/crew/](crew/): [agentic setup](crew/agentic-set
   exercised only by the ported unit tests (fake cgroup roots, plain subprocesses).
 - `isolation="venv"` apply against the network (venv creation + pip + downloads) is not run by
   the tests; apply is tested with installs patched and with local `file://` weights.
-- `mediapipe.pose_full` / `pose_heavy` sizes and digests were measured on downloaded copies;
-  the EfficientTAM weight size (40 MiB) is an estimate, so only its SHA256 is enforced.
+- The refine process and the MediaPipe worker were not started in their new environments: no environment
+  was created, so the dependency sets are declared, not resolved by pip here.
+- `mediapipe.pose_full` / `pose_heavy`, `yoloe.26s`, MobileCLIP2 and EfficientTAM sizes and digests were
+  measured on files already on disk.
 
 ## Adding a role
 

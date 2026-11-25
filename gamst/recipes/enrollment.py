@@ -80,6 +80,19 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
     return saved
 
 
+class _Joints:
+    """Keeps the newest joints of the pose module in this process; commits nothing."""
+    name, version = 'enrollment_joints', '1'
+
+    def __init__(self):
+        self.poses, self.timestamp_ms = [], None
+
+    def process(self, frame):
+        from ..private_payload import poses_of
+        self.poses, self.timestamp_ms = poses_of(frame.data) or [], frame.timestamp_ms
+        return []
+
+
 async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     """Face (and body) embeddings of the only visible person in the window; frames are not kept."""
     from .. import Gamst
@@ -90,9 +103,10 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     face, body = await face_embedder(item, context), await body_embedder(item, context)
     upstream = [entry for entry in recipe['modules'] if entry['use'] in ('mediapipe-pose',)]
     found = dict(face=[], body=[])
-    first, last = {}, {}
+    first, last, joints = {}, {}, _Joints()
     async with Gamst(consent=True) as human:
         pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream)
+        pipeline.add_module('enrollment_joints', joints, consumes=[upstream[0]['joints']])
 
         async def on_frame(input_id, frame, records):
             first.setdefault('ms', frame.timestamp_ms)
@@ -101,8 +115,7 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
                 return False
             if seconds < args.start or frame.timestamp_ms - last.get('ms', -every_ms) < every_ms:
                 return True
-            poses = next((record['observation']['value'] for record in records
-                          if record['observation'].get('name') == 'scene.poses'), [])
+            poses = joints.poses if joints.timestamp_ms == frame.timestamp_ms else []
             if len(poses) != 1:   # nobody, or it is unclear which person consented
                 return True
             last['ms'] = frame.timestamp_ms

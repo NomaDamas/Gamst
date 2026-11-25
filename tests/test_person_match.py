@@ -1,3 +1,4 @@
+import json
 import math
 import unittest
 
@@ -6,6 +7,7 @@ import numpy as np
 from gamst import Gamst
 from gamst.pipeline import Pipeline
 from gamst.plugins import InputFrame
+from gamst.private_payload import PrivatePoses
 from gamst.providers.person_match import ARCFACE_112, TargetPerson, body_box, face_points, umeyama
 from gamst.providers.pose_exemplar import PoseChannels
 from gamst.providers.sapiens2_pose import GOLIATH_BODY, Sapiens2PosePlugin, nms, to_poses
@@ -70,8 +72,12 @@ class GeometryTest(unittest.TestCase):
         module = PoseChannels(mapping=GOLIATH_BODY, source='sapiens2', min_visibility=.3)
         from_landmarks = module.process(InputFrame(poses, 'video', 1))
         self.assertEqual(from_landmarks['visible'], 13)
-        compact = dict(poses=[dict(keypoints=[[p['x'], p['y'], p['visibility']] for p in poses[0]['landmarks']])])
-        self.assertEqual(module.process(InputFrame(compact, 'video', 1))['channels'], from_landmarks['channels'])
+        private = InputFrame(PrivatePoses(poses), 'video', 1)
+        self.assertEqual(module.process(private)['channels'], from_landmarks['channels'])
+        self.assertEqual(from_landmarks['image_aspect'], 1.)
+        wide = to_poses(keypoints * [2, 1], np.ones((1, 308)), [[0, 0, 200, 100]], 200, 100)
+        self.assertEqual((wide[0]['image_width'], wide[0]['image_height']), (200, 100))
+        self.assertEqual(module.process(InputFrame(wide, 'video', 1))['image_aspect'], 2.)
         with self.assertRaisesRegex(PermissionError, 'biometric'):
             Sapiens2PosePlugin.from_local('pose', 'detector')
 
@@ -119,8 +125,8 @@ class TargetTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, 'consent'):
                 pipeline.add_reference('person', 'person', value)
             pipeline.add_reference('person', 'person', value, consent=dict(by='owner'))
-            module = TargetPerson(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, emits='person:me')
-            pipeline.add_module('target', module, consumes=['camera', 'poses'], emits=('person:me',))
+            module = TargetPerson(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, emits='person:me', joints='joints:me')
+            pipeline.add_module('target', module, consumes=['camera', 'poses'], emits=('person:me', 'joints:me'))
             crops, poses = [], []
 
             class Sink:
@@ -132,11 +138,13 @@ class TargetTest(unittest.IsolatedAsyncioTestCase):
                     return []
 
             pipeline.add_module('crop', Sink(crops), consumes='person:me')
-            pipeline.add_module('pose', Sink(poses), consumes='target:scene.target_poses')
+            pipeline.add_module('pose', Sink(poses), consumes='joints:me')
             ts = now() - 1000
-            await pipeline.push('poses', [person(.25, 'a'), person(.75, 'b')], timestamp_ms=ts)
-            await pipeline.push('camera', frame_of(BLUE, RED), timestamp_ms=ts)
-            self.assertEqual([pose['track_id'] for pose in poses[0]], ['b'])
+            await pipeline.push('poses', PrivatePoses([person(.25, 'a'), person(.75, 'b')]), timestamp_ms=ts)
+            records = await pipeline.push('camera', frame_of(BLUE, RED), timestamp_ms=ts)
+            self.assertEqual([pose['track_id'] for pose in poses[0].poses], ['b'])
+            self.assertEqual(len(poses[0].poses[0]['landmarks']), 33)
+            self.assertNotIn('landmarks', json.dumps(records))   # the joints never become a record
             self.assertGreater(crops[0][..., 2].mean(), 200)
 
     def test_embeddings_of_another_model_are_refused(self):

@@ -8,7 +8,6 @@ import tempfile
 from .capabilities import bounded_json
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
 from .provider_profiles import capability
-from .providers.model_workers import PRIVATE_AUDIO
 from .streams import _finish
 
 
@@ -67,10 +66,17 @@ class ProcessProvider:
     # of calling open(). Only the explicit SAM open path installs an owner.
     _separation_owner = None
     profile = None
+    # True: this worker answers ``query`` of its owning module only (gamst.private_payload).
+    private = False
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
-                   separation_owner=None):
+                   separation_owner=None, private=False):
+        from .private_payload import CONTRACTS, PRIVATE_ONLY, PROTOCOL as PRIVATE_PROTOCOL
+        if type(private) is not bool or private and profile not in CONTRACTS:
+            raise PermissionError(f'{profile} declares no private payload')
+        if profile in PRIVATE_ONLY and not private:
+            raise PermissionError(f'{profile} answers its owning module only')
         if profile == 'pg.physical.local':
             if separation_owner is not None:raise ValueError('PG has no private separation media')
             from .pg_physical_process import PGPhysicalProcess
@@ -92,7 +98,7 @@ class ProcessProvider:
         self = cls()
         self.spec = capability(profile, config)
         self.config = bounded_json(config)
-        self.profile, self.timeout = profile, inference_timeout
+        self.profile, self.timeout, self.private = profile, inference_timeout, private
         self._lock = asyncio.Lock()
         self._process = None
         self._close_task = None
@@ -123,6 +129,8 @@ class ProcessProvider:
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
+            if private:
+                extra['private_protocol'] = PRIVATE_PROTOCOL
             response = await self._request('start', profile=profile, config=self.config,
                                            timeout=startup_timeout, **extra)
             if response != {'spec': spec_value(self.spec), **extra}:
@@ -160,8 +168,8 @@ class ProcessProvider:
             from .separation_media import MAX_PAIR_BYTES, MEDIA_HEADER_LIMIT
             if head_size > MEDIA_HEADER_LIMIT or payload_size > MAX_PAIR_BYTES:
                 raise ValueError('separation response exceeds private wire bounds')
-        private_audio = operation == 'process' and self.profile in PRIVATE_AUDIO
-        if payload_size and not private_audio and (owner is None or operation != 'process'):
+        query = operation == 'query' and self.private
+        if payload_size and not query and (owner is None or operation != 'process'):
             raise ValueError('worker response cannot contain raw sensor payload')
         response = parse_header(await process.stdout.readexactly(head_size))
         if type(response) is not dict or type(response.get('id')) is not int or response.get('id') != sequence or type(response.get('ok')) is not bool:
@@ -183,16 +191,18 @@ class ProcessProvider:
                 raise ValueError('separation response length differs from request')
             binary = await process.stdout.readexactly(payload_size)
             return unpack_pair(result, response['separation'], binary, binding, self.spec), binding
-        if private_audio:
-            # Waveform for the module that owns this worker; it is never validated into a record.
-            shape = fields['frame']['layout'].get('shape') or [0]
-            if result is not None or payload_size not in (0, 4 * shape[0]):
-                raise ValueError('private audio response differs from its request')
-            import numpy as np
-            samples = np.frombuffer(await process.stdout.readexactly(payload_size), dtype='<f4').copy()
-            if not np.isfinite(samples).all():
-                raise ValueError('private audio response must be finite')
-            return samples
+        if query:
+            from .private_payload import expected_size, unpack
+            if set(response) != {'id', 'ok', 'result', 'private'}:
+                raise ValueError('query requires a public result and a private descriptor')
+            # The declared size is checked before any private byte is read.
+            if payload_size != expected_size(self.profile, response['private'], fields['frame']):
+                raise ValueError('private payload length differs from its shape')
+            binary = await process.stdout.readexactly(payload_size)
+            public = self.spec.validate(result)
+            return public, unpack(self.profile, public, response['private'], binary, fields['frame'])
+        if 'private' in response:
+            raise ValueError('unnegotiated private payload')
         if 'separation' in response:
             raise ValueError('unnegotiated separation metadata')
         if owner is not None and operation != 'start' and result is not None:
@@ -256,18 +266,32 @@ class ProcessProvider:
                 if self._separation_owner is not None:
                     self._separation_owner._release()
 
+    def _committable(self):
+        if self.private:
+            raise PermissionError('a private worker answers query() of its owning module only')
+
+    async def query(self, frame, request=None):
+        """(public value, :class:`gamst.private_payload.Private`) for the module that owns this worker."""
+        if not self.private:
+            raise PermissionError('this worker was not opened for private queries')
+        return await self._request('query', input_frame=frame, request=bounded_json(request))
+
     async def process(self, frame):
+        self._committable()
         return await self._request('process', input_frame=frame)
 
     async def process_regions(self, frame, evidence):
+        self._committable()
         evidence = bounded_json(evidence)
         return await self._request('process_regions', input_frame=frame, evidence=evidence)
 
     async def endpoint(self):
         """Serialize a nonterminal utterance endpoint; unsupported workers fail closed."""
+        self._committable()
         return await self._request('endpoint')
 
     async def finish(self):
+        self._committable()
         return await self._request('finish')
 
     async def reset(self):
