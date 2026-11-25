@@ -18,7 +18,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
+**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup built into GAMST (`gamst setup`, `gamst.crew`; profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
@@ -225,16 +225,16 @@ gamst recipe check rotation --symmetry 3 --max-rpm 1500 --fps 240
 gamst recipe run rotation --camera 0 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 ```
 
-Role-based hardware defaults are delegated to GamstCrew:
-`gamst setup plan --goals rotation,speech --json` and
-`gamst setup apply PLAN.json` (agents: MCP `plan_setup` / `apply_setup`). If
-GamstCrew is not installed, `gamst setup` prints its installation command
-instead of silently choosing another setup. Apply writes
-`~/.config/gamst/profile.json`; `await ProfileRuntime.open(human)` from
-`gamst.profile` then registers every selected role as an ordinary plugin
-(isolated workers behind a queue, model-free roles such as `vision.rotation`
-in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
-the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
+Setup is part of GAMST (`gamst.crew`, formerly the separate GamstCrew package; nothing else to
+install). There is one setup path: `gamst setup plan --goals rotation,speech --json` and
+`gamst setup apply PLAN.json`, MCP `plan_setup` / `apply_setup`, and `gamst recipe setup <recipe>`
+all run the same plan/apply over one role registry (`gamst/crew/registry.py`), which is the only
+place that names a weight URL and its SHA256. Apply installs the planned packages, downloads only
+pinned weights and verifies them, and writes `~/.config/gamst/profile.json`;
+`await ProfileRuntime.open(human)` from `gamst.profile` then runs every selected role as one
+Pipeline (isolated workers in bounded lanes, model-free roles such as `vision.rotation`
+in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run the profile behind
+MCP capture or the dashboard; `push_video` feeds the same Pipeline. See [docs/crew.md](docs/crew.md).
 
 ### Rotation counting (experimental)
 
@@ -266,7 +266,7 @@ The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
 (each throw at 8× slow motion with the running count) are written next to the
 take.
 
-The `coin-flip` recipe runs this pipeline. `setup` installs only its parts: the extras, the SHA256-pinned YOLOE and
+The `coin-flip` recipe runs this pipeline. `setup` installs only its parts through `gamst setup`'s apply: their packages, the SHA256-pinned YOLOE and
 EfficientTAM tiny weights, and EfficientTAM at its pinned revision. `check` tells whether a camera's frame rate can
 count the recipe's speed.
 

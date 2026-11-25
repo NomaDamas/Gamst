@@ -67,17 +67,11 @@ async def demo():
 
 
 def _dispatch_setup(extra):
-    import importlib.util
-    try:
-        available = importlib.util.find_spec("gamstcrew.setup") is not None
-    except ModuleNotFoundError:
-        available = False
-    if not available:
-        print("GamstCrew is required for role-based setup. Install it with: python -m pip install gamstcrew")
-        raise SystemExit(1)
-    result = subprocess.run([sys.executable, "-m", "gamstcrew.setup", *extra], check=False)
-    if result.returncode:
-        raise SystemExit(result.returncode)
+    """``gamst setup plan|apply``: GAMST's own role setup (gamst.crew.setup), in this process."""
+    from .crew.setup import main as setup
+    code = setup(extra)
+    if code:
+        raise SystemExit(code)
     return 0
 
 

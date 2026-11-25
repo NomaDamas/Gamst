@@ -12,7 +12,7 @@ script a person:
 - pixel (0, 1) channel 1 (G): > 127 adds a visible right hand
 
 Environment: FAKE_DELAY_MS (per-frame work), FAKE_FAIL_AFTER (fatal error after N frames),
-FAKE_LOG (append every command line received, for assertions).
+FAKE_DROP_EVERY (FlowLimiter drops every Nth frame), FAKE_REVISION, FAKE_LOG (append every command line received, for assertions).
 """
 import math
 import os
@@ -77,6 +77,8 @@ class Fake:
         self.out, self.lock = out, threading.Lock()
         self.delay = float(os.environ.get('FAKE_DELAY_MS', '0')) / 1000
         self.fail_after = int(os.environ.get('FAKE_FAIL_AFTER', '0'))
+        self.drop_every = int(os.environ.get('FAKE_DROP_EVERY', '0'))
+        self.revision = os.environ.get('FAKE_REVISION', 'fake')
         self.frames = 0
         self.queue = queue.Queue()
         self.cond = threading.Condition()
@@ -93,13 +95,14 @@ class Fake:
     def hello(self):
         branches = ','.join('"%s"' % b for b in self.branches)
         sides = ','.join('"%s"' % s for s in self.sides_declared)
-        self.line('{"type":"hello","protocol":%d,"mediapipe":"fake","gpu":false,"input":"input_video",'
-                  '"frame_stream":"gamst_frame","branches":[%s],"side_packets":[%s]}' % (PROTOCOL, branches, sides))
+        self.line('{"type":"hello","protocol":%d,"mediapipe":"%s","gpu":false,"input":"input_video",'
+                  '"frame_stream":"gamst_frame","branches":[%s],"side_packets":[%s]}' % (PROTOCOL, self.revision, branches, sides))
 
     # -------------------------------------------------- graph run (worker = MediaPipe scheduler)
 
     def start(self):
         self.run += 1
+        self.in_flight = 0
         self.last_us = None
         self.max_in_flight = int(self.sides.get('max_in_flight', 1))
         self.worker = threading.Thread(target=self.work, args=(self.run,), daemon=True)
@@ -110,55 +113,41 @@ class Fake:
     def stop(self):
         if self.worker is None:
             return
+        with self.cond:  # closing the inputs releases what the FlowLimiter still holds
+            rest, self.waiting = self.waiting, []
+            for us, pixels, branches in rest:
+                self.queue.put((us, pixels, branches, True))
         self.queue.put(None)
         self.worker.join()
         self.worker = None
 
     def frame(self, us, pixels, branches):
-        # FlowLimiter: admit while fewer than max_in_flight are inside, else keep one waiting.
+        # FlowLimiter: admit while fewer than max_in_flight are inside, else keep the latest waiting.
         with self.cond:
-            if self.in_flight < self.max_in_flight:
+            if self.drop_every and self.frames % self.drop_every == 0:
+                self.queue.put((us, pixels, branches, False))
+            elif self.in_flight < self.max_in_flight:
                 self.in_flight += 1
                 self.queue.put((us, pixels, branches, True))
             else:
-                if self.waiting:
-                    dropped = self.waiting.pop(0)
-                    self.queue.put((dropped[0], None, dropped[2], False))
-                self.waiting.append((us, pixels, branches))
-
-    def finished(self):
-        with self.cond:
-            self.in_flight -= 1
-            if self.waiting and self.in_flight < self.max_in_flight:
-                us, pixels, branches = self.waiting.pop(0)
-                self.in_flight += 1
-                self.queue.put((us, pixels, branches, True))
+                for dropped in self.waiting:
+                    self.queue.put((*dropped, False))
+                self.waiting = [(us, pixels, branches)]
 
     def work(self, run):
-        pending = []
         while True:
             item = self.queue.get()
             if item is None:
-                with self.cond:  # close: frames still waiting in the FlowLimiter are processed
-                    rest, self.waiting = self.waiting, []
-                for us, pixels, branches in rest:
-                    pending.append((us, pixels, branches, True))
-                pending.sort(key=lambda entry: entry[0])
-                for entry in pending:
-                    self.bundle(run, *entry)
                 return
-            pending.append(item)
-            pending.sort(key=lambda entry: entry[0])
-            # emit in timestamp order, like settled timestamps in a graph
-            while pending and (pending[0][3] is False or pending[0] is item or len(pending) > 1):
-                entry = pending.pop(0)
-                if entry[3]:
-                    time.sleep(self.delay)
-                self.bundle(run, *entry)
-                if entry[3]:
-                    self.finished()
-                if not pending or pending[0][3]:
-                    break
+            if item[3]:
+                time.sleep(self.delay)
+            self.bundle(run, *item)
+            if item[3]:
+                with self.cond:
+                    self.in_flight -= 1
+                    if self.waiting:
+                        self.in_flight += 1
+                        self.queue.put((*self.waiting.pop(), True))
 
     def bundle(self, run, us, pixels, branches, processed):
         head = '{"type":"packet","run":%d,"ts_us":%d' % (run, us)

@@ -13,69 +13,40 @@ from __future__ import annotations
 
 import asyncio
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import ssl
 import subprocess
 import sys
 import time
-from urllib.request import urlopen
 
+from ..crew.registry import weight_assets
 from ..providers.rotation import RotationPlugin
 
 
-MODEL_ASSETS = {
-    'yoloe-26s-seg.pt': ('https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt',
-                         '48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654'),
-    'mobileclip2_b.ts': ('https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts',
-                         '35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f'),
-}
+# Pinned weights come from the one GAMST role registry (gamst.crew.registry); these are views of it.
+DETECTOR = ('vision.detect', 'yoloe.26s')
+REFINER = ('vision.video_segmentation', 'efficienttam.ti_512')
+MODEL_ASSETS = weight_assets(*DETECTOR)
 # Take refinement (--refine): promptable video segmenter, Hugging Face revision pinned.
-REFINE_ASSETS = {
-    'efficienttam_ti_512x512.pt': ('https://huggingface.co/yunyangx/efficient-track-anything/resolve/'
-                                   '9bdd8ab585b19ef95f9c9ed847ac9478301890b4/efficienttam_ti_512x512.pt',
-                                   '7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b'),
-}
+REFINE_ASSETS = weight_assets(*REFINER)
 DEFAULT_MODELS = Path(os.environ.get('GAMST_MODELS', Path.home() / '.cache' / 'gamst' / 'models')) / 'yoloe'
 
 
-def _tls():
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        return ssl.create_default_context()
-
-
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as source:
-        while chunk := source.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def fetch_models(directory, names=None):
-    """Download the pinned weights (only ``names`` when given) and verify their SHA256."""
-    directory.mkdir(parents=True, exist_ok=True)
-    for name, (url, expected) in {**MODEL_ASSETS, **REFINE_ASSETS}.items():
-        if names is not None and name not in names:
-            continue
-        target = directory / name
-        temporary = target.with_suffix('.download')
-        if target.exists() and _sha256(target) == expected:
-            print(f'{name}: sha256 verified')
-            continue
-        with urlopen(url, timeout=120, context=_tls()) as response, temporary.open('wb') as output:
-            while chunk := response.read(1 << 20):
-                output.write(chunk)
-        if _sha256(temporary) != expected:
-            temporary.unlink(missing_ok=True)
-            raise SystemExit(f'{name}: SHA256 mismatch; download discarded')
-        temporary.replace(target)
-        print(f'{name}: sha256 verified')
+    """Download the pinned weights (only ``names`` when given); setup's downloader verifies SHA256."""
+    from ..crew.registry import candidate
+    from ..crew.setup import SetupError, download_weight
+    directory = Path(directory)
+    for role, model in (DETECTOR, REFINER):
+        for weight in candidate(role, model).weights:
+            if names is not None and weight.name not in names:
+                continue
+            try:
+                download_weight(weight.as_dict(), directory / weight.name)
+            except SetupError as error:
+                raise SystemExit(str(error)) from error
+            print(f'{weight.name}: sha256 verified')
 
 
 def detector_config(models, labels, device, threshold=.25):

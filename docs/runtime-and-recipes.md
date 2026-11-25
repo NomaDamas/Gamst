@@ -81,7 +81,7 @@ A recipe declares:
 
 The runtime stays one runtime. A recipe only chooses and connects its parts:
 
-- `setup` installs the union of the parts' extras, pinned weights and pinned source checkouts, and nothing else;
+- `setup` plans exactly the registry roles its parts name and runs `gamst setup`'s apply (`gamst.crew.setup`): their packages, pinned weights and pinned source checkouts, and nothing else;
 - `run` starts the existing runtime with those parts.
 
 The sampling check is physics, not tuning. An object whose look repeats `symmetry` times per turn is countable only

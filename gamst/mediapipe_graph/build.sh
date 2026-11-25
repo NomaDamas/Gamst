@@ -186,4 +186,5 @@ json.dump(manifest, open(os.path.join(out, 'manifest.json'), 'w'), indent=2)
 print(json.dumps(dict(runner=manifest['runner'], runner_sha256=manifest['runner_sha256'], files=len(files))))
 PY
 echo "staged: $OUT"
+echo "role:   vision.mediapipe_graph model graph.holistic_$VARIANT, config {\"manifest\": \"$OUT/manifest.json\"}"
 echo "use:    MediaPipeGraphModule.from_manifest('$OUT/manifest.json')"

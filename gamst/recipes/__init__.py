@@ -5,7 +5,7 @@ A recipe composes parts GAMST already has (``gamst/recipes/parts.py``) into a
 
   gamst recipe list
   gamst recipe show person-action-count
-  gamst recipe setup person-action-count [--dry-run]     install only what the recipe uses
+  gamst recipe setup person-action-count [--dry-run]     install only what the recipe uses (gamst setup's apply)
   gamst recipe check rotation --fps 240 --symmetry 3     test a camera against the sampling limit
   gamst recipe enroll person-action-count --video demo.mp4 --start 2 --seconds 1.5 --out shotgun.json
   gamst recipe run person-action-count --camera 0 --exemplar shotgun.json
@@ -36,22 +36,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 import platform
 import re
-import subprocess
 import sys
 
 from ..demos import rotation as demo
-from .parts import MODELS_ROOT, PARTS, model_path, sha256
+from .parts import PARTS
 
 RECIPES = Path(__file__).resolve().parent
-SOURCES = Path(os.environ.get('GAMST_SOURCES', Path.home() / '.cache' / 'gamst' / 'sources'))
-SOURCE_REPOSITORIES = {
-    'EfficientTAM': ('https://github.com/yformer/EfficientTAM', 'gamst.providers.efficienttam_stream',
-                     'UPSTREAM_REVISION'),
-}
 SOURCES_BY_INPUT = {'camera': ('camera', 'video', 'take'), 'gamst240': ('iphone', 'take'),
                     'microphone': ('microphone', 'audio')}
 REFERENCE_KINDS = ('voice', 'person', 'face', 'body', 'exemplar', 'terms', 'object')
@@ -128,106 +121,77 @@ def check(recipe, *, fps=None, max_rev_s=None, symmetry=None, max_reps_s=None):
     return dict(result, fps=fps, ok=ok, problems=problems)
 
 
-def _extra_requirements(extras):
-    """Requirements of the named ``gamst-sdk`` extras: the checkout's pyproject, else installed metadata."""
-    pyproject = RECIPES.parents[1] / 'pyproject.toml'
-    if pyproject.is_file() and sys.version_info >= (3, 11):
-        import tomllib
-        table = tomllib.loads(pyproject.read_text())['project']['optional-dependencies']
-        found = [line for extra in extras for line in table[extra]]
-    else:
-        from importlib import metadata
-        found = []
-        for line in metadata.requires('gamst-sdk') or ():
-            requirement, _, marker = line.partition(';')
-            match = re.search(r'extra\s*==\s*["\']([^"\']+)["\']', marker)
-            if match and match.group(1) in extras:
-                found.append(requirement.strip())
-    return list(dict.fromkeys(found))
+def _items(recipe):
+    """(item, part) for the recipe's input, modules and view, in order."""
+    items = list(recipe['inputs']) + list(recipe.get('modules', ())) + [dict(use=recipe['view'])]
+    return [(item, PARTS[item['use']]) for item in items]
 
 
 def _parts(recipe):
-    uses = [item['use'] for item in recipe['inputs']] + [item['use'] for item in recipe.get('modules', ())]
-    return [PARTS[use] for use in uses + [recipe['view']]]
+    return [part for _, part in _items(recipe)]
 
 
-def _assets(part):
-    if part.models == 'yoloe':
-        return {name: value for name, value in demo.MODEL_ASSETS.items()}, demo.DEFAULT_MODELS
-    if part.models == 'efficienttam':
-        return {name: value for name, value in demo.REFINE_ASSETS.items()}, demo.DEFAULT_MODELS
-    return dict(part.models), MODELS_ROOT / part.group
+def _role(item):
+    part = PARTS[item['use']]
+    return part.role, item.get('candidate', part.candidate)
 
 
-def plan(recipe, models=None):
-    """Everything ``setup`` installs for this recipe."""
-    extras, pip, files, sources = [], [], {}, []
-    for part in _parts(recipe):
-        extras += part.extras
-        pip += part.pip
-        sources += part.sources
-        assets, directory = _assets(part)
-        for name in assets:
-            files[name] = str(Path(models) / name if models and part.models in ('yoloe', 'efficienttam')
-                              else directory / name)
-    extras = list(dict.fromkeys(extras))
-    requirements = _extra_requirements(extras) + [item for item in dict.fromkeys(pip) if item != 'clip']
-    if 'clip' in pip:
-        from ..providers.yoloe_native import CLIP_REVISION
-        requirements.append(f'git+https://github.com/ultralytics/CLIP.git@{CLIP_REVISION}')
-    return dict(recipe=recipe['name'], extras=extras, pip=requirements,
-                models=dict(directory=str(models or demo.DEFAULT_MODELS), files=list(files), paths=files),
-                sources={name: str(SOURCES / name) for name in dict.fromkeys(sources)})
+def roles(recipe):
+    """``{role: candidate}`` of the role registry that the recipe's parts need."""
+    selected = {}
+    for item, part in _items(recipe):
+        if part.role is None:
+            continue
+        role, model = _role(item)
+        if selected.setdefault(role, model) != model:
+            raise ValueError(f"{recipe['name']}: {role} is both {selected[role]} and {model}")
+    return selected
 
 
-def _fetch(url, path, expected):
-    from urllib.request import urlopen
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(path.suffix + '.part')
-    with urlopen(url, context=demo._tls()) as response, open(partial, 'wb') as target:
-        while block := response.read(1 << 20):
-            target.write(block)
-    if sha256(partial) != expected:
-        partial.unlink()
-        raise SystemExit(f'{url} does not match its pinned sha256')
-    partial.rename(path)
+def plan(recipe, models=None, hardware=None):
+    """The setup plan for exactly the recipe's parts (``gamst.crew.setup.make_plan``; installs nothing).
+
+    Packages go into this interpreter (recipe modules run in-process or as workers of it), and
+    every planned weight goes into one directory, ``models`` (default: the one ``gamst demo
+    rotation`` reads), so the coin-flip view finds the detector and the refiner side by side.
+    """
+    from ..crew.setup import make_plan
+    steps = make_plan(roles=roles(recipe), dependencies=False, isolation='current', hardware=hardware)
+    steps['recipe'] = recipe['name']
+    steps['models_dir'] = str(Path(models or demo.DEFAULT_MODELS).expanduser().absolute())
+    return steps
 
 
-def _checkout(name, path):
-    import importlib
-    url, module, attribute = SOURCE_REPOSITORIES[name]
-    revision = getattr(importlib.import_module(module), attribute)
-    if not (path / '.git').is_dir():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'clone', '--quiet', url, str(path)], check=True)
-    head = subprocess.run(['git', '-C', str(path), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-    if head != revision:
-        subprocess.run(['git', '-C', str(path), 'fetch', '--quiet', 'origin'], check=True)
-        subprocess.run(['git', '-C', str(path), 'checkout', '--quiet', revision], check=True)
-    print(f'{name}: {path} at {revision[:7]}')
+def weight_files(steps):
+    return [weight['name'] for selection in steps['roles'].values() for weight in selection['weights']]
 
 
-def setup(recipe, *, models=None, dry_run=False):
+def setup(recipe, *, models=None, dry_run=False, prefix=None, profile=None):
+    """Install only the recipe's parts with the same apply as ``gamst setup``; writes the profile."""
+    from ..crew.setup import SetupError, apply_plan
     steps = plan(recipe, models)
     print(json.dumps(steps, indent=2))
     if dry_run:
         return steps
-    if steps['pip']:
-        subprocess.run([sys.executable, '-m', 'pip', 'install', *steps['pip']], check=True)
-    demo_files = [name for part in _parts(recipe) if part.models in ('yoloe', 'efficienttam')
-                  for name in _assets(part)[0]]
-    if demo_files:
-        demo.fetch_models(Path(models or demo.DEFAULT_MODELS), demo_files)
-    for part in _parts(recipe):
-        if isinstance(part.models, dict):
-            for name, (url, expected) in part.models.items():
-                path = MODELS_ROOT / part.group / name
-                if not path.is_file() or sha256(path) != expected:
-                    _fetch(url, path, expected)
-                print(f'{name}: {path}')
-    for name, path in steps['sources'].items():
-        _checkout(name, Path(path))
-    return steps
+    try:
+        result = apply_plan(steps, prefix=prefix, profile_path=profile, models_dir=steps['models_dir'])
+    except SetupError as error:
+        raise SystemExit(f'setup: {error}') from error
+    print(json.dumps(result, indent=2))
+    return result
+
+
+def installed(recipe, item, profile=None):
+    """The profile entry setup wrote for this module's role and candidate."""
+    from ..profile import read_profile
+    role, model = _role(item)
+    try:
+        entry = read_profile(profile)['roles'].get(role)
+    except FileNotFoundError:
+        entry = None
+    if entry is None or entry.get('model') != model:
+        raise SystemExit(f"{role} {model} is not set up; run: gamst recipe setup {recipe['name']}")
+    return entry
 
 
 # ---------------------------------------------------------------- run
@@ -288,7 +252,11 @@ def demo_argv(recipe, args):
     max_rev_s = args.max_rev_s or modules['flip']['max_rev_s']
     argv = ['--iphone', str(args.iphone or 9123)] if chosen == 'iphone' else [
         '--iphone-replay', str(_take_recording(args.take))]
-    argv += ['--refine', label, '--efficienttam-source', str(SOURCES / 'EfficientTAM'),
+    detector = installed(recipe, modules['yoloe'], getattr(args, 'profile', None))
+    refiner = installed(recipe, modules['efficienttam'], getattr(args, 'profile', None))
+    if getattr(args, 'models', None) is None:
+        argv += ['--models', str(Path(detector['config']['checkpoint_path']).parent)]
+    argv += ['--refine', label, '--efficienttam-source', refiner['config']['source_dir'],
              '--expected-max-rev-s', f'{max_rev_s:g}', '--device', _device()]
     argv += (['--refine-on', 'button', '--refine-fast'] if modules['flip'].get('on', 'analyze') == 'analyze'
              else ['--refine-on', 'stop'])
@@ -334,7 +302,8 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
                    roi=getattr(args, 'roi', None), symmetry=getattr(args, 'symmetry', None),
                    max_rev_s=getattr(args, 'max_rev_s', None), max_reps_s=getattr(args, 'max_reps_s', None),
                    device=getattr(args, 'device', None) or _device(),
-                   worker_python=getattr(args, 'worker_python', None) or sys.executable,
+                   worker_python=getattr(args, 'worker_python', None),
+                   installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)),
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None))
     for item in modules or recipe['modules']:
@@ -344,7 +313,7 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         built = await build(item, context)
         pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
                             every_ms=built.get('every_ms'), emits=tuple(item.get('emits', ())),
-                            enabled=item.get('enabled', True))
+                            enabled=item.get('enabled', True), queue=item.get('queue'))
     return pipeline
 
 
@@ -385,7 +354,7 @@ async def enroll(recipe, args):
     exemplar = next((item for item in recipe['modules'] if item['use'] == 'exemplar'), None)
     if exemplar is None:
         raise SystemExit(f"{recipe['name']} has no exemplar module to enroll for")
-    upstream = [item for item in recipe['modules'] if item['use'] in ('mediapipe-pose', 'pose-channels')]
+    upstream = [item for item in recipe['modules'] if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'pose-channels')]
     mode = args.mode or exemplar.get('mode', 'hold')
     samples = []
     async with Gamst(consent=True) as human:
@@ -456,6 +425,7 @@ def _source_options(parser):
     parser.add_argument('--label', help="what to find (default: the recipe's label)")
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
                         help='normalized x,y,width,height')
+    parser.add_argument('--profile', help='setup profile to read (default ~/.config/gamst/profile.json)')
 
 
 def _max_rev_s(args):
@@ -473,6 +443,8 @@ def main(argv=None):
     install.add_argument('recipe')
     install.add_argument('--models', help=f'weights directory (default {demo.DEFAULT_MODELS})')
     install.add_argument('--dry-run', action='store_true', help='print the plan, install nothing')
+    install.add_argument('--prefix', help='setup prefix for source checkouts (default ~/.local/share/gamst)')
+    install.add_argument('--profile', help='profile to write (default ~/.config/gamst/profile.json)')
     verify = actions.add_parser('check', help='can this camera run the recipe without aliasing?')
     verify.add_argument('recipe')
     verify.add_argument('--fps', type=float, help='camera frames per second (omit to get the required rate)')
@@ -506,7 +478,7 @@ def main(argv=None):
     if args.action == 'show':
         print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
     elif args.action == 'setup':
-        setup(recipe, models=args.models, dry_run=args.dry_run)
+        setup(recipe, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile)
     elif args.action == 'check':
         verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args), symmetry=args.symmetry,
                         max_reps_s=args.max_reps_s)

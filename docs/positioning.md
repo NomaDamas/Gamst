@@ -57,7 +57,7 @@ no notion of "nothing happened for the last 40 seconds".
 | Which frame/audio window goes into the prompt? | No | Onset detection + bounded temporal context + query cutoff |
 | What time was the evidence captured, and is it stale? | No | Temporal packet contract |
 | Mixing modalities in real time without an omni model | No | Event-level fusion of independent lightweight providers, each in its own process/venv |
-| Composing System-1 perception stacks per domain | No | Provider profiles (`ProcessProvider`, GamstCrew) assemble vision/audio/sensor workers per use case without a retraining or a new venv per project |
+| Composing System-1 perception stacks per domain | No | Provider profiles (`ProcessProvider`, `gamst.crew` setup) assemble vision/audio/sensor workers per use case without a retraining or a new venv per project |
 
 A router sits after the decision. GAMST sits before it. They compose: GAMST
 can emit through LiteLLM.
@@ -106,7 +106,7 @@ decide when a completion is worth it. Three attachment modes:
 - macOS/Apple Silicon: one-line install, provider isolation by process and
   virtualenv. Docker on macOS runs a Linux VM without Metal/MPS, so a
   docker-only Mac demo would lose GPU acceleration.
-- Linux/NVIDIA: one container per provider under GamstCrew, each shipping its
+- Linux/NVIDIA: one container per provider under `gamst.crew`, each shipping its
   own CUDA runtime and framework versions; the host supplies only the driver.
   `ResourceAllocator` reserves VRAM/RAM before start. This is the planned
   `docker compose up` path; it requires a Linux/CUDA host for acceptance.

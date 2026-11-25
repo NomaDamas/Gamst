@@ -25,6 +25,13 @@ Two kinds of links connect modules:
   it, with the original capture time and ``derived_from`` provenance. Derived media never enters the
   Store or any context; only records do.
 
+A module added with ``queue=N`` runs in its own bounded lane (latest frames win, the oldest is
+dropped and counted), so a slow model never blocks the input or the modules after it; this is how
+an isolated worker (``gamst.crew.modules.WorkerModule``) runs next to per-frame math.
+``PipelineIntake`` feeds a host-fed input from the engine's own intake (``push_video`` /
+``push_audio``, MCP ``start_capture``, the dashboard), which is how ``ProfileRuntime`` runs the
+roles chosen by setup as one Pipeline.
+
 User-defined reference inputs (a voice sample, photos, a demonstrated pose, a list of words) are
 given with ``add_reference``. Modules read them in ``bind(pipeline)``; the pipeline keeps only what
 the module returns from ``bind`` (an embedding, a feature template), never the raw sample, unless
@@ -33,6 +40,7 @@ the module keeps it itself.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, replace
 import inspect
 import time
@@ -90,8 +98,10 @@ class Pipeline:
         self.references[name] = dict(kind=kind, value=value, label=label or name, consent=consent)
         return self
 
-    def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=()):
+    def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=(), queue=None):
         identifier(name, 'module name')
+        if queue is not None and (type(queue) is not int or not 1 <= queue <= 64):
+            raise ValueError('queue must be an integer from 1 to 64')
         if name in self.modules or name in self.inputs:
             raise ValueError(f'{name!r} is already an input or module')
         if not callable(getattr(module, 'process', None)):
@@ -109,7 +119,10 @@ class Pipeline:
             bind(self)
         self.modules[name] = dict(module=module, consumes=consumes, links=links, spec=spec, enabled=bool(enabled),
                                   every_ms=every_ms, last_run_ms=None, processed=0, errors=0,
-                                  last_error=None, last_latency_ms=None, needs_reset=False, emits=tuple(emits))
+                                  last_error=None, last_latency_ms=None, needs_reset=False, emits=tuple(emits),
+                                  last_admit_ms=None,
+                                  lane=None if queue is None else dict(frames=deque(), capacity=queue, task=None,
+                                                                       dropped=0))
         return self
 
     def enable(self, name):
@@ -120,6 +133,8 @@ class Pipeline:
         entry = self._module(name)
         entry['enabled'] = False
         entry['needs_reset'] = True  # what it saw before the gap must not join what it sees after
+        if entry['lane'] is not None:
+            entry['lane']['frames'].clear()
         return self.status()['modules'][name]
 
     async def configure(self, name, options):
@@ -130,6 +145,20 @@ class Pipeline:
             raise ValueError(f'module {name!r} has no options to configure')
         await _call(configure, dict(options))
         return self.status()['modules'][name]
+
+    async def reset(self):
+        """Discard queued frames and reset every module before its next frame (a capture gap)."""
+        tasks = []
+        for entry in self.modules.values():
+            entry['needs_reset'] = True
+            lane = entry['lane']
+            if lane is not None:
+                lane['frames'].clear()
+                if lane['task'] is not None and not lane['task'].done():
+                    lane['task'].cancel()
+                    tasks.append(lane['task'])
+                lane['task'] = None
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def _module(self, name):
         if name not in self.modules:
@@ -173,11 +202,52 @@ class Pipeline:
             if not entry['enabled'] or not any(src == source and wanted in (None, output)
                                                for src, wanted in entry['links']):
                 continue
-            if entry['every_ms'] and entry['last_run_ms'] is not None \
-                    and frame.timestamp_ms - entry['last_run_ms'] < entry['every_ms']:
+            last = entry['last_admit_ms'] if entry['lane'] is not None else entry['last_run_ms']
+            if entry['every_ms'] and last is not None and frame.timestamp_ms - last < entry['every_ms']:
+                continue
+            if entry['lane'] is not None:
+                self._enqueue(name, entry, frame)
                 continue
             records += await self._run_module(name, entry, frame)
         return records
+
+    def _enqueue(self, name, entry, frame):
+        lane = entry['lane']
+        entry['last_admit_ms'] = frame.timestamp_ms
+        if len(lane['frames']) >= lane['capacity']:
+            lane['frames'].popleft()
+            lane['dropped'] += 1
+            if frame.modality == 'audio':
+                entry['needs_reset'] = True  # never join audio across a dropped interval
+        lane['frames'].append(frame)
+        if lane['task'] is None or lane['task'].done():
+            lane['task'] = asyncio.create_task(self._drain_lane(name, entry))
+
+    async def _drain_lane(self, name, entry):
+        lane = entry['lane']
+        while lane['frames'] and not self._closed:
+            frame = lane['frames'].popleft()
+            if not entry['enabled'] or self.human.paused or self.human.closed:
+                continue
+            try:
+                await self._run_module(name, entry, frame)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # counted on the module; the lane keeps running
+                errors = getattr(self.human, 'plugin_errors', None)
+                if isinstance(errors, list):
+                    errors.append(dict(plugin=f'{self.name}:{name}', error=str(exc), timestamp_ms=frame.timestamp_ms))
+                    del errors[:-100]
+
+    async def drain(self):
+        """Wait until every queued module has processed what it was given."""
+        while True:
+            tasks = [entry['lane']['task'] for entry in self.modules.values()
+                     if entry['lane'] is not None and entry['lane']['task'] is not None
+                     and not entry['lane']['task'].done()]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_module(self, name, entry, frame):
         module = entry['module']
@@ -225,7 +295,7 @@ class Pipeline:
             # commits earlier frames' records while later frames are already flowing.
             link = self._frame(name, observation.get('value'), observation.get('modality') or frame.modality,
                                record.get('timestamp_ms', frame.timestamp_ms), subject_id=frame.subject_id,
-                               sensor=frame.sensor)
+                               sensor=frame.sensor if record.get('timestamp_ms') == frame.timestamp_ms else None)
             records += await self.feed(name, link, output=observation.get('name'))
         for item in derived:
             if item.input not in entry['emits']:
@@ -286,6 +356,7 @@ class Pipeline:
 
     async def finish(self):
         """End of input: commit what stateful modules still hold (e.g. a count at the last frame)."""
+        await self.drain()
         records = []
         for name, entry in self.modules.items():
             finish = getattr(entry['module'], 'finish', None)
@@ -301,6 +372,11 @@ class Pipeline:
 
     async def close(self):
         self._closed = True
+        lanes = [entry['lane']['task'] for entry in self.modules.values()
+                 if entry['lane'] is not None and entry['lane']['task'] is not None]
+        for task in lanes:
+            task.cancel()
+        await asyncio.gather(*lanes, return_exceptions=True)
         for entry in self.inputs.values():
             close = getattr(entry['source'], 'close', None)
             if callable(close):
@@ -323,6 +399,36 @@ class Pipeline:
                                capability=value['spec'].id if value['spec'] is not None else None,
                                every_ms=value['every_ms'], processed=value['processed'], errors=value['errors'],
                                last_error=value['last_error'], last_latency_ms=value['last_latency_ms'],
+                               **({} if value['lane'] is None else dict(
+                                   queue=value['lane']['capacity'], queued=len(value['lane']['frames']),
+                                   dropped=value['lane']['dropped'])),
                                **({'state': value['module'].status()}
                                   if callable(getattr(value['module'], 'status', None)) else {}))
                      for key, value in self.modules.items()})
+
+
+class PipelineIntake:
+    """Engine plugin that feeds pushed media into one host-fed Pipeline input.
+
+    Registered with ``human.register``, it lets every intake path (``push_video`` /
+    ``push_audio``, MCP ``start_capture``, the dashboard) reach the Pipeline. The Pipeline
+    commits the records, so the plugin itself returns no signals; an engine reset (pause,
+    stop, delete) resets the Pipeline.
+    """
+
+    version = '1'
+
+    def __init__(self, pipeline, input_id, modality):
+        if input_id not in pipeline.inputs or pipeline.inputs[input_id]['source'] is not None:
+            raise ValueError(f'{input_id!r} must be a host-fed input of the pipeline')
+        self.pipeline, self.input_id = pipeline, input_id
+        self.name = f'pipeline:{pipeline.name}:{input_id}'
+        self.modalities = (modality,)
+
+    async def process(self, frame):
+        await self.pipeline.push(self.input_id, frame.data, timestamp_ms=frame.timestamp_ms, modality=frame.modality,
+                                 subject_id=frame.subject_id, sample_rate=frame.sample_rate)
+        return []
+
+    async def reset(self):
+        await self.pipeline.reset()

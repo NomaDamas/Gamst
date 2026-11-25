@@ -10,7 +10,7 @@
   "inputs": [{"id": "camera", "use": "camera", "sources": ["camera", "video", "take"]}],
   "references": [{"name": "exemplar", "kind": "exemplar", "label": "the demonstrated pose or movement"}],
   "modules": [
-    {"name": "pose", "use": "mediapipe-pose", "model": "pose_landmarker_full.task", "max_poses": 1, "consumes": ["camera"]},
+    {"name": "pose", "use": "mediapipe-pose", "candidate": "mediapipe.pose_full", "max_poses": 1, "consumes": ["camera"]},
     {"name": "pose_channels", "use": "pose-channels", "consumes": ["pose:scene.poses"]},
     {"name": "exemplar", "use": "exemplar", "mode": "hold", "max_reps_s": 2, "consumes": ["pose_channels"]},
     {"name": "repetition", "use": "repetition", "max_reps_s": 2, "consumes": ["pose_channels"]}

@@ -19,6 +19,7 @@
 // The output also feeds FlowLimiterCalculator's FINISHED back edge: a bundle at
 // T releases every in-flight frame at or before T.
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,7 +71,7 @@ class GamstFrameCalculator : public CalculatorBase {
     }
     has_last_ = true;
     last_ = ts;
-    auto bundle = absl::make_unique<gamst::GamstFrame>();
+    auto bundle = std::make_unique<gamst::GamstFrame>();
     bundle->processed = !cc->Inputs().Tag(kFrameTag).IsEmpty();
     for (size_t i = 0; i < ids_.size(); ++i) {
       const Packet& packet = cc->Inputs().Get(ids_[i]).Value();

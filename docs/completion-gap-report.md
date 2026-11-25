@@ -1,4 +1,7 @@
 
+
+> Note (2026-11-25): GamstCrew was absorbed into GAMST as `gamst.crew` (docs/crew.md). References below to GamstCrew commits, PRs and issues are history.
+
 ## Final execution status
 
 The approved workflow was executed through foundation implementation, targeted verification, PR creation and manual review. The Epic 0 correctness gate is now closed; repository-wide production merge remains gated by the open A–F acceptance work documented below.
