@@ -3,7 +3,7 @@
 A count is context, not a model output: it is computed from committed records each time, so it is
 the same for an agent over MCP, an application over the SDK, and a replay of the same input.
 Events are the ``events`` arrays inside observation values; an event's name is its ``event`` or
-``type`` field (both conventions exist in providers).
+``type`` field (both conventions exist in providers); ``group_by='@event'`` groups by that name.
 """
 from __future__ import annotations
 
@@ -38,7 +38,9 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
             if any(_lookup(item, path) != (True, expected) for path, expected in where.items()):
                 continue
             count += 1
-            if group_by is not None:
+            if group_by == '@event':
+                groups[name] = groups.get(name, 0) + 1
+            elif group_by is not None:
                 found, key = _lookup(item, group_by)
                 key = str(key) if found else None
                 groups[key] = groups.get(key, 0) + 1

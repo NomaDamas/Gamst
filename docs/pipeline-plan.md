@@ -180,3 +180,36 @@ Pipeline = { inputs: [...], modules: [...], links: [모듈 → 파생 입력 →
 
 Context(Store, 레코드 스키마, Watch), MCP의 기존 도구, SDK `push_*`, 기존 perception provider,
 캡처 시계, retention, `delete_data`, "context에는 원본 미디어를 넣지 않는다"는 규칙은 바뀌지 않습니다.
+
+## 9. 구현 상태 (2026-11-25)
+
+| 단계 | 상태 | 근거 |
+|---|---|---|
+| Pipeline 계층 | **완료** | `gamst/pipeline.py`. 레코드 링크(`"pose:scene.poses"`), 파생 입력(`Derived`), capture 중 켜고 끄기, `finish`. 테스트 `tests/test_pipeline.py` |
+| 입력 모듈 | **완료**(카메라, 영상 파일, take, WAV, 마이크) | `gamst/inputs.py`. iPhone 240 실시간 수신기는 아직 halo-coin 앱 안에 있습니다 |
+| 사용자 정의 기준 입력 | **완료**(exemplar, terms) / voice·person은 동의 기록 검사만 | `Pipeline.add_reference`, `gamst recipe enroll` |
+| count 질의 | **완료** | `Gamst.count_events`, MCP `count_events`, `get_pipeline`, `configure_pipeline_module` |
+| 레시피 흡수 | **완료**(rotation, person-action-count) / coin-flip은 halo-coin 뷰가 실행 | `gamst/recipes/parts.py`. rotation을 Pipeline으로 돌려 합성 선풍기 12 rev/s에서 11.9회전을 셈(테스트) |
+| 뷰 모듈(HUD) | **완료**(count, rotation) | `gamst/views.py` |
+| 계산 모듈 | **완료**: pose channels, exemplar(hold/sequence DTW), term_events | 합성 데이터 테스트만 했고, 정답 테이크로 측정한 값은 없습니다 |
+| 실모델 스모크 | MediaPipe Pose로 실제 영상(10.6초, 316프레임)을 등록하고 실행 | 정답 카운트가 없어서 정확도는 확인하지 않았습니다 |
+| SOTA 모델 모듈 | **미착수** | 디스크 여유 공간이 15GB뿐이고, Qwen3.8-27B는 호스팅이 필요합니다. 아래 참고 |
+
+### MediaPipe
+
+- MediaPipe **Tasks**(Pose/Hand/Face Landmarker)는 이미 perception 모듈입니다(`providers/pose.py` 등).
+  person-action-count 레시피는 MediaPipe Pose를 실시간 기본값으로 씁니다.
+  - 2026년 비교 연구에서 jitter가 가장 낮았고, CPU에서 돕니다.
+  - Sapiens2는 정확도 SOTA 옵션으로 추가합니다.
+- MediaPipe **Framework**(C++ Packet/Graph/Calculator)를 GAMST의 실행 엔진으로 들이지는 않습니다.
+  - 그래프와 타임스탬프 동기화가 GAMST의 SensorStreams·Pipeline·캡처 시계와 역할이 겹칩니다.
+  - 사용자 정의 calculator는 C++/Bazel 빌드가 필요합니다. 그런데 SOTA 모델(Sapiens2, Qwen3-ASR, w2v-BERT)은 PyTorch라서 그래프 안에 넣기 어렵습니다.
+  - 대신 MediaPipe 그래프 하나를 통째로 모듈 하나로 감쌀 수 있습니다(Tasks가 바로 그 형태입니다).
+
+### 저주파 semantic lane
+
+`Qwen/Qwen3.8-27B`(Apache-2.0, image-text-to-text)를 1 fps로 돌려서 장면 설명을 타임스탬프 레코드로
+context에 함께 넣습니다. 기존 SmolVLM/StreamingVLM lane과 같은 계약을 씁니다.
+
+- 27.8B 파라미터라 bf16 약 56GB, FP8 약 28GB가 필요합니다. 로컬 M2 Pro(32GB, 디스크 여유 15GB)에서는 돌릴 수 없습니다.
+- 그래서 OpenAI 호환 엔드포인트(vLLM 호스팅) 어댑터로 연결합니다. 호스팅 비용은 시작하기 전에 보고합니다.

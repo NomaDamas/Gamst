@@ -365,8 +365,8 @@ async def run_pipeline(recipe, args):
             await pipeline.run(on_frame=on_frame)
             report['counts'], report['events'] = {}, {}
             for capability in recipe.get('records', ()):
-                counted = await human.count_events(capability, window='24h', max_evidence=100)
-                report['counts'][capability] = counted['count']
+                counted = await human.count_events(capability, window='24h', group_by='@event', max_evidence=100)
+                report['counts'][capability] = counted['groups']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
             report['pipeline'] = pipeline.status()
         finally:

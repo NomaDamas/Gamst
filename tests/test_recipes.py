@@ -107,7 +107,7 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(len(ended), 1)
         self.assertAlmostEqual(ended[0]['turns'], 12, delta=.2)
         self.assertEqual(report['pipeline']['modules']['rotation']['processed'], len(frames))
-        self.assertTrue(json.loads(report_path.read_text())['counts']['vision.rotation'] >= 1)
+        self.assertEqual(json.loads(report_path.read_text())['counts']['vision.rotation']['rotation.ended'], 1)
 
     def test_person_action_recipe_needs_an_enrolled_exemplar(self):
         recipe = recipes.load('person-action-count')

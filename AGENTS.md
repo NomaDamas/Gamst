@@ -21,3 +21,5 @@ GAMST keeps high-frequency perception (tracking, counting, timing) out of the mo
 matches the task before setting anything up:
 
 - `skills/gamst-coin-flip/` counts coin flips with an iPhone at 240 fps and reads the timestamped counts over MCP.
+- `skills/gamst-rotation/` counts in-plane turns of a fan, wheel or turntable inside a fixed box.
+- `skills/gamst-person-action/` counts a pose or movement a person demonstrated once (no training).
