@@ -1,11 +1,6 @@
 <div align="center">
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/gamst-logo-dark.png">
-    <img src="docs/images/gamst-logo-light.png" alt="GAMST" width="420">
-  </picture>
-</h1>
+<img src="docs/images/gamst-banner.png" alt="GAMST — Fast. Loud. GAMST." width="100%">
 
 ### Continuous multimodal observation and decision context for agents.
 
