@@ -4,6 +4,12 @@
 GitHub 스타 수는 2026-11-25에 `gh api repos/<repo>`로 조회한 값입니다.
 "확인 안 함"이라고 표시한 항목은 직접 검증하지 않은 내용입니다.
 
+> **2026-11-25 갱신:** SOTA 딥리서치 결과([report.md](research/speaker-pose-sota-2026-11/report.md))에 따라
+> 모델 선택을 바꿨습니다. 아래의 MediaPipe 기본값과 SpeechBrain ECAPA 1순위는 **대체되었습니다**.
+> 새 선택은 포즈 RTMW-x(Sapiens2는 라이선스 검토 후 호스팅 옵션), 화자 ReDimNet2-B6(경량은 CAM++),
+> ASR은 Qwen3-ASR-1.7B와 ForcedAligner입니다. 레시피 아키텍처는
+> [recipe-pose-and-voice.md](recipe-pose-and-voice.md)를 보세요.
+
 ## 결론
 
 1. **특정 인물이 특정 단어를 말한 횟수 세기**는 GAMST의 개념과 같습니다. 무거운 모델 앞에
