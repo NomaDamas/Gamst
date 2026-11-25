@@ -95,6 +95,7 @@ class Gamst:
         self._multimodal_decision = None
         from .voice_backend import RealtimeVoiceConfig
         self.voice_backend = RealtimeVoiceConfig()
+        self.pipeline = None  # the running gamst.pipeline.Pipeline, if any
         # Owner-declared Watches are the only alarm path; there is no hidden trigger.
         self.watches = WatchManager(
             lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
@@ -798,6 +799,28 @@ class Gamst:
         result['order'] = 'newest_first'
         result['scope'] = 'retained_registered_observations'
         return result
+
+    async def count_events(self, capability_id, subject_id='local-user', window='1h', event=None,
+                           where=None, group_by=None, max_evidence=20):
+        """Count events of retained records of one capability, with bounded evidence record IDs."""
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        identifier(capability_id)
+        if where is not None and (type(where) is not dict or len(where) > 16):
+            raise ValueError('where must be an object of at most 16 path: value pairs')
+        if type(max_evidence) is not int or not 0 <= max_evidence <= 100:
+            raise ValueError('max_evidence must be 0..100')
+        from .counting import MAX_SCAN, count_events
+        self._prune()
+        now = timestamp()
+        start = max(0, now - _window_ms(window))
+        rows = self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN + 1,
+                                registered_only=True, capability_id=capability_id)
+        truncated = len(rows) > MAX_SCAN
+        result = count_events(rows[-MAX_SCAN:], event=event, where=where, group_by=group_by,
+                              max_evidence=max_evidence)
+        return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
+                    scanned_records=min(len(rows), MAX_SCAN), scan_truncated=truncated)
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
                                    max_bytes=65536, capability_id=None, source_id=None,

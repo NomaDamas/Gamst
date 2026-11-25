@@ -118,6 +118,15 @@ def tool_definitions() -> list[dict]:
           "reason": {"type": "string", "minLength": 1, "maxLength": 2000}}, ("watch_id", "proposer", "changes", "reason")),
         ("get_watch_alarms", "Read retained Watch alarms (newest first) with contributions and context; the same payload pushed as notifications.",
          {"watch_id": identifier_field, "since_ms": TIME, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, ()),
+        ("count_events", "Count events inside retained records of one capability (e.g. repetitions, exemplar matches, spoken terms, rotation ends) in a time window, optionally filtered by event fields and grouped. Returns the count with bounded evidence record IDs; computed from records, never by a model.",
+         {"capability_id": identifier_field, "subject_id": SUBJECT, "window": WINDOW,
+          "event": {"type": "string", "maxLength": 128},
+          "where": {"type": "object", "description": "{dotted.event.path: exact value}, at most 16"},
+          "group_by": {"type": "string", "maxLength": 128},
+          "max_evidence": {"type": "integer", "minimum": 0, "maximum": 100}}, ("capability_id",)),
+        ("get_pipeline", "The running Pipeline: inputs (including user-defined and derived inputs), modules, what each consumes, whether it is on, and its processed/error/latency counters. No raw media.", {}, ()),
+        ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap.",
+         {"name": identifier_field, "enabled": {"type": "boolean"}}, ("name", "enabled")),
     ]
     return [{"name": name, "description": desc, "inputSchema": _schema(props, required)}
             for name, desc, props, required in specs]
@@ -215,6 +224,15 @@ class MCPServer:
             raise ValueError("start_ms must not exceed end_ms")
         if name in WATCH_TOOLS:
             return await self._watch_tool(name, args)
+        if name == "count_events":
+            return await self.human.count_events(**args)
+        if name in ("get_pipeline", "configure_pipeline_module"):
+            pipeline = getattr(self.human, "pipeline", None)
+            if pipeline is None:
+                raise ValueError("no Pipeline is running; start one with a recipe (gamst recipe run …)")
+            if name == "get_pipeline":
+                return pipeline.status()
+            return pipeline.enable(args["name"]) if args["enabled"] else pipeline.disable(args["name"])
         if name in ("get_voice_backend_status", "configure_voice_backend"):
             from .voice_backend import RealtimeVoiceConfig
             if name == "get_voice_backend_status":
