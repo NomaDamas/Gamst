@@ -32,7 +32,7 @@ compatibility only.
 ## Runtime boundary
 
 `gamst-core` owns packet schemas, timestamps, evidence, bounded queues and
-memory. GamstCrew starts each provider that has an explicit worker profile in
+memory. `gamst.crew` (formerly GamstCrew) starts each provider that has an explicit worker profile in
 its own interpreter and performs readiness, artifact, host and Python-version
 preflight before launch. In-process optional adapters remain clearly marked as
 such and are not counted as isolated runtime acceptance.

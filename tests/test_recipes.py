@@ -8,6 +8,8 @@ from unittest.mock import patch
 from gamst import recipes
 
 HAS_CV = all(importlib.util.find_spec(name) for name in ('cv2', 'numpy'))
+HOST = dict(tier='apple-mps', accelerator='mps', os='darwin', arch='arm64', python='3.11.9',
+            ram_bytes=32 << 30, vram_bytes=0, disk_free_bytes=512 << 30)
 
 
 class RecipeTest(unittest.TestCase):
@@ -36,12 +38,28 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(recipes.check(recipes.load('coin-flip'), max_rev_s=100)['required_fps'], 400)
 
     def test_setup_installs_only_the_pipeline_parts(self):
-        steps = recipes.plan(recipes.load('coin-flip'), self.tmp)
-        self.assertEqual(steps['extras'], ['rotation', 'yoloe', 'efficienttam'])
-        self.assertEqual(set(steps['models']['files']),
+        steps = recipes.plan(recipes.load('coin-flip'), self.tmp, hardware=HOST)
+        # one crew plan: exactly the recipe's roles, no dependency closure, into this interpreter
+        self.assertEqual({role: item['model'] for role, item in steps['roles'].items()},
+                         {'input.video': 'opencv', 'vision.detect': 'yoloe.26s', 'vision.rotation': 'gamst.rotation',
+                          'vision.video_segmentation': 'efficienttam.ti_512'})
+        self.assertEqual(steps['isolation'], 'current')
+        self.assertEqual(set(recipes.weight_files(steps)),
                          {'yoloe-26s-seg.pt', 'mobileclip2_b.ts', 'efficienttam_ti_512x512.pt'})
-        self.assertTrue(any(line.startswith('git+https://github.com/ultralytics/CLIP.git@') for line in steps['pip']))
-        self.assertEqual(list(steps['sources']), ['EfficientTAM'])
+        packages = [line for entry in steps['install'] for line in entry['packages']]
+        self.assertTrue(any(line.startswith('git+https://github.com/ultralytics/CLIP.git@') for line in packages))
+        self.assertFalse(any(line.startswith('gamst-sdk') for line in packages))  # already running
+        sources = [item['source']['url'] for item in steps['roles'].values() if item['source']]
+        self.assertEqual(sources, ['https://github.com/yformer/EfficientTAM'])
+        self.assertEqual(steps['models_dir'], str(self.tmp.absolute()))
+
+    def test_recipe_setup_is_the_crew_apply(self):
+        with patch('gamst.crew.setup.apply_plan', return_value={'profile': 'p'}) as apply:
+            recipes.main(['setup', 'rotation', '--models', str(self.tmp), '--profile', str(self.tmp / 'p.json')])
+        plan = apply.call_args.args[0]
+        self.assertEqual(set(plan['roles']), {'input.video', 'vision.rotation'})
+        self.assertEqual(apply.call_args.kwargs['models_dir'], str(self.tmp.absolute()))
+        self.assertEqual(apply.call_args.kwargs['profile_path'], str(self.tmp / 'p.json'))
 
     def test_a_pipeline_the_runtime_cannot_run_is_rejected(self):
         recipe = json.loads((recipes.RECIPES / 'coin-flip.json').read_text())
@@ -57,14 +75,33 @@ class RecipeTest(unittest.TestCase):
             recipes.main(['run', 'coin-flip', '--take', self.take(60.0)])
         start.assert_not_called()
 
+    def profile(self):
+        path = self.tmp / 'profile.json'
+        path.write_text(json.dumps({'version': 1, 'hardware': {}, 'roles': {
+            'vision.detect': {'model': 'yoloe.26s', 'provider_profile': 'yoloe.local', 'python': None,
+                              'config': {'checkpoint_path': str(self.tmp / 'models' / 'yoloe-26s-seg.pt')}},
+            'vision.video_segmentation': {'model': 'efficienttam.ti_512', 'provider_profile': 'efficienttam.tiny512',
+                                          'python': None, 'config': {'source_dir': str(self.tmp / 'EfficientTAM')}}}}))
+        return str(path)
+
     def test_run_passes_the_pipeline_and_lets_extra_options_win(self):
         take = self.take(239.6)
         with patch.object(recipes.demo, 'main') as start:
-            recipes.main(['run', 'coin-flip', '--take', take, '--label', 'gold coin', '--device', 'cpu'])
+            recipes.main(['run', 'coin-flip', '--take', take, '--label', 'gold coin', '--device', 'cpu',
+                          '--profile', self.profile()])
         argv = start.call_args.args[0]
         self.assertEqual(argv[argv.index('--iphone-replay') + 1], str(Path(take) / 'raw.gmst'))
         self.assertEqual(argv[argv.index('--refine') + 1], 'gold coin')
+        self.assertEqual(argv[argv.index('--models') + 1], str(self.tmp / 'models'))
+        self.assertEqual(argv[argv.index('--efficienttam-source') + 1], str(self.tmp / 'EfficientTAM'))
         self.assertEqual(argv[-2:], ['--device', 'cpu'])
+
+    def test_run_without_setup_names_the_setup_command(self):
+        empty = self.tmp / 'none.json'
+        with patch.object(recipes.demo, 'main') as start, \
+                self.assertRaisesRegex(SystemExit, 'gamst recipe setup coin-flip'):
+            recipes.main(['run', 'coin-flip', '--take', self.take(239.6), '--profile', str(empty)])
+        start.assert_not_called()
 
     def test_blade_symmetry_lowers_the_countable_speed(self):
         recipe = recipes.load('rotation')
@@ -75,10 +112,10 @@ class RecipeTest(unittest.TestCase):
         self.assertFalse(recipes.check(recipe, fps=60, symmetry=3, max_rev_s=25)['ok'])
 
     def test_rotation_setup_needs_no_models(self):
-        steps = recipes.plan(recipes.load('rotation'), self.tmp)
-        self.assertEqual(steps['extras'], ['rotation'])
-        self.assertEqual(steps['models']['files'], [])
-        self.assertEqual(steps['sources'], {})
+        steps = recipes.plan(recipes.load('rotation'), self.tmp, hardware=HOST)
+        self.assertEqual(set(steps['roles']), {'input.video', 'vision.rotation'})  # no vision.detect pulled in
+        self.assertEqual(recipes.weight_files(steps), [])
+        self.assertFalse(any(item['source'] for item in steps['roles'].values()))
 
     def test_rotation_run_needs_the_box(self):
         with self.assertRaisesRegex(SystemExit, '--roi'):
@@ -113,9 +150,10 @@ class RecipeTest(unittest.TestCase):
         recipe = recipes.load('person-action-count')
         self.assertEqual(recipes.check(recipe, fps=30)['ok'], True)
         self.assertFalse(recipes.check(recipe, fps=3)['ok'])
-        steps = recipes.plan(recipe)
-        self.assertIn('mediapipe', steps['extras'])
-        self.assertEqual(set(steps['models']['files']), {'pose_landmarker_full.task', 'pose_landmarker_heavy.task'})
+        steps = recipes.plan(recipe, hardware=HOST)
+        self.assertEqual(steps['roles']['vision.pose']['model'], 'mediapipe.pose_full')
+        self.assertTrue(any(line.startswith('mediapipe==') for entry in steps['install'] for line in entry['packages']))
+        self.assertEqual(recipes.weight_files(steps), ['pose_landmarker_full.task'])
         with self.assertRaisesRegex(SystemExit, 'gamst recipe enroll'):
             recipes.main(['run', 'person-action-count', '--video', str(self.tmp / 'x.mp4'), '--headless'])
 

@@ -26,13 +26,17 @@ class ProfileRuntimeTest(unittest.TestCase):
                     runtime = await ProfileRuntime.open(human, path)
                     status = dict(runtime.status)
                     registered = [plugin.name for plugin in human.plugins]
+                    pipeline = human.pipeline.status()
                     await runtime.close()
-                    return status, registered, [plugin.name for plugin in human.plugins]
-        status, registered, after = asyncio.run(run())
+                    return status, registered, pipeline, [plugin.name for plugin in human.plugins], human.pipeline
+        status, registered, pipeline, after, left = asyncio.run(run())
         self.assertEqual(status['vision.rotation']['state'], 'running')
         self.assertEqual(status['audio.asr']['state'], 'skipped')
-        self.assertIn('gamst.rotation', registered)
-        self.assertNotIn('gamst.rotation', after)
+        # the profile is one Pipeline fed by the engine's intake, not a second runtime
+        self.assertEqual(registered, ['pipeline:profile:camera'])
+        self.assertEqual(pipeline['modules']['vision.rotation']['consumes'], ['camera'])
+        self.assertEqual(after, [])
+        self.assertIsNone(left)
 
     def test_rejects_unversioned_profile(self):
         with tempfile.TemporaryDirectory() as directory:

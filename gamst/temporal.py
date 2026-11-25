@@ -411,6 +411,8 @@ class TemporalAligner:
         self.min_samples, self.max_samples, self.freshness_ms = min_samples, max_samples, freshness_ms
         self._clock_samples: dict[str, list[tuple[int, int]]] = {}
         self._revisions: dict[str, TemporalEvent] = {}
+        self._last_sequences: dict[tuple[str, str, str], int] = {}
+        self._sequence_results: dict[str, dict[str, Any]] = {}
 
     def add_clock_sample(self, source_clock: str, source_ms: int, monotonic_ms: int) -> None:
         _bounded_text(source_clock, "source_clock")
@@ -433,6 +435,37 @@ class TemporalAligner:
         residual = statistics.mean(abs(y - (offset + slope * x)) for x, y in samples)
         return {"source_clock": source_clock, "calibrated": True, "sample_count": len(samples), "offset_ms": offset, "drift": slope - 1.0, "residual_ms": residual}
 
+    def normalize_timestamp(self, source_clock: str, source_ms: int) -> dict[str, Any]:
+        """Map a source timestamp onto the monotonic timeline when that clock is calibrated.
+
+        Uncalibrated clocks return ``normalized_timestamp_ms: None``, never a guessed time, so
+        independent source clocks are not silently treated as comparable.
+        """
+        _bounded_text(source_clock, "source_clock")
+        if type(source_ms) is not int:
+            raise ValueError("source timestamp must be an integer")
+        status = self.clock_status(source_clock)
+        normalized = (round(status["offset_ms"] + (1.0 + status["drift"]) * source_ms)
+                      if status["calibrated"] else None)
+        return {"source_clock": source_clock, "source_timestamp_ms": source_ms,
+                "normalized_timestamp_ms": normalized, "calibrated": status["calibrated"], "clock": status}
+
+    def sequence_gap(self, event: TemporalEvent) -> dict[str, Any]:
+        """Sequence continuity of ``event`` within its stream and clock epoch; fabricates no events."""
+        if not isinstance(event, TemporalEvent):
+            raise TypeError("sequence gap requires a TemporalEvent")
+        cached = self._sequence_results.get(event.event_id)
+        if cached is not None:
+            return dict(cached)
+        previous = self._last_sequences.get((event.stream_id, event.clock_id, event.clock_epoch))
+        expected = None if previous is None else previous + 1
+        detected = previous is not None and event.sequence != expected
+        state = ("initial" if previous is None else "reordered" if event.sequence <= previous
+                 else "gap" if detected else "contiguous")
+        return {"stream_id": event.stream_id, "previous_sequence": previous, "expected_sequence": expected,
+                "observed_sequence": event.sequence, "declared_gap": bool(event.gap),
+                "detected_gap": bool(detected), "state": state}
+
     @staticmethod
     def overlap(left: TemporalEvent, right: TemporalEvent, *, max_gap_ms: int = 0) -> float:
         intersection = max(0, min(left.end_ms, right.end_ms) - max(left.start_ms, right.start_ms))
@@ -449,7 +482,12 @@ class TemporalAligner:
             return None
         if event.revision > 0 and (not previous or event.supersedes != previous.event_id):
             raise ValueError("newer revision must supersede the previous event")
+        gap = self.sequence_gap(event)
         self._revisions[event.event_id] = event
+        self._sequence_results[event.event_id] = gap
+        key = (event.stream_id, event.clock_id, event.clock_epoch)
+        if key not in self._last_sequences or event.sequence > self._last_sequences[key]:
+            self._last_sequences[key] = event.sequence
         return event.as_dict()
 
     def eligible(self, query_cutoff_ms: int, *, now_ms: int | None = None) -> list[TemporalEvent]:

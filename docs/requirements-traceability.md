@@ -1,5 +1,7 @@
 # Approved-plan requirements traceability
 
+> Note (2026-11-25): GamstCrew was absorbed into GAMST as `gamst.crew` (docs/crew.md). References below to GamstCrew commits, PRs and issues are history.
+
 This is the implementation gate for the owner-approved GAMST plan. It is
 intentionally separate from the implementation status: a documented requirement
 is not a completed capability. Every row has an owning epic, a concrete issue

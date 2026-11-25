@@ -1,7 +1,7 @@
-"""Run the models chosen by agentic setup inside one Gamst runtime.
+"""Run the models chosen by setup inside one Gamst runtime, as one Pipeline.
 
-GamstCrew (``gamst setup`` / MCP ``plan_setup`` + ``apply_setup``) writes
-``~/.config/gamst/profile.json``::
+Setup (``gamst setup``, MCP ``plan_setup`` + ``apply_setup``, ``gamst recipe setup``; all
+:mod:`gamst.crew.setup`) writes ``~/.config/gamst/profile.json``::
 
     {"version": 1, "hardware": {...},
      "roles": {"vision.detect": {"model": "rfdetr.nano", "provider_profile": "rfdetr.nano",
@@ -9,28 +9,27 @@ GamstCrew (``gamst setup`` / MCP ``plan_setup`` + ``apply_setup``) writes
                "vision.rotation": {"model": "gamst.rotation", "provider_profile": "vision.rotation",
                                    "python": null, "config": {}}}}
 
-``ProfileRuntime.open`` turns every role into an ordinary engine plugin, so any
-intake (``push_video``/``push_audio``, MCP ``start_capture``, the dashboard)
-feeds the selected models with no separate submission path:
+``ProfileRuntime.open`` builds a :class:`gamst.pipeline.Pipeline` named ``profile`` whose
+host-fed inputs (``camera``, ``microphone``) are fed by the engine's own intake
+(``push_video``/``push_audio``, MCP ``start_capture``, the dashboard) through
+``PipelineIntake``; each role becomes a module via :func:`gamst.crew.modules.role_module`, the
+same helper recipes use:
 
-* a role with a worker Python runs in its own ProcessProvider subprocess behind
-  a QueuedPlugin, so a slow model never blocks capture; its validated output is
-  committed with ``push_observation`` under the worker's capability;
-* ``vision.rotation`` is model-free and runs in-process as RotationPlugin,
-  reading the latest detector observations that the line above committed.
+* a role with a worker Python runs in its own ProcessProvider subprocess, in a bounded Pipeline
+  lane so a slow model never blocks capture; its validated output is committed with
+  ``push_observation`` under the worker's capability;
+* an in-process candidate (``vision.rotation``) runs on the caller's runtime, reading the latest
+  detector observations the workers committed.
 
-Roles without a worker (direct in-process adapters) are reported as skipped,
-never silently dropped.
+Roles that cannot run (input roles, direct in-process adapters with no worker) are reported as
+skipped, never silently dropped. The Pipeline is the runtime's ``human.pipeline``, so MCP
+``get_pipeline`` / ``configure_pipeline_module`` see and switch the roles.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-import uuid
-
-from .capabilities import SensorMetadata
-from .plugins import InputFrame
 
 PROFILE_VERSION = 1
 
@@ -50,100 +49,72 @@ def read_profile(path=None) -> dict:
     return value
 
 
-class WorkerPlugin:
-    """Engine plugin around one owned ProcessProvider worker (use behind QueuedPlugin)."""
-
-    def __init__(self, human, role, worker):
-        self.human, self.role, self.worker = human, role, worker
-        self.spec = worker.spec
-        self.name, self.version = f'{role}:{self.spec.provider}', self.spec.version
-        self.modalities = (self.spec.modality,)
-        self._epoch = uuid.uuid4().hex
-        self._sequences = {}
-        human.register_capability(self.spec)
-
-    async def process(self, frame):
-        sequence = self._sequences.get(frame.subject_id, -1) + 1
-        self._sequences[frame.subject_id] = sequence
-        sensor = SensorMetadata(source_id='gamst-profile', sensor_id=self.role, sequence=sequence,
-                                capture_sequence=sequence, coordinate_frame='image', stream_epoch=self._epoch)
-        data = frame.data
-        if self.spec.modality == 'video':
-            data = _bounded_image(data)
-        value = await self.worker.process(InputFrame(data, frame.modality, frame.timestamp_ms,
-                                                     subject_id=frame.subject_id, sensor=sensor,
-                                                     sample_rate=frame.sample_rate))
-        if value is not None:
-            await self.human.push_observation(self.spec.id, value, sensor=sensor,
-                                              subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)
-        return []
-
-    def reset(self):
-        self._sequences.clear()
-        self._epoch = uuid.uuid4().hex
-
-    async def close(self):
-        await self.worker.close()
-
-
-def _bounded_image(image, max_pixels=1_048_576, max_side=2048):
-    """Workers accept at most ~1 MP; boxes are normalized so the scale does not matter."""
-    height, width = image.shape[:2]
-    scale = min(1., (max_pixels / (height * width)) ** .5, max_side / max(height, width))
-    if scale >= 1:
-        return image
-    import cv2
-    return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-
-
 class ProfileRuntime:
-    """Registered plugins for one profile; ``close`` stops every worker it started."""
+    """The profile's roles as one Pipeline fed by the engine's intake; ``close`` stops every worker."""
+
+    INPUTS = {'video': 'camera', 'audio': 'microphone'}
 
     def __init__(self, human, profile):
         self.human, self.profile = human, profile
-        self.plugins, self.status = [], {}
+        self.pipeline, self.plugins, self.status = None, [], {}
 
     @classmethod
     async def open(cls, human, path=None, *, roles=None, startup_timeout=120, inference_timeout=30,
                    queue_capacity=1):
-        from .process_provider import ProcessProvider
-        from .providers.rotation import RotationPlugin
-        from .realtime import QueuedPlugin
+        from .crew.modules import RoleUnavailable, candidate_for, role_module
+        from .pipeline import Pipeline
         self = cls(human, read_profile(path))
         selected = self.profile['roles'] if roles is None else {r: self.profile['roles'][r] for r in roles}
+        self.pipeline = Pipeline(human, 'profile')
+
+        def in_process(role):
+            chosen = candidate_for(role, selected[role]['model'])
+            return bool(chosen is not None and chosen.in_process)
+
         try:
-            # Workers first: rotation reads their committed observations.
-            for role, entry in selected.items():
-                if role == 'vision.rotation':
+            # Workers first: an in-process module (rotation) reads the records they commit.
+            for role in sorted(selected, key=in_process):
+                entry = selected[role]
+                try:
+                    built = await role_module(human, role, entry, startup_timeout=startup_timeout,
+                                              inference_timeout=inference_timeout)
+                except RoleUnavailable as exc:
+                    self.status[role] = dict(model=entry['model'], state='skipped', reason=str(exc))
                     continue
-                if not entry.get('python') or not entry.get('provider_profile'):
+                input_id = self.INPUTS.get(built['modality'])
+                if input_id is None:
+                    close = getattr(built['module'], 'close', None)
+                    if close:
+                        result = close()
+                        if hasattr(result, '__await__'):
+                            await result
                     self.status[role] = dict(model=entry['model'], state='skipped',
-                                             reason='no isolated worker in profile; register its in-process adapter explicitly')
+                                             reason=f"no engine intake for {built['modality']} input")
                     continue
-                worker = await ProcessProvider.open(entry['python'], entry['provider_profile'], entry.get('config', {}),
-                                                    startup_timeout=startup_timeout, inference_timeout=inference_timeout)
-                plugin = QueuedPlugin(human, WorkerPlugin(human, role, worker), capacity=queue_capacity)
-                human.register(plugin)
-                self.plugins.append(plugin)
-                self.status[role] = dict(model=entry['model'], state='running', capability=worker.spec.id)
-            if 'vision.rotation' in selected:
-                entry = selected['vision.rotation']
-                plugin = RotationPlugin(human, **entry.get('config', {}))
-                human.register(plugin)
-                self.plugins.append(plugin)
-                self.status['vision.rotation'] = dict(model=entry['model'], state='running', capability=plugin.spec.id)
+                self._input(input_id, built['modality'])
+                # A worker runs in its own bounded lane so a slow model never blocks capture.
+                self.pipeline.add_module(role, built['module'], consumes=[input_id], spec=built['spec'],
+                                         queue=None if built['in_process'] else queue_capacity)
+                self.status[role] = dict(model=entry['model'], state='running', capability=built['capability'])
         except BaseException:
             await self.close()
             raise
         return self
+
+    def _input(self, input_id, modality):
+        from .pipeline import PipelineIntake
+        if input_id in self.pipeline.inputs:
+            return
+        self.pipeline.add_input(input_id, modality=modality)
+        plugin = PipelineIntake(self.pipeline, input_id, modality)
+        self.human.register(plugin)
+        self.plugins.append(plugin)
 
     async def close(self):
         plugins, self.plugins = self.plugins, []
         for plugin in plugins:
             if plugin in self.human.plugins:
                 self.human.plugins.remove(plugin)
-            close = getattr(plugin, 'close', None)
-            if close:
-                result = close()
-                if hasattr(result, '__await__'):
-                    await result
+        pipeline, self.pipeline = self.pipeline, None
+        if pipeline is not None:
+            await pipeline.close()

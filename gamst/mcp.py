@@ -125,6 +125,17 @@ def tool_definitions() -> list[dict]:
           "group_by": {"type": "string", "maxLength": 128},
           "max_evidence": {"type": "integer", "minimum": 0, "maximum": 100}}, ("capability_id",)),
         ("get_pipeline", "The running Pipeline: inputs (including user-defined and derived inputs), modules, what each consumes, whether it is on, and its processed/error/latency counters. No raw media.", {}, ()),
+        ("plan_setup", "Detect hardware and resolve setup goals (or explicit roles), role dependencies, model defaults/overrides, install packages, pinned weights, resource totals and warnings from the GAMST role registry. Installs nothing.",
+         {"goals": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+          "overrides": {"type": "object", "description": "{role: model}, e.g. {\"vision.detect\": \"yoloe.26s\"}"},
+          "roles": {"type": "object", "description": "{role: model} selected directly"},
+          "dependencies": {"type": "boolean", "default": True},
+          "isolation": {"type": "string", "enum": ["venv", "current"], "default": "venv"}}, ()),
+        ("apply_setup", "Apply exactly a version 1 plan from plan_setup: create the planned environments, install the planned packages, download only pinned weights and verify their SHA256, and write the GAMST profile. Give exactly one of plan or plan_path.",
+         {"plan": {"type": "object"}, "plan_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "prefix": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "profile": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "models_dir": {"type": "string", "minLength": 1, "maxLength": 4096}}, ()),
         ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap.",
          {"name": identifier_field, "enabled": {"type": "boolean"}}, ("name", "enabled")),
     ]
@@ -165,6 +176,23 @@ def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
     if isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             _validate(item, schema["items"], f"{path}[{index}]")
+
+
+def _setup_tool(name: str, args: dict) -> Any:
+    """``plan_setup`` / ``apply_setup``: the same code as ``gamst setup`` and ``gamst recipe setup``."""
+    from .crew.setup import apply_plan, make_plan
+    if name == "plan_setup":
+        if not args.get("goals") and not args.get("roles"):
+            raise ValueError("plan_setup needs goals or roles")
+        return make_plan(args.get("goals", ()), args.get("overrides", {}), roles=args.get("roles"),
+                         dependencies=args.get("dependencies", True), isolation=args.get("isolation", "venv"))
+    if ("plan" in args) == ("plan_path" in args):
+        raise ValueError("supply exactly one of plan or plan_path")
+    plan = args.get("plan")
+    if "plan_path" in args:
+        plan = json.loads(Path(args["plan_path"]).expanduser().read_text(encoding="utf-8"))
+    return apply_plan(plan, prefix=args.get("prefix"), profile_path=args.get("profile"),
+                      models_dir=args.get("models_dir"))
 
 
 class MCPServer:
@@ -224,6 +252,8 @@ class MCPServer:
             raise ValueError("start_ms must not exceed end_ms")
         if name in WATCH_TOOLS:
             return await self._watch_tool(name, args)
+        if name in ("plan_setup", "apply_setup"):
+            return await asyncio.to_thread(_setup_tool, name, args)
         if name == "count_events":
             return await self.human.count_events(**args)
         if name in ("get_pipeline", "configure_pipeline_module"):

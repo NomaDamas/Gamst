@@ -189,7 +189,7 @@ Context(Store, 레코드 스키마, Watch), MCP의 기존 도구, SDK `push_*`, 
 | 입력 모듈 | **완료**(카메라, 영상 파일, take, WAV, 마이크) | `gamst/inputs.py`. iPhone 240 실시간 수신기는 아직 halo-coin 앱 안에 있습니다 |
 | 사용자 정의 기준 입력 | **완료**(exemplar, terms) / voice·person은 동의 기록 검사만 | `Pipeline.add_reference`, `gamst recipe enroll` |
 | count 질의 | **완료** | `Gamst.count_events`, MCP `count_events`, `get_pipeline`, `configure_pipeline_module` |
-| 레시피 흡수 | **완료**(rotation, person-action-count) / coin-flip은 halo-coin 뷰가 실행 | `gamst/recipes/parts.py`. rotation을 Pipeline으로 돌려 합성 선풍기 12 rev/s에서 11.9회전을 셈(테스트) |
+| 레시피 흡수 | **완료**(rotation, person-action-count) / coin-flip은 halo-coin 뷰가 실행 | `gamst/recipes/parts.py`(부품은 빌드·샘플링 규칙과 registry 역할만 가짐, 설치는 `gamst.crew.setup`). rotation을 Pipeline으로 돌려 합성 선풍기 12 rev/s에서 11.9회전을 셈(테스트) |
 | 뷰 모듈(HUD) | **완료**(count, rotation) | `gamst/views.py` |
 | 계산 모듈 | **완료**: pose channels, exemplar(hold/sequence DTW), term_events | 합성 데이터 테스트만 했고, 정답 테이크로 측정한 값은 없습니다 |
 | 실모델 스모크 | MediaPipe Pose로 실제 영상(10.6초, 316프레임)을 등록하고 실행 | 정답 카운트가 없어서 정확도는 확인하지 않았습니다 |
