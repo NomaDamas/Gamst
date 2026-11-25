@@ -209,7 +209,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
     def __init__(self, model_path: str, window_seconds: float = 3.0,
                  language: str | None = None, device: str = "cpu", word_timestamps: bool = False):
         """``word_timestamps=True`` also emits ``speech.transcript_words``: the window as a final
-        utterance with Whisper's word times (``words: [{text, start_ms, end_ms, probability}]``),
+        utterance with Whisper's word times (``words: [{text, start_ms, end_ms}]``; Whisper's word probability is not calibrated, so it is not recorded),
         the input :class:`gamst.providers.term_events.TermEvents` uses to time each counted word."""
         if not Path(model_path).is_dir():
             raise ValueError("Supply an existing local faster-whisper model directory")
@@ -228,6 +228,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
                     while block := handle.read(1024 * 1024):
                         artifact_hash.update(block)
         self.model_hash = artifact_hash.hexdigest()
+        self.version = f"{_version('faster-whisper')}:sha256:{self.model_hash}"
         self.window_seconds = window_seconds
         self.language = language
         self.word_timestamps = bool(word_timestamps)
@@ -267,8 +268,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
                                 if getattr(segment, 'avg_logprob', 0) >= -1.2
                                 and getattr(segment, 'no_speech_prob', 0) <= .6
                                 and getattr(segment, 'compression_ratio', 0) <= 2.4]
-                        words = [dict(text=word.word.strip(), start_s=float(word.start), end_s=float(word.end),
-                                      probability=round(float(word.probability), 4))
+                        words = [dict(text=word.word.strip(), start_s=float(word.start), end_s=float(word.end))
                                  for segment in kept for word in (getattr(segment, 'words', None) or ())
                                  if word.word.strip()]
                         return " ".join(segment.text.strip() for segment in kept).strip(), words
@@ -294,8 +294,7 @@ class FasterWhisperPlugin(PerceptionPlugin):
                             utterance_id=f"window:{frame.subject_id}:{end_ms}", status="final", text=text,
                             start_ms=start_ms, end_ms=end_ms,
                             words=[dict(text=item["text"], start_ms=start_ms + round(1000 * item["start_s"]),
-                                        end_ms=start_ms + round(1000 * item["end_s"]),
-                                        probability=item["probability"]) for item in timed]),
+                                        end_ms=start_ms + round(1000 * item["end_s"])) for item in timed]),
                             self.name, version))
             return output
 
