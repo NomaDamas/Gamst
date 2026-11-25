@@ -17,7 +17,8 @@ individuals. Use this module for pose (gesture/repetition counting) only; identi
 
 Output matches :class:`gamst.providers.pose.MediaPipePosePlugin` (``scene.poses`` with normalized
 ``landmarks``, ``bbox`` and a stream-local ``track_id``), so :class:`PoseChannels` uses it with
-``mapping=GOLIATH_BODY`` and :class:`TargetPerson` with ``face_indices=GOLIATH_FACE_POINTS``.
+``mapping=GOLIATH_BODY``. Its keypoints are never used to find or align a face.
+``accept_license=True`` records that the owner read and accepted the licence.
 """
 from __future__ import annotations
 
@@ -33,8 +34,6 @@ from ..tracking import create_tracker
 GOLIATH_BODY = dict(left_shoulder=5, right_shoulder=6, left_elbow=7, right_elbow=8, left_wrist=62,
                     right_wrist=41, left_hip=9, right_hip=10, left_knee=11, right_knee=12,
                     left_ankle=13, right_ankle=14)
-# ArcFace template order (image-left eye first): right_eye, left_eye, nose, r/l outer mouth corner.
-GOLIATH_FACE_POINTS = (2, 1, 0, 188, 189)
 SIZES = ('0.4b', '0.8b', '1b', '5b')
 UPSTREAM_REVISION = '7e5bae88456ac418ff0e58e74106c9fe192055d4'
 
@@ -98,7 +97,10 @@ class Sapiens2PosePlugin(PerceptionPlugin):
 
     @classmethod
     def from_local(cls, pose_dir, detector_dir, *, pose_sha256=None, detector_sha256=None, device='cuda',
-                   dtype='float32', **options):
+                   dtype='float32', accept_license=False, **options):
+        if accept_license is not True:
+            raise PermissionError('the Sapiens2 License forbids biometric processing and re-identification: read it '
+                                  'and pass accept_license=True to opt in')
         import torch
         from transformers import (AutoImageProcessor, AutoModelForPoseEstimation, DetrForObjectDetection,
                                   DetrImageProcessor)
@@ -147,6 +149,7 @@ class Sapiens2PosePlugin(PerceptionPlugin):
                 return []
             coco = [[[x0, y0, x1 - x0, y1 - y0] for x0, y0, x1, y1 in boxes]]
             inputs = self.processor(rgb, boxes=coco, return_tensors='pt').to(self.device)
+            inputs['pixel_values'] = inputs['pixel_values'].to(next(self.pose.parameters()).dtype)
             with torch.inference_mode():
                 outputs = self.pose(**inputs)
                 flipped = None

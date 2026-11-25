@@ -25,8 +25,8 @@ Two kinds of output, one capability (``audio.speaker_match``):
   person's speech does not split it. Segment spans also drive the SAM-Audio span prompt
   (:mod:`gamst.providers.target_speech`).
 - ``kind="utterance"``: for each final transcript (``speech.transcript_update`` or
-  ``speech.transcript_words`` value) the utterance's own audio is scored and the transcript is passed
-  through with a ``speaker`` object, so :class:`gamst.providers.term_events.TermEvents` downstream
+  ``speech.transcript_words`` value) the utterance's own audio (its first to last word when word times are given)
+  is scored and the transcript is passed through with a ``speaker`` object, so :class:`gamst.providers.term_events.TermEvents` downstream
   counts only what the enrolled person said.
 
 Scores are uncalibrated cosine similarities. The threshold must be set on the owner's own audio
@@ -205,17 +205,19 @@ class SpeakerVerify:
     """Pipeline module: audio frames (16 kHz mono) and final transcripts in, speaker matches out."""
 
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
-                 hop_ms=500, min_dbfs=-45., min_utterance_ms=400, max_gap_ms=1000, ring_seconds=30.):
+                 hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
+                 segments=True, capability_id='audio.speaker_match'):
         if not 200 <= segment_ms <= 10000 or not 100 <= hop_ms <= segment_ms:
             raise ValueError('require 200 <= segment_ms <= 10000 and 100 <= hop_ms <= segment_ms')
         self.embedder, self.reference_name = embedder, reference
         self.threshold, self.hysteresis = float(threshold), float(hysteresis)
         self.segment_ms, self.hop_ms, self.min_dbfs = int(segment_ms), int(hop_ms), float(min_dbfs)
-        self.min_utterance_ms, self.max_gap_ms = int(min_utterance_ms), int(max_gap_ms)
+        self.min_utterance_ms = int(min_utterance_ms)
+        self.segments = bool(segments)
         self.target = None
         self.ring = AudioRing(SAMPLE_RATE, ring_seconds)
         self.spec = CapabilitySpec(
-            'audio.speaker_match', 'audio.speaker_match', 'audio', 'gamst.speaker_verify',
+            capability_id, capability_id, 'audio', 'gamst.speaker_verify',
             f'1.{embedder.model_id}'.replace(':', '.'),
             (OutputField('kind', 'string'), OutputField('reference', 'string'), OutputField('start_ms', 'integer'),
              OutputField('end_ms', 'integer'), OutputField('score', 'number', required=False),
@@ -253,7 +255,6 @@ class SpeakerVerify:
             self.ring.reset()
             self.state = Hysteresis(self.threshold, self.threshold - self.hysteresis)
             self._next_segment_ms = None
-            self._last_audio_ms = None
             self._checked = {}
 
     def score(self, samples):
@@ -276,11 +277,12 @@ class SpeakerVerify:
             if frame.sample_rate != SAMPLE_RATE:
                 raise ValueError('speaker_verify needs 16 kHz mono audio')
             end_ms = int(frame.timestamp_ms)
-            if self._last_audio_ms is not None and end_ms - self._last_audio_ms > self.max_gap_ms:
+            if self.ring.append(frame.data, end_ms, SAMPLE_RATE):   # capture gap: no history across it
                 self.state.active = False
                 self._next_segment_ms = None
-            self._last_audio_ms = end_ms
-            self.ring.append(frame.data, end_ms, SAMPLE_RATE)
+            if not self.segments:
+                return None
+            end_ms = self.ring.end_ms
             if self._next_segment_ms is None:
                 self._next_segment_ms = self.ring.start_ms + self.segment_ms
             outputs = []
@@ -317,10 +319,17 @@ class SpeakerVerify:
         self._checked[key] = True
         while len(self._checked) > 4096:
             self._checked.pop(next(iter(self._checked)))
-        score = None
-        if end - start >= self.min_utterance_ms and self.ring.covers(start, end):
+        score, first, last = None, start, end
+        words = [item for item in value.get('words') or () if isinstance(item, dict)
+                 and isinstance(item.get('start_ms'), int) and isinstance(item.get('end_ms'), int)]
+        if words and max(item['end_ms'] for item in words) - min(item['start_ms'] for item in words) \
+                >= self.min_utterance_ms:
+            first, last = min(item['start_ms'] for item in words), max(item['end_ms'] for item in words)
+        # Up to 500 ms of the tail may not have reached this module yet; score what is held.
+        if last - first >= self.min_utterance_ms and self.ring.covers(first, min(last, (self.ring.end_ms or 0) + 500)
+                                                                      - 500):
             try:
-                score = self.score(self.ring.span(start, end))
+                score = self.score(self.ring.span(first, last))
             except ValueError:
                 score = None
         match = score is not None and score >= self.threshold

@@ -45,10 +45,10 @@ def mono_float(data):
 class AudioRing:
     """The last ``seconds`` of one mono stream, addressable by capture time in milliseconds."""
 
-    def __init__(self, sample_rate=16000, seconds=30.):
+    def __init__(self, sample_rate=16000, seconds=30., max_drift_ms=250):
         if type(sample_rate) is not int or sample_rate <= 0:
             raise ValueError('sample_rate must be a positive integer')
-        self.sample_rate, self.seconds = sample_rate, float(seconds)
+        self.sample_rate, self.seconds, self.max_drift_ms = sample_rate, float(seconds), float(max_drift_ms)
         self.reset()
 
     def reset(self):
@@ -66,21 +66,31 @@ class AudioRing:
     def append(self, samples, end_ms, sample_rate=None):
         if sample_rate is not None and sample_rate != self.sample_rate:
             raise ValueError(f'ring holds {self.sample_rate} Hz audio, got {sample_rate} Hz')
+        """Add a chunk; returns True when it does not continue the previous one (history restarted).
+
+        A live callback's arrival time jitters, so a chunk within ``max_drift_ms`` of the sample clock
+        continues it; a larger disagreement is a real gap or another clock.
+        """
         samples = mono_float(samples)
         if not len(samples):
-            return
-        start_ms = end_ms - 1000. * len(samples) / self.sample_rate
-        if self._chunks and start_ms < self._chunks[-1][1] - 1000. / self.sample_rate - 1:
-            # Overlapping or out-of-order capture: start a new history rather than mixing two clocks.
-            self.reset()
-        self._chunks.append((start_ms, float(end_ms), samples))
+            return False
+        duration = 1000. * len(samples) / self.sample_rate
+        start_ms, gap = end_ms - duration, False
+        if self._chunks:
+            if abs(start_ms - self._chunks[-1][1]) <= self.max_drift_ms:
+                start_ms = self._chunks[-1][1]
+            else:
+                gap = True
+                self.reset()
+        self._chunks.append((start_ms, start_ms + duration, samples))
         self._samples += len(samples)
         limit = int(self.seconds * self.sample_rate)
         while self._samples - len(self._chunks[0][2]) >= limit:
             self._samples -= len(self._chunks.popleft()[2])
+        return gap
 
     def span(self, start_ms, end_ms):
-        """Samples captured in [start_ms, end_ms); gaps between chunks are not filled."""
+        """Samples captured in [start_ms, end_ms) that are still held."""
         np = _np()
         parts = []
         for chunk_start, chunk_end, samples in self._chunks:
@@ -149,7 +159,7 @@ def _kernel(up, down, half_width=16, beta=8.6):
     length = 2 * half_width * max(up, down) + 1
     n = np.arange(length) - (length - 1) / 2
     taps = cutoff * np.sinc(cutoff * n) * np.kaiser(length, beta)
-    return taps * up / taps.sum() * 1.  # unity DC gain after zero stuffing
+    return taps * up / taps.sum()  # unity DC gain after zero stuffing
 
 
 def resample(samples, source_rate, target_rate):

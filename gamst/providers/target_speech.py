@@ -105,7 +105,8 @@ class WeSepExtractor:
         checkpoint, config = directory / 'avg_model.pt', directory / 'config.yaml'
         if not checkpoint.is_file() or not config.is_file():
             raise ValueError(f'{directory} needs avg_model.pt and config.yaml (a WeSep model directory)')
-        if not (yaml.safe_load(config.read_text()) or {}).get('joint_training'):
+        model_args = ((yaml.safe_load(config.read_text()) or {}).get('model_args') or {}).get('tse_model') or {}
+        if not model_args.get('joint_training'):
             raise ValueError(f'{config}: extract_speech_from_pcm returns nothing unless joint_training is true')
         digest = _verify(checkpoint, sha256)
         model = wesep.load_model_local(str(directory))
@@ -153,7 +154,7 @@ class USEFExtractor:
         with open(source / 'chkpt' / 'USEF-TFGridNet' / 'config.yaml') as handle:
             config = load_hyperpyyaml(handle)
         model = config['modules']['masknet']
-        state = torch.load(checkpoint, map_location='cpu')['model_state_dict']
+        state = torch.load(checkpoint, map_location='cpu', weights_only=True)['model_state_dict']
         state = {key.replace('module.', '').replace('convolution_', 'convolution_module.'): value
                  for key, value in state.items()}
         model.load_state_dict(state)
@@ -200,22 +201,37 @@ class Blocks:
 
     def push(self, samples, end_ms):
         """Returns [(block_start_ms, block_end_ms, window_samples, keep_samples)]."""
-        previous_end = self.ring.end_ms
-        self.ring.append(samples, end_ms, SAMPLE_RATE)
-        if previous_end is None or self.ring.end_ms != end_ms or self.ring.start_ms > (previous_end or 0):
-            if self._next_ms is None or self.ring.start_ms >= (self._next_ms - self.block_ms):
-                self._next_ms = self.ring.start_ms + self.block_ms
+        if self.ring.append(samples, end_ms, SAMPLE_RATE) or self._next_ms is None:
+            if self.ring.start_ms is None:
+                return []
+            self._next_ms = self.ring.start_ms + self.block_ms
         blocks = []
-        while self._next_ms is not None and self._next_ms <= end_ms + .5:
-            block_end, block_start = self._next_ms, self._next_ms - self.block_ms
+        while self._next_ms <= self.ring.end_ms + .5:
+            blocks.append(self._block(self._next_ms - self.block_ms, self._next_ms))
             self._next_ms += self.block_ms
-            window_start = max(self.ring.start_ms, block_start - self.context_ms)
-            window = self.ring.span(window_start, block_end)
-            keep = int(round(self.block_ms * SAMPLE_RATE / 1000))
-            if len(window) < keep:
-                continue
-            blocks.append((int(round(block_start)), int(round(block_end)), window, keep))
-        return blocks
+        return [block for block in blocks if block[3]]
+
+    def flush(self):
+        """The last, shorter block at the end of the input."""
+        if self._next_ms is None:
+            return []
+        start, end = self._next_ms - self.block_ms, self.ring.end_ms
+        self._next_ms = None
+        return [self._block(start, end)] if end - start >= 100 else []
+
+    def _block(self, start, end):
+        window = self.ring.span(max(self.ring.start_ms, start - self.context_ms), end)
+        keep = min(len(window), int(round((end - start) * SAMPLE_RATE / 1000)))
+        return int(round(start)), int(round(end)), window, keep
+
+
+def derived_chunks(name, samples, start_ms, chunk_ms=100):
+    """Split separated audio into chunks stamped with their own capture time, like a microphone's."""
+    from ..pipeline import Derived
+    size = SAMPLE_RATE * chunk_ms // 1000
+    return [Derived(name, samples[i:i + size].copy(), 'audio', SAMPLE_RATE,
+                    timestamp_ms=int(round(start_ms + 1000 * min(i + size, len(samples)) / SAMPLE_RATE)))
+            for i in range(0, len(samples), size)]
 
 
 class TargetSpeech:
@@ -238,17 +254,72 @@ class TargetSpeech:
         self.blocks.reset()
 
     def process(self, frame):
-        from ..pipeline import Derived
         if frame.modality != 'audio' or frame.data is None or isinstance(frame.data, dict):
             return []
         if frame.sample_rate != SAMPLE_RATE:
             raise ValueError('target_speech needs 16 kHz mono audio')
         if self.enrollment is None:
             raise RuntimeError('no enrolled voice clip bound')
+        return self._extract(self.blocks.push(frame.data, int(frame.timestamp_ms)))
+
+    def finish(self):
+        return self._extract(self.blocks.flush())
+
+    def _extract(self, blocks):
         output = []
-        for _, _, window, keep in self.blocks.push(frame.data, int(frame.timestamp_ms)):
+        for start_ms, _, window, keep in blocks:
             estimate = self.extractor.extract(window, self.enrollment)
-            output.append(Derived(self.emits, estimate[-keep:].copy(), 'audio', SAMPLE_RATE))
+            output += derived_chunks(self.emits, estimate[-keep:], start_ms)
+        return output
+
+
+class SpeakerGate:
+    """Pipeline module: the room audio, silenced wherever the enrolled voice was not matched (no model).
+
+    Consumes the audio and the ``audio.speaker_match`` segments of :class:`SpeakerVerify`. Each 100 ms
+    chunk takes the verdict of the segment whose middle is nearest to it, so output lags by one segment.
+    This does not separate overlapping voices: while the enrolled person speaks, everything audible
+    passes. Use a :class:`TargetSpeech` model where voices overlap.
+    """
+
+    def __init__(self, *, reference='voice', emits=None, segment_ms=1500, chunk_ms=100):
+        self.reference_name, self.emits = reference, emits or f'voice:{reference}'
+        self.segment_ms, self.chunk_ms = int(segment_ms), int(chunk_ms)
+        self.name, self.version = 'speaker_gate', '1'
+        self.reset()
+
+    def reset(self):
+        self.blocks = Blocks(block_ms=200, context_ms=0)
+        self.pending, self.segments = [], []
+
+    def process(self, frame):
+        value = frame.data
+        if isinstance(value, dict):
+            if value.get('kind') == 'segment' and value.get('reference') == self.reference_name:
+                self.segments = self.segments[-63:] + [(value['start_ms'], value['end_ms'], bool(value['match']))]
+            return []
+        if frame.modality != 'audio' or value is None:
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('speaker gate needs 16 kHz mono audio')
+        self.pending += [(start, end, window) for start, end, window, _ in
+                         self.blocks.push(value, int(frame.timestamp_ms))]
+        return self._emit(self.blocks.ring.end_ms - self.segment_ms)
+
+    def finish(self):
+        self.pending += [(start, end, window) for start, end, window, _ in self.blocks.flush()]
+        return self._emit(None)
+
+    def _emit(self, until_ms):
+        np = _np()
+        output = []
+        while self.pending and (until_ms is None or self.pending[0][1] <= until_ms):
+            start, end, window = self.pending.pop(0)
+            middle = (start + end) / 2
+            covering = [item for item in self.segments if item[0] <= middle <= item[1]] or \
+                (self.segments[-1:] if until_ms is None else [])
+            keep = bool(covering) and min(covering, key=lambda item: abs((item[0] + item[1]) / 2 - middle))[2]
+            output += derived_chunks(self.emits, window if keep else np.zeros_like(window), start, self.chunk_ms)
         return output
 
 
@@ -322,7 +393,10 @@ class SAMSpanSpeech:
 
     @classmethod
     def from_local(cls, config, **options):
+        from .sam_audio_context import configuration
         from .sam_audio_native import SAMAudioNative
+        config = configuration(config)
+        options.setdefault('prompt', config['prompt'])
         return cls(SAMAudioNative.from_local(config), **options)
 
     def reset(self):
@@ -330,7 +404,6 @@ class SAMSpanSpeech:
         self.spans = []
 
     def process(self, frame):
-        from ..pipeline import Derived
         from ..sam_audio_windows import SAMPLE_RATE as SAM_RATE, prepare_window
         np = _np()
         value = frame.data
@@ -348,15 +421,14 @@ class SAMSpanSpeech:
         for start_ms, end_ms, window, keep in self.blocks.push(value, int(frame.timestamp_ms)):
             anchors = span_anchors(self.spans, start_ms, end_ms, include_other=self.include_other)
             if not any(token == '+' for token, _, _ in anchors):
-                output.append(Derived(self.emits, np.zeros(keep, np.float32), 'audio', SAMPLE_RATE))
+                output += derived_chunks(self.emits, np.zeros(keep, np.float32), start_ms)
                 continue
             pcm = np.clip(resample(window[-keep:], SAMPLE_RATE, SAM_RATE), -1., 1.).astype(np.float32)
             prepared = prepare_window(pcm, sample_rate=SAM_RATE, prompt=self.prompt, anchors=list(anchors),
                                       hop_length=self.backend.hop_length)
             target, _, _, _ = self.backend.predict(prepared)
             estimate = np.frombuffer(target, dtype=np.float32)
-            output.append(Derived(self.emits, _fit(resample(estimate, SAM_RATE, SAMPLE_RATE), keep), 'audio',
-                                  SAMPLE_RATE))
+            output += derived_chunks(self.emits, _fit(resample(estimate, SAM_RATE, SAMPLE_RATE), keep), start_ms)
             self.spans = [span for span in self.spans if span[1] > end_ms - 4000]
         return output
 

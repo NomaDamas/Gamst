@@ -62,7 +62,7 @@ _PATTERNS = {}
 
 def _pattern(term):
     if term not in _PATTERNS:
-        _PATTERNS[term] = re.compile(unicodedata.normalize('NFKC', term[3:]).lower())
+        _PATTERNS[term] = re.compile(unicodedata.normalize('NFKC', term[3:]), re.IGNORECASE)
     return _PATTERNS[term]
 
 

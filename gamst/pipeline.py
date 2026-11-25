@@ -57,6 +57,7 @@ class Derived:
     data: Any
     modality: str
     sample_rate: int | None = None
+    timestamp_ms: int | None = None   # capture time of this item; default: the frame it came from
 
 
 async def _call(function, *args):
@@ -109,7 +110,8 @@ class Pipeline:
         consumes = [consumes] if isinstance(consumes, str) else list(consumes)
         if not consumes:
             raise ValueError('a module consumes at least one input or module')
-        links = [tuple(item.split(':', 1)) if ':' in item else (item, None) for item in consumes]
+        links = [tuple(item.split(':', 1)) if ':' in item and item not in self.inputs else (item, None)
+                 for item in consumes]
         if spec is not None:
             self.human.register_capability(spec)
         for derived in emits:
@@ -288,7 +290,8 @@ class Pipeline:
         for item in derived:
             if item.input not in entry['emits']:
                 raise ValueError(f'{name} emitted {item.input!r} but declares emits={entry["emits"]}')
-            derived_frame = self._frame(item.input, item.data, item.modality, frame.timestamp_ms,
+            derived_frame = self._frame(item.input, item.data, item.modality,
+                                        frame.timestamp_ms if item.timestamp_ms is None else item.timestamp_ms,
                                         subject_id=frame.subject_id, sample_rate=item.sample_rate,
                                         sensor=frame.sensor)
             records += await self.feed(item.input, derived_frame)

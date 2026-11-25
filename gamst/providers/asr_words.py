@@ -9,7 +9,8 @@ This module does not reimplement ASR. It wraps what GAMST already has:
   :class:`QwenForcedAligner` (Qwen3-ForcedAligner-0.6B, Apache-2.0; the Qwen3-ASR report gives
   37.2 ms accumulated average shift on Korean MFA-labelled data).
 - Mac / CPU: :class:`gamst.plugins.FasterWhisperPlugin` with ``word_timestamps=True`` emits
-  ``speech.transcript_words`` itself; no wrapper is needed.
+  ``speech.transcript_words`` itself; :class:`WhisperWords` only adds the last, shorter window at
+  the end of an input. Its windows are fixed, so a word cut by a window edge can be missed.
 
 :class:`AlignedASR` (a Pipeline provider module, capability ``speech.transcript_words``):
 
@@ -136,25 +137,28 @@ class AlignedASR:
     def _restart(self):
         self._epoch, self._sequence = uuid.uuid4().hex, 0
 
-    def reset(self):
+    async def reset(self):
         self.clock.reset()
         self.ring.reset()
+        await self._restart_engine()
+
+    async def _restart_engine(self):
         self._restart()
         reset = getattr(self.asr, 'reset', None)
         if callable(reset):
-            reset()
+            await _call(reset)
 
     async def process(self, frame):
         if frame.modality != 'audio' or frame.data is None:
             return None
         if frame.sample_rate != SAMPLE_RATE:
             raise ValueError('asr_words needs 16 kHz mono audio')
-        self.ring.append(frame.data, frame.timestamp_ms, SAMPLE_RATE)
         hops, discontinuity = self.clock.push(frame.data, int(frame.timestamp_ms))
         outputs = []
         if discontinuity:
             outputs += await self._flush('gap')
         for end_ms, samples in hops:
+            self.ring.append(samples, end_ms, SAMPLE_RATE)   # same sample clock as the engine's utterance times
             sensor = SensorMetadata(source_id='gamst.asr_words', sensor_id='mono', sequence=self._sequence,
                                     channels=('mono',), stream_epoch=self._epoch)
             self._sequence += 1
@@ -165,17 +169,14 @@ class AlignedASR:
 
     async def finish(self):
         outputs = await self._flush('input_end')
+        self.clock.reset()
         return outputs or None
 
     async def _flush(self, reason):
         finish = getattr(self.asr, 'finish', None)
         update = await _call(finish) if callable(finish) else None
         outputs = await self._emit(update, reason=reason)
-        self.clock.reset()
-        self._restart()
-        reset = getattr(self.asr, 'reset', None)
-        if callable(reset):
-            reset()
+        await self._restart_engine()
         return outputs
 
     async def _emit(self, update, reason=None):
@@ -204,3 +205,34 @@ class AlignedASR:
         close = getattr(self.asr, 'close', None)
         if callable(close):
             await _call(close)
+
+
+class WhisperWords:
+    """FasterWhisperPlugin plus the end of the input: the last partial window is padded with silence."""
+
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self.name, self.version = plugin.name, plugin.version
+        self._last = None
+
+    async def process(self, frame):
+        if frame.modality != 'audio' or frame.data is None:
+            return []
+        self._last = frame
+        return await self.plugin.process(frame)
+
+    async def finish(self):
+        if self._last is None:
+            return []
+        import numpy as np
+        size = int(self.plugin.window_seconds * SAMPLE_RATE)
+        missing = size - len(self.plugin.buffers.get(self._last.subject_id, ()))
+        if missing in (0, size):
+            return []
+        return await self.plugin.process(InputFrame(
+            np.zeros(missing, np.float32), 'audio', self._last.timestamp_ms + round(1000 * missing / SAMPLE_RATE),
+            self._last.subject_id, SAMPLE_RATE))
+
+    def reset(self):
+        self._last = None
+        self.plugin.reset()

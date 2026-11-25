@@ -14,8 +14,8 @@ For every visible person it scores
 
 Math here (no model): 5-point similarity alignment (Umeyama), crop geometry, centroids, cosine, and a
 track lock with hysteresis: a face score >= ``face_threshold`` locks the track; the lock holds while
-the track is visible and its face does not contradict (score < ``face_reject``); without a lock, a
-body score >= ``body_threshold`` selects a track tentatively (``state="body"``).
+the track is visible, its face does not contradict (score < ``face_reject``) and the face confirmed
+it within ``hold_ms`` (or the body still matches); without a lock, a body score >= ``body_threshold`` selects a track tentatively (``state="body"``).
 
 Output (plugin signals, so downstream modules link by name):
 
@@ -297,7 +297,7 @@ class TargetPerson:
     name = 'target_person'
 
     def __init__(self, face=None, body=None, *, reference='person', face_threshold=.35, face_reject=.15,
-                 body_threshold=.6, face_every_ms=200, body_every_ms=500, emits=None, crop_pad=.15,
+                 body_threshold=.6, face_every_ms=200, body_every_ms=500, hold_ms=10000, emits=None, crop_pad=.15,
                  face_indices=MEDIAPIPE_FACE_POINTS):
         if face is None and body is None:
             raise ValueError('target_person needs a face or a body embedder')
@@ -305,7 +305,7 @@ class TargetPerson:
             raise ValueError('require face_reject <= face_threshold')
         self.face, self.body, self.reference_name = face, body, reference
         self.face_threshold, self.face_reject, self.body_threshold = face_threshold, face_reject, body_threshold
-        self.face_every_ms, self.body_every_ms = int(face_every_ms), int(body_every_ms)
+        self.face_every_ms, self.body_every_ms, self.hold_ms = int(face_every_ms), int(body_every_ms), int(hold_ms)
         self.emits, self.crop_pad, self.face_indices = emits, crop_pad, tuple(face_indices)
         self.version = f"1.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
         self.gallery = None
@@ -336,7 +336,7 @@ class TargetPerson:
         with self._lock:
             self._poses = {}
             self._tracks = {}
-            self._locked = None
+            self._locked = self._confirmed_ms = None
             if self.gallery is not None:
                 self.gallery.session.clear()
 
@@ -356,6 +356,9 @@ class TargetPerson:
                 embedding = self.body.embed(crop)
                 state['body_embedding'] = embedding
                 state['body'], state['body_ms'] = self.gallery.body_score(embedding), ts
+        for key in ('face', 'body'):   # a score is evidence about now, not about a minute ago
+            if state[key + '_ms'] is not None and ts - state[key + '_ms'] > 1000:
+                state[key] = None
         return state
 
     def process(self, frame):
@@ -383,7 +386,7 @@ class TargetPerson:
                 candidates[track] = (pose, self._score(track, pose, frame.data, ts))
             for track in [key for key, state in self._tracks.items() if ts - state['seen_ms'] > 5000]:
                 del self._tracks[track]
-            target, state_name = self._select(candidates)
+            target, state_name = self._select(candidates, ts)
             pose, scores = candidates[target] if target is not None else (None, {})
             if state_name == 'face' and scores.get('body_embedding') is not None:
                 self.gallery.remember_body(scores['body_embedding'])
@@ -400,21 +403,21 @@ class TargetPerson:
                     output.append(Derived(self.emits, frame.data[y0:y1, x0:x1].copy(), 'video'))
             return output
 
-    def _select(self, candidates):
-        """(track_id, state): the locked track while it holds, else the best face, else the best body."""
-        locked = self._locked
-        if locked in candidates:
-            face = candidates[locked][1].get('face')
-            if face is None or face >= self.face_reject:
-                return locked, 'face' if face is not None and face >= self.face_threshold else 'held'
-            self._locked = None   # the face now contradicts the lock
+    def _select(self, candidates, ts):
+        """(track_id, state): best matching face; else the locked track while it holds; else best body."""
         faces = [(state['face'], track) for track, (_, state) in candidates.items()
                  if state.get('face') is not None and state['face'] >= self.face_threshold]
         if faces:
-            self._locked = max(faces)[1]
+            locked = next((track for _, track in faces if track == self._locked), None)
+            self._locked, self._confirmed_ms = locked or max(faces)[1], ts
             return self._locked, 'face'
-        if locked not in candidates:
-            self._locked = None
+        if self._locked in candidates:
+            scores = candidates[self._locked][1]
+            face, body = scores.get('face'), scores.get('body')
+            fresh = ts - self._confirmed_ms <= self.hold_ms or (body is not None and body >= self.body_threshold)
+            if fresh and (face is None or face >= self.face_reject):
+                return self._locked, 'held'
+        self._locked = None   # gone, contradicted by its face, or unconfirmed for too long
         bodies = [(state['body'], track) for track, (_, state) in candidates.items()
                   if state.get('body') is not None and state['body'] >= self.body_threshold
                   and not (state.get('face') is not None and state['face'] < self.face_reject)]
