@@ -51,7 +51,10 @@ class WhisperContractTest(unittest.IsolatedAsyncioTestCase):
                 counted = await human.count_events('speech.term_events', event='term.spoken')
                 self.assertEqual(counted['count'], 2)
                 self.assertTrue(counted['evidence'][0]['event']['word_timed'])
-                self.assertNotIn('probability', str(await human.get_history()))   # uncalibrated: never recorded
+                words = [word for record in await human.get_history()
+                         if record['observation'].get('name') == 'speech.transcript_words'
+                         for word in record['observation']['value']['words']]
+                self.assertEqual([set(word) for word in words], [{'text', 'start_ms', 'end_ms'}] * 2)   # no uncalibrated probability
 
 
 if __name__ == '__main__':
