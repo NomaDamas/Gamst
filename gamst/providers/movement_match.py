@@ -51,9 +51,9 @@ INFINITY = float('inf')
 
 
 def distance(a, mask_a, b, mask_b):
-    """Mean absolute channel difference over channels visible in both; None when fewer than 4 are."""
+    """Mean absolute channel difference over channels visible in both; None when fewer than 4 are (of fewer than 4: all)."""
     pairs = [abs(x - y) for x, y, m, n in zip(a, b, mask_a, mask_b) if m and n]
-    return sum(pairs) / len(pairs) if len(pairs) >= 4 else None
+    return sum(pairs) / len(pairs) if len(pairs) >= min(4, len(a)) else None
 
 
 def example(value, *, span_ms=None):

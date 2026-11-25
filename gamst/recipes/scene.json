@@ -251,7 +251,7 @@
       "for": "exemplar"
     },
     {
-      "id": "temporal.repetitions",
+      "id": "temporal.repetition_count",
       "for": "repetition"
     },
     {

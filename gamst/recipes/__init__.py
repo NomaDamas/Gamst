@@ -147,6 +147,7 @@ def add_role(recipe, wanted):
     if found is None or found[1] not in ROLES:
         raise SystemExit(f'--with-role {wanted}: ROLE[=CANDIDATE][@MS], a role of gamst recipe roles')
     role = found[1]
+    _refuse_role(ROLES[role], found[2])
     modality = ROLES[role].modality
     source = next((item['id'] for item in recipe['inputs'] if input_modality(item) == modality), None)
     if source is None:
@@ -162,19 +163,23 @@ def add_role(recipe, wanted):
     return dict(recipe, modules=[*recipe['modules'], item])
 
 
-def _check_role(path, recipe, item):
+def _refuse_role(role, candidate=None):
+    """Why no candidate (or not this one) can be a generic module, as an error."""
     from ..crew.modules import refusal
-    from ..crew.registry import ROLES
-    role = ROLES.get(item.get('role'))
-    if role is None:
-        raise ValueError(f"{path}: module {item['name']!r} names no role of the registry: {item.get('role')!r}")
-    candidates = [item['candidate']] if item.get('candidate') else list(role.candidates)
     reasons = {name: refusal(role.id, name) if name in role.candidates else f"unknown; choose from {', '.join(role.candidates)}"
-               for name in candidates}
+               for name in ([candidate] if candidate else role.candidates)}
     if all(reasons.values()):
         raise SystemExit(f'{role.id} cannot be a module: ' + '; '.join(
             f"{', '.join(name for name in reasons if reasons[name] == reason)}: {reason}"
             for reason in dict.fromkeys(reasons.values())))
+
+
+def _check_role(path, recipe, item):
+    from ..crew.registry import ROLES
+    role = ROLES.get(item.get('role'))
+    if role is None:
+        raise ValueError(f"{path}: module {item['name']!r} names no role of the registry: {item.get('role')!r}")
+    _refuse_role(role, item.get('candidate'))
     for source in item.get('consumes', ()):
         entry = next((entry for entry in recipe['inputs'] if entry['id'] == source), None)
         if entry is not None and input_modality(entry) != role.modality:
@@ -418,7 +423,7 @@ def _device():
 
 
 def _given(args):
-    return [name for name in SOURCES if getattr(args, name, None) not in (None, False)]
+    return [name for name in SOURCES if getattr(args, name, None) is not None and getattr(args, name) is not False]
 
 
 def _pairs(values, option):

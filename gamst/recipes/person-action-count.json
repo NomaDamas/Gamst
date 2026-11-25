@@ -111,7 +111,7 @@
   "view": "count",
   "records": [
     "temporal.exemplar_events",
-    "temporal.repetitions"
+    "temporal.repetition_count"
   ],
   "limits": "the enrolled face must be visible to confirm identity (then the track is held up to 10 s); --without target_person counts the most visible person instead; identity thresholds are not measured on people",
   "measured": "not yet"
