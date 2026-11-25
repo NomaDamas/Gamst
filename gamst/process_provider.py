@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 
 from .capabilities import bounded_json
+from .redact import public_text
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
 from .provider_profiles import capability
 from .streams import _finish
@@ -54,6 +55,13 @@ async def stop_child(process):
         transport.close()
 
 
+async def _tail(stream, kept):
+    """The end of what a starting child writes to its error output (so a full pipe never blocks it)."""
+    while block := await stream.read(4096):
+        kept.extend(block)
+        del kept[:-4000]
+
+
 class ProcessProvider:
     """Async SensorStreams provider. No shell, network service or implicit restart.
 
@@ -66,6 +74,7 @@ class ProcessProvider:
     # of calling open(). Only the explicit SAM open path installs an owner.
     _separation_owner = None
     profile = None
+    _errors = None      # the task reading the child's error output while it starts
     # True: this worker answers ``query`` of its owning module only (gamst.private_payload).
     private = False
 
@@ -126,13 +135,20 @@ class ProcessProvider:
                 worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
                 'gamst.provider_worker', stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
+            kept = bytearray()
+            self._errors = asyncio.create_task(_tail(self._process.stderr, kept))
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
             if private:
                 extra['private_protocol'] = PRIVATE_PROTOCOL
-            response = await self._request('start', profile=profile, config=self.config,
-                                           timeout=startup_timeout, **extra)
+            try:
+                response = await self._request('start', profile=profile, config=self.config,
+                                               timeout=startup_timeout, **extra)
+            except (asyncio.IncompleteReadError, BrokenPipeError, ConnectionResetError) as ended:
+                raise RuntimeError(await self._ended_early(kept)) from ended
+            except asyncio.TimeoutError as late:
+                raise asyncio.TimeoutError(f'{profile} worker did not start within {startup_timeout:g} s') from late
             if response != {'spec': spec_value(self.spec), **extra}:
                 raise RuntimeError('worker capability/provenance differs from selected contract')
             return self
@@ -148,8 +164,22 @@ class ProcessProvider:
             if staging is not None:
                 staging.cleanup()
 
+    async def _ended_early(self, kept):
+        """Why a child ended before it answered: its exit code and the last line it wrote (bounded, no secrets)."""
+        await asyncio.wait({self._errors}, timeout=1)
+        try:
+            code = await asyncio.wait_for(self._process.wait(), 1)
+        except asyncio.TimeoutError:
+            code = 'unknown'
+        lines = [line.strip() for line in kept.decode(errors='replace').splitlines() if line.strip()]
+        return f'{self.profile} worker ended while starting (exit code {code}): ' \
+            f"{public_text(lines[-1]) if lines else 'no message'}"
+
     async def _stop(self):
         self.closed = True
+        errors, self._errors = self._errors, None
+        if errors is not None:
+            errors.cancel()
         owner = getattr(self, '_separation_owner', None)
         if owner is not None:
             owner.close()
@@ -178,6 +208,8 @@ class ProcessProvider:
             kind = response.get('error_type', 'unknown')
             if not isinstance(kind, str) or len(kind) > 128:
                 kind = 'unknown'
+            message = response.get('error') if operation == 'start' else None
+            kind = public_text(message) if isinstance(message, str) and message else kind
             raise RuntimeError(f'{self.profile} worker failed ({kind}); verify profile configuration, '
                                'local checkpoints and optional dependencies in the selected Python environment')
         result = response.get('result')
