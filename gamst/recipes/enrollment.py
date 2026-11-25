@@ -143,6 +143,14 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     return saved
 
 
+def saved_terms(path):
+    """A terms file of ``gamst recipe enroll --kind terms`` (confirmed words and how they were given)."""
+    value = json.loads(Path(path).read_text())
+    if not isinstance(value, dict) or value.get('kind') != 'terms' or not isinstance(value.get('terms'), dict) or not value['terms']:
+        raise SystemExit(f'{path} is not a terms file')
+    return value
+
+
 def saved_reference(path, kind):
     """(value, consent) of an enrollment file; refused without a consent record."""
     value = json.loads(Path(path).read_text())

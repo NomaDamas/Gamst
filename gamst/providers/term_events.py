@@ -79,6 +79,12 @@ def _valid(spelling):
     return bool(normalize(spelling))
 
 
+def check_spelling(spelling):
+    """Refuse a spelling that can never match (nothing but spaces and punctuation, or an invalid pattern)."""
+    if not _valid(spelling):
+        raise ValueError(f'{spelling!r} has nothing to match')
+
+
 def _word_times(words, offset, length):
     """Times of the words covering normalized characters [offset, offset+length)."""
     position, covered = 0, []

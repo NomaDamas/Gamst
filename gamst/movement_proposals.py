@@ -1,12 +1,13 @@
-"""Proposed movements waiting for the owner: candidate intervals of a text, or a rule an agent wrote.
+"""Proposed movements and words waiting for the owner: intervals of a text, a rule an agent wrote, or a term heard in clips.
 
 A proposal never counts anything. An interval becomes a positive example only after the owner confirms it,
-a negative one after the owner rejects it (``gamst recipe enroll --proposals``). As with Watches, a proposal
+a negative one after the owner rejects it (``gamst recipe enroll --proposals``). A term (what a speech recognizer wrote for
+example clips, with its spelling variants) becomes countable only after the owner confirms or edits it. As with Watches, a proposal
 belongs to ``user``; ``jev`` (the application's model) or the finder may propose, only the owner resolves,
 and must name the version that was looked at.
 
 The file is JSON (mode 0600) and holds intervals, the text, scores and the identity of the video (path, size
-and SHA256), never frames, joints or text written by a VLM.
+and SHA256), never frames, joints, audio or text written by a VLM.
 """
 from __future__ import annotations
 
@@ -29,12 +30,13 @@ OWNER = 'user'
 PROPOSERS = OWNERS + ('finder',)
 STATUSES = ('open', 'confirmed', 'rejected')
 MAX_PROPOSALS, MAX_VIDEOS, MAX_FILE = 512, 64, 4 << 20
-MAX_INTERVAL_S = 30.
+MAX_INTERVAL_S, MAX_SPELLINGS = 30., 16
 _VERSIONED = ('id', 'kind', 'recipe', 'text', 'video', 'start_s', 'end_s', 'score', 'rule', 'proposer', 'status')
 
 
 def _version(item):
-    data = json.dumps({key: item.get(key) for key in _VERSIONED}, sort_keys=True, separators=(',', ':'))
+    keys = _VERSIONED + (('spellings',) if item.get('kind') == 'term' else ())
+    data = json.dumps({key: item.get(key) for key in keys}, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(data.encode()).hexdigest()
 
 
@@ -56,6 +58,24 @@ def checked_interval(start_s, end_s, duration_s):
     if duration_s is not None and end_s > duration_s + 1e-3:
         raise ValueError('the interval ends after the video')
     return round(float(start_s), 3), round(float(end_s), 3)
+
+
+def checked_spellings(spellings, *, patterns=False):
+    """Distinct written forms of one term, the first naming it; ``re:`` patterns only where the owner wrote them."""
+    from .providers.term_events import normalize, check_spelling
+    found = []
+    for value in spellings if isinstance(spellings, (list, tuple)) else ():
+        value = ' '.join(str(value).split())
+        if not 1 <= len(value) <= 100:
+            raise ValueError('a spelling has 1..100 characters')
+        if value.startswith('re:') and not patterns:
+            raise ValueError('a proposed spelling is text, not a pattern')
+        check_spelling(value)
+        if normalize(value) not in [normalize(other) for other in found]:
+            found.append(value)
+    if not 1 <= len(found) <= MAX_SPELLINGS:
+        raise ValueError(f'a term has 1..{MAX_SPELLINGS} spellings')
+    return found
 
 
 class Proposals:
@@ -157,9 +177,18 @@ class Proposals:
         with self._edit() as data:
             return self._public(data, self._add(data, dict(kind='rule', recipe=recipe, text=text, rule=rule), proposer))
 
+    def propose_term(self, *, recipe, spellings, clips=(), proposer='finder', model=None):
+        """A term as it was written for example clips (``clips``: where, and what was recognized there)."""
+        spellings = checked_spellings(spellings)
+        with self._edit() as data:
+            item = dict(kind='term', recipe=recipe, text=movement_text(spellings[0]), spellings=spellings)
+            if clips:
+                item['clips'] = [dict(clip) for clip in clips][:32]
+            return self._public(data, self._add(data, item, proposer, model))
+
     # ------------------------------------------------------------------ resolve
 
-    def resolve(self, *, proposal_id, actor, decision, expected_version, start_s=None, end_s=None):
+    def resolve(self, *, proposal_id, actor, decision, expected_version, start_s=None, end_s=None, spellings=None):
         """Confirm or reject one proposal. Only its owner may, naming the version that was looked at."""
         if actor not in OWNERS:
             raise ValueError(f'actor must be one of {OWNERS}')
@@ -179,6 +208,12 @@ class Proposals:
                 item['proposed'] = item.get('proposed') or [item['start_s'], item['end_s']]
                 item['start_s'], item['end_s'] = checked_interval(start_s, end_s,
                                                            data['videos'][item['video']].get('duration_s'))
+            if spellings is not None:
+                if item['kind'] != 'term' or decision != 'confirm':
+                    raise ValueError('only a confirmed term can be edited')
+                item['proposed'] = item.get('proposed') or item['spellings']
+                item['spellings'] = checked_spellings(spellings, patterns=True)
+                item['text'] = movement_text(item['spellings'][0])
             item.update(status=dict(confirm='confirmed', reject='rejected')[decision], resolved_by=actor,
                         resolved_ms=self._clock())
             item['version'] = _version(item)

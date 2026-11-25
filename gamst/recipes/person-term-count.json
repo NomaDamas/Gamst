@@ -1,6 +1,6 @@
 {
   "name": "person-term-count",
-  "summary": "Count how often one enrolled person says chosen words; other voices are not counted.",
+  "summary": "Count how often chosen words are said: by one enrolled person (default), or by anyone (--without voice).",
   "skill": "skills/gamst-person-terms/SKILL.md",
   "hardware": {
     "min_fps": null,
@@ -13,7 +13,8 @@
       "use": "microphone",
       "sources": [
         "microphone",
-        "audio"
+        "audio",
+        "video"
       ]
     }
   ],
@@ -21,7 +22,12 @@
     {
       "name": "voice",
       "kind": "voice",
-      "label": "the enrolled voice"
+      "label": "the enrolled voice",
+      "for": [
+        "speaker",
+        "target_voice",
+        "speaker_check"
+      ]
     },
     {
       "name": "terms",
@@ -36,6 +42,11 @@
       "reference": "voice",
       "consumes": [
         "microphone"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
       ]
     },
     {
@@ -48,6 +59,11 @@
       ],
       "emits": [
         "voice"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
       ]
     },
     {
@@ -57,7 +73,12 @@
       "window_seconds": 3.0,
       "consumes": [
         "voice"
-      ]
+      ],
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
     },
     {
       "name": "speaker_check",
@@ -68,6 +89,11 @@
       "consumes": [
         "microphone",
         "asr:speech.transcript_words"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
       ]
     },
     {
@@ -76,13 +102,18 @@
       "reference": "terms",
       "consumes": [
         "speaker_check"
-      ]
+      ],
+      "consumes_without": {
+        "speaker_check": [
+          "asr:speech.transcript_words"
+        ]
+      }
     }
   ],
   "view": "count",
   "records": [
     "speech.term_events"
   ],
-  "limits": "overlapping voices are not separated by the default gate; use a target-speech module (a separation model) in a copy of this recipe; the speaker threshold must be set on your own audio; a word cut by a 3 s ASR window can be missed",
+  "limits": "overlapping voices are not separated by the default gate; use a target-speech module (a separation model) in a copy of this recipe; the speaker threshold must be set on your own audio; a word cut by a 3 s ASR window can be missed; --without voice counts every voice and says so (speaker: not_bound)",
   "measured": "not yet on people"
 }

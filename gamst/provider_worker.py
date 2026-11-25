@@ -24,7 +24,8 @@ def _construct(profile, config):
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
         backend = OpenAIStreamingBackend.from_config(config)
-        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
+        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000),
+                                            context=config.get('context', False))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
         provider = SmolVLMContext.from_local(**config)
@@ -247,7 +248,9 @@ def main():
                     if result is not None:
                         result = spec.validate(result)
                 elif operation == 'process_regions' and provider is not None:
-                    result = spec.validate(provider.process_regions(decode_frame(request['frame'], payload), request['evidence']))
+                    result = provider.process_regions(decode_frame(request['frame'], payload), request['evidence'])
+                    if result is not None:
+                        result = spec.validate(result)
                 elif operation in ('finish', 'endpoint') and provider is not None and not payload:
                     finish = getattr(provider, operation, None)
                     if operation == 'endpoint' and not callable(finish):

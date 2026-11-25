@@ -210,7 +210,7 @@ def _proposed(recipe, args):
         chosen, videos = store.selected(text=args.text, ids=args.proposal)
     except ValueError as error:
         raise SystemExit(f'{args.proposals}: {error}') from error
-    chosen = [item for item in chosen if item['recipe'] == recipe['name']]
+    chosen = [item for item in chosen if item['recipe'] == recipe['name'] and item['kind'] != 'term']
     wanted = ('open', 'confirmed') if args.no_confirm else ('confirmed',)
     waiting = [item for item in chosen if item['status'] == 'open' and 'open' not in wanted]
     if waiting:
@@ -424,7 +424,8 @@ def proposals(args):
             result = store.list(status=args.status, text=args.text, limit=512)
             for item in result['proposals']:
                 place = f"{item['video']['name']} {item['start_s']:.2f}-{item['end_s']:.2f} s" \
-                    if item['kind'] == 'interval' else json.dumps(item['rule'])
+                    if item['kind'] == 'interval' else json.dumps(item['rule']) if item['kind'] == 'rule' \
+                    else 'word: ' + ', '.join(item['spellings'])
                 score = '' if item.get('score') is None else f" score {item['score']:.2f}"
                 print(f"{item['id'][:12]}  {item['status']:9}  {item['proposer']:6}  {place}{score}  "
                       f"{json.dumps(item['text'], ensure_ascii=False)}")
@@ -432,11 +433,13 @@ def proposals(args):
             return result
         everything, resolved = store.list(limit=512)['proposals'], []
         for wanted in args.ids:
-            found = re.fullmatch(r'([0-9a-f]+)(?:@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?))?', wanted)
+            found = re.fullmatch(r'([0-9a-f]+)(?:@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)|=(.+))?', wanted)
             matches = [item for item in everything if found and item['id'].startswith(found[1])]
             if len(matches) != 1 or len(found[1]) < 6:
                 raise ValueError(f'{wanted}: not the start (6 or more characters) of one proposal ID')
             interval = {} if found[2] is None else dict(start_s=float(found[2]), end_s=float(found[3]))
+            if found[4] is not None:
+                interval = dict(spellings=found[4].split(','))
             resolved.append(store.resolve(proposal_id=matches[0]['id'], actor=OWNER, decision=args.decision,
                                           expected_version=matches[0]['version'], **interval))
         for item in resolved:

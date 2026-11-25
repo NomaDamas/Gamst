@@ -23,7 +23,7 @@ class _Window:
         self.pipeline, self.headless = pipeline, headless
         self.capabilities = tuple(capabilities)
         self.latest = {}
-        self.printed = set()
+        self.printed, self.windows = set(), {}
 
     async def _refresh(self, records):
         for record in records:
@@ -36,6 +36,10 @@ class _Window:
                     self.printed.add(record['id'])
                     print(json.dumps(dict(capability=capability, timestamp_ms=record['timestamp_ms'],
                                           events=events), ensure_ascii=False), flush=True)
+
+    def _title(self, input_id):
+        """One window per video input; the first has the plain title."""
+        return self.windows.setdefault(input_id, f'{self.title}: {input_id}' if self.windows else self.title)
 
     def _keys(self):
         import cv2
@@ -88,7 +92,7 @@ class CountView(_Window):
         for index, line in enumerate(lines[:max(1, image.shape[0] // 22 - 1)]):
             cv2.putText(panel, line, (10, 26 + 22 * index), cv2.FONT_HERSHEY_SIMPLEX, .48,
                         (80, 220, 255) if index == 0 else (255, 255, 255), 1)
-        cv2.imshow(self.title, np.hstack([image, panel]))
+        cv2.imshow(self._title(input_id), np.hstack([image, panel]))
         return self._keys()
 
 
@@ -105,7 +109,7 @@ class RotationView(_Window):
             return True
         import cv2
         from .demos.rotation import Panel
-        cv2.imshow(self.title, Panel().draw(frame.data.copy(), record, [], 0))
+        cv2.imshow(self._title(input_id), Panel().draw(frame.data.copy(), record, [], 0))
         return self._keys()
 
 

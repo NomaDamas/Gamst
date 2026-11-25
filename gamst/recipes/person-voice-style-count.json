@@ -1,6 +1,6 @@
 {
   "name": "person-voice-style-count",
-  "summary": "Count how often one enrolled person uses a demonstrated way of speaking (tone), and optionally a text pattern.",
+  "summary": "Count how often a demonstrated way of speaking (tone) is used, and optionally a text pattern: by one enrolled person (default), or by anyone (--without voice).",
   "skill": "skills/gamst-person-terms/SKILL.md",
   "hardware": {
     "min_fps": null,
@@ -13,7 +13,8 @@
       "use": "microphone",
       "sources": [
         "microphone",
-        "audio"
+        "audio",
+        "video"
       ]
     }
   ],
@@ -21,7 +22,12 @@
     {
       "name": "voice",
       "kind": "voice",
-      "label": "the enrolled voice"
+      "label": "the enrolled voice",
+      "for": [
+        "speaker",
+        "target_voice",
+        "speaker_check"
+      ]
     },
     {
       "name": "style",
@@ -42,6 +48,11 @@
       "reference": "voice",
       "consumes": [
         "microphone"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
       ]
     },
     {
@@ -54,6 +65,11 @@
       ],
       "emits": [
         "voice"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
       ]
     },
     {
@@ -61,7 +77,12 @@
       "use": "prosody",
       "consumes": [
         "voice"
-      ]
+      ],
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
     },
     {
       "name": "voice_channels",
@@ -84,7 +105,12 @@
       "consumes": [
         "voice_channels",
         "speaker"
-      ]
+      ],
+      "consumes_without": {
+        "speaker": [
+          "voice_channels"
+        ]
+      }
     },
     {
       "name": "asr",
@@ -94,7 +120,12 @@
       "consumes": [
         "voice"
       ],
-      "optional": "off"
+      "optional": "off",
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
     },
     {
       "name": "speaker_check",
@@ -106,7 +137,11 @@
         "microphone",
         "asr:speech.transcript_words"
       ],
-      "optional": "off"
+      "optional": "off",
+      "parts": [
+        "voice",
+        "terms"
+      ]
     },
     {
       "name": "terms",
@@ -115,14 +150,22 @@
       "consumes": [
         "speaker_check"
       ],
-      "optional": "off"
+      "optional": "off",
+      "consumes_without": {
+        "speaker_check": [
+          "asr:speech.transcript_words"
+        ]
+      }
     }
   ],
   "view": "count",
   "records": [
     "audio.exemplar_events",
-    "speech.term_events"
+    {
+      "id": "speech.term_events",
+      "for": "terms"
+    }
   ],
-  "limits": "tone channels describe pitch, level and brightness, not emotion; the match thresholds are the pose defaults and have not been measured for voice; text patterns need --with asr --with speaker_check --with terms",
+  "limits": "tone channels describe pitch, level and brightness, not emotion; the match thresholds are the pose defaults and have not been measured for voice; text patterns need --with asr --with terms (and --with speaker_check to check each utterance again); --without voice counts every voice and says so (speaker: not_bound)",
   "measured": "not yet"
 }

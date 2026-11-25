@@ -57,13 +57,14 @@ class WorkerModule:
     async def process(self, frame):
         return await self._ask(self.worker, frame)
 
-    async def _ask(self, worker, frame):
+    async def _ask(self, worker, frame, evidence=None):
+        """``evidence``: bounded JSON beside the frame, for a worker that takes it (``process_regions``)."""
         data = frame.data
         if self.spec.modality == 'video' and hasattr(data, 'shape'):
             data = bounded_image(data)
-        return await worker.process(InputFrame(data, frame.modality, frame.timestamp_ms,
-                                                    subject_id=frame.subject_id, sensor=frame.sensor,
-                                                    sample_rate=frame.sample_rate))
+        frame = InputFrame(data, frame.modality, frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor,
+                           sample_rate=frame.sample_rate)
+        return await (worker.process(frame) if evidence is None else worker.process_regions(frame, evidence))
 
     async def reset(self):
         # The SensorStreams rule: only a stateful provider holds state across frames.

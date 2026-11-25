@@ -147,17 +147,80 @@ async def _sapiens2_pose(options, context):
                                           tracker=options.get('tracker', 'ocsort')))
 
 
-class SegmentModule(WorkerModule):
-    """A worker that answers once per segment; says since when a segment is open, and closes the last one."""
+TRANSCRIPTS = ('speech.transcript_words', 'speech.transcript_update')    # signal names of utterances
+CONTEXT = ('transcript', 'counts')
 
-    def __init__(self, worker):
+
+class SegmentModule(WorkerModule):
+    """A worker that answers once per segment; says since when a segment is open, and closes the last one.
+
+    ``context`` (of ``CONTEXT``): what the Store already holds about the open segment goes beside each frame as text
+    data; nothing is waited for. ``counts`` are the events and counts of ``capabilities`` (the recipe's records).
+    """
+
+    def __init__(self, worker, *, human=None, context=(), capabilities=()):
         super().__init__(worker)
         self.pending_since_ms = None
+        self.human, self.declared, self.capabilities = human, tuple(context), tuple(capabilities)
+        self.context = set(self.declared)
+
+    def status(self):
+        return dict(context=sorted(self.context))
+
+    def configure(self, options):
+        """Switch off (and on again) what the recipe gives the model besides the frames: ``{"transcript": false}``."""
+        if not options or set(options) - set(self.declared) or any(type(value) is not bool for value in options.values()):
+            raise ValueError(f"options are {', '.join(self.declared) or 'none here'}: true or false")
+        self.context = (self.context | {key for key, value in options.items() if value}) - {
+            key for key, value in options.items() if not value}
+
+    def evidence(self, frame):
+        """What other modules said about the open segment and is known now (current revisions only)."""
+        from ..revisions import record_span
+        store, start, end = self.human.store, self.pending_since_ms, frame.timestamp_ms
+        result = dict(as_of_ms=store.known_now(), transcript=[], counts=[], events=[])
+        replaced = store.superseded(frame.subject_id)
+
+        def current(**arguments):
+            return [record for record in store.query(frame.subject_id, kind='observation.signal', registered_only=True,
+                                                     **arguments) if record['id'] not in replaced]
+
+        if 'transcript' in self.context:
+            newest = {}
+            for record in current(start=start, limit=128, any_of=list(TRANSCRIPTS)):
+                value, span = record['observation']['value'], record_span(record)
+                if isinstance(value, dict) and value.get('text') and span and span[0] <= end and span[1] >= start:
+                    newest[value.get('utterance_id') or record['id']] = dict(
+                        record_id=record['id'], text=str(value['text'])[:2000], status=value.get('status', 'final'),
+                        start_ms=span[0], end_ms=span[1],
+                        **{key: value[key] for key in ('utterance_id', 'revision') if value.get(key) is not None})
+            result['transcript'] = list(newest.values())[-16:]
+        for capability in self.capabilities if 'counts' in self.context else ():
+            records = current(start=start, limit=256, capability_id=capability)
+            for record in records:
+                value = record['observation']['value']
+                for event in (value.get('events') or ()) if isinstance(value, dict) else ():
+                    if isinstance(event, dict):
+                        first, last = (event.get(key) if type(event.get(key)) is int else record['timestamp_ms']
+                                       for key in ('start_ms', 'end_ms'))
+                        if first <= end and last >= start:
+                            result['events'].append(dict(
+                                record_id=record['id'], capability=capability, start_ms=first, end_ms=last,
+                                event=str(event.get('event', event.get('type')))[:100],
+                                **({'label': str(event[key])[:100] for key in ('term', 'label')
+                                    if event.get(key) is not None})))
+            upto = current(start=max(0, end - 600_000), end=end, limit=1, capability_id=capability)
+            if upto and type((upto[0]['observation']['value'] or {}).get('count')) is int:
+                result['counts'].append(dict(record_id=upto[0]['id'], capability=capability,
+                                             count=upto[0]['observation']['value']['count'],
+                                             timestamp_ms=upto[0]['timestamp_ms']))
+        result['events'] = result['events'][-32:]
+        return result
 
     async def process(self, frame):
         if self.pending_since_ms is None:
             self.pending_since_ms = frame.timestamp_ms
-        value = await super().process(frame)
+        value = await self._ask(self.worker, frame, self.evidence(frame) if self.declared else None)
         if value is not None:
             self.pending_since_ms = None
         return value
@@ -175,7 +238,8 @@ async def _semantic_scene(options, context):
     """The existing streaming VLM client, isolated in its worker so a slow reply never blocks capture.
 
     It interprets segments: ``segment_s`` seconds of frames taken every ``every_ms`` go to the model together.
-    The lane keeps the frames of the next segments while a reply is pending.
+    The lane keeps the frames of the next segments while a reply is pending. Unless ``"context"`` (or
+    ``--vlm-context``) says otherwise, what is transcribed and counted in the same run is given to it as text data.
     """
     from ..process_provider import ProcessProvider
     config, python, profile = _entry(options, context, 'streamingvlm.local')
@@ -184,7 +248,22 @@ async def _semantic_scene(options, context):
     config.setdefault('window_frames', frames)
     config.setdefault('window_ms', min(60000, config['window_frames'] * every_ms))
     config.setdefault('max_gap_ms', max(2000, min(10000, 3 * every_ms)))
-    module = SegmentModule(await ProcessProvider.open(python, profile, config, inference_timeout=90))
+    recipe, modules, asked = context.get('recipe') or {}, context.get('modules') or (), context.get('vlm_context')
+    names = options.get('context', CONTEXT) if asked is None else [name for name in asked.split(',') if name and name != 'none']
+    if set(names) - set(CONTEXT):
+        raise SystemExit(f"a VLM's context is {', '.join(CONTEXT)} or none")
+    from . import PARTS
+    capabilities = list(recipe.get('records', ()))[:8]
+    given = [name for name in CONTEXT if name in names and context.get('human') is not None and (
+        capabilities if name == 'counts' else any(PARTS[item['use']].transcribes for item in modules))]
+    config.pop('context', None)
+    if given:
+        config['context'] = True
+        if config.get('allow_remote'):
+            print(f"note: {' and '.join(given)} go to the hosted endpoint with the frames (--vlm-context none: frames only)",
+                  file=sys.stderr)
+    module = SegmentModule(await ProcessProvider.open(python, profile, config, inference_timeout=90),
+                           human=context.get('human'), context=given, capabilities=capabilities)
     return dict(module=module, spec=module.spec, every_ms=every_ms, queue=min(64, 3 * config['window_frames']))
 
 

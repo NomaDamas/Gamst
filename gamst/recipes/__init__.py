@@ -130,21 +130,7 @@ def choose(recipe, include=(), exclude=()):
         wanted = _listed(item.get('for')) if isinstance(item, dict) else []
         return not wanted or any(name not in absent for name in wanted)
 
-    present = {item['name'] for item in modules}
-    if any(PARTS[item['use']].transcribes or item.get('role') == 'audio.asr' for item in modules if item.get('use') in PARTS):
-        pass
-    else:    # no module transcribes: there is no transcript to hand to a VLM
-        modules = [dict(item, context=[name for name in item['context'] if name != 'transcript'])
-                   if 'transcript' in (item.get('context') or ()) else item for item in modules]
-    inputs = recipe.get('inputs') or []
-    if len(inputs) > 1:
-        read = {source.split(':', 1)[0] for item in modules for source in item.get('consumes', ())}
-        inputs = [item for item in inputs if item['id'] in read]
-        if not inputs and present:
-            raise SystemExit(f"{recipe['name']}: nothing that is left reads an input")
-        if not present:
-            raise SystemExit(f"{recipe['name']}: every module is left out")
-    return dict(recipe, modules=modules, inputs=inputs,
+    return dict(recipe, modules=modules,
                 references=[item for item in recipe.get('references', ()) if kept(item)],
                 records=[item['id'] if isinstance(item, dict) else item for item in recipe.get('records', ()) if kept(item)])
 
@@ -186,7 +172,9 @@ def _check_role(path, recipe, item):
     reasons = {name: refusal(role.id, name) if name in role.candidates else f"unknown; choose from {', '.join(role.candidates)}"
                for name in candidates}
     if all(reasons.values()):
-        raise SystemExit(f'{role.id} cannot be a module: ' + '; '.join(f'{name}: {reason}' for name, reason in reasons.items()))
+        raise SystemExit(f'{role.id} cannot be a module: ' + '; '.join(
+            f"{', '.join(name for name in reasons if reasons[name] == reason)}: {reason}"
+            for reason in dict.fromkeys(reasons.values())))
     for source in item.get('consumes', ()):
         entry = next((entry for entry in recipe['inputs'] if entry['id'] == source), None)
         if entry is not None and input_modality(entry) != role.modality:
@@ -201,7 +189,14 @@ def load(name, include=(), exclude=(), with_roles=()):
         if not path.is_file():
             raise SystemExit(f'unknown recipe {name!r}; built-in: {", ".join(names())}')
     recipe = choose(json.loads(path.read_text()), include, exclude)
-    inputs = recipe['inputs']
+    for wanted in with_roles:
+        recipe = add_role(recipe, wanted)
+    inputs = recipe.get('inputs') or []
+    if len(inputs) > 1:     # nothing is opened that nobody reads
+        inputs = inputs_of(recipe, recipe['modules'])
+        recipe = dict(recipe, inputs=inputs)
+        if not inputs:
+            raise SystemExit(f"{recipe['name']}: nothing that is left reads an input")
     if not inputs or len({item['id'] for item in inputs}) != len(inputs):
         raise ValueError(f'{path}: a recipe has one or more inputs with distinct ids')
     for item in inputs:
@@ -213,8 +208,6 @@ def load(name, include=(), exclude=(), with_roles=()):
             raise ValueError(f"{path}: input {item['use']!r} reads from {supported}")
         if item['use'] == 'sensor' and not {'columns', 'time'} <= set(item):
             raise ValueError(f"{path}: a sensor input declares its columns (name, unit) and its time column")
-    for wanted in with_roles:
-        recipe = add_role(recipe, wanted)
     known = {item['id'] for item in inputs}
     for reference in recipe.get('references', ()):
         if reference.get('kind') not in REFERENCE_KINDS:
