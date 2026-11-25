@@ -108,13 +108,17 @@ async def _mediapipe_graph(options, context):
         config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets')))
 
 
+def _pose_source(options):
+    """How to read the joints of the item's pose model (``"source"``; default MediaPipe Pose)."""
+    if options.get('source') != 'sapiens2':
+        return {}
+    from ..providers.sapiens2_pose import GOLIATH_BODY
+    return dict(mapping=GOLIATH_BODY, min_visibility=.3)   # the official demo's --kpt-thr
+
+
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
-    arguments = {}
-    if options.get('source') == 'sapiens2':
-        from ..providers.sapiens2_pose import GOLIATH_BODY
-        arguments = dict(mapping=GOLIATH_BODY, min_visibility=.3)   # the official demo's --kpt-thr
-    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **arguments)
+    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **_pose_source(options))
     return dict(module=module, spec=module.spec)
 
 
@@ -149,12 +153,16 @@ async def _repetition(options, context):
 
 async def _exemplar(options, context):
     from ..providers.pose_exemplar import ExemplarEvents
-    module = ExemplarEvents(reference=options.get('reference', 'exemplar'), mode=options.get('mode', 'hold'),
-                            enter=float(context.get('enter') or options.get('enter', .12)),
-                            exit=float(context.get('exit') or options.get('exit', .18)),
+    given = [context.get('enter'), context.get('exit')]     # the command line wins over the movement file
+    enter = float(given[0] or options.get('enter', .12))
+    exit_ = float(given[1] or max(enter, options.get('exit', .18)))
+    # hold, sequence or rule comes from the movement file; the item's "mode" is only enroll's default.
+    module = ExemplarEvents(reference=options.get('reference', 'exemplar'), enter=enter, exit=exit_,
                             min_hold_ms=int(options.get('min_hold_ms', 200)),
+                            fixed_thresholds=any(value is not None for value in given),
                             modality=options.get('modality', 'video'),
-                            capability_id=options.get('capability_id', 'temporal.exemplar_events'))
+                            capability_id=options.get('capability_id', 'temporal.exemplar_events'),
+                            **_pose_source(options))
     return dict(module=module, spec=module.spec)
 
 

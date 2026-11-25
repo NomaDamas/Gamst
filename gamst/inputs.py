@@ -65,11 +65,16 @@ class CameraInput:
 
 
 class VideoFileInput:
-    """A video file; ``capture_fps`` overrides file timing (high-speed clips saved at 30 fps)."""
+    """A video file; ``capture_fps`` overrides file timing (high-speed clips saved at 30 fps).
+
+    ``start_s`` / ``end_s`` read only that part of the file. ``origin_ms`` is the capture time of the file's
+    first frame, so ``timestamp_ms - origin_ms`` is a position in the file whichever part is read.
+    """
     modality = 'video'
 
-    def __init__(self, path, *, capture_fps=None, max_frames=None):
+    def __init__(self, path, *, capture_fps=None, max_frames=None, start_s=0., end_s=None):
         self.path, self.capture_fps, self.max_frames = str(path), capture_fps, max_frames
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
         self._cap = None
 
     def fps(self):
@@ -80,6 +85,18 @@ class VideoFileInput:
         finally:
             cap.release()
 
+    def duration_s(self):
+        """From the file's frame count and rate; None when the container does not say."""
+        import cv2
+        cap = cv2.VideoCapture(self.path)
+        try:
+            if not cap.isOpened():
+                raise RuntimeError(f'cannot open video {self.path}')
+            fps, total = self.capture_fps or cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            return total / fps if fps and total and total > 0 else None
+        finally:
+            cap.release()
+
     async def frames(self):
         import cv2
         self._cap = cv2.VideoCapture(self.path)
@@ -87,16 +104,26 @@ class VideoFileInput:
             raise RuntimeError(f'cannot open video {self.path}')
         fps = self.capture_fps or self._cap.get(cv2.CAP_PROP_FPS) or 30.
         total = self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-        base = _now_ms() - round(1000 * total / fps) - 1000
-        sequence, last = 0, None
-        while self.max_frames is None or sequence < self.max_frames:
+        base = self.origin_ms = _now_ms() - round(1000 * total / fps) - 1000
+        position = first = round(self.start_s * fps)
+        if first and not (self._cap.set(cv2.CAP_PROP_POS_FRAMES, first)
+                          and round(self._cap.get(cv2.CAP_PROP_POS_FRAMES)) == first):
+            self._cap.release()      # this container cannot seek: decode up to the start
+            self._cap = cv2.VideoCapture(self.path)
+            for _ in range(first):
+                if not self._cap.grab():
+                    break
+        last = None
+        while self.max_frames is None or position - first < self.max_frames:
             ok, frame = self._cap.read()
             if not ok:
                 break
-            offset = sequence * 1000 / self.capture_fps if self.capture_fps else self._cap.get(cv2.CAP_PROP_POS_MSEC)
+            offset = position * 1000 / self.capture_fps if self.capture_fps else self._cap.get(cv2.CAP_PROP_POS_MSEC)
+            if self.end_s is not None and offset > 1000 * self.end_s:
+                break
             stamp = base + round(offset)
             stamp = stamp if last is None or stamp > last else last + 1
-            last, sequence = stamp, sequence + 1
+            last, position = stamp, position + 1
             yield InputFrame(frame, 'video', stamp)
 
     def close(self):

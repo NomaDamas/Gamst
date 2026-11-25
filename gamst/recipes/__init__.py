@@ -7,8 +7,14 @@ A recipe composes parts GAMST already has (``gamst/recipes/parts.py``) into a
   gamst recipe show person-action-count
   gamst recipe setup person-action-count [--dry-run]     install only what the recipe uses (gamst setup's apply)
   gamst recipe check rotation --fps 240 --symmetry 3     test a camera against the sampling limit
-  gamst recipe enroll person-action-count --video demo.mp4 --start 2 --seconds 1.5 --out shotgun.json
-  gamst recipe run person-action-count --camera 0 --exemplar shotgun.json
+  gamst recipe enroll person-action-count --video a.mp4 --video b.mp4@2-3.5 --negative other.mp4 --out move.json
+  gamst recipe run person-action-count --camera 0 --exemplar move.json
+  gamst recipe find person-action-count --video long.mp4 --exemplar move.json --out found.csv --format csv
+  gamst recipe propose person-action-count --video long.mp4 --text "raises both arms"     a VLM finds candidates
+  gamst recipe proposals list | confirm ID... | reject ID...                              the owner decides
+  gamst recipe enroll person-action-count --text "raises both arms" --proposals FILE --out move.json
+  gamst recipe enroll person-action-count --text "raises both arms" --rule rule.json --out move.json
+  gamst recipe export --store run.db --format csv --out events.csv
   gamst recipe run rotation --take DIR --roi .3,.2,.4,.6 --symmetry 3
   gamst recipe enroll person-term-count --kind voice --microphone --seconds 20 --consent '...' --out me.json
   gamst recipe run person-term-count --microphone --voice me.json --terms 대박 [--truth truth.json]
@@ -47,6 +53,7 @@ import re
 import sys
 
 from ..demos import rotation as demo
+from .movement import PROPOSALS
 from .parts import PARTS
 
 RECIPES = Path(__file__).resolve().parent
@@ -245,14 +252,26 @@ def _source_fps(args):
     if getattr(args, 'take', None):
         return _take_fps(_take_recording(args.take))
     if getattr(args, 'video', None):
-        if args.capture_fps:
-            return args.capture_fps
-        import cv2
-        video = cv2.VideoCapture(args.video)
-        fps = video.get(cv2.CAP_PROP_FPS) if video.isOpened() else 0
-        video.release()
-        return fps or None
+        return source_fps('video', args.video, args.capture_fps)
     return None
+
+
+def source_fps(kind, path, capture_fps=None):
+    if kind != 'video' or capture_fps:
+        return capture_fps
+    import cv2
+    video = cv2.VideoCapture(path)
+    fps = video.get(cv2.CAP_PROP_FPS) if video.isOpened() else 0
+    video.release()
+    return fps or None
+
+
+def store_options(args):
+    """Store arguments of a run: ``--max-records`` raises what is retained (a pose run commits several per frame)."""
+    options = dict(store=getattr(args, 'store', None) or ':memory:')
+    if getattr(args, 'max_records', None):
+        options.update(max_records=args.max_records, max_payload_bytes=max(32 << 20, 8192 * args.max_records))
+    return options
 
 
 def _device():
@@ -318,6 +337,9 @@ def _reference_value(reference, args):
         saved = json.loads(Path(args.exemplar).read_text())
         if isinstance(saved, dict) and 'value' in saved:
             _check_exemplar(saved, args.exemplar)
+        if isinstance(saved, dict) and saved.get('format') == 2:
+            _check_exemplar(saved, args.exemplar)
+            return saved, None
         return (saved['value'] if isinstance(saved, dict) and 'value' in saved else saved), None
     if kind == 'terms':
         if not args.terms:
@@ -345,7 +367,8 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
     pipeline.add_input(item['id'], source)
     for reference in recipe.get('references', ()):
         value, consent = _reference_value(reference, args)
-        pipeline.add_reference(reference['name'], reference['kind'], value, label=reference.get('label'),
+        label = value.get('label') if reference['kind'] == 'exemplar' and isinstance(value, dict) else None
+        pipeline.add_reference(reference['name'], reference['kind'], value, label=label or reference.get('label'),
                                consent=consent)
     context = dict(human=human, labels=args.label.split(',') if getattr(args, 'label', None) else None,
                    roi=getattr(args, 'roi', None), symmetry=getattr(args, 'symmetry', None),
@@ -389,8 +412,26 @@ def _view_class(name):
 
 async def run_pipeline(recipe, args):
     from .. import Gamst
+    from ..counting import MAX_SCAN, count_events
+    from ..engine import timestamp
     report = dict(recipe=recipe['name'], frames=0)
-    async with Gamst(consent=True, store=args.store) as human:
+    truth = json.loads(Path(args.truth).read_text()) if getattr(args, 'truth', None) else None
+    wanted, committed, earlier = set(recipe.get('records', ())), {}, set()
+    if truth:
+        wanted.add(truth['capability'])
+
+    def keep(records):
+        """Event records as they are committed: the store keeps a bounded number and evicts the oldest."""
+        for record in records:
+            observation = record.get('observation') or {}
+            if record['id'] not in earlier and (observation.get('capability') or {}).get('id') in wanted and isinstance(
+                    observation.get('value'), dict) and observation['value'].get('events'):
+                committed[record['id']] = record
+
+    async with Gamst(consent=True, **store_options(args)) as human:
+        stored = [record for capability in wanted for record in human.store.query(
+            'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
+        earlier = {record['id'] for record in stored}   # a store file may hold other runs
         pipeline = await build_pipeline(recipe, args, human)
         view, idle = None, None
         try:
@@ -404,25 +445,29 @@ async def run_pipeline(recipe, args):
             report['frames'] += 1
             report.setdefault('start_ms', frame.timestamp_ms - (
                 round(1000 * len(frame.data) / frame.sample_rate) if frame.sample_rate else 0))
+            keep(records)
             return await view.update(input_id, frame, records)
 
         if callable(getattr(view, 'idle', None)):
             idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
         try:
-            await pipeline.run(on_frame=on_frame)
+            keep(await pipeline.run(on_frame=on_frame) or [])
+            now = timestamp()
+            for capability in wanted:   # plus the records of modules that commit their own
+                keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
+                                       limit=MAX_SCAN, registered_only=True, capability_id=capability))
             report['counts'], report['events'] = {}, {}
+            rows = sorted(committed.values(), key=lambda record: record['timestamp_ms'])
             for capability in recipe.get('records', ()):
-                counted = await human.count_events(capability, window='24h', group_by='@event', max_evidence=100)
+                own = [row for row in rows if row['observation']['capability']['id'] == capability]
+                counted = count_events(own, group_by='@event', max_evidence=100)
                 report['counts'][capability] = counted['groups']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
-            if getattr(args, 'truth', None):
-                from ..engine import timestamp
+            if truth:
                 from ..scoring import score
-                truth, start_ms = json.loads(Path(args.truth).read_text()), report.get('start_ms', 0)
-                rows = human.store.query('local-user', start_ms, timestamp(), 'observation.signal', limit=1_000_000,
-                                         registered_only=True, capability_id=truth['capability'])
-                found = [event for row in rows for event in row['observation']['value'].get('events') or ()]
-                report['score'] = score(truth, found, start_ms=start_ms)
+                found = [event for row in rows if row['observation']['capability']['id'] == truth['capability']
+                         for event in row['observation']['value']['events']]
+                report['score'] = score(truth, found, start_ms=report.get('start_ms', 0))
             report['pipeline'] = pipeline.status()
         finally:
             if idle is not None:
@@ -437,61 +482,18 @@ async def run_pipeline(recipe, args):
 
 
 async def enroll(recipe, args):
-    """Record the owner's exemplar: feature channels over [start, start+seconds] of the chosen input."""
-    from .. import Gamst
+    """Save the owner's movement (clips, confirmed proposals or a rule), or an enrolled voice or person."""
     kind = getattr(args, 'kind', None) or 'exemplar'
-    if kind != 'exemplar':
-        return await _enroll_identity(recipe, args, kind)
-    exemplar = next((item for item in recipe['modules'] if item['use'] == 'exemplar'), None)
-    if exemplar is None:
-        raise SystemExit(f"{recipe['name']} has no exemplar module to enroll for")
-    # The demonstration itself is the only person or voice in it, so identity modules are not used here.
-    upstream = [dict(item, consumes=[recipe['inputs'][0]['id']]) if item['use'] == 'prosody' else item
-                for item in choose(json.loads(json.dumps(recipe)), exclude=[
-                    item['name'] for item in recipe['modules'] if item.get('optional')])['modules']
-                if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'pose-channels', 'prosody',
-                                   'voice-channels')]
-    mode = args.mode or exemplar.get('mode', 'hold')
-    samples = []
-    async with Gamst(consent=True) as human:
-        pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream)
-        first = {}
-
-        async def on_frame(input_id, frame, records):
-            first.setdefault('ms', frame.timestamp_ms)
-            seconds = (frame.timestamp_ms - first['ms']) / 1000
-            if seconds > args.start + args.seconds:
-                return False
-            if seconds >= args.start:
-                for record in records:
-                    capability = (record['observation'].get('capability') or {}).get('id')
-                    if capability in ('vision.pose_channels', 'audio.voice_channels'):
-                        samples.append(record['observation']['value'])
-                        first['channels'] = f"{capability}@{record['models'][0]['version']}"
-            return True
-
-        try:
-            await pipeline.run(on_frame=on_frame)
-        finally:
-            await pipeline.close()
-    if not samples:
-        raise SystemExit('nothing to learn in the enrollment window (no visible person, or no audio)')
-    if mode == 'hold':
-        size = len(samples[0]['channels'])
-        mask = [sum(item['mask'][i] for item in samples) * 2 > len(samples) for i in range(size)]
-        channels = []
-        for i in range(size):
-            values = sorted(item['channels'][i] for item in samples if item['mask'][i])
-            channels.append(values[len(values) // 2] if values and mask[i] else 0.)
-        value = dict(channels=channels, mask=mask)
-    else:
-        step = max(1, len(samples) // 30)
-        value = [dict(channels=item['channels'], mask=item['mask']) for item in samples[::step]]
-    saved = dict(kind='exemplar', recipe=recipe['name'], mode=mode, frames=len(samples),
-                 channels=first['channels'], window_s=[args.start, args.start + args.seconds], value=value)
-    Path(args.out).write_text(json.dumps(saved))
-    print(json.dumps(dict(out=args.out, mode=mode, frames=len(samples))), flush=True)
-    return saved
+    if kind == 'exemplar':
+        from .movement import enroll as enroll_movement
+        return await enroll_movement(recipe, args)
+    for name in ('video', 'audio'):
+        values = getattr(args, name) or []
+        if len(values) > 1:
+            raise SystemExit(f'--kind {kind} reads one --{name}')
+        setattr(args, name, values[0] if values else None)
+    args.start, args.seconds = args.start or 0., 1.5 if args.seconds is None else args.seconds
+    return await _enroll_identity(recipe, args, kind)
 
 
 async def _enroll_identity(recipe, args, kind):
@@ -525,13 +527,17 @@ def _speed_options(parser):
     parser.add_argument('--max-reps-s', type=float, help="fastest repeated movement to count, per second")
 
 
-def _source_options(parser):
+def _source_options(parser, *, clips=False):
     source = parser.add_mutually_exclusive_group()
+    many = dict(action='append', default=None) if clips else {}
     source.add_argument('--iphone', type=int, metavar='PORT', help='live GAMST 240 app (default port 9123)')
     source.add_argument('--take', metavar='DIR', help='a recorded GAMST 240 take (folder or raw.gmst)')
     source.add_argument('--camera', type=int, metavar='INDEX', help='a local camera')
-    source.add_argument('--video', metavar='FILE', help='a video file (add --capture-fps for high-speed files)')
-    source.add_argument('--audio', metavar='FILE', help='a PCM WAV file')
+    source.add_argument('--video', metavar='FILE[@start-end]' if clips else 'FILE', **many,
+                        help='a video file (add --capture-fps for high-speed files)' + (
+                            '; repeat it for more' if clips else ''))
+    source.add_argument('--audio', metavar='FILE[@start-end]' if clips else 'FILE', **many,
+                        help='a PCM WAV file' + ('; repeat it for more' if clips else ''))
     source.add_argument('--microphone', action='store_true', help='the default microphone')
     parser.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
     parser.add_argument('--frames', type=int, help='stop after this many frames')
@@ -542,6 +548,23 @@ def _source_options(parser):
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
                         help='normalized x,y,width,height')
     parser.add_argument('--profile', help='setup profile to read (default ~/.config/gamst/profile.json)')
+
+
+def _store_options(parser):
+    parser.add_argument('--store', default=':memory:', help='SQLite store for the records (default: memory)')
+    parser.add_argument('--max-records', type=int, metavar='N',
+                        help='records the store retains before it evicts the oldest (default 5000)')
+
+
+def _movement_options(parser):
+    """What a run and a search need to know the movement and the person."""
+    parser.add_argument('--exemplar', help='movement JSON from gamst recipe enroll')
+    parser.add_argument('--person', help='person JSON from gamst recipe enroll --kind person')
+    parser.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
+    parser.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
+    parser.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
+    parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
+    parser.add_argument('--exit', type=float, help='release threshold')
 
 
 def _max_rev_s(args):
@@ -568,12 +591,21 @@ def main(argv=None):
     verify.add_argument('recipe')
     verify.add_argument('--fps', type=float, help='camera frames per second (omit to get the required rate)')
     _speed_options(verify)
-    learn = actions.add_parser('enroll', help="record a user-defined exemplar (a demonstrated pose or movement)")
+    learn = actions.add_parser('enroll', help='save a user-defined movement (example clips, a text or a rule), voice or person')
     learn.add_argument('recipe')
-    _source_options(learn)
-    learn.add_argument('--start', type=float, default=0., help='seconds into the input where the demonstration starts')
-    learn.add_argument('--seconds', type=float, default=1.5, help='length of the demonstration')
+    _source_options(learn, clips=True)
+    learn.add_argument('--negative', action='append', default=[], metavar='FILE[@start-end]',
+                       help='a clip of something similar that must not count; repeat it')
+    learn.add_argument('--start', type=float, help='seconds into the input where the demonstration starts')
+    learn.add_argument('--seconds', type=float, help='length of the demonstration (a file: all of it; live: 1.5)')
     learn.add_argument('--mode', choices=['hold', 'sequence'], help="hold: one pose; sequence: a movement")
+    learn.add_argument('--name', help='label of the movement in its records (default: the text)')
+    learn.add_argument('--text', help='the movement in words: with --proposals or --rule')
+    learn.add_argument('--rule', metavar='FILE', help='a rule as JSON (gamst/providers/movement_rule.py)')
+    learn.add_argument('--proposals', metavar='FILE', help='use the confirmed (and rejected) proposals of --text')
+    learn.add_argument('--proposal', action='append', default=[], metavar='ID', help='only this proposal; repeat it')
+    learn.add_argument('--no-confirm', action='store_true',
+                       help='use open proposals too; their records are marked confirmed: false')
     learn.add_argument('--kind', choices=['exemplar', 'voice', 'person'], default='exemplar',
                        help='voice / person: save embeddings only (needs --consent)')
     learn.add_argument('--consent', help='who consented to being enrolled, and to what')
@@ -582,20 +614,45 @@ def main(argv=None):
     start.add_argument('recipe')
     _source_options(start)
     _speed_options(start)
-    start.add_argument('--exemplar', help='exemplar JSON from gamst recipe enroll')
+    _movement_options(start)
     start.add_argument('--terms', help='comma-separated words to count (re:PATTERN for a pattern)')
-    start.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
-    start.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
-    start.add_argument('--person', help='person JSON from gamst recipe enroll --kind person')
-    start.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
     start.add_argument('--language', help="spoken language, e.g. ko (default: the recipe's)")
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
-    start.add_argument('--enter', type=float, help='exemplar match threshold (mean channel difference)')
-    start.add_argument('--exit', type=float, help='exemplar release threshold')
-    start.add_argument('--store', default=':memory:', help='SQLite store for the records (default: memory)')
+    _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
     start.add_argument('--report', help='write frames, counts and pipeline status as JSON')
-    for command in (show, install, learn, start):
+    search = actions.add_parser('find', help='list where a movement occurs in recordings (the same counter, offline)')
+    search.add_argument('recipe')
+    _source_options(search, clips=True)
+    _movement_options(search)
+    _store_options(search)
+    search.add_argument('--max-reps-s', type=float, help='fastest repeated movement to count, per second')
+    seek = actions.add_parser('propose', help='a VLM looks for a described movement in a recording; counts nothing')
+    seek.add_argument('recipe')
+    seek.add_argument('--video', action='append', metavar='FILE', help='a recording to search; repeat it')
+    seek.add_argument('--text', required=True, help='the movement in words')
+    seek.add_argument('--proposals', metavar='FILE', default=PROPOSALS)
+    seek.add_argument('--fps', type=float, default=2., help='frames per second the VLM sees')
+    seek.add_argument('--window-s', type=float, default=8., help='seconds per VLM call')
+    seek.add_argument('--overlap-s', type=float, default=2., help='seconds shared by neighbouring calls')
+    seek.add_argument('--max-windows', type=int, help='most VLM calls per recording')
+    seek.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
+    seek.add_argument('--profile', help='setup profile to read (default ~/.config/gamst/profile.json)')
+    decide = actions.add_parser('proposals', help="list, confirm or reject proposed movements (the owner's decision)")
+    decide.add_argument('decision', choices=['list', 'confirm', 'reject'])
+    decide.add_argument('ids', nargs='*', metavar='ID[@start-end]', help='confirm may correct an interval')
+    decide.add_argument('--proposals', metavar='FILE', default=PROPOSALS)
+    decide.add_argument('--status', choices=['open', 'confirmed', 'rejected'])
+    decide.add_argument('--text')
+    data = actions.add_parser('export', help='the events of a store as JSONL or CSV')
+    data.add_argument('--store', required=True, help='SQLite store of a run (--store)')
+    data.add_argument('--capability', help='only this capability, e.g. temporal.exemplar_events')
+    data.add_argument('--event', help='only this event, e.g. exemplar.matched')
+    data.add_argument('--subject', default='local-user')
+    for command in (search, data):
+        command.add_argument('--format', choices=['jsonl', 'csv'], default='jsonl')
+        command.add_argument('--out', help='file to write')
+    for command in (show, install, learn, start, search, seek):
         _optional_options(command)
     takes = start.add_argument_group('GAMST 240 takes (coin-flip)')
     takes.add_argument('--record-dir', help='one folder per take: raw.gmst, hud.mp4, refined.json/mp4 '
@@ -614,7 +671,13 @@ def main(argv=None):
         for name in names():
             print(f"{name:20} {load(name)['summary']}")
         return
+    if args.action in ('proposals', 'export'):
+        from . import movement
+        return getattr(movement, args.action)(args)
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()))
+    if args.action in ('find', 'propose'):
+        from . import movement
+        return asyncio.run(getattr(movement, args.action)(recipe, args))
     if args.action == 'show':
         print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
     elif args.action == 'setup':
@@ -627,7 +690,7 @@ def main(argv=None):
         if verdict.get('ok') is False:
             raise SystemExit(1)
     elif args.action == 'enroll':
-        asyncio.run(enroll(recipe, args))
+        return asyncio.run(enroll(recipe, args))
     else:
         args.max_rev_s = _max_rev_s(args)
         verdict = check(recipe, fps=_source_fps(args), max_rev_s=args.max_rev_s, symmetry=args.symmetry,

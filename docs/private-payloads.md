@@ -17,6 +17,8 @@ Joint positions, identity embeddings and separated waveforms are answers for one
 | `speaker.embedding`, `face.embedding`, `body.embedding` | one vector, 16..4096 | `SpeakerVerify`, `TargetPerson`, enrollment |
 | `target_speech.local` | samples, exactly as many as the block | `TargetSpeech`, `SAMSpanSpeech` |
 
+`ExemplarEvents` reads a joints input only for a rule that uses joint relations; its record is one violation number.
+
 `Private` (the owner's handle) and `PrivatePoses` (joints on a derived input such as `pose_joints`) are not JSON, cannot be
 pickled or copied, and `push_signal` / `push_observation` refuse them. Private workers are refused by
 `SensorStreams`, `Pipeline.add_module`, `Gamst.register`, `WorkerModule` and `role_module` (so `ProfileRuntime`).
@@ -42,5 +44,7 @@ and `inspect_interval`; `get_context` does not return them.
 4. **Derived numbers that are records by design**: pose boxes (their edges are extreme joints), joint angles and
    wrist offsets (`vision.pose_channels`), face and voice similarity scores.
 5. **Files the owner asks for**: enrollment files hold embeddings and a consent record (mode 0600); GAMST 240 takes hold raw video.
+   Movement files (`gamst recipe enroll`, mode 0600) hold joint angles and wrist offsets of the demonstrations, or a rule.
+   Proposal files hold intervals, texts and the path and SHA256 of the recording.
 6. **Memory only**: references and galleries hold embeddings, derived inputs hold crops, joints and separated audio while the
    pipeline runs. `get_pipeline` shows none of it.

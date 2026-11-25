@@ -43,6 +43,22 @@ class Store:
         with self._transaction():
             self._enforce_limits()
 
+    @classmethod
+    def open_read_only(cls, uri):
+        """An existing store file for queries only: no pruning, no size enforcement, no schema change."""
+        path = str(uri)[len("sqlite:///"):] if str(uri).startswith("sqlite:///") else str(uri)
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"no store at {path}")
+        store = cls.__new__(cls)
+        store.connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        return store
+
+    def removed_records(self):
+        """How many records were ever written to this file and are no longer in it (evicted, pruned, deleted)."""
+        written = self.connection.execute("SELECT seq FROM sqlite_sequence WHERE name='record_offsets'").fetchone()
+        kept = self.connection.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+        return (written[0] if written else 0) - kept
+
     def _reload_sizes(self):
         self._sizes = OrderedDict((row[0], row[1]) for row in self.connection.execute(
             "SELECT id,length(CAST(payload AS BLOB)) FROM records ORDER BY rowid"))

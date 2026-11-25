@@ -1,6 +1,6 @@
 {
   "name": "person-action-count",
-  "summary": "Count how many times one enrolled person makes a pose or movement they demonstrated once; no training.",
+  "summary": "Count how many times one enrolled person makes a pose or movement specified by example clips, a text or a rule; no training.",
   "skill": "skills/gamst-person-action/SKILL.md",
   "hardware": {
     "min_fps": null,
@@ -22,7 +22,7 @@
     {
       "name": "exemplar",
       "kind": "exemplar",
-      "label": "the demonstrated pose or movement"
+      "label": "the specified pose or movement"
     },
     {
       "name": "person",
@@ -78,8 +78,16 @@
       "mode": "hold",
       "max_reps_s": 2,
       "consumes": [
-        "pose_channels"
-      ]
+        "pose_channels",
+        "target_person:vision.target_person",
+        "target_joints"
+      ],
+      "consumes_without": {
+        "target_person": [
+          "pose_channels",
+          "pose_joints"
+        ]
+      }
     },
     {
       "name": "repetition",

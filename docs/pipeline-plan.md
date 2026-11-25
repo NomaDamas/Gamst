@@ -192,6 +192,7 @@ Context(Store, 레코드 스키마, Watch), MCP의 기존 도구, SDK `push_*`, 
 | 레시피 흡수 | **완료**(rotation, person-action-count, coin-flip) | `gamst/recipes/parts.py`(부품은 빌드·샘플링 규칙과 registry 역할만 가짐, 설치는 `gamst.crew.setup`). rotation을 Pipeline으로 돌려 합성 선풍기 12 rev/s에서 11.9회전을 셈(테스트). coin-flip은 `record`(take 기록) → 파생 입력 `take` → `count`(take 뒤 카운트, `gamst/takes.py`)입니다. `gamst demo rotation --iphone`도 같은 Pipeline을 씁니다 |
 | 뷰 모듈(HUD) | **완료**(count, rotation, halo-coin) | `gamst/views.py`, `gamst/halo.py` |
 | 계산 모듈 | **완료**: pose channels, exemplar(hold/sequence DTW), term_events | 합성 데이터 테스트만 했고, 정답 테이크로 측정한 값은 없습니다 |
+| 동작 지정(예시 여러 개, 텍스트, 규칙) | **완료**(코드와 합성 데이터 테스트), **정확도는 측정 안 함** | `providers/movement_match.py`(여러 예시, 임계값 규칙), `providers/movement_rule.py`(규칙 언어), `movement_finder.py`와 `movement_proposals.py`(VLM이 후보만 찾고 owner가 확인), `recipes/movement.py`(`enroll`, `propose`, `proposals`, `find`, `export`). 세는 곳은 `ExemplarEvents` 하나. 테스트 `tests/test_movement_spec.py`, 인계 [handoff-feat-movement-spec.md](handoff-feat-movement-spec.md) |
 | 실모델 스모크 | MediaPipe Pose로 실제 영상(10.6초, 316프레임)을 등록하고 실행 | 정답 카운트가 없어서 정확도는 확인하지 않았습니다 |
 | SOTA 모델 모듈 | **미착수** | 디스크 여유 공간이 15GB뿐이고, Qwen3.8-27B는 호스팅이 필요합니다. 아래 참고 |
 

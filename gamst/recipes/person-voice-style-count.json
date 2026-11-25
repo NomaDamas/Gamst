@@ -82,7 +82,8 @@
       "exit": 0.18,
       "max_reps_s": 1,
       "consumes": [
-        "voice_channels"
+        "voice_channels",
+        "speaker"
       ]
     },
     {

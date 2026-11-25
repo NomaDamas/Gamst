@@ -8,14 +8,18 @@ the person stands or how large they appear: joint angles, plus wrist positions r
 shoulders in shoulder widths. The same vector feeds :class:`gamst.providers.repetition.RepetitionCounter`
 (periodic movements) and :class:`ExemplarEvents` (a demonstrated pose or movement).
 
-``ExemplarEvents`` compares that stream with an exemplar the owner demonstrated once (a user-defined
-``exemplar`` reference input):
+``ExemplarEvents`` is the one real-time counter. It compares that stream with a movement the owner
+specified (a user-defined ``exemplar`` reference input), by examples or by a rule:
 
-- ``hold``: the exemplar is one pose. A match starts when the distance stays below ``enter`` for
+- ``hold``: the examples are poses. A match starts when the distance stays below ``enter`` for
   ``min_hold_ms`` and ends when it rises above ``exit`` (hysteresis); each match is one event.
-- ``sequence``: the exemplar is a movement (a list of vectors). Subsequence dynamic time warping
-  over a sliding window finds where the recent motion ends a close copy of the exemplar; matches
-  closer together than half the exemplar's length are one event.
+- ``sequence``: the examples are movements (lists of vectors). Subsequence dynamic time warping
+  finds where the recent motion ends a close copy of an example; matches closer together than half the
+  example's length are one event.
+- ``rule``: a declarative rule over channels and joint relations (:mod:`gamst.providers.movement_rule`).
+
+A reference holds several positive and optional negative examples; the matching and the derivation of
+thresholds from them are in :mod:`gamst.providers.movement_match`.
 
 Distances are mean absolute differences per channel over channels visible in both, so a value
 reads as "average joint-angle difference" (angles are in units of pi radians).
@@ -27,12 +31,13 @@ exemplars enrolled with it do not match on non-square images and have to be enro
 """
 from __future__ import annotations
 
-from collections import deque
 import math
 import threading
 
 from ..capabilities import CapabilitySpec, OutputField
 from ..private_payload import poses_of
+from .movement_match import ExampleScorer, SequenceTrack, distance, example  # noqa: F401  (distance: shared metric)
+from .movement_rule import RuleScorer
 
 # COCO-17 indices into MediaPipe's 33 landmarks; other keypoint models pass their own mapping.
 MEDIAPIPE_BODY = dict(left_shoulder=11, right_shoulder=12, left_elbow=13, right_elbow=14, left_wrist=15,
@@ -47,7 +52,8 @@ CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
 CHANNELS_VERSION = 2
 
 
-def _angle(a, vertex, b):
+def joint_angle(a, vertex, b):
+    """Angle at ``vertex`` in units of pi radians, None for a zero-length side."""
     ax, ay, bx, by = a[0] - vertex[0], a[1] - vertex[1], b[0] - vertex[0], b[1] - vertex[1]
     na, nb = math.hypot(ax, ay), math.hypot(bx, by)
     if na == 0 or nb == 0:
@@ -56,20 +62,26 @@ def _angle(a, vertex, b):
     return math.acos(cosine) / math.pi
 
 
-def pose_channels(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
-    """``landmarks``: list of {x, y, visibility?}. Returns (channels, mask); masked channels are 0.
-
-    ``aspect`` is image width / height when x and y are normalized per axis.
-    """
+def body_points(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
+    """{joint: (x, y)} of the visible mapped joints, x scaled so both axes have one unit."""
     points = {}
     for name, index in mapping.items():
         if index < len(landmarks):
             point = landmarks[index]
             if point.get('visibility', 1.) >= min_visibility:
                 points[name] = (float(point['x']) * aspect, float(point['y']))
+    return points
+
+
+def pose_channels(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
+    """``landmarks``: list of {x, y, visibility?}. Returns (channels, mask); masked channels are 0.
+
+    ``aspect`` is image width / height when x and y are normalized per axis.
+    """
+    points = body_points(landmarks, mapping, min_visibility=min_visibility, aspect=aspect)
     values, mask = [], []
     for vertex, a, b in ANGLES:
-        angle = _angle(points[a], points[vertex], points[b]) if {vertex, a, b} <= points.keys() else None
+        angle = joint_angle(points[a], points[vertex], points[b]) if {vertex, a, b} <= points.keys() else None
         values.append(angle if angle is not None else 0.)
         mask.append(angle is not None)
     shoulders = ('left_shoulder', 'right_shoulder')
@@ -89,16 +101,26 @@ def pose_channels(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspec
     return values, mask
 
 
-def distance(a, mask_a, b, mask_b):
-    pairs = [abs(x - y) for x, y, m, n in zip(a, b, mask_a, mask_b) if m and n]
-    return sum(pairs) / len(pairs) if len(pairs) >= 4 else None
-
-
 def _aspect(pose):
     """Width / height of the image this pose is normalized to, else None."""
     if pose.get('image_width') and pose.get('image_height'):
         return pose['image_width'] / pose['image_height']
     return None
+
+
+def largest_pose(poses, mapping=MEDIAPIPE_BODY, min_visibility=.5):
+    """(channels, mask, index, aspect) of the pose with the most visible channels, or None."""
+    best = None
+    for index, pose in enumerate(poses):
+        landmarks = pose.get('landmarks') if isinstance(pose, dict) else None
+        if not landmarks:
+            continue
+        aspect = _aspect(pose)
+        values, mask = pose_channels(landmarks, mapping, min_visibility=min_visibility,
+                                     aspect=1. if aspect is None else aspect)
+        if best is None or sum(mask) > sum(best[1]):
+            best = (values, mask, index, aspect)
+    return best
 
 
 class PoseChannels:
@@ -126,16 +148,7 @@ class PoseChannels:
         poses = [pose for pose in poses if isinstance(pose, dict)]
         if poses and not any('landmarks' in pose for pose in poses):
             raise ValueError('these poses carry no joint positions; consume the pose module\'s joints input')
-        best = None
-        for index, pose in enumerate(poses):
-            landmarks = pose.get('landmarks')
-            if not landmarks:
-                continue
-            aspect = _aspect(pose)
-            values, mask = pose_channels(landmarks, self.mapping, min_visibility=self.min_visibility,
-                                         aspect=1. if aspect is None else aspect)
-            if best is None or sum(mask) > sum(best[1]):
-                best = (values, mask, index, aspect)
+        best = largest_pose(poses, self.mapping, self.min_visibility)
         if best is None:
             return None
         values, mask, index, aspect = best
@@ -148,59 +161,62 @@ class PoseChannels:
 def subsequence_dtw(template, series):
     """Distance of the best warp of ``template`` onto a suffix of ``series`` ending at its last item.
 
-    Items are (values, mask). Open beginning (any start in ``series``), fixed end (the latest item):
-    the cost of ``template`` ending now. Returns the mean step cost, or None.
+    Items are (values, mask). Open beginning (any start in ``series``), fixed end (the latest item): the
+    cost of ``template`` ending now. Returns the mean step cost, or None.
     """
-    n, m = len(template), len(series)
-    if n == 0 or m == 0:
+    if not template or not series:
         return None
-    infinity = float('inf')
-    previous = [0.] * (m + 1)  # open start: the template may begin anywhere
-    steps_previous = [0] * (m + 1)
-    for i in range(1, n + 1):
-        current, steps = [infinity] * (m + 1), [0] * (m + 1)
-        for j in range(1, m + 1):
-            cost = distance(template[i - 1][0], template[i - 1][1], series[j - 1][0], series[j - 1][1])
-            cost = 1. if cost is None else cost
-            choices = ((previous[j - 1], steps_previous[j - 1]), (previous[j], steps_previous[j]),
-                       (current[j - 1], steps[j - 1]))
-            best, length = min(choices, key=lambda item: item[0])
-            current[j], steps[j] = best + cost, length + 1
-        previous, steps_previous = current, steps
-    if previous[m] == infinity:
-        return None
-    return previous[m] / max(1, steps_previous[m])
+    track = SequenceTrack(template, window=len(series))
+    for index, item in enumerate(series):
+        track.update(index, item)
+    return track.cost()
 
 
 class ExemplarEvents:
-    """Match a feature-channel stream against a demonstrated exemplar; one event per match.
+    """The movement counter: match a channel stream against a specified movement; one event per match.
 
     Any fixed-length channel stream works: pose channels (video), voice-style channels (audio), IMU.
     ``modality`` and ``capability_id`` name the record so a video and an audio matcher can run together.
+
+    It may also consume (both optional):
+
+    - an identity record (``vision.target_person``, ``audio.speaker_match``): its newest value is
+      attached to each event as ``person``;
+    - a pose module's joints input: needed only by a rule that uses joint relations. Joints stay in memory.
+
+    Events: ``exemplar.matched`` (``start_ms``, ``end_ms`` = when it was recognized) and, when a held pose or
+    a sequence is over, ``exemplar.ended`` with the same ``index`` and ``start_ms``, its final ``end_ms`` and
+    ``best_distance``. Both carry ``reference``, ``reference_id``, ``label``, ``method`` (``examples``,
+    ``rule`` or ``text_finder``) and ``confirmed`` (false when an unconfirmed proposal is part of the
+    movement).
     """
 
-    def __init__(self, *, reference='exemplar', mode='hold', enter=.12, exit=.18, min_hold_ms=200,
-                 refractory_ms=None, window_s=None, max_gap_ms=1000, modality='video',
-                 capability_id='temporal.exemplar_events'):
-        if mode not in ('hold', 'sequence'):
+    def __init__(self, *, reference='exemplar', mode=None, enter=.12, exit=.18, min_hold_ms=200,
+                 refractory_ms=None, max_gap_ms=1000, modality='video', capability_id='temporal.exemplar_events',
+                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5):
+        if mode not in (None, 'hold', 'sequence'):
             raise ValueError("mode must be 'hold' or 'sequence'")
         if not 0 < enter <= exit:
             raise ValueError('require 0 < enter <= exit')
-        self.reference_name, self.mode = reference, mode
+        self.reference_name, self._wanted_mode, self.mode = reference, mode, mode
         self.enter, self.exit, self.min_hold_ms = enter, exit, min_hold_ms
-        self.refractory_ms, self.window_s, self.max_gap_ms = refractory_ms, window_s, max_gap_ms
-        self.template = None
+        self.fixed_thresholds = fixed_thresholds     # the caller's enter / exit win over the reference's
+        self.refractory_ms, self.max_gap_ms = refractory_ms, max_gap_ms
+        self.mapping, self.min_visibility = mapping, min_visibility
+        self.label, self.scorer, self.rule, self.info = reference, None, None, {}
         self.spec = CapabilitySpec(
             capability_id, 'temporal.exemplar_events', modality, 'gamst.exemplar_events',
-            f'1.{mode}', (OutputField('count', 'integer'), OutputField('status', 'string'),
-                          OutputField('distance', 'number', required=False), OutputField('events', 'array')),
+            '2', (OutputField('count', 'integer'), OutputField('status', 'string'),
+                  OutputField('distance', 'number', required=False), OutputField('events', 'array')),
             'native', stateful=True, reset_on_gap=True, freshness_ms=max_gap_ms, interpretation='estimate',
             devices=('cpu',), license='Apache-2.0')
         self._lock = threading.RLock()
         self._clear()
 
+    # ------------------------------------------------------------------ the movement
+
     def bind(self, pipeline):
-        """Read the owner's exemplar: a channel vector (hold) or a list of them (sequence)."""
+        """Read the owner's movement: a saved reference (examples or a rule), or the bare value of one example."""
         reference = pipeline.references.get(self.reference_name)
         if reference is None or reference['kind'] != 'exemplar':
             raise ValueError(f'exemplar_events needs an exemplar reference named {self.reference_name!r}')
@@ -208,97 +224,214 @@ class ExemplarEvents:
         self.label = reference['label']
 
     def set_exemplar(self, value):
-        items = value if self.mode == 'sequence' else [value]
-        template = []
-        for item in items:
-            if not isinstance(item, dict) or not isinstance(item.get('channels'), list):
-                raise ValueError('exemplar items are {"channels": [...], "mask": [...]} pose-channel values')
-            channels = [float(v) for v in item['channels']]
-            mask = [bool(v) for v in item.get('mask', [True] * len(channels))]
-            template.append((channels, mask))
-        if not template:
-            raise ValueError('empty exemplar')
-        self.template = template
-        if self.mode == 'sequence':
-            self.window = max(4, 2 * len(template))
+        """``{"positives": [...], ...}`` or ``{"rule": {...}}`` as saved by ``gamst recipe enroll``; or one bare
+        example, ``{"channels", "mask"}`` (hold) or a list of them (sequence), as files before format 2 hold."""
+        with self._lock:
+            self.scorer = self.rule = None
+            if isinstance(value, dict) and 'rule' in value:
+                self.mode, self.rule = 'rule', RuleScorer(value['rule'])
+                self.enter, self.exit = 0., self.rule.margin
+                self._methods = ['rule']
+            else:
+                if isinstance(value, dict) and 'positives' in value:
+                    entries, mode = value, value.get('mode')
+                    if not self.fixed_thresholds and 'enter' in value:
+                        enter, exit_ = float(value['enter']), float(value['exit'])
+                        if not 0 < enter <= exit_ < float('inf'):
+                            raise ValueError('require 0 < enter <= exit')
+                        self.enter, self.exit = enter, exit_
+                else:
+                    if value == [] or value is None:
+                        raise ValueError('empty exemplar')
+                    entries = dict(positives=[dict(value=value)])
+                    mode = 'sequence' if isinstance(value, list) else 'hold'
+                if mode not in ('hold', 'sequence') or self._wanted_mode not in (None, mode):
+                    raise ValueError(f'this is a {mode} exemplar; the module runs {self._wanted_mode or "hold or sequence"}')
+                positives, negatives = ([example(item['value'], span_ms=item.get('span_ms'))
+                                         for item in entries.get(key) or ()] for key in ('positives', 'negatives'))
+                self.mode, self.scorer = mode, ExampleScorer(mode, positives, negatives)
+                self._methods = [item.get('method', 'examples') for item in entries['positives']]
+            saved = value if isinstance(value, dict) else {}
+            self.info = dict(reference_id=saved.get('id'), confirmed=bool(saved.get('confirmed', True)),
+                             threshold_source='caller' if self.fixed_thresholds and self.rule is None else
+                             saved.get('threshold_source', 'rule' if self.rule is not None else 'default'),
+                             positives=len(self._methods) if self.rule is None else 0,
+                             negatives=len(self.scorer.negatives) if self.rule is None else 0)
+            self._clear()
+
+    def status(self):
+        return dict(self.info, label=self.label, mode=self.mode, enter=self.enter, exit=self.exit, count=self._count,
+                    methods=sorted(set(self._methods)) if self.scorer or self.rule else [])
+
+    # ------------------------------------------------------------------ the counter
 
     def _clear(self):
         self._count, self._inside, self._candidate_ms = 0, False, None
-        self._started_ms = self._last_ms = self._last_match_ms = None
-        self._history = deque()
-        self._best = None
+        self._started_ms = self._last_ms = self._last_match_ms = self._end_ms = None
+        self._best = self._method = None
+        self._step = 0
+        self._person, self._saw_joints, self._channel_frames = None, False, 0
+        if self.scorer is not None:
+            self.scorer.reset()
 
     def reset(self):
         with self._lock:
             self._clear()
 
+    def _event(self, name, **values):
+        event = dict(event=name, index=self._count, reference=self.reference_name, label=self.label,
+                     method=self._method, confirmed=self.info['confirmed'], **values)
+        if self.info['reference_id']:
+            event['reference_id'] = self.info['reference_id']
+        if self._person is not None and self._last_ms - self._person['at_ms'] <= self.max_gap_ms:
+            event['person'] = dict(self._person)
+        return event
+
+    def _ended(self, end_ms, **extra):
+        self._inside, self._candidate_ms = False, None
+        return self._event('exemplar.ended', start_ms=self._started_ms, end_ms=end_ms,
+                           best_distance=round(self._best, 5), **extra)
+
+    def _identity(self, frame, value):
+        """The newest identity verdict about the person in view (a record another module committed)."""
+        self._person = dict(reference=value['reference'], state=value['state'], at_ms=frame.timestamp_ms)
+        for key in ('face_score', 'body_score', 'score'):
+            if type(value.get(key)) in (int, float):
+                self._person[key] = value[key]
+
+    def _input(self, frame):
+        """(channels, mask, points or None) of a frame to match, else None."""
+        poses = poses_of(frame.data)
+        if poses is not None:
+            if self.rule is None or not self.rule.needs_joints:
+                return None
+            self._saw_joints = True
+            best = largest_pose(poses, self.mapping, self.min_visibility)
+            if best is None:
+                return None
+            channels, mask, index, aspect = best
+            return channels, mask, body_points(poses[index]['landmarks'], self.mapping,
+                                               min_visibility=self.min_visibility,
+                                               aspect=1. if aspect is None else aspect)
+        value = frame.data if isinstance(frame.data, dict) else {}
+        channels, mask = value.get('channels'), value.get('mask')
+        if not isinstance(channels, list) or not isinstance(mask, list):
+            if isinstance(value.get('reference'), str) and isinstance(value.get('state'), str):
+                self._identity(frame, value)
+            return None
+        if self.rule is not None and self.rule.needs_joints:
+            self._channel_frames += 1
+            if self._channel_frames > 2 and not self._saw_joints:
+                raise ValueError('this rule uses joint relations: link the module to the pose module\'s joints input')
+            return None
+        return [float(v) for v in channels], [bool(v) for v in mask], None
+
     def process(self, frame):
         with self._lock:
-            if self.template is None:
+            if self.scorer is None and self.rule is None:
                 raise RuntimeError('no exemplar: add an exemplar reference before the module')
-            value = frame.data if isinstance(frame.data, dict) else {}
-            channels, mask = value.get('channels'), value.get('mask')
-            if not isinstance(channels, list) or not isinstance(mask, list):
+            found = self._input(frame)
+            if found is None:
                 return None
-            ts = frame.timestamp_ms
+            channels, mask, points = found
+            ts, events = frame.timestamp_ms, []
             if self._last_ms is not None and ts - self._last_ms > self.max_gap_ms:
-                count = self._count
+                if self._inside:   # a gap ends a match; it does not undo counted ones
+                    events.append(self._ended(self._last_ms, cut='gap'))
+                count, person, joints = self._count, self._person, self._saw_joints
                 self._clear()
-                self._count = count  # a gap ends a match; it does not undo counted ones
+                self._count, self._person, self._saw_joints = count, person, joints
             self._last_ms = ts
-            item = ([float(v) for v in channels], [bool(v) for v in mask])
-            events = []
-            if self.mode == 'hold':
-                current = distance(self.template[0][0], self.template[0][1], *item)
-                events = self._hold(ts, current)
+            if self.rule is not None:
+                current = self._rule(ts, channels, mask, points, events)
             else:
-                self._history.append((ts, item))
-                while len(self._history) > self.window:
-                    self._history.popleft()
-                current = subsequence_dtw(self.template, [entry for _, entry in self._history]) \
-                    if len(self._history) >= max(2, len(self.template) // 2) else None
-                events = self._sequence(ts, current)
-            status = 'matching' if self._inside else 'watching'
-            result = dict(count=self._count, status=status, events=events)
+                current, index, start, rival = self.scorer.update(ts, (channels, mask), limit=self.exit)
+                (self._hold if self.mode == 'hold' else self._sequence)(ts, current, index, start, rival, events)
+            result = dict(count=self._count, status='matching' if self._inside else 'watching', events=events)
             if current is not None:
                 result['distance'] = round(current, 5)
             return self.spec.validate(result)
 
-    def _hold(self, ts, current):
+    def finish(self):
+        """End of input: the match in progress ends at the last frame."""
+        with self._lock:
+            if not self._inside:
+                return None
+            events = [self._ended(self._last_ms, cut='end_of_input')]
+            return self.spec.validate(dict(count=self._count, status='watching', events=events))
+
+    def _match(self, ts, start, current, index=None):
+        self._count += 1
+        self._inside, self._started_ms, self._last_match_ms = True, start, ts
+        self._best, self._end_ms, self._method = current, ts, self._methods[index or 0]
+        extra = {} if index is None else dict(example=index)
+        return self._event('exemplar.matched', start_ms=start, end_ms=ts, distance=round(current, 5), **extra)
+
+    def _hold(self, ts, current, index, start, rival, events):
         if current is None:
-            return []
+            return
         if not self._inside:
-            if current <= self.enter:
-                self._candidate_ms = self._candidate_ms or ts
+            if current <= self.enter and (rival is None or current < rival):
+                self._candidate_ms = ts if self._candidate_ms is None else self._candidate_ms
                 if ts - self._candidate_ms >= self.min_hold_ms:
-                    self._inside, self._started_ms, self._best = True, self._candidate_ms, current
-                    self._count += 1
-                    return [dict(event='exemplar.matched', index=self._count, reference=self.reference_name,
-                                 start_ms=self._started_ms, distance=round(current, 5))]
+                    events.append(self._match(ts, self._candidate_ms, current, index))
             else:
                 self._candidate_ms = None
-            return []
+            return
         self._best = min(self._best, current)
-        if current > self.exit:
-            self._inside, self._candidate_ms = False, None
-            return [dict(event='exemplar.ended', index=self._count, reference=self.reference_name,
-                         start_ms=self._started_ms, end_ms=ts, best_distance=round(self._best, 5))]
-        return []
+        # A negative ends the match by the same hysteresis gap as the threshold does.
+        if current > self.exit or (rival is not None and current - rival > self.exit - self.enter):
+            events.append(self._ended(ts))
 
-    def _sequence(self, ts, current):
-        if current is None:
-            return []
-        refractory = self.refractory_ms
-        if refractory is None and len(self._history) >= 2:
-            span = self._history[-1][0] - self._history[0][0]
-            refractory = int(.5 * span * len(self.template) / max(1, len(self._history) - 1))
-        if current <= self.enter and not self._inside:
-            if self._last_match_ms is not None and ts - self._last_match_ms < (refractory or 0):
-                return []
-            self._inside, self._last_match_ms = True, ts
-            self._count += 1
-            return [dict(event='exemplar.matched', index=self._count, reference=self.reference_name,
-                         end_ms=ts, distance=round(current, 5))]
-        if current > self.exit:
-            self._inside = False
-        return []
+    def _sequence(self, ts, current, index, start, rival, events):
+        value = float('inf') if current is None else current
+        copy = value <= self.enter and (rival is None or value < rival)
+        if copy and (not self._inside or start >= self._end_ms):     # nothing yet, or a copy after the last one
+            refractory = self.scorer.half_duration_ms(index) if self.refractory_ms is None else self.refractory_ms
+            if self._last_match_ms is None or ts - self._last_match_ms >= refractory:
+                if self._inside:
+                    events.append(self._ended(self._end_ms))
+                events.append(self._match(ts, start, current, index))
+                return
+        if self._inside:
+            if value < self._best:
+                self._best, self._end_ms = value, ts
+            if value > self.exit:
+                events.append(self._ended(self._end_ms))
+
+    def _rule(self, ts, channels, mask, points, events):
+        steps = self.rule.steps
+        if len(steps) == 1:
+            current = self.rule.violation(0, channels, mask, points)
+            hold_ms = steps[0].get('hold_ms', self.min_hold_ms)
+            if current is None:
+                if not self._inside:
+                    self._candidate_ms = None
+            elif not self._inside:
+                if current <= 0:
+                    self._candidate_ms = ts if self._candidate_ms is None else self._candidate_ms
+                    if ts - self._candidate_ms >= hold_ms:
+                        events.append(self._match(ts, self._candidate_ms, current))
+                else:
+                    self._candidate_ms = None
+            else:
+                self._best = min(self._best, current)
+                if current > self.exit:
+                    events.append(self._ended(ts))
+            return current
+        if self._step and ts - self._end_ms > steps[self._step]['within_ms']:
+            self._step, self._candidate_ms = 0, None     # too late: start over with this frame
+        current = self.rule.violation(self._step, channels, mask, points)
+        if current is None or current > 0:
+            self._candidate_ms = None
+            return current
+        self._candidate_ms = ts if self._candidate_ms is None else self._candidate_ms
+        if ts - self._candidate_ms < steps[self._step].get('hold_ms', 0):
+            return current
+        if self._step == 0:
+            self._started_ms = self._candidate_ms
+        self._step, self._end_ms, self._candidate_ms = self._step + 1, ts, None
+        if self._step == len(steps):
+            events.append(self._match(ts, self._started_ms, current))
+            self._inside, self._step = False, 0          # ordered movements are events, not states
+        return current
