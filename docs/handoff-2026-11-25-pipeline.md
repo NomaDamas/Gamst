@@ -145,3 +145,9 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
 - 격리의 실제 범위: venv = 패키지, 별도 프로세스 = 메모리와 크래시. CPU/GPU/RAM 사용량 제한과 보안 격리는 아닙니다. 사용량 제한은 Linux cgroup만 지원합니다(`crew/host_limits.py`).
 - 네트워크 실측: 720p JPEG q85 30fps = 19~22 Mbps(인코딩 약 2ms), 360p = 7~8.5 Mbps. 16kHz 16bit 모노 = 0.256 Mbps(계산값).
 - 제안(G, F 다음): (1) 모듈별 실시간 목표(초당 횟수, p95 지연, 프레임을 버려도 되는지) (2) 이 컴퓨터에서 재는 `gamst bench` (3) 실행 전 예산 검사와 거부, 우선순위와 자동 낮춤 (4) 묶음(pack): local / speech / person / semantic, 묶음 단위로 서버 배치 (5) 네트워크 worker(TLS, 인증, 캡처 시각 유지, 끊김 처리). 서버 비용은 시작 전에 보고합니다.
+- **실제 Pipeline 실측에서 찾은 결함**(M2 Pro, 480×854, 30fps 카메라를 흉내 낸 입력 10초, 다른 작업이 함께 도는 상태):
+  - 고침: Pipeline 프레임에 `coordinate_frame='image'`가 없어 YOLOE worker가 모든 프레임을 거부했습니다.
+  - 레시피 모듈은 semantic을 빼면 queue가 없어 **차례로** 돕니다. 포즈+YOLOE에서 카메라 300프레임 중 150개, 2+2에서 226개를 읽지 못했고, 이 손실은 어디에도 세지 않습니다.
+  - queue=1로 나누면 카메라는 놓치지 않지만 포즈가 2~3/s로 무너집니다. `landmarker_video.py`가 sequence가 하나만 건너뛰어도 검출기를 다시 만들기 때문입니다. 그 조건만 빼고 시험하니 포즈 29/s + YOLOE 23/s(2+2는 25/s씩, 14/s씩)였습니다. 시험 후 되돌렸습니다.
+  - `MicrophoneInput`은 오디오 유실(overflow) 표시를 무시합니다.
+- G: `feat/realtime-pipeline`(wt-realtime)에서 위 결함을 고칩니다. 새 계층은 만들지 않습니다.

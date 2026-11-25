@@ -176,7 +176,9 @@ class Pipeline:
         sequence = self._sequence.get(input_id, 0)
         self._sequence[input_id] = sequence + 1
         if sensor is None:
-            sensor = SensorMetadata(source_id=self.name, sensor_id=input_id, sequence=sequence)
+            # Detectors and trackers require the frame to say its boxes are in image coordinates.
+            sensor = SensorMetadata(source_id=self.name, sensor_id=input_id, sequence=sequence,
+                                    coordinate_frame='image' if modality == 'video' else None)
         else:
             capture = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
             sensor = replace(sensor, sensor_id=input_id, sequence=sequence, capture_sequence=capture)

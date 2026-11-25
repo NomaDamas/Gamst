@@ -79,6 +79,10 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([frame.data for frame in separated.frames], [101, 102, 103, 104])
             # Derived frames keep the original capture time and carry their own input id.
             self.assertEqual(separated.frames[0].sensor.sensor_id, 'target')
+            # A video frame says its boxes are image coordinates (YOLOE refuses one that does not).
+            self.assertEqual(separated.frames[0].sensor.coordinate_frame, 'image')
+            pipeline.add_input('microphone', modality='audio')
+            self.assertIsNone(pipeline._frame('microphone', [0.], 'audio', now()).sensor.coordinate_frame)
             status = pipeline.status()
             self.assertEqual(status['inputs']['target']['derived_from'], 'separator')
             self.assertEqual(status['modules']['double']['processed'], 4)
