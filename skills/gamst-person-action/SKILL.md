@@ -13,6 +13,10 @@ The pipeline is the built-in recipe `person-action-count` (`gamst/recipes/person
   shoulder widths, independent of where the person stands) → the one movement counter (`ExemplarEvents`) and
   the periodic repetition counter.
 
+`--with-role ROLE[=CANDIDATE][@MS]` adds any registry role that reads the same input (`gamst recipe roles`), e.g.
+`--with-role vision.hand` or `--with-role vision.depth@500`. `--with semantic` adds the VLM, which also gets this run's counts
+as text (`--vlm-context none`: frames only).
+
 No model is trained. Examples, confirmed text proposals and rules all end in the same counter.
 
 ```bash

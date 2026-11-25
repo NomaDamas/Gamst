@@ -1,9 +1,12 @@
 ---
 name: gamst-person-terms
-description: Count how often one enrolled person says chosen words, a text pattern, or uses a demonstrated tone of voice, and read the timestamped count from GAMST context. Use when someone asks how many times a specific person said something or spoke in a certain way.
+description: Count how often chosen words (typed, or taken from example clips), a text pattern or a demonstrated tone of voice occur, said by one enrolled person or by anyone, and read the timestamped count from GAMST context. Use when someone asks how many times something was said or someone spoke in a certain way.
 ---
 
-# Counting what one enrolled person says, and how
+# Counting what is said, and how
+
+By default a count is tied to one enrolled person. `--without voice` counts whoever speaks; then every event and the report
+say `speaker: not_bound`.
 
 Recipes: `person-term-count` (words) and `person-voice-style-count` (tone; text patterns optional).
 
@@ -20,6 +23,23 @@ gamst recipe run person-term-count --audio room.wav --voice me.json --terms 're:
 gamst recipe enroll person-voice-style-count --audio demo.wav@2-3 --audio more.wav@4-5.2 --negative calm.wav@3-4 --out style.json
 gamst recipe run person-voice-style-count --microphone --voice me.json --exemplar style.json
 ```
+
+`--video FILE` reads a video's own sound (needs ffmpeg and ffprobe on PATH).
+
+## Words by example
+
+```bash
+gamst recipe enroll person-term-count --kind terms --video a.mp4@3.1-3.8 --audio b.wav@0-1 --proposals p.json
+gamst recipe proposals list --proposals p.json
+gamst recipe proposals confirm 3fa9c1d2e0b7 --proposals p.json                  # or 3fa9c1d2e0b7=대박,대애박 to edit
+gamst recipe enroll person-term-count --kind terms --proposals p.json --out words.json
+gamst recipe run person-term-count --microphone --without voice --terms words.json
+```
+
+The recipe's recognizer writes down each clip; the different spellings become one proposed term. Only the owner confirms or
+edits it (an agent may propose with MCP `propose_movement`, never confirm). Name the part of each clip that is the word. No audio is
+kept; `words.json` holds text. `--no-confirm` saves undecided words; their events say `confirmed: false`. Which spellings a
+recognizer will produce for a word is not predicted: check a recording you counted yourself.
 
 Pipeline: microphone -> speaker verification (segments) -> speaker gate (other voices silenced) -> ASR with
 word times -> speaker verification again on each utterance's own words -> term events. Records:

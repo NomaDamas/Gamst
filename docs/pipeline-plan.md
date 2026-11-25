@@ -196,6 +196,19 @@ Context(Store, 레코드 스키마, Watch), MCP의 기존 도구, SDK `push_*`, 
 | 실모델 스모크 | MediaPipe Pose로 실제 영상(10.6초, 316프레임)을 등록하고 실행 | 정답 카운트가 없어서 정확도는 확인하지 않았습니다 |
 | SOTA 모델 모듈 | **미착수** | 디스크 여유 공간이 15GB뿐이고, Qwen3.8-27B는 호스팅이 필요합니다. 아래 참고 |
 
+### 여러 입력, 역할 부품, VLM 글 자료 (2026-11-25, `feat/multi-input`)
+
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| 입력 여러 개 | 구현, 합성 영상으로 확인 | `recipes.open_inputs`, `inputs.RecordedClock`, `SoundTrackInput`(ffmpeg 스트리밍), `Pipeline.run`이 녹화 입력을 캡처 시각 순서로 읽음. 같은 파일의 번쩍임과 딸깍이 한 프레임(33ms) 안 |
+| 역할 부품 | 구현 | `"use": "role"`, `--with-role`. 기존 `role_module`을 그대로 씀. 상태표 `gamst recipe roles` |
+| 숫자 센서 입력 | 구현, 합성 데이터로 확인 | `inputs.SensorFileInput`. repetition(imu), exemplar, rhythm이 읽음. kinematics는 미터 단위 위치 스냅샷이 필요해 IMU를 받지 못함 |
+| VLM에 전사와 세기 | 구현, 가짜 서버로 확인 | `SegmentModule.evidence`, `StreamingSemanticContext._given` |
+| 단어를 예시로, 인물 없이 세기 | 구현, 가짜 전사로 확인 | `recipes/terms.py`, `--without voice` |
+| 종합 레시피 | `scene` | 기존 부품만 조합. 부품 묶음(`parts`)을 `--with`/`--without`으로 고름 |
+
+자세한 내용과 한계는 [handoff-feat-multi-input.md](handoff-feat-multi-input.md)에 있습니다.
+
 ### MediaPipe
 
 - MediaPipe **Tasks**(Pose/Hand/Face Landmarker)는 이미 perception 모듈입니다(`providers/pose.py` 등).

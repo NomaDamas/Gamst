@@ -101,6 +101,11 @@ without a cursor; a cursor of another query, another process or before `delete_d
 
 ## Clocks
 
+Inputs of one run share one capture clock. Recordings: positions in the files, placed by the start times the container gives
+(`gamst.inputs.RecordedClock`). Live: the host's clock; a camera frame is stamped when it is read, so it is late by the camera's own latency,
+which GAMST does not know. An input's `offset_ms` (owner-set, in `status()['inputs']`) is added to its capture times.
+
+
 Preferred: a server echoes the capture time it was sent, and the record is in local capture time; no clock sync.
 A source with its own clock sets `SensorMetadata.clock_id` (and `clock_epoch`, new after a restart) and the application
 calls `human.add_clock_sample(clock_id, source_ms, local_ms, clock_epoch=...)`; at 8 samples `TemporalAligner`'s

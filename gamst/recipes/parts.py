@@ -199,7 +199,7 @@ async def _terms(options, context):
 
 async def _role(options, context):
     """Any role of the registry, exactly as ``ProfileRuntime`` runs it (:func:`gamst.crew.modules.role_module`)."""
-    from ..crew.modules import RoleUnavailable, role_module
+    from ..crew.modules import RoleUnavailable, refusal, role_module
     from ..crew.registry import ROLES, candidate
     role = ROLES[options['role']]
     if isinstance(options.get('config'), dict):    # prepared by hand: the item says where
@@ -210,6 +210,9 @@ async def _role(options, context):
                      python=options.get('python') or sys.executable)
     else:
         entry = context['installed'](options)
+    reason = refusal(role.id, entry['model'])
+    if reason:
+        raise SystemExit(f"{role.id} {entry['model']}: {reason}")
     try:
         built = await role_module(context['human'], role.id, entry, python=context.get('worker_python'))
     except RoleUnavailable as error:
