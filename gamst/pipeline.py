@@ -139,6 +139,15 @@ class Pipeline:
             entry['lane']['frames'].clear()
         return self.status()['modules'][name]
 
+    async def configure(self, name, options):
+        """Pass module options (for example a MediaPipe graph's branches or side packets) to ``configure``."""
+        entry = self._module(name)
+        configure = getattr(entry['module'], 'configure', None)
+        if not callable(configure):
+            raise ValueError(f'module {name!r} has no options to configure')
+        await _call(configure, dict(options))
+        return self.status()['modules'][name]
+
     async def reset(self):
         """Discard queued frames and reset every module before its next frame (a capture gap)."""
         tasks = []
@@ -284,8 +293,11 @@ class Pipeline:
                             await self._ingest(signals, frame, entry['module'], name) if record]
         for record in list(records):
             observation = record.get('observation') or {}
+            # A record keeps its own capture time: a module running in parallel (its own process)
+            # commits earlier frames' records while later frames are already flowing.
             link = self._frame(name, observation.get('value'), observation.get('modality') or frame.modality,
-                               frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor)
+                               record.get('timestamp_ms', frame.timestamp_ms), subject_id=frame.subject_id,
+                               sensor=frame.sensor if record.get('timestamp_ms') == frame.timestamp_ms else None)
             records += await self.feed(name, link, output=observation.get('name'))
         for item in derived:
             if item.input not in entry['emits']:
@@ -392,7 +404,9 @@ class Pipeline:
                                last_error=value['last_error'], last_latency_ms=value['last_latency_ms'],
                                **({} if value['lane'] is None else dict(
                                    queue=value['lane']['capacity'], queued=len(value['lane']['frames']),
-                                   dropped=value['lane']['dropped'])))
+                                   dropped=value['lane']['dropped'])),
+                               **({'state': value['module'].status()}
+                                  if callable(getattr(value['module'], 'status', None)) else {}))
                      for key, value in self.modules.items()})
 
 

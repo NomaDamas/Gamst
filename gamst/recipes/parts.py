@@ -97,6 +97,13 @@ async def _mediapipe_pose(options, context):
                                            tracker=options.get('tracker', 'iou')))
 
 
+async def _mediapipe_graph(options, context):
+    from ..mediapipe_graph import MediaPipeGraphModule
+    config = context['installed'](options)['config']
+    return dict(module=MediaPipeGraphModule.from_manifest(
+        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets')))
+
+
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
     arguments = {}
@@ -204,6 +211,8 @@ PARTS = {
     'yoloe': Part('module', role='vision.detect', candidate='yoloe.26s', build=_yoloe),
     'efficienttam': Part('module', role='vision.video_segmentation', candidate='efficienttam.ti_512'),
     'mediapipe-pose': Part('module', role='vision.pose', candidate='mediapipe.pose_full', build=_mediapipe_pose),
+    'mediapipe-graph': Part('module', role='vision.mediapipe_graph', candidate='graph.holistic_cpu',
+                            build=_mediapipe_graph),
     'pose-channels': Part('module', build=_pose_channels),
     'repetition': Part('module', build=_repetition, sampling=movement_sampling),
     'exemplar': Part('module', build=_exemplar, sampling=movement_sampling),

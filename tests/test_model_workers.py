@@ -187,6 +187,8 @@ class RegistryPinTest(unittest.TestCase):
         for role in ROLES.values():
             for name, candidate in role.candidates.items():
                 key = candidate.provider_profile or name
+                if candidate.in_process and key not in LOADERS:
+                    continue   # GAMST's own code or a pinned native build; no Python package is loaded
                 self.assertTrue(name == 'custom' or key in LOADERS, f'{role.id} {name}: add {key} to LOADERS')
                 loader = LOADERS.get(key)
                 if loader is None:

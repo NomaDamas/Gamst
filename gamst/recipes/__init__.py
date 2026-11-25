@@ -360,7 +360,7 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         try:
             built = await build(item, context)
             pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
-                                every_ms=built.get('every_ms'), queue=built.get('queue'),
+                                every_ms=built.get('every_ms'), queue=item.get('queue', built.get('queue')),
                                 emits=tuple(item.get('emits', ())), enabled=item.get('enabled', True))
         except BaseException:
             await pipeline.close()   # workers of the modules already built
@@ -438,7 +438,8 @@ async def enroll(recipe, args):
     upstream = [dict(item, consumes=[recipe['inputs'][0]['id']]) if item['use'] == 'prosody' else item
                 for item in choose(json.loads(json.dumps(recipe)), exclude=[
                     item['name'] for item in recipe['modules'] if item.get('optional')])['modules']
-                if item['use'] in ('mediapipe-pose', 'pose-channels', 'prosody', 'voice-channels')]
+                if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'pose-channels', 'prosody',
+                                   'voice-channels')]
     mode = args.mode or exemplar.get('mode', 'hold')
     samples = []
     async with Gamst(consent=True) as human:

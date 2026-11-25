@@ -397,6 +397,18 @@ ROLES = {
         "sapiens2.1b": _sapiens2("1b", "f5fed8b97b99698d5eea1d14ff0855d0b4c3f000", "2dab7014a17e99e460c18817325a71dd7a81ce48d87027f01c2ee7d7b3af969f", 6079194752),
         "sapiens2.5b": _sapiens2("5b", "ada1f29aa1fd454ca28665c700923a0101b6b24f", "b4848da8691c72e14d3ff71319f077363107129bf4128019eb39d072129b2a52", 20480899148),
     }, _defaults("mediapipe.pose_lite")),
+    "vision.mediapipe_graph": Role("vision.mediapipe_graph", "MediaPipe Framework C++ graph (pose, hands, face) in its own process", {
+        "graph.holistic_cpu": _candidate(
+            "graph.holistic_cpu", None, ("numpy>=1.24",), ("cpu",), 1024, 0, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build gamst/mediapipe_graph/build.sh (source pin: pin.json), then set config.manifest to its manifest.json (SHA256 of runner, graphs and models)",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+        "graph.holistic_gpu": _candidate(
+            "graph.holistic_gpu", None, ("numpy>=1.24",), ("cuda",), 1024, 1024, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build.sh --gpu on Linux with EGL, then set config.manifest to its manifest.json",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+    }, _defaults("graph.holistic_cpu")),
     "vision.hand": Role("vision.hand", "Hand landmarks", {
         "mediapipe.hand": _mediapipe("hand", "hand_landmarker.task", HAND_URL, "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1", 8 * MIB, "VERIFY.md: real-video CPU success, 9.8 ms compute, 15.6 ms p95", size_source="estimated"),
     }, _defaults("mediapipe.hand")),

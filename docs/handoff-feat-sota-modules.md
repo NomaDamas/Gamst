@@ -1,6 +1,6 @@
 # HANDOFF feat/sota-modules (서브에이전트 D)
 
-워크트리 `.local-run/wt-sota-modules`. 통합 브랜치 `0eee40a`(crew + iPhone 병합 뒤)를 합친 상태입니다. push와 PR은 하지 않았습니다.
+워크트리 `.local-run/wt-sota-modules`. 통합 브랜치 `96e886e`(crew, iPhone, MediaPipe 병합 뒤)까지 합쳤습니다. push와 PR은 하지 않았습니다.
 
 ## 1. 상태 요약
 
@@ -79,5 +79,5 @@ sha256은 배포처 메타데이터(GitHub digest, HF LFS oid, ModelScope API)�
 
 ## 5. 테스트
 
-- 전체 1303개, 오류 15개(원래 있던 stereo 13, sam_audio_native 2), skip 47개. 작업 전 기준은 1166개, 오류 15개, skip 40개였습니다(그 사이 crew와 iPhone 병합 포함).
+- 전체 1329개, 오류 15개(원래 있던 stereo 13, sam_audio_native 2), skip 47개. 작업 전 기준은 1166개, 오류 15개, skip 40개였습니다(그 사이 crew, iPhone, MediaPipe 병합 포함).
 - 새 테스트: `test_speaker_verify`, `test_target_speech`, `test_asr_words`, `test_person_match`, `test_model_workers`, `test_perception_recipes`, `test_sota_real_models`(전부 skip).

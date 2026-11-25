@@ -12,6 +12,49 @@ from .providers.model_workers import PRIVATE_AUDIO
 from .streams import _finish
 
 
+async def stop_child(process):
+    """Stop one explicitly spawned child: close its pipes, let it exit, then terminate/kill it.
+
+    Shared by every owned worker process (ProcessProvider, the MediaPipe graph runner).
+    """
+    if process is None:
+        return
+    if process.stdin:
+        process.stdin.close()
+    # Process has no public close-reader method. Its owned asyncio transport
+    # exposes pipe closure; close stdout even when StreamReader has paused
+    # after malformed excessive output, rather than relying on GC to do it.
+    transport = process._transport
+    for descriptor in (1, 2):
+        pipe = transport.get_pipe_transport(descriptor)
+        if pipe is not None:
+            pipe.close()
+    try:
+        # A close acknowledgement, EOF or protocol failure often means the
+        # worker is already exiting. Let asyncio's child watcher reap it
+        # before asking Popen to signal (and poll) the same child.
+        try:
+            await asyncio.wait_for(process.wait(), .1)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if process.returncode is None:
+            try:
+                process.terminate()  # Only this explicitly spawned child handle.
+            except ProcessLookupError:
+                pass
+        try:
+            await asyncio.wait_for(process.wait(), 1)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+    finally:
+        transport.close()
+
+
 class ProcessProvider:
     """Async SensorStreams provider. No shell, network service or implicit restart.
 
@@ -103,42 +146,7 @@ class ProcessProvider:
         if owner is not None:
             owner.close()
         process, self._process = self._process, None
-        if process is None:
-            return
-        if process.stdin:
-            process.stdin.close()
-        # Process has no public close-reader method. Its owned asyncio transport
-        # exposes pipe closure; close stdout even when StreamReader has paused
-        # after malformed excessive output, rather than relying on GC to do it.
-        transport = process._transport
-        for descriptor in (1, 2):
-            pipe = transport.get_pipe_transport(descriptor)
-            if pipe is not None:
-                pipe.close()
-        try:
-            # A close acknowledgement, EOF or protocol failure often means the
-            # worker is already exiting. Let asyncio's child watcher reap it
-            # before asking Popen to signal (and poll) the same child.
-            try:
-                await asyncio.wait_for(process.wait(), .1)
-                return
-            except asyncio.TimeoutError:
-                pass
-            if process.returncode is None:
-                try:
-                    process.terminate()  # Only this explicitly spawned child handle.
-                except ProcessLookupError:
-                    pass
-            try:
-                await asyncio.wait_for(process.wait(), 1)
-            except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                await process.wait()
-        finally:
-            transport.close()
+        await stop_child(process)
 
     async def _exchange(self, operation, payload, fields):
         process = self._process
