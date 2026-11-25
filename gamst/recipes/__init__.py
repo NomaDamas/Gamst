@@ -10,6 +10,8 @@ A recipe composes parts GAMST already has (``gamst/recipes/parts.py``) into a
   gamst recipe enroll person-action-count --video demo.mp4 --start 2 --seconds 1.5 --out shotgun.json
   gamst recipe run person-action-count --camera 0 --exemplar shotgun.json
   gamst recipe run rotation --take DIR --roi .3,.2,.4,.6 --symmetry 3
+  gamst recipe enroll person-term-count --kind voice --microphone --seconds 20 --consent '...' --out me.json
+  gamst recipe run person-term-count --microphone --voice me.json --terms 대박 [--truth truth.json]
   gamst recipe run coin-flip --iphone 9123 | --take DIR
 
 Recipe file::
@@ -19,6 +21,7 @@ Recipe file::
    "references": [{"name": "exemplar", "kind": "exemplar"}],        user-defined inputs
    "modules": [{"name": "pose", "use": "mediapipe-pose", "consumes": ["camera"], ...options},
                {"name": "find", "use": "yoloe", "in": "count"}],     a stage that runs inside "count"
+   (a module may be "optional": "on" | "off"; --with / --without choose it)
    "view": "count" | "rotation-view" | "halo-coin",
    "records": ["temporal.exemplar_events"], "measured": "..."}
 
@@ -56,14 +59,39 @@ def names():
     return sorted(path.stem for path in RECIPES.glob('*.json'))
 
 
-def load(name):
-    """A built-in recipe by name, or a recipe file path; validated."""
+def choose(recipe, include=(), exclude=()):
+    """Resolve ``"optional": "on" | "off"`` modules (``--with`` / ``--without``).
+
+    A module may name what it reads when an optional one is absent (``consumes_without``), and a
+    reference what it is for (``for``); both follow the choice.
+    """
+    optional = {item['name']: item['optional'] for item in recipe.get('modules', ()) if item.get('optional')}
+    unknown = (set(include) | set(exclude)) - set(optional)
+    if unknown:
+        raise SystemExit(f"{recipe['name']} has no optional module {', '.join(sorted(unknown))}; "
+                         f"optional: {', '.join(sorted(optional)) or 'none'}")
+    absent = {name for name, state in optional.items()
+              if name in exclude or (state == 'off' and name not in include)}
+    modules = []
+    for item in recipe.get('modules', ()):
+        if item['name'] in absent:
+            continue
+        for name in absent & set(item.get('consumes_without', {})):
+            item = dict(item, consumes=item['consumes_without'][name])
+        modules.append(item)
+    references = [item for item in recipe.get('references', ())
+                  if item.get('for') is None or item['for'] not in absent]
+    return dict(recipe, modules=modules, references=references) if absent else recipe
+
+
+def load(name, include=(), exclude=()):
+    """A built-in recipe by name, or a recipe file path; validated, optional modules resolved."""
     path = Path(name)
     if not (path.suffix == '.json' and path.is_file()):
         path = RECIPES / f'{name}.json'
         if not path.is_file():
             raise SystemExit(f'unknown recipe {name!r}; built-in: {", ".join(names())}')
-    recipe = json.loads(path.read_text())
+    recipe = choose(json.loads(path.read_text()), include, exclude)
     inputs = recipe.get('inputs') or []
     if len(inputs) != 1:
         raise ValueError(f'{path}: a recipe has one primary input (derived inputs come from modules)')
@@ -85,7 +113,7 @@ def load(name):
         if item.get('in') and item['in'] not in {other['name'] for other in recipe['modules']}:
             raise ValueError(f"{path}: module {item['name']!r} runs in {item['in']!r}, which is not a module")
         for source in item.get('consumes', ()):
-            if source.split(':', 1)[0] not in known:
+            if source not in known and source.split(':', 1)[0] not in known:
                 raise ValueError(f"{path}: module {item['name']!r} consumes {source!r}, which no input or "
                                  'earlier module provides')
         known.add(item['name'])
@@ -271,7 +299,18 @@ def _check_exemplar(saved, path):
 
 
 def _reference_value(reference, args):
+    """(value, consent record or None) of one user-defined input from its command-line option."""
     kind, name = reference['kind'], reference['name']
+    if kind in ('voice', 'person'):
+        from .enrollment import saved_reference
+        path = getattr(args, kind, None)
+        if not path:
+            raise SystemExit(f"this recipe needs an enrolled {kind}: run 'gamst recipe enroll --kind {kind}' and "
+                             f'pass --{kind} FILE ({name})')
+        value, consent = saved_reference(path, kind)
+        if kind == 'voice' and getattr(args, 'voice_wav', None):
+            value['wav'] = args.voice_wav   # extraction models condition on the clip itself
+        return value, consent
     if kind == 'exemplar':
         if not args.exemplar:
             raise SystemExit(f"this recipe needs a demonstrated exemplar: run 'gamst recipe enroll' and pass "
@@ -279,11 +318,11 @@ def _reference_value(reference, args):
         saved = json.loads(Path(args.exemplar).read_text())
         if isinstance(saved, dict) and 'value' in saved:
             _check_exemplar(saved, args.exemplar)
-        return saved['value'] if isinstance(saved, dict) and 'value' in saved else saved
+        return (saved['value'] if isinstance(saved, dict) and 'value' in saved else saved), None
     if kind == 'terms':
         if not args.terms:
             raise SystemExit(f'this recipe needs --terms word1,word2 ({name})')
-        return [item.strip() for item in args.terms.split(',') if item.strip()]
+        return [item.strip() for item in args.terms.split(',') if item.strip()], None
     raise SystemExit(f'reference kind {kind!r} is not enrollable from the command line yet')
 
 
@@ -305,8 +344,9 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         source = open_source(kind, value, **options)
     pipeline.add_input(item['id'], source)
     for reference in recipe.get('references', ()):
-        pipeline.add_reference(reference['name'], reference['kind'], _reference_value(reference, args),
-                               label=reference.get('label'))
+        value, consent = _reference_value(reference, args)
+        pipeline.add_reference(reference['name'], reference['kind'], value, label=reference.get('label'),
+                               consent=consent)
     context = dict(human=human, labels=args.label.split(',') if getattr(args, 'label', None) else None,
                    roi=getattr(args, 'roi', None), symmetry=getattr(args, 'symmetry', None),
                    max_rev_s=getattr(args, 'max_rev_s', None), max_reps_s=getattr(args, 'max_reps_s', None),
@@ -314,7 +354,8 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
                    worker_python=getattr(args, 'worker_python', None),
                    installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)),
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
-                   exit=getattr(args, 'exit', None), inputs={item['id']: source},
+                   exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
+                   speaker_threshold=getattr(args, 'speaker_threshold', None), inputs={item['id']: source},
                    record_dir=getattr(args, 'record_dir', None), replay=chosen == 'take',
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
@@ -327,10 +368,14 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         build = PARTS[item['use']].build
         if build is None:
             raise SystemExit(f"part {item['use']!r} runs inside the {recipe['view']} view")
-        built = await build(item, context)
-        pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
-                            every_ms=built.get('every_ms'), emits=tuple(item.get('emits', ())),
-                            enabled=item.get('enabled', True))
+        try:
+            built = await build(item, context)
+            pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
+                                every_ms=built.get('every_ms'), queue=item.get('queue', built.get('queue')),
+                                emits=tuple(item.get('emits', ())), enabled=item.get('enabled', True))
+        except BaseException:
+            await pipeline.close()   # workers of the modules already built
+            raise
     return pipeline
 
 
@@ -357,6 +402,8 @@ async def run_pipeline(recipe, args):
 
         async def on_frame(input_id, frame, records):
             report['frames'] += 1
+            report.setdefault('start_ms', frame.timestamp_ms - (
+                round(1000 * len(frame.data) / frame.sample_rate) if frame.sample_rate else 0))
             return await view.update(input_id, frame, records)
 
         if callable(getattr(view, 'idle', None)):
@@ -368,13 +415,21 @@ async def run_pipeline(recipe, args):
                 counted = await human.count_events(capability, window='24h', group_by='@event', max_evidence=100)
                 report['counts'][capability] = counted['groups']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
+            if getattr(args, 'truth', None):
+                from ..engine import timestamp
+                from ..scoring import score
+                truth, start_ms = json.loads(Path(args.truth).read_text()), report.get('start_ms', 0)
+                rows = human.store.query('local-user', start_ms, timestamp(), 'observation.signal', limit=1_000_000,
+                                         registered_only=True, capability_id=truth['capability'])
+                found = [event for row in rows for event in row['observation']['value'].get('events') or ()]
+                report['score'] = score(truth, found, start_ms=start_ms)
             report['pipeline'] = pipeline.status()
         finally:
             if idle is not None:
                 idle.cancel()
             view.close()
             await pipeline.close()
-    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'counts') if key in report},
+    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'counts', 'score') if key in report},
                      ensure_ascii=False), flush=True)
     if getattr(args, 'report', None):
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
@@ -382,12 +437,20 @@ async def run_pipeline(recipe, args):
 
 
 async def enroll(recipe, args):
-    """Record the owner's exemplar: pose channels over [start, start+seconds] of the chosen input."""
+    """Record the owner's exemplar: feature channels over [start, start+seconds] of the chosen input."""
     from .. import Gamst
+    kind = getattr(args, 'kind', None) or 'exemplar'
+    if kind != 'exemplar':
+        return await _enroll_identity(recipe, args, kind)
     exemplar = next((item for item in recipe['modules'] if item['use'] == 'exemplar'), None)
     if exemplar is None:
         raise SystemExit(f"{recipe['name']} has no exemplar module to enroll for")
-    upstream = [item for item in recipe['modules'] if item['use'] in ('mediapipe-pose', 'pose-channels')]
+    # The demonstration itself is the only person or voice in it, so identity modules are not used here.
+    upstream = [dict(item, consumes=[recipe['inputs'][0]['id']]) if item['use'] == 'prosody' else item
+                for item in choose(json.loads(json.dumps(recipe)), exclude=[
+                    item['name'] for item in recipe['modules'] if item.get('optional')])['modules']
+                if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'pose-channels', 'prosody',
+                                   'voice-channels')]
     mode = args.mode or exemplar.get('mode', 'hold')
     samples = []
     async with Gamst(consent=True) as human:
@@ -402,7 +465,7 @@ async def enroll(recipe, args):
             if seconds >= args.start:
                 for record in records:
                     capability = (record['observation'].get('capability') or {}).get('id')
-                    if capability == 'vision.pose_channels':
+                    if capability in ('vision.pose_channels', 'audio.voice_channels'):
                         samples.append(record['observation']['value'])
                         first['channels'] = f"{capability}@{record['models'][0]['version']}"
             return True
@@ -412,7 +475,7 @@ async def enroll(recipe, args):
         finally:
             await pipeline.close()
     if not samples:
-        raise SystemExit('no visible person in the enrollment window')
+        raise SystemExit('nothing to learn in the enrollment window (no visible person, or no audio)')
     if mode == 'hold':
         size = len(samples[0]['channels'])
         mask = [sum(item['mask'][i] for item in samples) * 2 > len(samples) for i in range(size)]
@@ -431,7 +494,26 @@ async def enroll(recipe, args):
     return saved
 
 
+async def _enroll_identity(recipe, args, kind):
+    from . import enrollment
+    context = dict(installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)))
+    if kind == 'person':
+        return await enrollment.enroll_person(recipe, args, build_pipeline=build_pipeline, context=context)
+    from ..inputs import open_source
+    _, chosen = _source(recipe, args)
+    return await enrollment.enroll_voice(recipe, args, context=context,
+                                         source=open_source(chosen, getattr(args, 'audio', None)))
+
+
 # ---------------------------------------------------------------- command line
+
+def _optional_options(parser):
+    parser.add_argument('--with', dest='include', action='append', default=[], metavar='MODULE',
+                        help='add an optional module of the recipe')
+    parser.add_argument('--without', dest='exclude', action='append', default=[], metavar='MODULE',
+                        help='leave an optional module out')
+
+
 
 def _speed_options(parser):
     speed = parser.add_mutually_exclusive_group()
@@ -492,18 +574,29 @@ def main(argv=None):
     learn.add_argument('--start', type=float, default=0., help='seconds into the input where the demonstration starts')
     learn.add_argument('--seconds', type=float, default=1.5, help='length of the demonstration')
     learn.add_argument('--mode', choices=['hold', 'sequence'], help="hold: one pose; sequence: a movement")
-    learn.add_argument('--out', required=True, help='exemplar JSON to write')
+    learn.add_argument('--kind', choices=['exemplar', 'voice', 'person'], default='exemplar',
+                       help='voice / person: save embeddings only (needs --consent)')
+    learn.add_argument('--consent', help='who consented to being enrolled, and to what')
+    learn.add_argument('--out', required=True, help='enrollment JSON to write')
     start = actions.add_parser('run', help='run the recipe')
     start.add_argument('recipe')
     _source_options(start)
     _speed_options(start)
     start.add_argument('--exemplar', help='exemplar JSON from gamst recipe enroll')
-    start.add_argument('--terms', help='comma-separated words to count')
+    start.add_argument('--terms', help='comma-separated words to count (re:PATTERN for a pattern)')
+    start.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
+    start.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
+    start.add_argument('--person', help='person JSON from gamst recipe enroll --kind person')
+    start.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
+    start.add_argument('--language', help="spoken language, e.g. ko (default: the recipe's)")
+    start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
     start.add_argument('--enter', type=float, help='exemplar match threshold (mean channel difference)')
     start.add_argument('--exit', type=float, help='exemplar release threshold')
     start.add_argument('--store', default=':memory:', help='SQLite store for the records (default: memory)')
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
     start.add_argument('--report', help='write frames, counts and pipeline status as JSON')
+    for command in (show, install, learn, start):
+        _optional_options(command)
     takes = start.add_argument_group('GAMST 240 takes (coin-flip)')
     takes.add_argument('--record-dir', help='one folder per take: raw.gmst, hud.mp4, refined.json/mp4 '
                                             '(default gamst-takes)')
@@ -521,7 +614,7 @@ def main(argv=None):
         for name in names():
             print(f"{name:20} {load(name)['summary']}")
         return
-    recipe = load(args.recipe)
+    recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()))
     if args.action == 'show':
         print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
     elif args.action == 'setup':

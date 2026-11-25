@@ -8,6 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
+    from .providers.model_workers import PROFILES
+    if profile in PROFILES:
+        from .providers.model_workers import load
+        return load(profile, config), spec
     if profile == 'sam_audio.text_temporal.local':
         from .providers.sam_audio_context import SAMAudioContext
         provider = SAMAudioContext.from_local(config)
@@ -20,7 +24,8 @@ def _construct(profile, config):
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
         backend = OpenAIStreamingBackend(config['endpoint'], config['model'], config['revision'], config.get('api_key_env'),
-                                         config.get('request_options'), config.get('max_tokens', 256))
+                                         config.get('request_options'), config.get('max_tokens', 256),
+                                         config.get('allow_remote', False))
         provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
@@ -186,6 +191,7 @@ def main():
     provider = spec = None
     separation_protocol = None
     separation_config = None
+    private_audio = False
     try:
         while True:
             head_size, payload_size = sizes(_read_exact(source, 8))
@@ -207,6 +213,8 @@ def main():
                         raise ValueError('JSON providers cannot negotiate separation media')
                     separation_config = request['config']
                     provider, spec = _construct(request['profile'], request['config'])
+                    from .providers.model_workers import PRIVATE_AUDIO
+                    private_audio = request['profile'] in PRIVATE_AUDIO
                     result = dict(spec=spec_value(spec))
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
@@ -225,6 +233,9 @@ def main():
                             result=observation, separation=media), binary))
                         continue
                     result = provider.process(decode_frame(request['frame'], payload))
+                    if private_audio:
+                        output.write(envelope(dict(id=number, ok=True, result=None), result.astype('<f4').tobytes()))
+                        continue
                     if result is not None:
                         result = spec.validate(result)
                 elif operation == 'process_regions' and provider is not None:

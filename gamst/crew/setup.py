@@ -554,6 +554,8 @@ def _role_config(selection, weight_paths, source_dir):
                       runtime_root=str(Path(checkpoint["path"]).parent))
     elif model.startswith("mediapipe.") or model in ("silero.vad", "yamnet", "depth_anything_v2.small"):
         config.update(path=first["path"], sha256=first["sha256"])
+    elif model.startswith(("sherpa.", "lvface.")):
+        config.update(path=first["path"], sha256=first["sha256"])
     elif model == "faster_whisper.small":
         config["model_path"] = str(Path(first["path"]).parent)
     elif model == "nemotron3":
@@ -568,11 +570,16 @@ def _role_config(selection, weight_paths, source_dir):
     return config
 
 
-def weights_directory(model, weights, models_dir):
-    """Where apply keeps one model's files: its own directory, or an existing flat one that verifies."""
+def weights_directory(model, weights, models_dir, bundle=False):
+    """Where apply keeps one model's files: its own directory, or an existing flat one that verifies.
+
+    A ``bundle`` (its loader reads the whole directory) always gets its own.
+    """
     names = [weight["name"] for weight in weights]
     directory = model_directory(model, names, models_dir)
     own = (models_root() if models_dir is None else Path(models_dir).expanduser().absolute()) / model
+    if bundle:
+        return own
     if directory != own and any(_sha256(directory / weight["name"]) != weight["sha256"] for weight in weights):
         return own  # another model's file under the same name
     return directory
@@ -602,7 +609,8 @@ def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
         model = selection["model"]
         downloaded = []
         weights = selection.get("weights", [])
-        directory = weights_directory(model, weights, models_dir) if weights else None
+        directory = weights_directory(model, weights, models_dir, registry_candidate(role_id, model).bundle) \
+            if weights else None
         for weight in weights:
             result = download_weight(weight, directory / weight["name"])
             downloaded.append(result)

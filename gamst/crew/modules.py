@@ -9,7 +9,8 @@ A profile role (``{"model", "provider_profile", "python", "config"}``, written b
   (``spec`` + ``process(frame) -> value``) committed with ``push_observation``;
 * an in-process candidate (registry ``in_process``, e.g. ``vision.rotation``, which reads
   the records other modules commit): the named class built on the caller's runtime, a
-  *plugin* module committed like a registered plugin.
+  *plugin* module committed like a registered plugin. One that runs its own native process
+  (``owns_process``, e.g. the MediaPipe graph runner) gets a bounded lane like a worker.
 
 ``ProfileRuntime`` (``gamst mcp --profile``, ``gamst dashboard --profile``) and recipes
 build their modules here, so a Crew-launched worker is one Pipeline module however it is
@@ -97,7 +98,12 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
         plugin = _import(chosen.in_process)(human, **config)
         spec = getattr(plugin, 'spec', None)
         return dict(module=plugin, spec=None, modality=tuple(plugin.modalities)[0],
-                    capability=None if spec is None else spec.id, in_process=True)
+                    capability=None if spec is None else spec.id, in_process=True,
+                    owns_process=bool(getattr(plugin, 'owns_process', False)))
+    from ..providers.model_workers import PROFILES as MODEL_PROFILES
+    if entry.get('provider_profile') in MODEL_PROFILES:
+        raise RoleUnavailable('answers one recipe module (enrolled reference and consent needed); '
+                              'its embeddings or audio are never context')
     if config.get('landmarks'):
         raise RoleUnavailable('keypoint output is for the recipe module that asked for it; it is never context')
     python = python or entry.get('python')

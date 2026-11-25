@@ -57,6 +57,7 @@ class Derived:
     data: Any
     modality: str
     sample_rate: int | None = None
+    timestamp_ms: int | None = None   # capture time of this item; default: the frame it came from
 
 
 async def _call(function, *args):
@@ -109,7 +110,8 @@ class Pipeline:
         consumes = [consumes] if isinstance(consumes, str) else list(consumes)
         if not consumes:
             raise ValueError('a module consumes at least one input or module')
-        links = [tuple(item.split(':', 1)) if ':' in item else (item, None) for item in consumes]
+        links = [tuple(item.split(':', 1)) if ':' in item and item not in self.inputs else (item, None)
+                 for item in consumes]
         if spec is not None:
             self.human.register_capability(spec)
         for derived in emits:
@@ -135,6 +137,15 @@ class Pipeline:
         entry['needs_reset'] = True  # what it saw before the gap must not join what it sees after
         if entry['lane'] is not None:
             entry['lane']['frames'].clear()
+        return self.status()['modules'][name]
+
+    async def configure(self, name, options):
+        """Pass module options (for example a MediaPipe graph's branches or side packets) to ``configure``."""
+        entry = self._module(name)
+        configure = getattr(entry['module'], 'configure', None)
+        if not callable(configure):
+            raise ValueError(f'module {name!r} has no options to configure')
+        await _call(configure, dict(options))
         return self.status()['modules'][name]
 
     async def reset(self):
@@ -282,13 +293,17 @@ class Pipeline:
                             await self._ingest(signals, frame, entry['module'], name) if record]
         for record in list(records):
             observation = record.get('observation') or {}
+            # A record keeps its own capture time: a module running in parallel (its own process)
+            # commits earlier frames' records while later frames are already flowing.
             link = self._frame(name, observation.get('value'), observation.get('modality') or frame.modality,
-                               frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor)
+                               record.get('timestamp_ms', frame.timestamp_ms), subject_id=frame.subject_id,
+                               sensor=frame.sensor if record.get('timestamp_ms') == frame.timestamp_ms else None)
             records += await self.feed(name, link, output=observation.get('name'))
         for item in derived:
             if item.input not in entry['emits']:
                 raise ValueError(f'{name} emitted {item.input!r} but declares emits={entry["emits"]}')
-            derived_frame = self._frame(item.input, item.data, item.modality, frame.timestamp_ms,
+            derived_frame = self._frame(item.input, item.data, item.modality,
+                                        frame.timestamp_ms if item.timestamp_ms is None else item.timestamp_ms,
                                         subject_id=frame.subject_id, sample_rate=item.sample_rate,
                                         sensor=frame.sensor)
             records += await self.feed(item.input, derived_frame)
@@ -389,7 +404,9 @@ class Pipeline:
                                last_error=value['last_error'], last_latency_ms=value['last_latency_ms'],
                                **({} if value['lane'] is None else dict(
                                    queue=value['lane']['capacity'], queued=len(value['lane']['frames']),
-                                   dropped=value['lane']['dropped'])))
+                                   dropped=value['lane']['dropped'])),
+                               **({'state': value['module'].status()}
+                                  if callable(getattr(value['module'], 'status', None)) else {}))
                      for key, value in self.modules.items()})
 
 

@@ -26,7 +26,8 @@ CHANNELS = ('pitch_st', 'level_db', 'voiced', 'periodicity', 'brightness')
 
 
 class VoiceChannels:
-    def __init__(self, *, step_ms=100, history_s=30, max_gap_ms=1000):
+    def __init__(self, *, step_ms=100, history_s=30, max_gap_ms=1000, silence_dbfs=-70.):
+        self.silence_dbfs = float(silence_dbfs)   # quieter windows are nobody speaking, not a quiet voice
         self.step_ms, self.max_gap_ms = int(step_ms), int(max_gap_ms)
         self.history = max(10, int(history_s * 1000 / self.step_ms))
         self.spec = CapabilitySpec(
@@ -57,6 +58,8 @@ class VoiceChannels:
         return self._channels(bucket)
 
     def _channels(self, bucket):
+        bucket = [f for f in bucket if f.get('dbfs') is None or f['dbfs'] > self.silence_dbfs] or \
+            [dict(dbfs=None)]
         pitches = [f['pitch_hz'] for f in bucket if f.get('pitch_hz')]
         levels = [f['dbfs'] for f in bucket if f.get('dbfs') is not None]
         centroids = [f['spectral_centroid_hz'] for f in bucket if f.get('spectral_centroid_hz')]

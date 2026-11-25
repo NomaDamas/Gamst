@@ -11,7 +11,13 @@ When the transcript carries word timings (``words: [{text, start_ms, end_ms}]``,
 aligner) the event gets the matching words' times; otherwise the utterance's times.
 
 Which voice a transcript belongs to is decided upstream: feed this module the transcript of a
-derived input (one enrolled person's separated voice) to count what that person said.
+derived input (one enrolled person's separated voice) to count what that person said. A transcript
+that carries ``speaker: {"match": false}`` (re-checked by ``gamst.providers.speaker_verify``) is not
+counted.
+
+Text-pattern styles of speaking (a filler, a sentence ending) are terms too: a term written as
+``re:<pattern>`` is a regular expression over the normalized text (lower case, no spaces or
+punctuation), e.g. ``re:(거든요|잖아요)$``.
 """
 from __future__ import annotations
 
@@ -30,15 +36,43 @@ def normalize(text):
 
 def occurrences(text, term):
     """Start offsets (in normalized text) of non-overlapping occurrences of ``term``."""
-    haystack, needle = normalize(text), normalize(term)
+    return [offset for offset, _ in matches(text, term)]
+
+
+def matches(text, term):
+    """(offset, length) in normalized text of non-overlapping occurrences; ``re:`` terms are patterns."""
+    haystack = normalize(text)
+    if str(term).startswith('re:'):
+        pattern = _pattern(term)
+        return [(found.start(), found.end() - found.start()) for found in pattern.finditer(haystack)
+                if found.end() > found.start()]
+    needle = normalize(term)
     found, start = [], 0
     while needle:
         index = haystack.find(needle, start)
         if index < 0:
             break
-        found.append(index)
+        found.append((index, len(needle)))
         start = index + len(needle)
     return found
+
+
+_PATTERNS = {}
+
+
+def _pattern(term):
+    if term not in _PATTERNS:
+        _PATTERNS[term] = re.compile(unicodedata.normalize('NFKC', term[3:]), re.IGNORECASE)
+    return _PATTERNS[term]
+
+
+def _valid(spelling):
+    if spelling.startswith('re:'):
+        try:
+            return bool(spelling[3:]) and _pattern(spelling) is not None
+        except re.error as exc:
+            raise ValueError(f'invalid term pattern {spelling!r}: {exc}') from exc
+    return bool(normalize(spelling))
 
 
 def _word_times(words, offset, length):
@@ -80,7 +114,7 @@ class TermEvents:
         """A list of terms, or {term: [spellings ...]} so variants count as the same term."""
         mapping = {str(term): [str(term)] for term in value} if isinstance(value, (list, tuple)) else \
             {str(term): [str(item) for item in (spellings or [term])] for term, spellings in dict(value).items()}
-        if not mapping or any(not normalize(item) for spellings in mapping.values() for item in spellings):
+        if not mapping or any(not _valid(item) for spellings in mapping.values() for item in spellings):
             raise ValueError('terms must be non-empty text')
         self.terms = mapping
 
@@ -102,6 +136,9 @@ class TermEvents:
             value = value if isinstance(value, dict) else {}
             if value.get('status') != 'final' or not value.get('text'):
                 return None
+            speaker = value.get('speaker')
+            if isinstance(speaker, dict) and speaker.get('match') is False:
+                return None  # re-checked upstream (speaker_verify): not the enrolled person's voice
             key = (value.get('utterance_id'), frame.subject_id)
             if key in self._counted:
                 return None
@@ -112,8 +149,7 @@ class TermEvents:
             for term, spellings in self.terms.items():
                 taken = []
                 for spelling in sorted(spellings, key=lambda item: -len(normalize(item))):
-                    size = len(normalize(spelling))
-                    for offset in occurrences(value['text'], spelling):
+                    for offset, size in matches(value['text'], spelling):
                         if any(offset < end and offset + size > start for start, end in taken):
                             continue  # a longer spelling already counted these characters
                         taken.append((offset, offset + size))
@@ -121,7 +157,9 @@ class TermEvents:
                         start_ms, end_ms = times if times else (value.get('start_ms'), value.get('end_ms'))
                         self._counts[term] = self._counts.get(term, 0) + 1
                         self._total += 1
-                        events.append(dict(event='term.spoken', term=term, spoken=spelling,
+                        spoken = normalize(value['text'])[offset:offset + size] if spelling.startswith('re:') \
+                            else spelling
+                        events.append(dict(event='term.spoken', term=term, spoken=spoken,
                                            utterance_id=value.get('utterance_id'), start_ms=start_ms,
                                            end_ms=end_ms, word_timed=times is not None))
             if not events:

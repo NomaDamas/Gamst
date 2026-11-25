@@ -106,7 +106,7 @@ class Environments(Temporary):
             self.assertLessEqual(len(registry.cv2_distributions(packages)), 1, name)
         self.assertEqual(registry.cv2_distributions(['mediapipe==0.10.35']), {'opencv-contrib-python'})
         self.assertEqual(registry.cv2_distributions(['ultralytics==8.4.212', 'opencv-python>=4.8,<5']), {'opencv-python'})
-        merged = recipes.plan(recipes.load('person-action-count'), hardware=HOST, isolation='current')
+        merged = recipes.plan(recipes.load('person-action-count', exclude=['target_person']), hardware=HOST, isolation='current')
         self.assertTrue(any('overwrite each other' in warning for warning in merged['warnings']))
         apart = recipes.plan(recipes.load('person-action-count'), hardware=HOST)
         self.assertFalse(any('overwrite each other' in warning for warning in apart['warnings']))
@@ -205,6 +205,31 @@ class WeightRoot(Temporary):
         self.assertEqual(flat.read_bytes(), b'first')  # untouched
 
 
+    def test_a_bundle_gets_its_own_folder_even_next_to_flat_files(self):
+        """FasterWhisperPlugin hashes its whole directory: nothing else may be in it."""
+        candidate = registry.candidate('audio.asr', 'faster_whisper.small')
+        self.assertTrue(candidate.bundle)
+        weights = [dict(name=item.name, url='unused', sha256=hashlib.sha256(item.name.encode()).hexdigest())
+                   for item in candidate.weights]
+        for weight in weights:  # a flat directory that even holds the bundle's verified files
+            self.write(self.tmp / 'models' / weight['name'], weight['name'].encode())
+        self.write(self.tmp / 'models' / 'model.safetensors')
+        directory = setup.weights_directory('faster_whisper.small', weights, self.tmp / 'models', candidate.bundle)
+        self.assertEqual(directory, self.tmp / 'models' / 'faster_whisper.small')
+        fetched = [dict(name=item.name, path=str(directory / item.name)) for item in candidate.weights]
+        config = setup._role_config(dict(model='faster_whisper.small', config={}), fetched, None)
+        self.assertEqual(config['model_path'], str(directory))
+        from gamst.recipes.perception_parts import _whisper_words
+        seen = {}
+
+        async def opened(client, entry):
+            seen.update(entry[0])
+            return SimpleNamespace(spec=None)
+        with patch('gamst.recipes.perception_parts._open', opened):
+            asyncio.run(_whisper_words({}, dict(installed=lambda item: dict(config=config, python=sys.executable))))
+        self.assertEqual(seen['model_path'], str(directory))
+
+
 class CoinFlipEnvironment(Temporary):
     def profile(self, detect, segment):
         path = self.tmp / 'profile.json'
@@ -300,7 +325,7 @@ class Aspect(unittest.TestCase):
                     recipes._reference_value(reference, args)
             for current in ('vision.pose_channels@2.mediapipe_pose', 'audio.voice_channels@1.x'):
                 path.write_text(json.dumps(dict(saved, channels=current)))
-                self.assertEqual(recipes._reference_value(reference, args), saved['value'])
+                self.assertEqual(recipes._reference_value(reference, args), (saved['value'], None))
 
 
 class VideoDetector:
@@ -372,7 +397,7 @@ class PoseWorker(Temporary):
 
     def run_frames(self, frames, *, between=None):
         VideoDetector.made = []
-        recipe = recipes.load('person-action-count')
+        recipe = recipes.load('person-action-count', exclude=['target_person'])
         entry = dict(model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python='/env/python',
                      config=dict(path='/m/pose.task', sha256='1' * 64))
 
@@ -454,7 +479,7 @@ class PoseWorker(Temporary):
         saved = json.loads(out.read_text())
         self.assertTrue(saved['channels'].startswith('vision.pose_channels@2.'))
         self.assertEqual(recipes._reference_value(dict(kind='exemplar', name='exemplar'),
-                                                  argparse.Namespace(exemplar=str(out))), saved['value'])
+                                                  argparse.Namespace(exemplar=str(out))), (saved['value'], None))
         self.assertTrue(all(math.isfinite(value) for value in saved['value']['channels']))
 
 

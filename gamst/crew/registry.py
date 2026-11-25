@@ -174,6 +174,8 @@ class RoleCandidate:
     # "module:Class" for a candidate that must run inside the caller's Gamst runtime (it reads
     # committed records); None means an isolated ProcessProvider worker (``provider_profile``).
     in_process: str | None = None
+    # The loader reads (and hashes) its whole directory, so it must hold this model's files only.
+    bundle: bool = False
 
     def as_dict(self):
         return {
@@ -341,6 +343,43 @@ WHISPER_FILES = {
 DIAR_REV = "52a432672732425e4c19765b9fec9b5810e6f4ba"
 
 
+# Enrolled-person modules. ``automatic=False`` marks what apply must not install by itself: licences
+# the owner has to accept, unpinned files, or multi-file snapshots. A recipe item then names its local
+# files in ``"config"``. Every sha256 here was read from the publisher's own metadata (GitHub release
+# digest, Hugging Face LFS oid, ModelScope file API); "downloaded" says the bytes were also hashed here.
+LVFACE = HF + "/bytedance-research/LVFace/resolve/b12702ab1f5c721748e054a66dc90e1edd1f0724/"
+SHERPA_SV = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
+WESPEAKER = "wespeaker @ git+https://github.com/wenet-e2e/wespeaker.git@9fecd6cb4f47475d01761d87c826298dff4ef18c"
+W2VBERT_SV = "https://www.modelscope.cn/models/shangguanqituan/wespeaker-w2v-bert2/resolve/master/"
+W2VBERT_BACKBONE = _weight("w2v-bert-2.0.safetensors", HF + "/facebook/w2v-bert-2.0/resolve/da985ba0987f70aaeb84a80f2851cfac8c697a7b/model.safetensors", "eb890c9660ed6e3414b6812e27257b8ce5454365d5490d3ad581ea60b93be043", 2322063736, "publisher metadata")
+SAPIENS2_LICENSE = "Sapiens2 License: forbids biometric processing and re-identification; owner must accept"
+
+
+def _lvface(size, sha, count, verification):
+    return _candidate(
+        "lvface." + size.lower(), "face.embedding", ("onnxruntime>=1.18", "opencv-python>=4.8,<5", "numpy>=1.24"), ("cpu", "cuda"),
+        2048, 0, 200, ESTIMATED, "MIT (code and weights); Glint360K training-data terms require review", verification,
+        (_weight(f"LVFace-{size}_Glint360K.onnx", f"{LVFACE}LVFace-{size}_Glint360K/LVFace-{size}_Glint360K.onnx", sha, count, "publisher metadata"),),
+        environment="lvface", config={})
+
+
+def _sapiens2(size, revision, sha, count):
+    return _candidate(
+        "sapiens2." + size, "sapiens2.pose", ("transformers>=5.10.3", "torch>=2.7", "torchvision", "timm", "safetensors", "numpy>=1.24"),
+        ("cuda",), 16384, count // MIB, 2000, ESTIMATED, SAPIENS2_LICENSE,
+        "GAMST adapter written from the transformers port; no weights run; snapshot directories provisioned by hand",
+        (_weight(f"sapiens2_{size}_pose.safetensors", f"{HF}/facebook/sapiens2-pose-{size}/resolve/{revision}/sapiens2_{size}_pose.safetensors", sha, count, "publisher metadata"),
+         _weight("detr-resnet-101-dc5.safetensors", HF + "/facebook/detr-resnet-101-dc5/resolve/96317ca979e231bd960cb3cac31328e0165a3e94/model.safetensors", "707de69ca32dee6b518798a866219809eb3e76c190f70acda1c1f67c9f7de6c7", 242797616, "publisher metadata")),
+        environment="sapiens2", python="3.11", automatic=False, config={})
+
+
+def _vlm_endpoint(name, model, revision, license_name, verification, *, automatic=True, **config):
+    return _candidate(
+        name, "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, license_name, verification,
+        environment="semantic-endpoint", automatic=automatic,
+        config={"endpoint": "http://127.0.0.1:8000/v1", "model": model, "revision": revision, "window_frames": 1, **config})
+
+
 ROLES = {
     "vision.detect": Role("vision.detect", "Object detection", DETECTION, _defaults("rfdetr.nano", "rfdetr.large")),
     "vision.track": Role("vision.track", "OpenCV motion/track continuity", {
@@ -365,7 +404,21 @@ ROLES = {
         "mediapipe.pose_lite": _mediapipe("pose_lite", "pose_landmarker_lite.task", POSE_LITE_URL, "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a", 5777746, "scripts/local_models.py pinned; real target-host acceptance unmeasured"),
         "mediapipe.pose_full": _mediapipe("pose_full", "pose_landmarker_full.task", POSE_FULL_URL, "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1", 9398198, "pinned float16/1 bytes (size and SHA256 measured on a downloaded copy); target-host acceptance unmeasured"),
         "mediapipe.pose_heavy": _mediapipe("pose_heavy", "pose_landmarker_heavy.task", POSE_HEAVY_URL, "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b", 30664242, "VERIFY.md: real-video CPU success, 32.3 ms compute, 91.6 ms p95"),
+        "sapiens2.1b": _sapiens2("1b", "f5fed8b97b99698d5eea1d14ff0855d0b4c3f000", "2dab7014a17e99e460c18817325a71dd7a81ce48d87027f01c2ee7d7b3af969f", 6079194752),
+        "sapiens2.5b": _sapiens2("5b", "ada1f29aa1fd454ca28665c700923a0101b6b24f", "b4848da8691c72e14d3ff71319f077363107129bf4128019eb39d072129b2a52", 20480899148),
     }, _defaults("mediapipe.pose_lite")),
+    "vision.mediapipe_graph": Role("vision.mediapipe_graph", "MediaPipe Framework C++ graph (pose, hands, face) in its own process", {
+        "graph.holistic_cpu": _candidate(
+            "graph.holistic_cpu", None, ("numpy>=1.24",), ("cpu",), 1024, 0, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build gamst/mediapipe_graph/build.sh (source pin: pin.json), then set config.manifest to its manifest.json (SHA256 of runner, graphs and models)",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+        "graph.holistic_gpu": _candidate(
+            "graph.holistic_gpu", None, ("numpy>=1.24",), ("cuda",), 1024, 1024, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build.sh --gpu on Linux with EGL, then set config.manifest to its manifest.json",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+    }, _defaults("graph.holistic_cpu")),
     "vision.hand": Role("vision.hand", "Hand landmarks", {
         "mediapipe.hand": _mediapipe("hand", "hand_landmarker.task", HAND_URL, "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1", 8 * MIB, "VERIFY.md: real-video CPU success, 9.8 ms compute, 15.6 ms p95", size_source="estimated"),
     }, _defaults("mediapipe.hand")),
@@ -380,6 +433,11 @@ ROLES = {
         "smolvlm.500m": _candidate("smolvlm.500m", None, ("torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6", "huggingface-hub==0.36.0", "safetensors==0.7.0", "num2words==0.5.14", "numpy>=1.24", "Pillow>=10"), ("cpu",), 4096, 0, 4000, ESTIMATED, "Apache-2.0", "GAMST direct SmolVLM adapter; real trained acceptance pending; no ProcessProvider profile", (_weight("SmolVLM2-500M-Video-Instruct", HF + "/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/4cde9d208e19519c36917aa170fffc7e381aa0ad", None, 1500 * MIB, "estimated bundle; per-file SHA256 unpinned"),), environment="smolvlm", config={"adapter": "gamst.providers.smolvlm_context.SmolVLMContext"}),
         "qwen3.5.9b": _candidate("qwen3.5.9b", "streamingvlm.local", ("vllm==0.34.0",), ("cuda",), 24576, 18432, 30000, {"ram": "estimated", "vram": "PLAN.md reports about 18 GB; not a VERIFY.md process measurement", "disk": "estimated"}, "Qwen model license requires review", "VERIFY.md: JSON output success; 412 ms/frame compute and 4.86 s p95; endpoint server required", (_weight("Qwen3.5-9B", HF + "/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a", None, 18000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen35-vllm", python="3.12", min_vram_bytes=24 * GIB, automatic=False, config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a", "device": "cuda"}),
         "qwen3.5.endpoint": _candidate("qwen3.5.endpoint", "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, "endpoint operator must verify model license", "Remote serving is explicit; endpoint/model acceptance is not inferred", environment="semantic-endpoint", config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"}),
+        "qwen3.8-flash.hosted": _vlm_endpoint("qwen3.8-flash.hosted", "qwen3.8-flash", "hosted-unversioned", "Alibaba Model Studio terms", "Not run. Frames leave the machine and it costs money: quote first. The endpoint and key are regional", automatic=False, endpoint="https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1", api_key_env="DASHSCOPE_API_KEY", allow_remote=True, request_options={"enable_thinking": False, "response_format": {"type": "json_object"}}),
+        "qwen3.8-flash-next.endpoint": _vlm_endpoint("qwen3.8-flash-next.endpoint", "Qwen/Qwen3.8-Flash-Next", "812d96e10a0dd82b69d749e68693698cf6c36daa", "qwen-community-1.0 (gated); operator must accept", "Not run. Operator hosts it (360.0 GB BF16 safetensors, 185.5 GB FP8); quote the hosting cost first"),
+        "qwen3.6-35b-a3b.endpoint": _vlm_endpoint("qwen3.6-35b-a3b.endpoint", "Qwen/Qwen3.6-35B-A3B", "345d467b117d1fd5eda9b879a5988de9ae5f47a7", "Apache-2.0", "Not run. Operator hosts it (71.90 GB BF16 safetensors)"),
+        "qwen3.5-4b.endpoint": _vlm_endpoint("qwen3.5-4b.endpoint", "Qwen/Qwen3.5-4B", "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a", "Apache-2.0", "Not run. Operator hosts it (9.32 GB BF16 safetensors)"),
+        "qwen3.5-2b.endpoint": _vlm_endpoint("qwen3.5-2b.endpoint", "Qwen/Qwen3.5-2B", "15852e8c16360a2fea060d615a32b45270f8a8fc", "Apache-2.0", "Not run. Operator hosts it (4.55 GB BF16 safetensors)"),
     }, _defaults("smolvlm.500m", "qwen3.5.9b")),
     "vision.physical_concepts": Role("vision.physical_concepts", "PG-InstructBLIP physical property estimates", {
         "pg.instructblip": _candidate("pg.instructblip", "pg.physical.local", ("transformers==4.33.2", "timm==0.4.12", "fairscale==0.4.4", "torch==2.8.0", "torchvision==0.23.0", "omegaconf==2.3.0", "sentencepiece", "accelerate", "safetensors==0.7.0", "numpy>=1.24", "Pillow>=10"), ("cuda",), 49152, 40960, 60000, ESTIMATED, "PG/assets/canonical export: operator must verify", "GAMST adapter implemented; real canonical export/reference parity pending", (_weight("PG-InstructBLIP", HF + "/bidiptas/PG-InstructBLIP/resolve/7caa1683fbc3f6889868accf25c2074aee83324c", "6b3923683eb83405ca12d81e10a564e7523efe72a1bdf6efa9b493545984bd1e", 24999831084, "GAMST pg_sources.py pinned aggregate"),), environment="pg-instructblip", python="3.11", min_vram_bytes=40 * GIB, automatic=False, config={"device": "cuda"}),
@@ -388,8 +446,8 @@ ROLES = {
         "silero.vad": _candidate("silero.vad", "silero.activity", ("torch>=2.2,<3",), ("cpu",), 512, 0, 1200, ESTIMATED, "MIT", "scripts/local_models.py pinned; target-host real-audio acceptance unmeasured", (_weight("silero_vad.jit", SILERO_URL, "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720", 2272526, "pinned source bytes"),), environment="silero-vad"),
     }, _defaults("silero.vad")),
     "audio.asr": Role("audio.asr", "Speech transcription", {
-        "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}),
-        "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("vllm==0.14.0", "transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "VERIFY.md: real-audio success, 34.4 ms/20 ms block, 133.9 ms p95", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}),
+        "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", bundle=True, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}),
+        "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("qwen-asr==0.0.6", "vllm==0.14.0", "transformers==4.57.6", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "not run with these pins (VERIFY.md's real-audio result predates them)", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}),
         "moonshine.tiny": _candidate("moonshine.tiny", "moonshine_voice.native", ("moonshine-voice==0.0.45", "numpy>=1.24"), ("cpu",), 512, 0, 500, ESTIMATED, "MIT", "GAMST adapter implemented; real-weight acceptance pending", (_weight("moonshine-v2-tiny-streaming-en", "https://github.com/moonshine-ai/moonshine-v2/tree/49bc3af5bb0d767d5156fb579fa5f9853b559bf3", None, 200 * MIB),), environment="moonshine", automatic=False),
     }, _defaults("faster_whisper.small", "qwen3.asr_1_7b"), ("audio.vad",)),
     "audio.events": Role("audio.events", "Environmental audio events", {
@@ -397,7 +455,7 @@ ROLES = {
         "ced.base": _candidate("ced.base", "ced.onnx", ("onnxruntime==1.23.2", "torch==2.8.0", "torchaudio==2.8.0", "numpy>=1.24"), ("cpu",), 2048, 0, 2500, CPU_MEASURED, "GPL-3.0 upstream CED code; weights/data/runtime terms separate", "VERIFY.md: real-audio success; top-2 labels matched PyTorch reference; pinned 527-label JSON still required", (_weight("model.onnx", HF + "/mispeech/ced-base/resolve/db3e14a8db4c21b56b165261c39649741a900e7f/model.onnx", "1cb33c4300b6c52ae099a5af72058982e673ec79862855961b8b8c10eeaba74c", 400 * MIB),), environment="ced-base", automatic=False),
     }, _defaults("yamnet")),
     "audio.diarization": Role("audio.diarization", "Streaming speaker activity slots, not identity", {
-        "nemotron3": _candidate("nemotron3", "nemotron3.diarization", ("transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"), ("cpu", "cuda"), 4096, 1100, 3500, {"ram": "estimated", "vram": "VERIFY.md measured 1100 MiB", "disk": "estimated"}, "OpenMDW-1.1 declared; redistribution review required", "VERIFY.md: real-audio success, 1.5 ms/80 ms block, 13.8 ms p95", tuple(_weight(name, HF + "/nvidia/Nemotron-3-Diarization/resolve/" + DIAR_REV + "/" + name, sha, size, "GAMST diarization.py pinned bytes") for name, size, sha in (("config.json", 1458, "dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873"), ("processor_config.json", 623, "91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e"), ("model.safetensors", 396954592, "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6"))), environment="nemotron3", python="3.11"),
+        "nemotron3": _candidate("nemotron3", "nemotron3.diarization", ("transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"), ("cpu", "cuda"), 4096, 1100, 3500, {"ram": "estimated", "vram": "VERIFY.md measured 1100 MiB", "disk": "estimated"}, "OpenMDW-1.1 declared; redistribution review required", "VERIFY.md: real-audio success, 1.5 ms/80 ms block, 13.8 ms p95", tuple(_weight(name, HF + "/nvidia/Nemotron-3-Diarization/resolve/" + DIAR_REV + "/" + name, sha, size, "GAMST diarization.py pinned bytes") for name, size, sha in (("config.json", 1458, "dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873"), ("processor_config.json", 623, "91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e"), ("model.safetensors", 396954592, "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6"))), environment="nemotron3", python="3.11", bundle=True),
     }, _defaults("nemotron3"), ("audio.vad",)),
     "audio.prosody": Role("audio.prosody", "Pitch/energy/rate DSP features", {
         "dsp": _candidate("dsp", "audio.prosody", ("numpy>=1.24",), ("cpu",), 128, 0, 50, ESTIMATED, "Apache-2.0", "Deterministic GAMST DSP; not emotion recognition", environment="audio-dsp"),
@@ -405,6 +463,26 @@ ROLES = {
     "audio.vocal_expression": Role("audio.vocal_expression", "Vocal-expression classification estimates", {
         "emotion2vec.seed": _candidate("emotion2vec.seed", "emotion2vec.seed.onnx", ("onnxruntime==1.23.2", "numpy>=1.24"), ("cpu",), 4096, 0, 1500, ESTIMATED, "other/model-license; redistribution/commercial terms unverified", "GAMST export and ORT adapter; trained export/reference parity pending", (_weight("model.pt", HF + "/emotion2vec/emotion2vec_plus_seed/resolve/7be9a30d52bdc793cc24e6f7d25358d6648927c1/model.pt", "327e861049c7105a3f8589edfd16543a7cdc0c1926f1b64de975d98e0650cdd3", 1118245358, "GAMST vocal-expression.md pinned bytes"),), environment="emotion2vec", automatic=False),
     }, _defaults("emotion2vec.seed"), ("audio.vad",)),
+    "audio.speaker_verify": Role("audio.speaker_verify", "Is this speech the enrolled person's voice (needs a consent record)", {
+        "sherpa.campplus_zh_en": _candidate("sherpa.campplus_zh_en", "speaker.embedding", ("sherpa-onnx==2.0.3", "numpy>=1.24"), ("cpu",), 512, 0, 60, ESTIMATED, "Apache-2.0 code (3D-Speaker, sherpa-onnx); weight licence on ModelScope not checked", "Run on macOS Korean TTS voices only (tests/test_speaker_verify.py, 2026-11-25); not measured on people", (_weight("3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx", SHERPA_SV + "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx", "53cab20ba8f2eb2f6e2d89ecc18e88ef3222169b61b4419cbc13666744a4574b", 28281165, "pinned source bytes"),), environment="sherpa-onnx", config={"backend": "sherpa-onnx"}),
+        "wespeaker.w2vbert2_mfa_vox": _candidate("wespeaker.w2vbert2_mfa_vox", "speaker.embedding", (WESPEAKER, "transformers", "peft", "torch", "torchaudio"), ("cpu", "mps", "cuda"), 8192, 4096, 6000, ESTIMATED, "Apache-2.0 code; VoxCeleb weights CC BY 4.0 per WeSpeaker; backbone MIT", "Adapter written from source; not run. Save the .pt as avg_model.pt with config_LM.yaml as config.yaml, and point w2vbert_args.model_name at the local backbone", (_weight("w2v_bert2_voxceleb_reproduced_LM.pt", W2VBERT_SV + "w2v_bert2_voxceleb_reproduced_LM.pt", "26d3ac4a724af599d89e6f67d27fc773596e7693bce1055fb4ef9e19607527ca", 2353130955, "publisher metadata"), W2VBERT_BACKBONE), environment="wespeaker", automatic=False, config={"backend": "wespeaker"}),
+        "wespeaker.w2vbert2_mfa_voxblink2": _candidate("wespeaker.w2vbert2_mfa_voxblink2", "speaker.embedding", (WESPEAKER, "transformers", "peft", "torch", "torchaudio"), ("cpu", "mps", "cuda"), 8192, 4096, 6000, ESTIMATED, "OPT-IN: VoxBlink2 data licence not confirmed, treat as non-commercial", "Adapter written from source; not run. Prepare like w2vbert2_mfa_vox", (_weight("w2v_bert2_voxblink_official_LM.pth", W2VBERT_SV + "w2v_bert2_voxblink_official_LM.pth", "4c9ace77c99cc9998f66ce85f8d20bfd2bbdd8eba075b1a2e17456cdad4d1e43", 2346932921, "publisher metadata"), W2VBERT_BACKBONE), environment="wespeaker", automatic=False, config={"backend": "wespeaker"}),
+    }, _defaults("sherpa.campplus_zh_en")),
+    "audio.target_speech": Role("audio.target_speech", "One enrolled person's voice separated from a mixture (needs a consent record)", {
+        "wesep.bsrnn_ecapa": _candidate("wesep.bsrnn_ecapa", "target_speech.local", ("wesep @ git+https://github.com/wenet-e2e/wesep.git@4c899c49c300a83f9cfd0d06a4acde7894abae0c",), ("cpu", "cuda"), 4096, 0, 1000, ESTIMATED, "Apache-2.0 code; weight licence not stated", "Adapter written from source; not run. Extract the tar into a model directory", (_weight("bsrnn_ecapa_vox1.tar.gz", "https://www.modelscope.cn/datasets/wenet/wesep_pretrained_models/resolve/master/bsrnn_ecapa_vox1.tar.gz", None, 261570027, "Content-Length; sha256 not published as such"),), environment="wesep", automatic=False, config={"backend": "wesep"}),
+        "usef.tfgridnet": _candidate("usef.tfgridnet", "target_speech.local", ("torch", "torchaudio", "librosa", "hyperpyyaml", "python_speech_features"), ("cpu", "cuda"), 4096, 0, 1000, ESTIMATED, "OPT-IN: CC BY-NC 4.0, non-commercial only (allow_noncommercial)", "Adapter written from source; not run. 8 kHz model", (_weight("temp_best.pth.tar", HF + "/ZBang/USEF-TSE/resolve/6e2bd14dd3a2d4fcb6abd246cce5f91538c08dbf/chkpt/USEF-TFGridNet/wham!/temp_best.pth.tar", "74737c8e1fd41aaadd05393442328b909bb1891bc475c999ec1e7e1c973e0eb7", 188051307, "publisher metadata"),), environment="usef-tse", automatic=False, source={"url": "https://github.com/ZBang/USEF-TSE", "revision": "bdaeb3609735b3a9dbedd1b0625343826f2cb5fe"}, config={"backend": "usef"}),
+        "sam_audio.span": _candidate("sam_audio.span", "target_speech.local", (), ("cpu", "cuda"), 8192, 0, 0, ESTIMATED, "SAM License; gated weights", "Reuses the existing SAM-Audio loader with speaker-match spans; not run", environment="sam-audio", automatic=False, config={"backend": "sam-span"}),
+    }, _defaults("wesep.bsrnn_ecapa"), ("audio.speaker_verify",)),
+    "audio.word_alignment": Role("audio.word_alignment", "Word times for final transcripts", {
+        "qwen3.forced_aligner_0_6b": _candidate("qwen3.forced_aligner_0_6b", "qwen3.forced_aligner", ("qwen-asr==0.0.6",), ("cuda",), 8192, 4096, 4000, ESTIMATED, "Apache-2.0", "Adapter written from source; not run. Needs the whole snapshot c7cbfc2048c462b0d63a45797104fc9db3ad62b7", (_weight("model.safetensors", HF + "/Qwen/Qwen3-ForcedAligner-0.6B/resolve/c7cbfc2048c462b0d63a45797104fc9db3ad62b7/model.safetensors", "47831d0e82f96b20e9034dba01a075ee06436654719f6a68289e49f1b65ce0e7", 1835544544, "publisher metadata"),), environment="qwen-aligner", automatic=False, config={}),
+    }, _defaults("qwen3.forced_aligner_0_6b"), ("audio.asr",)),
+    "vision.face_identity": Role("vision.face_identity", "Is this visible face the enrolled person (needs a consent record)", {
+        "lvface.t": _lvface("T", "bf8da0e1e93c432d9a1d874a9ba0990f5859f970e8864b3990f2f33d11f9cdb3", 76653813, "Not run"),
+        "lvface.b": _lvface("B", "9d834ed8e927fd35b9123b2bf97c40aad05785b1f9ecfb1c4c1f6242d38d1382", 455533594, "Not run; same adapter as lvface.t"),
+    }, _defaults("lvface.b")),
+    "vision.body_identity": Role("vision.body_identity", "Short-horizon body match of the enrolled person (needs a consent record)", {
+        "solider.swin_b_msmt17": _candidate("solider.swin_b_msmt17", "body.embedding", ("torch>=2.2", "torchvision", "yacs", "opencv-python>=4.8,<5", "numpy>=1.24"), ("cuda",), 4096, 2048, 2000, ESTIMATED, "MIT (SOLIDER-REID), Apache-2.0 (SOLIDER); MSMT17 data terms require review", "Adapter written from source; not run. Checkpoint is on Google Drive only, no published digest", (_weight("transformer_120.pth", "https://drive.google.com/file/d/1Y-RFAYdT56vnMjwxH1Ym3DVhZzZuMQZs/view", None, 0, "size unknown"),), environment="solider", automatic=False, source={"url": "https://github.com/tinyvision/SOLIDER-REID", "revision": "8c08e1c3255e8e1e51e006bf189e52cc57b009ed"}, config={}),
+    }, _defaults("solider.swin_b_msmt17"), ("vision.pose",)),
     "physio.rppg": Role("physio.rppg", "Camera pulse estimate; not a medical measurement", {
         "factorizephys": _candidate("factorizephys", "factorizephys.local", ("torch==2.8.0", "numpy>=1.24", "opencv-python>=4.8,<5", "scipy>=1.10"), ("cpu", "mps", "cuda"), 4096, 1104, 3500, {"ram": "estimated", "vram": "VERIFY.md measured 1104 MiB", "disk": "estimated"}, "rPPG-Toolbox Responsible-AI-License", "VERIFY.md: checkpoint/graph loaded; pulse output not confirmed", (_weight("UBFC-rPPG_FactorizePhys_FSAM_Res.pth", "https://github.com/ubicomplab/rPPG-Toolbox/raw/b7500b848f84ad7f86e277b4612563b69f4f88f9/final_model_release/UBFC-rPPG_FactorizePhys_FSAM_Res.pth", "03cb8590e0b1f0fe669534d9708520fed0b20e1fe28e1b57a56a2504b4a246f6", 100 * MIB),), environment="factorizephys", source={"url": "https://github.com/ubicomplab/rPPG-Toolbox.git", "revision": "b7500b848f84ad7f86e277b4612563b69f4f88f9"}),
     }, _defaults("factorizephys"), ("vision.face",)),

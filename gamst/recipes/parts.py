@@ -100,9 +100,20 @@ async def _mediapipe_pose(options, context):
     return dict(module=PoseWorkerPlugin(worker, tracker=options.get('tracker', 'iou')))
 
 
+async def _mediapipe_graph(options, context):
+    from ..mediapipe_graph import MediaPipeGraphModule
+    config = context['installed'](options)['config']
+    return dict(module=MediaPipeGraphModule.from_manifest(
+        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets')))
+
+
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
-    module = PoseChannels(source=options.get('source', 'mediapipe_pose'))
+    arguments = {}
+    if options.get('source') == 'sapiens2':
+        from ..providers.sapiens2_pose import GOLIATH_BODY
+        arguments = dict(mapping=GOLIATH_BODY, min_visibility=.3)   # the official demo's --kpt-thr
+    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **arguments)
     return dict(module=module, spec=module.spec)
 
 
@@ -140,7 +151,9 @@ async def _exemplar(options, context):
     module = ExemplarEvents(reference=options.get('reference', 'exemplar'), mode=options.get('mode', 'hold'),
                             enter=float(context.get('enter') or options.get('enter', .12)),
                             exit=float(context.get('exit') or options.get('exit', .18)),
-                            min_hold_ms=int(options.get('min_hold_ms', 200)))
+                            min_hold_ms=int(options.get('min_hold_ms', 200)),
+                            modality=options.get('modality', 'video'),
+                            capability_id=options.get('capability_id', 'temporal.exemplar_events'))
     return dict(module=module, spec=module.spec)
 
 
@@ -223,6 +236,8 @@ PARTS = {
     'yoloe': Part('module', role='vision.detect', candidate='yoloe.26s', build=_yoloe),
     'efficienttam': Part('module', role='vision.video_segmentation', candidate='efficienttam.ti_512'),
     'mediapipe-pose': Part('module', role='vision.pose', candidate='mediapipe.pose_full', build=_mediapipe_pose),
+    'mediapipe-graph': Part('module', role='vision.mediapipe_graph', candidate='graph.holistic_cpu',
+                            build=_mediapipe_graph),
     'pose-channels': Part('module', build=_pose_channels),
     'repetition': Part('module', build=_repetition, sampling=movement_sampling),
     'exemplar': Part('module', build=_exemplar, sampling=movement_sampling),
@@ -232,3 +247,7 @@ PARTS = {
     'rotation-view': Part('view'),
     'halo-coin': Part('view', role='view.hud', candidate='pillow'),
 }
+
+from .perception_parts import parts as _perception_parts  # noqa: E402  (needs Part)
+
+PARTS.update(_perception_parts(Part))

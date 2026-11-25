@@ -131,6 +131,7 @@ class PoseChannels:
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
 
     def process(self, frame):
+        # A pose list (``scene.poses``, ``scene.target_poses``) or a record with ``poses`` (a worker's value).
         value = frame.data
         poses = value if isinstance(value, list) else (value.get('poses') or []) if isinstance(value, dict) else []
         summary = value.get('summary') if isinstance(value, dict) else None
