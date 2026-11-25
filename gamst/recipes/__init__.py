@@ -565,6 +565,8 @@ def open_inputs(recipe, args, inputs):
             kind = 'gamst240-take' if item['use'] == 'gamst240' and kind == 'take' else kind
             if clock is not None:
                 options['clock'] = clock
+            if kind == 'camera' and getattr(args, 'camera_max_side', None):
+                options['max_side'] = args.camera_max_side
             source = sources[item['id']] = open_source(kind, None if value is True else value, **options)
             if clock is not None:
                 if kind not in ('video', 'sound'):
@@ -948,6 +950,8 @@ def _source_options(parser, *, clips=False):
                         help='the source of one input by name, e.g. left=camera:1 or sound=audio:room.wav')
     parser.add_argument('--offset-ms', action='append', metavar='ID=MS',
                         help="a measured correction added to an input's capture times (default 0)")
+    parser.add_argument('--camera-max-side', type=int, metavar='PX',
+                        help='shrink camera frames to at most this many pixels on the longer side (less to compute)')
     parser.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
     parser.add_argument('--frames', type=int, help='stop after this many frames (several inputs: of the video)')
     parser.add_argument('--models', help='weight root or an existing flat weights directory (default: the setup profile)')

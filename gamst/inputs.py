@@ -135,14 +135,17 @@ class CameraInput:
 
     Every frame the driver delivers is read and waits for the consumer (up to ``MAX_WAITING_BYTES``;
     beyond that the oldest is given up and counted in ``missed``). Frames the camera or its driver
-    dropped before the read are not visible here and are not counted.
+    dropped before the read are not visible here and are not counted. ``max_side`` shrinks larger frames
+    (aspect ratio kept) as they are read, so every module after it sees the smaller ones.
     """
     modality = 'video'
     live = True
     MAX_WAITING_BYTES = 256 * 1024 * 1024
 
-    def __init__(self, index=0, *, max_frames=None):
-        self.index, self.max_frames, self.missed = index, max_frames, 0
+    def __init__(self, index=0, *, max_frames=None, max_side=None):
+        if max_side is not None and (type(max_side) is not int or not 160 <= max_side <= 8192):
+            raise ValueError('max_side must be 160..8192 pixels')
+        self.index, self.max_frames, self.max_side, self.missed = index, max_frames, max_side, 0
         self._cap = self._reader = None
 
     async def frames(self):
@@ -155,7 +158,13 @@ class CameraInput:
 
         def read():
             ok, frame = cap.read()
-            return ((base + round(1000 * (time.monotonic() - start)), frame), frame.nbytes) if ok else None
+            if not ok:
+                return None
+            stamp = base + round(1000 * (time.monotonic() - start))
+            scale = self.max_side / max(frame.shape[:2]) if self.max_side else 1
+            if scale < 1:
+                frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            return (stamp, frame), frame.nbytes
 
         self._reader = _DeviceReader(read, self.MAX_WAITING_BYTES, f'gamst-camera-{self.index}')
         try:
