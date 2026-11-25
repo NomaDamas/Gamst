@@ -27,8 +27,8 @@ def capability(profile, config):
     if profile == 'streamingvlm.local':
         from .providers.streaming_semantic import StreamingSemanticContext
         required={'endpoint','model','revision'}
-        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env','request_options','max_tokens'}:
-            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env/request_options/max_tokens')
+        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env','request_options','max_tokens','allow_remote'}:
+            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env/request_options/max_tokens/allow_remote')
         return StreamingSemanticContext.capability(**config)
     if profile == 'food.segformer_b0':
         from .providers.food import FoodContext

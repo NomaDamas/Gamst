@@ -34,10 +34,18 @@ class OpenAIStreamingBackend:
     """
 
     def __init__(self, endpoint: str, model: str, revision: str, api_key_env: str | None = None,
-                 request_options: dict | None = None, max_tokens: int = 256):
+                 request_options: dict | None = None, max_tokens: int = 256, allow_remote: bool = False):
+        """``allow_remote=True`` is the owner's explicit opt-in to a hosted endpoint (frames leave the
+        machine; it costs money): it must be HTTPS and ``api_key_env`` must name a set variable."""
         parsed = urlparse(endpoint)
         if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
-            raise ValueError("streaming VLM endpoint must be local")
+            if allow_remote is not True:
+                raise ValueError("streaming VLM endpoint must be local (pass allow_remote=True for a hosted one)")
+            if parsed.scheme != "https":
+                raise ValueError("a hosted VLM endpoint must use https")
+            if not api_key_env or not os.environ.get(api_key_env):
+                raise ValueError("a hosted VLM endpoint needs api_key_env naming a set environment variable")
+        self.remote = parsed.hostname not in ("127.0.0.1", "localhost", "::1")
         self.endpoint = endpoint.rstrip("/")
         if not self.endpoint.endswith("/chat/completions"):
             self.endpoint += "/chat/completions"

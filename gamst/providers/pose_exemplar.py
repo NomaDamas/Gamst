@@ -84,6 +84,18 @@ def distance(a, mask_a, b, mask_b):
     return sum(pairs) / len(pairs) if len(pairs) >= 4 else None
 
 
+def _landmarks(pose):
+    """``landmarks`` [{x, y, visibility}] or ``keypoints`` [[x, y, score], ...] (normalized image units)."""
+    if not isinstance(pose, dict):
+        return None
+    if pose.get('landmarks'):
+        return pose['landmarks']
+    keypoints = pose.get('keypoints')
+    if isinstance(keypoints, list) and keypoints:
+        return [dict(x=point[0], y=point[1], visibility=point[2] if len(point) > 2 else 1.) for point in keypoints]
+    return None
+
+
 class PoseChannels:
     """Pose record (``scene.poses``) -> the largest visible person's feature vector."""
 
@@ -96,10 +108,12 @@ class PoseChannels:
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
 
     def process(self, frame):
-        poses = frame.data if isinstance(frame.data, list) else []
+        # A pose list (``scene.poses``, ``scene.target_poses``) or a record with ``poses`` (Sapiens2).
+        poses = frame.data if isinstance(frame.data, list) else \
+            (frame.data.get('poses') or []) if isinstance(frame.data, dict) else []
         best = None
         for index, pose in enumerate(poses):
-            landmarks = pose.get('landmarks') if isinstance(pose, dict) else None
+            landmarks = _landmarks(pose)
             if not landmarks:
                 continue
             values, mask = pose_channels(landmarks, self.mapping, min_visibility=self.min_visibility)
