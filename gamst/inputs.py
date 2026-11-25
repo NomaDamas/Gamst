@@ -158,8 +158,8 @@ class CameraInput:
 
         def read():
             ok, frame = cap.read()
-            if not ok:
-                return None
+            if not ok:      # a camera has no end: it was unplugged, or the system took it away
+                raise RuntimeError(f'camera {self.index} stopped giving frames')
             stamp = base + round(1000 * (time.monotonic() - start))
             scale = self.max_side / max(frame.shape[:2]) if self.max_side else 1
             if scale < 1:
@@ -179,6 +179,10 @@ class CameraInput:
                     break
         finally:
             self.close()
+
+    def slow_hint(self):
+        return f"{'a smaller ' if self.max_side else ''}--camera-max-side PX shrinks camera frames as they are read" + (
+            f' (now {self.max_side})' if self.max_side else '')
 
     def status(self):
         reader = self._reader
@@ -624,6 +628,12 @@ class IPhone240Input:
         if self._listener is not None:
             self._listener.close()
             self._listener = None
+
+    def reopen(self):
+        """After a failure: let go of the port, so that ``frames()`` can listen again."""
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            listener.close()
 
     def close(self):
         self.stop()

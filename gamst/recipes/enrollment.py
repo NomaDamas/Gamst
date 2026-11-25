@@ -128,7 +128,7 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
             return True
 
         try:
-            await pipeline.run(on_frame=on_frame)
+            await pipeline.run(on_frame=on_frame, stop_on_failure=True)
         finally:
             await pipeline.close()
             await _close(face)

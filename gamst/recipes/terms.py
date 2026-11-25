@@ -41,7 +41,7 @@ async def heard(recipe, args, clip):
         pipeline = await build_pipeline(dict(recipe, references=[]), run, human, sources={place['id']: source},
                                         modules=[item], lanes=False)
         try:
-            await pipeline.run()
+            await pipeline.run(stop_on_failure=True)
             records = human.store.query('local-user', kind='observation.signal', limit=1000, registered_only=True,
                                         capability_id=pipeline.modules[item['name']]['spec'].id)
         except (RuntimeError, OSError, ValueError) as error:

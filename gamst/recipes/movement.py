@@ -140,7 +140,7 @@ async def demonstration(recipe, args, clip):
             return True
 
         try:
-            await pipeline.run(on_frame=on_frame)
+            await pipeline.run(on_frame=on_frame, stop_on_failure=True)
         finally:
             await pipeline.close()
     if 'too_long' in seen:
@@ -485,7 +485,7 @@ async def find_in(recipe, args, kind, path):
             return True
 
         try:
-            keep(await pipeline.run(on_frame=on_frame) or [])
+            keep(await pipeline.run(on_frame=on_frame, stop_on_failure=True) or [])
             movement = pipeline.modules[item['name']]['module'].status()
             lost = pipeline.lost(capability)
         finally:
