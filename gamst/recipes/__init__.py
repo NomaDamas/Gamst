@@ -63,6 +63,7 @@ from pathlib import Path
 import platform
 import re
 import sys
+import time
 
 from ..demos import rotation as demo
 from .movement import PROPOSALS
@@ -70,7 +71,7 @@ from .parts import PARTS
 
 RECIPES = Path(__file__).resolve().parent
 SOURCES_BY_INPUT = {'camera': ('camera', 'video', 'take'), 'gamst240': ('iphone', 'take'),
-                    'microphone': ('microphone', 'audio', 'video'), 'sensor': ('sensor',)}
+                    'microphone': ('microphone', 'audio', 'video'), 'sensor': ('sensor',), 'plugin': ('plugin',)}
 MODALITY_BY_INPUT = {'camera': 'video', 'video': 'video', 'take': 'video', 'microphone': 'audio', 'audio': 'audio'}
 SOURCES = ('iphone', 'take', 'camera', 'video', 'audio', 'microphone', 'sensor')     # command-line options
 LIVE = ('iphone', 'camera', 'microphone')
@@ -137,7 +138,20 @@ def choose(recipe, include=(), exclude=()):
 
 def input_modality(item):
     """The modality of an input's frames, or None when only its own recipe's modules read them."""
+    if item['use'] == 'plugin':
+        return item.get('modality')
     return item.get('modality', 'imu') if item['use'] == 'sensor' else MODALITY_BY_INPUT.get(item['use'])
+
+
+def selected_plugin(item, plugins):
+    """The entry point a plugin item names, if the owner selected it; a recipe file alone never runs installed code."""
+    name = item.get('plugin')
+    if not isinstance(name, str) or not name:
+        raise SystemExit(f"{item.get('name') or item.get('id')!r}: a plugin item names its entry point: \"plugin\": NAME")
+    if name not in (plugins or ()):
+        raise SystemExit(f'plugin {name} is code installed on this computer, run as it is with your rights (trusted code); '
+                         f'if you trust it: --plugin {name}')
+    return name
 
 
 def add_role(recipe, wanted):
@@ -186,19 +200,29 @@ def _check_role(path, recipe, item):
             raise SystemExit(f"{role.id} reads {role.modality}; input {source!r} is {input_modality(entry) or entry['use']}")
 
 
-def load(name, include=(), exclude=(), with_roles=()):
-    """A built-in recipe by name, or a recipe file path; validated, optional modules resolved."""
+def read_recipe(name):
+    """(path, content) of a built-in recipe by name, or of a recipe file path; nothing chosen yet."""
     path = Path(name)
     if not (path.suffix == '.json' and path.is_file()):
         path = RECIPES / f'{name}.json'
         if not path.is_file():
             raise SystemExit(f'unknown recipe {name!r}; built-in: {", ".join(names())}')
-    recipe = choose(json.loads(path.read_text()), include, exclude)
+    return path, json.loads(path.read_text())
+
+
+def load(name, include=(), exclude=(), with_roles=(), keep=None):
+    """A built-in recipe by name, or a recipe file path; validated, optional modules resolved.
+
+    ``keep(input item)``: an input that stays although nothing reads it (a camera that is only shown).
+    """
+    path, raw = read_recipe(name)
+    recipe = choose(raw, include, exclude)
     for wanted in with_roles:
         recipe = add_role(recipe, wanted)
     inputs = recipe.get('inputs') or []
     if len(inputs) > 1:     # nothing is opened that nobody reads
-        inputs = inputs_of(recipe, recipe['modules'])
+        read = inputs_of(recipe, recipe['modules'])
+        inputs = [item for item in inputs if item in read or keep is not None and keep(item)]
         recipe = dict(recipe, inputs=inputs)
         if not inputs:
             raise SystemExit(f"{recipe['name']}: nothing that is left reads an input")
@@ -206,8 +230,13 @@ def load(name, include=(), exclude=(), with_roles=()):
         raise ValueError(f'{path}: a recipe has one or more inputs with distinct ids')
     for item in inputs:
         part = PARTS.get(item.get('use'))
-        if part is None or part.kind != 'input':
+        if part is None or part.kind not in ('input', 'plugin'):
             raise ValueError(f'{path}: unknown input part {item.get("use")!r}')
+        if item['use'] == 'plugin':
+            from ..capabilities import MODALITIES
+            if item.get('modality') not in MODALITIES:
+                raise ValueError(f"{path}: plugin input {item['id']!r} declares its modality")
+            item.setdefault('sources', ['plugin'])
         supported = SOURCES_BY_INPUT.get(item['use'], (item['use'],))
         if not item.get('sources') or set(item['sources']) - set(supported):
             raise ValueError(f"{path}: input {item['use']!r} reads from {supported}")
@@ -219,7 +248,7 @@ def load(name, include=(), exclude=(), with_roles=()):
             raise ValueError(f'{path}: reference kind must be one of {REFERENCE_KINDS}')
     for item in recipe.get('modules', ()):
         part = PARTS.get(item.get('use'))
-        if part is None or part.kind != 'module':
+        if part is None or part.kind not in ('module', 'plugin'):
             raise ValueError(f'{path}: unknown part {item.get("use")!r}')
         if item.get('in') and item['in'] not in {other['name'] for other in recipe['modules']}:
             raise ValueError(f"{path}: module {item['name']!r} runs in {item['in']!r}, which is not a module")
@@ -453,6 +482,12 @@ def _leave_out(recipe, item):
     return ', or leave out what reads it: ' + ' '.join(f'--without {name}' for name in parts)
 
 
+def _unread(recipe, option):
+    return f"{recipe['name']} reads nothing from --{option} here: drop it" + (
+        ' (or run without --headless to see it, or with --serve so that an agent can add what reads it)' if option == 'camera'
+        else ' (or add --serve, so that an agent can add what reads it)' if option in LIVE else '')
+
+
 def _sources(recipe, args, inputs):
     """[(input item, source name, value)]: where each input is read from."""
     given, named = _given(args), _pairs(getattr(args, 'input', None), '--input')
@@ -462,7 +497,9 @@ def _sources(recipe, args, inputs):
                          f"{', '.join(item['id'] for item in inputs)}")
     result, used = [], set()
     for item in inputs:
-        if item['id'] in named:
+        if item['use'] == 'plugin':
+            chosen, value = 'plugin', item.get('plugin')
+        elif item['id'] in named:
             chosen, _, value = named[item['id']].partition(':')
             value = True if chosen == 'microphone' else int(value or 0) if chosen == 'camera' else value
             if value == '':
@@ -489,7 +526,7 @@ def _sources(recipe, args, inputs):
     if len(inputs) > 1:
         unused = [name for name in given if name not in used]
         if unused:
-            raise SystemExit(f"{recipe['name']} reads nothing from --{unused[0]} here")
+            raise SystemExit(_unread(recipe, unused[0]))
         places = [(input_modality(item), chosen, str(value)) for item, chosen, value in result]
         twice = next((place for place in places if places.count(place) > 1), None)
         if twice is not None:
@@ -518,7 +555,19 @@ def open_inputs(recipe, args, inputs):
     from ..inputs import RecordedClock, media_streams, open_source
     chosen = _sources(recipe, args, inputs)
     offsets, stated = _offsets(recipe, args, inputs)
-    live = [kind in LIVE for _, kind, _ in chosen]
+    given = {}
+    for item, kind, value in chosen:
+        if kind == 'plugin':
+            from ..extensions import load_input
+            from ..inputs import PluginInput
+            selected_plugin(item, getattr(args, 'plugins', None))
+            try:
+                given[item['id']] = PluginInput(value, load_input(value, **(item.get('options') or {})), item['modality'])
+            except (ValueError, TypeError, ImportError, RuntimeError, OSError) as error:
+                raise SystemExit(f"input {item['id']}: {error}") from error
+            if not given[item['id']].live and len(chosen) > 1:
+                raise SystemExit(f"input {item['id']}: a recorded plugin input has no clock shared with others; run it alone")
+    live = [given[item['id']].live if item['id'] in given else kind in LIVE for item, kind, _ in chosen]
     if any(live) and not all(live):
         raise SystemExit('a live input and a recording have no common capture clock; record both, or run both live')
     if any(live) and any(abs(value) > MAX_LIVE_OFFSET_MS for value in offsets.values()):
@@ -541,6 +590,9 @@ def open_inputs(recipe, args, inputs):
                                  f'they relate: --offset-ms {unplaced[0]}=MS (0: they start together)')
     try:
         for item, kind, value in chosen:
+            if item['id'] in given:
+                sources[item['id']] = given[item['id']]
+                continue
             options = {}
             if kind == 'video' and item['use'] == 'microphone':
                 kind = 'sound'
@@ -707,6 +759,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
+                   remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    record_dir=getattr(args, 'record_dir', None), replay=replay,
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
@@ -715,20 +768,34 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
     for item in modules:
         if item.get('in'):
             continue  # runs inside the module it names (its build reads context['stages'])
-        build = PARTS[item['use']].build
-        if build is None:
-            raise SystemExit(f"part {item['use']!r} runs inside the {recipe['view']} view")
         try:
-            built = await build(item, context)
-            pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
-                                every_ms=built.get('every_ms'),
-                                queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
-                                optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
-                                enabled=item.get('enabled', True))
+            built = await build_module(item, context)
+            pipeline.add_module(item['name'], built['module'], **module_options(item, built, lanes=lanes))
         except BaseException:
             await pipeline.close()   # workers of the modules already built
             raise
+    pipeline.recipe_context = context    # what a module added while it runs is built with
     return pipeline
+
+
+async def build_module(item, context):
+    """What the part's builder makes of one module item; a worker that does not start is named with its reason."""
+    build = PARTS[item['use']].build
+    if build is None:
+        raise SystemExit(f"part {item['use']!r} runs inside the {context['recipe']['view']} view")
+    try:
+        return await build(item, context)
+    except (RuntimeError, OSError, asyncio.TimeoutError) as error:
+        from ..redact import public_text
+        raise SystemExit(f"{item['name']} did not start: {public_text(error)}") from error
+
+
+def module_options(item, built, *, lanes=True):
+    """How the Pipeline runs a built module item (``Pipeline.add_module``)."""
+    return dict(consumes=item['consumes'], spec=built.get('spec'), every_ms=built.get('every_ms'),
+                queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
+                optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
+                enabled=item.get('enabled', True))
 
 
 def _view_class(name):
@@ -779,8 +846,10 @@ class _LiveMCP:
 
 async def run_pipeline(recipe, args):
     from .. import Gamst
-    from ..counting import MAX_SCAN, count_events
+    from ..counting import MAX_SCAN, count_events, current_instructions, is_current, newest_instructions
     from ..engine import timestamp
+    from .instructions import Instructions
+    recipe = dict(recipe, records=list(recipe.get('records', ())))     # an instruction may add one
     report = dict(recipe=recipe['name'], frames=0)
     inputs, first = recipe['inputs'], recipe['inputs'][0]['id']    # several: "frames" are those of the first input
     if len(inputs) > 1:
@@ -807,8 +876,19 @@ async def run_pipeline(recipe, args):
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
         pipeline = await build_pipeline(recipe, args, human)
-        view, idle, live = None, None, None
+        view, idle, live, warned = None, None, None, dict(at=0., seen=set())
+        pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
+
+        def added(capability):      # an instruction added a counting module
+            wanted.add(capability)
+            if capability not in recipe['records']:
+                recipe['records'].append(capability)
+            if view is not None:
+                view.capabilities = tuple(dict.fromkeys((*view.capabilities, capability)))
+
         try:
+            human.instructions = Instructions(recipe, args, pipeline, folders=getattr(args, 'clips', None) or (),
+                                              proposals=getattr(args, 'proposals', None), on_capability=added)
             if getattr(args, 'serve', None):
                 live = _LiveMCP(human, args.serve, getattr(args, 'proposals', None))
                 await live.start()
@@ -830,6 +910,12 @@ async def run_pipeline(recipe, args):
             report.setdefault('start_ms', started)
             report['frames'] += input_id == first
             keep(records)
+            if time.monotonic() - warned['at'] > 5:
+                warned['at'] = time.monotonic()
+                for warning in pipeline.warnings():
+                    if (warning['lane'], warning['input']) not in warned['seen']:
+                        warned['seen'].add((warning['lane'], warning['input']))
+                        print(f"warning: {warning['text']}", file=sys.stderr, flush=True)
             shown = await view.update(input_id, frame, records)
             if len(inputs) > 1 and args_frames and report['input_frames'][counted] >= args_frames:
                 return False
@@ -838,7 +924,7 @@ async def run_pipeline(recipe, args):
         if callable(getattr(view, 'idle', None)):
             idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
         try:
-            keep(await pipeline.run(on_frame=on_frame) or [])
+            keep(await pipeline.run(on_frame=on_frame, stop_on_failure=bool(getattr(args, 'stop_on_failure', False))) or [])
             now = timestamp()
             for capability in wanted:   # plus the records of modules that commit their own
                 keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
@@ -847,16 +933,28 @@ async def run_pipeline(recipe, args):
             rows = sorted(committed.values(), key=lambda record: record['timestamp_ms'])
             for capability in recipe.get('records', ()):
                 own = [row for row in rows if row['observation']['capability']['id'] == capability]
-                counted = count_events(own, group_by='@event', max_evidence=100)
+                changes = [change for _, change in human.instruction_changes() if change['start_ms'] >= report.get('start_ms', 0)]
+                counted = count_events(own, group_by='@event', max_evidence=100, current=current_instructions(
+                    [change for change in changes if capability in change['capabilities']]))
                 report['counts'][capability] = counted['groups']
+                if counted.get('other_instructions'):   # what was looked for before: never added to the count
+                    report.setdefault('other_instructions', {})[capability] = counted['other_instructions']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
                 report['lost'][capability] = pipeline.lost(capability)
             # Complete: no frame the count depends on was lost, failed or captured while a module was off.
             report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
+            report['failures'], optional = pipeline.failures(), {key for key, item in pipeline.modules.items() if item['optional']}
+            if any(item.get('module') not in optional for item in report['failures']):
+                report['complete'] = False
+            report['warnings'] = pipeline.warnings()
+            if human.instruction_changes():
+                report['instruction_changes'] = [change for _, change in human.instruction_changes()]
             if truth:
                 from ..scoring import score
-                found = [event for row in rows if row['observation']['capability']['id'] == truth['capability']
-                         for event in row['observation']['value']['events']]
+                own = [row for row in rows if row['observation']['capability']['id'] == truth['capability']]
+                newest = newest_instructions(own, current_instructions(
+                    [change for _, change in human.instruction_changes() if truth['capability'] in change['capabilities']]))
+                found = [event for row in own for event in row['observation']['value']['events'] if is_current(event, newest)]
                 report['score'] = dict(score(truth, found, start_ms=report.get('start_ms', 0)),
                                        complete=not pipeline.lost(truth['capability'])['gaps'])
             if any(item['use'] in ('whisper-words', 'qwen-words', 'prosody') for item in recipe['modules']):
@@ -871,12 +969,16 @@ async def run_pipeline(recipe, args):
             if live is not None:
                 await live.close()
             await pipeline.close()
-    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'input_frames', 'speaker', 'counts', 'complete', 'lost', 'errors', 'score')
-                      if key in report and (key not in ('lost', 'errors') or key == 'lost' and not report['complete']
-                                            or key == 'errors' and report['errors'])},
+    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
+                                                   'failures', 'warnings', 'errors', 'score')
+                      if key in report and (key not in ('lost', 'errors', 'failures', 'warnings') or key == 'lost' and not report['complete']
+                                            or key != 'lost' and report[key])},
                      ensure_ascii=False), flush=True)
     if getattr(args, 'report', None):
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    failed = [item for item in report['failures'] if 'input' in item]
+    if failed and not any(item['frames'] for item in report['pipeline']['inputs'].values()):
+        raise SystemExit('; '.join(f"{item['input']}: {item['error']}" for item in failed))
     return report
 
 
@@ -913,6 +1015,18 @@ async def _enroll_identity(recipe, args, kind):
 
 # ---------------------------------------------------------------- command line
 
+def _kept(args):
+    """Which inputs stay open although nothing reads them: a camera that is shown, and live ones an agent may need later."""
+    named = _pairs(args.input, '--input')
+
+    def keep(item):
+        given = {name for name in LIVE if name in item.get('sources', ()) and name in _given(args)}
+        if item['id'] in named:
+            given |= {named[item['id']].partition(':')[0]} & set(LIVE)
+        return bool(given) if args.serve else 'camera' in given and not args.headless
+    return keep
+
+
 def _optional_options(parser):
     parser.add_argument('--with', dest='include', action='append', default=[], metavar='MODULE',
                         help='add an optional module of the recipe')
@@ -946,6 +1060,8 @@ def _source_options(parser, *, clips=False):
     source.add_argument('--microphone', action='store_true', help='the default microphone')
     source.add_argument('--sensor', metavar='FILE[@start-end]' if clips else 'FILE', **many,
                         help='CSV or JSONL samples of a sensor input (the recipe declares columns, units and time)')
+    parser.add_argument('--plugin', dest='plugins', action='append', metavar='NAME',
+                        help='allow a user-made module or input the recipe names (an installed entry point): trusted code, run as it is')
     parser.add_argument('--input', action='append', metavar='ID=SOURCE[:VALUE]',
                         help='the source of one input by name, e.g. left=camera:1 or sound=audio:room.wav')
     parser.add_argument('--offset-ms', action='append', metavar='ID=MS',
@@ -1036,12 +1152,20 @@ def main(argv=None):
     start.add_argument('--language', help="spoken language, e.g. ko (default: the recipe's)")
     start.add_argument('--vlm-context', metavar='NAMES', help='what a VLM module gets as text besides the frames: '
                        "transcript,counts (default: both), one of them, or none")
+    start.add_argument('--vlm-remote-context', action='store_true',
+                       help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
     _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
     start.add_argument('--serve', nargs='?', type=int, const=8765, metavar='PORT',
                        help='let an agent read and switch this run over MCP: gamst-mcp-live --url ws://127.0.0.1:PORT '
                             '(this computer only, token required; default port 8765)')
+    start.add_argument('--clips', action='append', metavar='DIR',
+                       help='a folder whose example clips and enrolled files an instruction may use while the run goes on; repeat it')
+    start.add_argument('--proposals', metavar='FILE', help='proposals file an agent may list and add to, and whose confirmed '
+                       'proposals may become instructions')
+    start.add_argument('--stop-on-failure', action='store_true',
+                       help='end the run when an input or a needed module fails (default: the others go on, the run is incomplete)')
     start.add_argument('--report', help='write frames, counts and pipeline status as JSON')
     search = actions.add_parser('find', help='list where a movement occurs in recordings (the same counter, offline)')
     search.add_argument('recipe')
@@ -1103,8 +1227,12 @@ def main(argv=None):
     if args.action in ('proposals', 'export'):
         from . import movement
         return getattr(movement, args.action)(args)
-    recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()))
+    recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
+                  _kept(args) if args.action == 'run' else None)
     if len(recipe['inputs']) == 1 and args.action in ('run', 'enroll', 'find') and len(_given(args)) > 1:
+        unread = [name for name in _given(args) if name not in recipe['inputs'][0]['sources']]
+        if unread and len(read_recipe(args.recipe)[1]['inputs']) > 1:
+            raise SystemExit(_unread(recipe, unread[0]))
         parser.error(' and '.join('--' + name for name in _given(args)) + f": {recipe['name']} reads one source")
     if args.action == 'enroll' and not args.out and args.kind != 'terms':
         parser.error('the following arguments are required: --out')

@@ -244,6 +244,8 @@ def _write(args, saved):
     content = {key: saved[key] for key in ('mode', 'channels', 'rule', 'positives', 'negatives', 'enter', 'exit')
                if key in saved}
     saved['id'] = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
+    if args.out is None:        # an instruction of a running recipe: kept by the run, not in a file
+        return saved
     _save(args.out, saved)      # readable by the owner only
     summary = {key: saved[key] for key in ('id', 'label', 'mode', 'method', 'confirmed', 'enter', 'exit',
                                            'threshold_source') if key in saved}
@@ -279,7 +281,8 @@ async def enroll(recipe, args):
             args.text = movement_text(args.text)
         except ValueError as error:
             raise SystemExit(str(error)) from error
-    given, negatives, rule = _positives(recipe, args), [], None
+    given, negatives = getattr(args, 'clips', None) or (_positives(recipe, args), [])
+    rule = None
     if args.rule:
         if given or args.negative or args.proposals:
             raise SystemExit('--rule specifies the movement alone; it takes no clips or proposals')
@@ -294,7 +297,8 @@ async def enroll(recipe, args):
     if args.proposals:
         if not args.text and not args.proposal:
             raise SystemExit('--proposals needs --text (every proposal of it) or --proposal ID')
-        found, negatives, rule = _proposed(recipe, args)
+        found, rejected, rule = _proposed(recipe, args)
+        negatives = negatives + rejected
         if rule is not None:
             if given or args.negative:
                 raise SystemExit('a proposed rule specifies the movement alone; it takes no clips')

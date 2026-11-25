@@ -36,6 +36,9 @@ WATCH_RULE = {"type": "object", "description": (
     "{subject_id?, conditions:[{capability_id|signal, path?, op: gt|gte|lt|lte|eq|ne|exists|contains, "
     "value?, weight?, within_ms?}], threshold? (weighted fraction, default 1), cooldown_ms?, "
     "max_per_minute?, context_window_ms?, recipient?, enabled?}")}
+CLIP = {"type": "object", "properties": {"file": {"type": "string", "minLength": 1, "maxLength": 1024},
+                                          "start_s": {"type": "number", "minimum": 0}, "end_s": {"type": "number", "minimum": 0}},
+        "required": ["file"], "additionalProperties": False}
 WATCH_TOOLS = {"create_watch", "update_watch", "delete_watch", "list_watches",
                "propose_watch_change", "get_watch_alarms"}
 MOVEMENT_TOOLS = {"list_movement_proposals", "propose_movement", "resolve_movement_proposal"}
@@ -119,7 +122,7 @@ def tool_definitions() -> list[dict]:
           "reason": {"type": "string", "minLength": 1, "maxLength": 2000}}, ("watch_id", "proposer", "changes", "reason")),
         ("get_watch_alarms", "Read retained Watch alarms (newest first) with contributions and context; the same payload pushed as notifications.",
          {"watch_id": identifier_field, "since_ms": TIME, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, ()),
-        ("count_events", "Count events inside retained records of one capability (e.g. repetitions, exemplar matches, spoken terms, rotation ends) in a time window, optionally filtered by event fields and grouped. Returns the count with bounded evidence record IDs; computed from records, never by a model. complete=false: frames it depends on were lost (see lost), so the true count may be higher or lower; events over a loss carry gap_frames. Superseded records are not counted; as_of_ms counts what was known at that time.",
+        ("count_events", "Count events inside retained records of one capability (e.g. repetitions, exemplar matches, spoken terms, rotation ends) in a time window, optionally filtered by event fields and grouped. Returns the count with bounded evidence record IDs; computed from records, never by a model. complete=false: frames it depends on were lost (see lost), so the true count may be higher or lower; events over a loss carry gap_frames. Events of a replaced instruction are not in the count but in other_instructions. Superseded records are not counted; as_of_ms counts what was known at that time.",
          {"capability_id": identifier_field, "subject_id": SUBJECT, "window": WINDOW,
           "event": {"type": "string", "maxLength": 128},
           "where": {"type": "object", "description": "{dotted.event.path: exact value}, at most 16"},
@@ -158,6 +161,20 @@ def tool_definitions() -> list[dict]:
         ("resolve_movement_proposal", "Confirm or reject one movement proposal. Only its owner ('user') may; 'jev' may only propose. expected_version must be the version that was shown to the owner. Call it only when the user decided this proposal.",
          {"proposal_id": identifier_field, "actor": WATCH_ACTOR, "decision": {"type": "string", "enum": ["confirm", "reject"]},
           "expected_version": WATCH_VERSION}, ("proposal_id", "actor", "decision", "expected_version")),
+        ("list_instructions", "What the running recipe looks for now: each words (terms) or movement (exemplar) reference with its reference_id and reference_revision, since which capture time (effective_from_ms, complete_from_ms: nothing before it was looked for), who set it (set_by is what the caller said of itself), recent changes, what is left out and which input it would need, and the example clips and enrolled files that may be used (--clips folders). Persons and voices are owner_only. No media.", {}, ()),
+        ("set_instruction", "Tell the running recipe what to count from now on, without restarting it. kind terms: exactly one of terms (words, or {word: [spellings]}), file (an enrolled words file) or proposals (IDs of words the owner confirmed). kind exemplar (a movement or pose): exactly one of clips (example clips of the movement, each {file, start_s?, end_s?}, at most 30 s; negatives: look-alikes that must not count), rule (declarative JSON, with text), file (an enrolled movement) or proposals (confirmed intervals or rule). Files are named by their path inside the folders the owner opened (list_instructions); no other path and no URL. The answer says from which capture time it counts (effective_from_ms) and its reference_id and reference_revision, which every event and count carries: the old and the new are never added up. A counting part that was left out is added if its model worker is set up and its input is open; otherwise the answer says what the owner must run. Reading clips takes as long as they take to process; one at a time.",
+         {"kind": {"type": "string", "enum": ["terms", "exemplar"]}, "actor": WATCH_ACTOR, "reference": identifier_field,
+          "terms": {"type": ["array", "object"], "items": {"type": "string", "minLength": 1, "maxLength": 100}},
+          "file": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "proposals": {"type": "array", "maxItems": 32, "items": identifier_field},
+          "rule": {"type": "object"}, "text": {"type": "string", "minLength": 1, "maxLength": 500},
+          "clips": {"type": "array", "maxItems": 16, "items": CLIP}, "negatives": {"type": "array", "maxItems": 16, "items": CLIP},
+          "mode": {"type": "string", "enum": ["hold", "sequence"], "description": "hold: a pose; sequence: a movement (default: the recipe's)"}},
+         ("kind", "actor")),
+        ("remove_instruction", "Stop looking for what a reference describes, from now on. What was counted stays under its own revision.",
+         {"reference": identifier_field, "actor": WATCH_ACTOR}, ("reference", "actor")),
+        ("search_retained", "After an instruction was set: look for it in the records retained from before (transcripts for words, pose channels for a movement). Runs no model, reads no media, stores nothing. The results are retrospective and are not part of count_events; what was not retained was not searched.",
+         {"reference": identifier_field, "window": WINDOW, "max_events": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, ("reference",)),
         ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap. Optional options go to the module itself, e.g. a MediaPipe graph module: {\"branches\": {\"face\": false}} or {\"side_packets\": {\"model_complexity\": 2}}.",
          {"name": identifier_field, "enabled": {"type": "boolean"}, "options": {"type": "object"}}, ("name", "enabled")),
     ]
@@ -282,7 +299,8 @@ class MCPServer:
         # Finalization owns its manager's lifecycle lock. Do not hold the global
         # tool lock while draining: deletion must invalidate a pending final.
         # A timeline read waits for a thread and is void when data is deleted meanwhile.
-        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream", "get_timeline"):
+        # Reading example clips takes as long as they take; the recipe itself allows one change at a time.
+        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream", "get_timeline", "set_instruction", "search_retained"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)

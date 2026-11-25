@@ -239,7 +239,7 @@ class Choosing(Recipes):
         self.refused('source for camera.*--camera.*--video.*--without flash', '--microphone')
         self.refused('source for microphone.*--without click', '--camera', 0)
         self.refused('no common capture clock', '--camera', 0, '--audio', 'x.wav')
-        self.refused('2', '--audio', 'x.wav', '--camera', 0, '--without', 'click')     # one input left, one source
+        self.refused('nothing from --audio here: drop it', '--audio', 'x.wav', '--camera', 0, '--without', 'click')     # one input left, one source
         self.refused('reads nothing from --sensor', '--camera', 0, '--microphone', '--sensor', 'x.csv')
         self.refused('no input nobody', '--input', 'nobody=camera:0')
         self.refused('different recordings.*--offset-ms microphone', '--video', 'a.mp4', '--audio', 'b.wav')

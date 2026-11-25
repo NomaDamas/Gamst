@@ -35,6 +35,10 @@ CONTEXT_INSTRUCTION = (
     "not correct or add to the counts.")
 
 
+def is_remote(endpoint):
+    return urlparse(endpoint).hostname not in ("127.0.0.1", "localhost", "::1")
+
+
 class OpenAIStreamingBackend:
     """Explicit local OpenAI-compatible bridge for a pinned StreamingVLM server.
 
@@ -54,7 +58,7 @@ class OpenAIStreamingBackend:
                 raise ValueError("a hosted VLM endpoint must use https")
             if not api_key_env or not os.environ.get(api_key_env):
                 raise ValueError("a hosted VLM endpoint needs api_key_env naming a set environment variable")
-        self.remote = parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+        self.remote = is_remote(endpoint)
         self.endpoint = endpoint.rstrip("/")
         if not self.endpoint.endswith("/chat/completions"):
             self.endpoint += "/chat/completions"

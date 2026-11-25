@@ -24,6 +24,8 @@ def _construct(profile, config):
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
         backend = OpenAIStreamingBackend.from_config(config)
+        if backend.remote and config.get('context') and config.get('allow_remote_context') is not True:
+            raise PermissionError('allow_remote sends frames to a hosted endpoint; transcripts and counts need allow_remote_context')
         provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000),
                                             context=config.get('context', False))
     elif profile == 'smolvlm2.500m.local':

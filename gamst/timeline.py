@@ -9,7 +9,7 @@ Cell statuses, in the order they are decided for a row ``[t, t + step)``:
 
 ``exact``    a record captured in this row, or an interval record that overlaps it;
 ``gap``      captured, declared lost, never processed;
-``off``      the module was switched off (or paused);
+``off``      the module was switched off (or paused), or nothing was set to look for (``not_instructed``);
 ``pending``  the module has not finished this capture time (``ref``: its last value, if still fresh);
 ``sampled``  the module looks at one frame per interval by declaration; this row is between two of them;
 ``held``     nothing new, and the last value is still within its ``freshness_ms`` (``ref``, ``age_ms``);
@@ -38,7 +38,7 @@ from types import SimpleNamespace
 
 from .capabilities import is_raw_key as _is_raw_key
 from .context import compact_observation, is_context_observation
-from .counting import GAP_CAPABILITY as GAPS
+from .counting import GAP_CAPABILITY as GAPS, INSTRUCTION_CAPABILITY as INSTRUCTIONS
 from .observation_pages import _encode as seal_cursor, _open as open_cursor
 from .revisions import LATE_MS, RETRACTION, depends_on, record_span, span_of, time_ms
 
@@ -53,6 +53,8 @@ MAX_DELTA_SCAN = 5000
 TURN_S, REST_S = .0003, .00005      # a building thread works this long, then lets the event loop run
 HISTORY, SAMPLE_MS = 1500, 200      # Pipeline completeness kept for as_of_ms and cursors (5 minutes)
 OFF_REASONS = frozenset(('disabled', 'paused', 'capture_paused'))
+NOT_ASKED = 'not_instructed'        # nothing was looked for then: no words or movement was set
+MAX_CHANGES = 8                     # instruction changes named in one answer
 ITEM_FIELDS = ('events', 'words', 'segments')
 DEFAULT_FRESHNESS_MS = 5000
 
@@ -72,6 +74,7 @@ class Progress:
     sampled: bool = False
     off: bool = False
     records: bool = True                # it commits records (not only a derived input)
+    asked: tuple = ()                   # [from, until) in which it was asked for something; empty: always
 
 
 def progress(pipeline):
@@ -108,7 +111,8 @@ def progress(pipeline):
             tuple(sorted(gaps)), (min(gap[0] for gap in gaps) if gaps else until) if cut else None,
             bool(state['sampled']) if 'sampled' in state else bool(state.get('every_ms')),
             not state.get('enabled', True) or bool(state.get('paused')),
-            bool(capability) or not state.get('emits'))
+            bool(capability) or not state.get('emits'),
+            tuple((start, end) for start, end in state.get('asked') or ()))
     return result
 
 
@@ -123,7 +127,9 @@ def _joined(parts):
     return Progress(', '.join(part.module for part in parts), reported=all(part.reported for part in on),
                     until=None if None in untils else min(untils), since=None if None in sinces else max(sinces),
                     gaps=tuple(sorted(gap for part in on for gap in part.gaps)), gaps_since=max(cuts, default=None),
-                    sampled=any(part.sampled for part in on), off=all(part.off for part in parts))
+                    sampled=any(part.sampled for part in on), off=all(part.off for part in parts),
+                    asked=() if any(not part.asked for part in on) else tuple(sorted(
+                        (pair for part in on for pair in part.asked), key=lambda pair: pair[0])))
 
 
 EMPTY = ({}, {}, None)
@@ -483,7 +489,10 @@ def _column_cells(column, starts, step, lost_until):
         finished = done.until is not None and done.until >= stop - 1
         gap = next((gap for gap in done.gaps if gap[0] < stop and gap[1] >= start), None)
         off = gap[2] in OFF_REASONS if gap is not None else done.off and not finished
-        known = finished and start >= floor
+        begun = start
+        if done.asked:      # the part of the row in which it was asked for something, or None
+            begun = next((max(start, low) for low, high in done.asked if low < stop and (high is None or high > start)), None)
+        known = finished and begun is not None and begun >= floor
         position = bisect_left(times, start) - 1
         held = last[position] if position >= 0 and start - times[position] <= last[position][1].record.freshness else None
         instant = None
@@ -495,6 +504,8 @@ def _column_cells(column, starts, step, lost_until):
                     cell['records'] = len(exact[index])
             if gap is not None:
                 cell['gap'] = gap[2]
+        elif begun is None:
+            cell, held = dict(status='off', reason=NOT_ASKED), None
         elif off or gap is not None:
             cell, held = dict(status='off' if off else 'gap'), None
             if gap is not None:
@@ -515,7 +526,7 @@ def _column_cells(column, starts, step, lost_until):
         if len(intervals) > MAX_INTERVALS:
             cell['intervals_omitted'] = len(intervals) - MAX_INTERVALS
             intervals = intervals[-MAX_INTERVALS:]
-        cells.append((cell, instant, intervals, known or off and gap is None))
+        cells.append((cell, instant, intervals, known or begun is None or off and gap is None))
     return cells
 
 
@@ -617,7 +628,7 @@ class _Query:
         if not record.context:
             return False
         if self.wanted is None:
-            return record.capability != GAPS
+            return record.capability not in (GAPS, INSTRUCTIONS)
         return bool({record.capability, record.name} & self.wanted) or not record.capability and record.model in self.wanted
 
     def table(self, known_ms, state, stop=None):
@@ -713,7 +724,7 @@ class _Query:
         column.progress = Progress(
             part.module, part.outputs, part.reported, until, None if part.since is None else local(part.since),
             tuple(sorted([(local(gap[0]), local(gap[1]), gap[2]) for gap in part.gaps] + more)),
-            None if part.gaps_since is None else local(part.gaps_since), part.sampled, part.off)
+            None if part.gaps_since is None else local(part.gaps_since), part.sampled, part.off, part.records, part.asked)
 
     def affected(self, before, clocks, limit):
         """Capture intervals before ``before`` that records learned since the cursor changed, newest first."""
@@ -806,7 +817,7 @@ NOT_READ = 'records learned after this cursor were removed before they were read
 
 
 async def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_ms, now_ms, step_ms, capabilities, settled_only,
-         cursor, max_bytes, contracts):
+         cursor, max_bytes, contracts, changes=()):
     """One answer of ``Gamst.get_timeline``: rows on the absolute step grid, or what changed since ``cursor``."""
     scope = hashlib.sha256(json.dumps([subject_id, step_ms, sorted(capabilities) if capabilities else None,
                                        settled_only]).encode()).hexdigest()[:32]
@@ -859,11 +870,35 @@ async def read(store, history, *, subject_id, start_ms, end_ms, known_ms, as_of_
         return restart('retention', 'records of the remaining rows were removed; read again without cursor')
     return await asyncio.to_thread(
         _answer, query, signer, scope=scope, at=at, base=base, base_stop=base_stop, known=known, state=state, before=before,
-        not_covered=not_covered, lost=lost, now_ms=now_ms, settled_only=settled_only, max_bytes=max_bytes)
+        not_covered=not_covered, lost=lost, now_ms=now_ms, settled_only=settled_only, max_bytes=max_bytes, changes=changes)
+
+
+def _instructions(changes, columns, first, stop):
+    """What was asked for in [first, stop): each reference and revision, from when and until when; and how many are not shown."""
+    names, found, last = {column.name for column in columns}, [], {}
+    for known, change in changes:
+        before = last.get(change['reference'])
+        if before is None and 'previous_revision' in change:    # what the run began with
+            before = dict(reference=change['reference'], kind=change['kind'], reference_id=change['previous_id'],
+                          reference_revision=change['previous_revision'], from_ms=None,
+                          capabilities=change.get('capabilities', []))
+            found.append(before)
+        if before is not None and before.get('until_ms') is None:
+            before['until_ms'] = change['start_ms']
+        if change['event'] == 'instruction.removed':
+            before['removed_by'] = change['set_by']
+            continue
+        last[change['reference']] = entry = dict(
+            {key: change[key] for key in ('reference', 'kind', 'label', 'reference_id', 'reference_revision', 'set_by', 'source')
+             if key in change}, from_ms=change['start_ms'], known_ms=known, capabilities=change.get('capabilities', []))
+        found.append(entry)
+    shown = [entry for entry in found if (entry['from_ms'] or 0) < stop and entry.get('until_ms', stop) > first
+             and (not names or names & set(entry['capabilities']))]
+    return shown[-MAX_CHANGES:], max(0, len(shown) - MAX_CHANGES)
 
 
 def _answer(query, signer, *, scope, at, base, base_stop, known, state, before, not_covered, lost, now_ms, settled_only,
-            max_bytes):
+            max_bytes, changes=()):
     """Rows and evidence of a loaded query (a worker thread: no Store, no runtime)."""
     query.decode()
     subject_id, first, stop, step_ms, contracts = query.subject, query.first, query.stop, query.step, query.contracts
@@ -896,6 +931,11 @@ def _answer(query, signer, *, scope, at, base, base_stop, known, state, before, 
         scan_truncated=query.scan_truncated, removed_until_ms=query.removed_until, rows=[], evidence={},
         rows_total=len(table.starts), rows_complete=sum(map(table.complete, table.starts)), has_more=True, byte_budget=max_bytes,
         next_cursor='', values='retained records; summarized, never interpolated')
+    asked, omitted = _instructions(changes, table.columns, first, stop)
+    if asked:
+        result['instructions'] = asked      # a count of one is never a count of another; before from_ms nothing was looked for
+        if omitted:
+            result['instructions_omitted'] = omitted
     if state is None:
         result['completeness_history'] = 'unavailable'      # as_of_ms is older than what is kept: nothing says complete
     elif state[2] is not None:

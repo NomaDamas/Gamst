@@ -64,7 +64,10 @@ gap, ``status()['failures']`` names it, and the run is incomplete. A live input 
 switched on again; the run ends when nothing is left. ``run(stop_on_failure=True)`` ends it at the first failure.
 
 User-defined reference inputs (a voice sample, photos, a demonstrated pose, a list of words) are
-given with ``add_reference``. Modules read them in ``bind(pipeline)``; the pipeline keeps only what
+given with ``add_reference``. Words (``terms``) and movements (``exemplar``) may be replaced or removed while a run goes
+on (:meth:`Pipeline.set_reference`, :meth:`Pipeline.remove_reference`): from a stated capture time on, with a revision
+that every event and count carries. References to a person are set by the owner before the run only.
+Modules read references in ``bind(pipeline)``; the pipeline keeps only what
 the module returns from ``bind`` (an embedding, a feature template), never the raw sample, unless
 the module keeps it itself.
 """
@@ -75,6 +78,8 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 import inspect
 import time
+import hashlib
+import json
 from typing import Any
 
 from .capabilities import CapabilitySpec, OutputField, SensorMetadata, identifier
@@ -83,6 +88,9 @@ from .redact import public_error, public_text
 
 GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipeline', '1',
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+INSTRUCTIONS = CapabilitySpec('pipeline.instructions', 'pipeline.instructions', 'events', 'gamst.pipeline', '1',
+                              (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+INSTRUCTABLE = ('terms', 'exemplar')     # reference kinds that may change while a run goes on; the others identify a person
 BACKLOG = 900                            # frames a lane holds (30 s of 30 fps video) ...
 BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline hold together
 MAX_OFFSET_MS = 600_000                  # an input's declared clock correction
@@ -135,6 +143,13 @@ def _percentiles(values):
                 samples=len(ordered))
 
 
+def reference_id(value):
+    """Which words or which movement this is: the file's own ID, else a hash of the content."""
+    if isinstance(value, dict) and isinstance(value.get('id'), str):
+        return value['id'][:64]
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def _now_ms():
     return time.time_ns() // 1_000_000
 
@@ -163,6 +178,7 @@ class Pipeline:
         self._running, self._failure = False, None
         self._stop, self._stop_on_failure = None, False
         self.reopen_s = REOPEN_S
+        self.notify = None                   # the application's hook: what failed or came back, as a line of text
         self._gaps: dict[str, dict] = {}     # not yet committed, by place
         self._gap_at: dict[str, float] = {}
         self._gap_sequence = 0
@@ -198,7 +214,127 @@ class Pipeline:
         if kind in ('voice', 'person', 'face', 'body') and not consent:
             raise ValueError('a reference to a person needs a consent record')
         self.references[name] = dict(kind=kind, value=value, label=label or name, consent=consent)
+        if kind in INSTRUCTABLE:
+            self.references[name].update(id=reference_id(value), revision=1, from_ms=0, set_by='owner', source='start',
+                                         set_at_ms=_now_ms())
         return self
+
+    # ------------------------------------------------------------------ instructions while a run goes on
+
+    def change_ms(self, inputs):
+        """The first capture time of these inputs that has not been taken in yet: where a change takes effect."""
+        return 1 + max((self.inputs[key]['last_ms'] for key in inputs if self.inputs[key]['last_ms'] is not None), default=-1)
+
+    def _reading(self, name):
+        return {key: entry for key, entry in self.modules.items()
+                if getattr(entry['module'], 'reference_name', None) == name and callable(getattr(entry['module'], 'schedule', None))}
+
+    async def set_reference(self, name, kind, value, *, label=None, set_by='user', source='value', add=()):
+        """Give the modules that read ``name`` other words or another movement, without restarting anything.
+
+        Frames captured before ``effective_from_ms`` (the answer's) are still measured by the old one, later ones by the
+        new one only: nothing before it was looked for. ``add``: ``(name, module, add_module options)`` of modules to
+        connect with it. Raises before anything is changed.
+        """
+        identifier(name, 'reference name')
+        if kind not in INSTRUCTABLE:
+            raise PermissionError(f'a {kind} reference identifies a person: the owner sets it, with consent, before the run')
+        before = self.references.get(name)
+        if before is not None and before['kind'] != kind:
+            raise ValueError(f"{name!r} is a {before['kind']} reference")
+        readers, added = self._reading(name), [item[0] for item in add]
+        if bool(readers) == bool(add):
+            raise ValueError(f'{name!r} is read already; nothing to add' if add else f'no module of this run reads a reference {name!r}')
+        self._instructable()
+        reference = dict(kind=kind, value=value, label=label or name, consent=None, id=reference_id(value),
+                         revision=before['revision'] + 1 if before is not None else 1, from_ms=0, set_by=set_by, source=source,
+                         set_at_ms=_now_ms())
+        ready = {key: entry['module'].prepare(reference) for key, entry in readers.items()}    # refuses what it cannot use
+        for module in (item[1] for item in add):
+            if getattr(module, 'reference_name', None) == name and callable(getattr(module, 'prepare', None)):
+                module.prepare(reference)
+        roots = {root for key in readers for root in self._roots(key)}
+        for source in (source for _, _, options in add for source in options['consumes']):
+            owner = self.inputs[source]['derived_from'] if source in self.inputs else source.split(':', 1)[0]
+            roots |= {source} if owner is None else self._roots(owner)
+        # Several changes before a new frame: the last one takes the place of the others.
+        reference['from_ms'] = self.change_ms(roots)
+        for key, entry in readers.items():
+            entry['module'].schedule(ready[key], reference['from_ms'])
+            self._asked(entry, reference)
+        self.references[name] = reference
+        try:
+            for key, module, options in add:
+                self.add_module(key, module, **options)
+                self.modules[key]['from_ms'] = self.change_ms(self._roots(key))     # of its own inputs
+        except BaseException:
+            for key in added:
+                self._discard(key)
+            if before is None:
+                del self.references[name]
+            else:
+                self.references[name] = before
+            raise
+        return await self._instructed('instruction.set', name, reference, before)
+
+    async def remove_reference(self, name, *, set_by='user'):
+        """Stop looking for what ``name`` describes; what was counted stays, under its own revision."""
+        before = self.references.get(name)
+        if before is None:
+            raise ValueError(f'no reference {name!r} is set')
+        if before['kind'] not in INSTRUCTABLE:
+            raise PermissionError(f"a {before['kind']} reference is the owner's; it is not removed while the run goes on")
+        if before.get('removed'):
+            raise ValueError(f'{name!r} is removed already')
+        readers = self._reading(name)
+        self._instructable()
+        reference = dict(before, removed=True, value=None, revision=before['revision'] + 1, set_by=set_by, source='removed',
+                         set_at_ms=_now_ms(), from_ms=self.change_ms({root for key in readers for root in self._roots(key)}))
+        for entry in readers.values():
+            entry['module'].schedule(None, reference['from_ms'])
+            self._asked(entry, reference)
+        self.references[name] = reference
+        return await self._instructed('instruction.removed', name, reference, before)
+
+    def _instructable(self):
+        if self._closed or self.human.closed:
+            raise RuntimeError('the run is over')
+        if self.human.paused or not self.human.consent:
+            raise PermissionError('capture is paused; resume it first')
+
+    @staticmethod
+    def _asked(entry, reference):
+        """The capture intervals in which this module was asked for something (``[from, until)``; older ones are merged)."""
+        asked, at = entry['asked'], reference['from_ms']
+        if asked and asked[-1][1] is None:
+            asked[-1][1] = at
+        if not reference.get('removed'):
+            asked.append([at, None])
+        asked[:] = [item for item in asked if item[1] is None or item[1] > item[0]]
+        if len(asked) > 16:
+            asked[:2] = [[asked[0][0], asked[1][1]]]
+
+    def _discard(self, name):
+        entry = self.modules.pop(name, None)
+        if entry is not None:
+            self._lanes = [lane for lane in self._lanes if lane['name'] != name]
+            self._pausable.clear()
+            for derived in entry['emits']:
+                self.inputs.pop(derived, None)
+
+    async def _instructed(self, event, name, reference, before):
+        capabilities = sorted(filter(None, (self._capability(entry) for entry in self._reading(name).values())))
+        change = dict(event=event, reference=name, kind=reference['kind'], label=str(reference['label'])[:100],
+                      reference_id=reference['id'], reference_revision=reference['revision'], start_ms=reference['from_ms'],
+                      end_ms=reference['from_ms'], set_by=reference['set_by'], source=reference['source'], capabilities=capabilities)
+        if before is not None:
+            change.update(previous_id=before['id'], previous_revision=before['revision'])
+        self.human.register_capability(INSTRUCTIONS)
+        self._gap_sequence += 1
+        record = await self.human.push_observation(
+            INSTRUCTIONS.id, dict(events=[change]), timestamp_ms=reference['from_ms'] or _now_ms(),
+            sensor=SensorMetadata(source_id=self.name, sensor_id='instructions', sequence=self._gap_sequence))
+        return dict(change, record_id=record['id'], effective_from_ms=reference['from_ms'])
 
     def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=(), queue=None,
                    optional=False):
@@ -231,6 +367,7 @@ class Pipeline:
         bind = getattr(module, 'bind', None)
         if callable(bind):
             bind(self)
+        reference = self.references.get(getattr(module, 'reference_name', None), {})
         if queue == 'auto' or queue is None and width > 1:
             queue = None if width == 1 and not getattr(module, 'owns_process', False) else 1 if every_ms else BACKLOG
         if queue is not None:
@@ -243,6 +380,7 @@ class Pipeline:
         self.modules[name] = dict(module=module, consumes=consumes, links=links, spec=spec, enabled=bool(enabled),
                                   every_ms=every_ms, last_run_ms=None, processed=0, errors=0,
                                   last_error=None, last_latency_ms=None, needs_reset=False, emits=tuple(emits),
+                                  asked=[[reference['from_ms'], None]] if 'from_ms' in reference else [],
                                   last_admit_ms=None, lane=lane, optional=bool(optional), paused=False, pauses=0,
                                   off=None, failing=0, failed=None, skipped=0, gaps=0, gap_frames=0, gap_out=False, gap_log=deque(maxlen=LOG),
                                   from_ms=1 + max((value['last_ms'] for value in self.inputs.values()
@@ -702,8 +840,14 @@ class Pipeline:
             start = entry['last_ms'] + 1 if entry['last_ms'] is not None else None if self._recorded else _now_ms()
             entry['down'] = dict(logged=start, recorded=start, since=start)
             entry['outages'].append(dict(from_ms=start, error=entry['error']))
+        self._say(f"{input_id} failed: {entry['error']}; " + (
+            'not opened again' if gone else f"trying again ({entry['retries'] + 1} of {len(self.reopen_s)})"))
         self._outage(input_id, record=True)
         self._check_left()
+
+    def _say(self, text):
+        if callable(self.notify):
+            self.notify(text)
 
     def _outage(self, input_id, *, record=False, end=None):
         """What a failed input has not delivered up to now (a recording: up to what the others reached) is a gap."""
@@ -733,8 +877,13 @@ class Pipeline:
         """The first frame after a failure."""
         entry = self.inputs[input_id]
         self._outage(input_id, record=True, end=stamp - 1)
+        for name in self._affected([input_id]):     # someone may have asked just before this frame arrived
+            for gap in self.modules[name]['gap_log']:
+                if (gap['source'], gap['reason']) == (input_id, 'input_failed') and gap['start_ms'] < stamp <= gap['end_ms']:
+                    gap['end_ms'] = stamp - 1
         entry.update(down=None, error=None, opened=time.monotonic())
         entry['outages'][-1]['resumed_ms'] = stamp
+        self._say(f'{input_id} is back')
 
     def _check_left(self):
         """End a run in which nothing is left that could still report something."""
@@ -885,6 +1034,7 @@ class Pipeline:
             entry['failing'] += 1
             if self._stop is not None and not self._stop_on_failure and entry['failing'] >= FAILURES:
                 entry['failed'] = public_text(entry['last_error'])
+                self._say(f"{name} failed {FAILURES} times in a row and is given up: {entry['failed']}")
                 self._check_left()
             return []
 
@@ -1225,7 +1375,10 @@ class Pipeline:
                               **({'state': value['source'].status()}
                                  if callable(getattr(value['source'], 'status', None)) else {}))
                     for key, value in self.inputs.items()},
-            references={key: dict(kind=value['kind'], label=value['label']) for key, value in self.references.items()},
+            references={key: dict(kind=value['kind'], label=value['label'], **(dict(
+                reference_id=value['id'], reference_revision=value['revision'], effective_from_ms=value['from_ms'],
+                set_by=value['set_by'], removed=bool(value.get('removed'))) if 'revision' in value else {}))
+                        for key, value in self.references.items()},
             modules={key: dict(enabled=value['enabled'], consumes=value['consumes'], emits=list(value['emits']),
                                capability=value['spec'].id if value['spec'] is not None else None,
                                every_ms=value['every_ms'], processed=value['processed'], errors=value['errors'],
@@ -1238,6 +1391,8 @@ class Pipeline:
                                **({'failed': value['failed']} if value['failed'] else {}),
                                complete_until_ms=self._complete_until(key), complete_from_ms=self._complete_from(key),
                                holding_from_ms=self._holding_from(value),
+                               **({'asked': [list(item) for item in value['asked']]}
+                                  if value['asked'] not in ([], [[0, None]]) else {}),
                                replicas=int(getattr(value['module'], 'replicas', 1)),
                                optional=value['optional'], paused=value['paused'], pauses=value['pauses'],
                                **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'])}

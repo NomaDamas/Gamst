@@ -213,7 +213,9 @@ class SegmentModule(WorkerModule):
             if upto and type((upto[0]['observation']['value'] or {}).get('count')) is int:
                 result['counts'].append(dict(record_id=upto[0]['id'], capability=capability,
                                              count=upto[0]['observation']['value']['count'],
-                                             timestamp_ms=upto[0]['timestamp_ms']))
+                                             timestamp_ms=upto[0]['timestamp_ms'],
+                                             **{key: value for key, value in upto[0]['observation']['value'].items()
+                                                if key in ('reference_id', 'reference_revision')}))
         result['events'] = result['events'][-32:]
         return result
 
@@ -239,9 +241,12 @@ async def _semantic_scene(options, context):
 
     It interprets segments: ``segment_s`` seconds of frames taken every ``every_ms`` go to the model together.
     The lane keeps the frames of the next segments while a reply is pending. Unless ``"context"`` (or
-    ``--vlm-context``) says otherwise, what is transcribed and counted in the same run is given to it as text data.
+    ``--vlm-context``) says otherwise, what is transcribed and counted in the same run is given to it as text data;
+    a hosted endpoint gets the frames only, unless the owner consents to that separately
+    (``--vlm-remote-context``, or ``allow_remote_context`` beside ``allow_remote`` in its config).
     """
     from ..process_provider import ProcessProvider
+    from ..providers.streaming_semantic import is_remote
     config, python, profile = _entry(options, context, 'streamingvlm.local')
     every_ms = int(options.get('every_ms', 500))
     frames = max(2, min(64, round(1000 * float(options.get('segment_s', 4)) / every_ms)))
@@ -252,6 +257,17 @@ async def _semantic_scene(options, context):
     names = options.get('context', CONTEXT) if asked is None else [name for name in asked.split(',') if name and name != 'none']
     if set(names) - set(CONTEXT):
         raise SystemExit(f"a VLM's context is {', '.join(CONTEXT)} or none")
+    if config.get('endpoint') is not None and is_remote(config['endpoint']):
+        if context.get('remote_context'):
+            config['allow_remote_context'] = True
+        if config.get('allow_remote_context') is not True:
+            if asked is not None and names:
+                raise SystemExit(f"{', '.join(names)} would go to a hosted endpoint; that needs its own consent: "
+                                 '--vlm-remote-context (frames only: leave --vlm-context out)')
+            names = ()
+            print('note: the hosted endpoint gets frames only; transcript and counts need --vlm-remote-context', file=sys.stderr)
+    else:
+        config.pop('allow_remote_context', None)
     from . import PARTS
     capabilities = list(recipe.get('records', ()))[:8]
     given = [name for name in CONTEXT if name in names and context.get('human') is not None and (
@@ -259,9 +275,8 @@ async def _semantic_scene(options, context):
     config.pop('context', None)
     if given:
         config['context'] = True
-        if config.get('allow_remote'):
-            print(f"note: {' and '.join(given)} go to the hosted endpoint with the frames (--vlm-context none: frames only)",
-                  file=sys.stderr)
+        if config.get('allow_remote_context'):
+            print(f"note: {' and '.join(given)} go to the hosted endpoint with the frames", file=sys.stderr)
     module = SegmentModule(await ProcessProvider.open(python, profile, config, inference_timeout=90),
                            human=context.get('human'), context=given, capabilities=capabilities)
     return dict(module=module, spec=module.spec, every_ms=every_ms, queue=min(64, 3 * config['window_frames']))

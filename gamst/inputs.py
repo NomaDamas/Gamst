@@ -1015,6 +1015,38 @@ class MicrophoneInput:
             stream.close()
 
 
+class PluginInput:
+    """A user-made input (``gamst.inputs`` entry point) as a recipe input: its frames are checked, nothing else is added.
+
+    Its code runs in this process with this process's rights; only the owner selects it (``--plugin NAME``).
+    """
+
+    def __init__(self, name, source, modality):
+        if source.modality != modality:
+            raise ValueError(f'plugin input {name} gives {source.modality}, the recipe declares {modality}')
+        self.name, self.source, self.modality = name, source, modality
+        self.live = bool(getattr(source, 'live', True))
+        for optional in ('reopen', 'status', 'slow_hint'):
+            if callable(getattr(source, optional, None)):
+                setattr(self, optional, getattr(source, optional))
+
+    @property
+    def missed(self):
+        return getattr(self.source, 'missed', 0)
+
+    async def frames(self):
+        async for frame in self.source.frames():
+            if not isinstance(frame, InputFrame) or frame.modality != self.modality or type(frame.timestamp_ms) is not int \
+                    or not 0 <= frame.timestamp_ms <= _now_ms() + 5000:
+                raise ValueError(f'plugin input {self.name}: a frame is an InputFrame of {self.modality} with its capture '
+                                 'time in integer milliseconds, not in the future')
+            yield frame
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        return close() if callable(close) else None
+
+
 def open_source(kind, value=None, **options):
     """The input module for a recipe source name (``sound``: the sound track of a media file)."""
     if kind == 'camera':
