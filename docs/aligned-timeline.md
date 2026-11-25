@@ -43,7 +43,7 @@ Answer: `columns` (one per capability, source, sensor and clock), `rows`, `evide
 |---|---|
 | `exact` | a record captured in this row, or an interval record that overlaps it |
 | `gap` | captured, declared lost, never processed |
-| `off` | the module was switched off or paused (`reason`) |
+| `off` | the module was switched off or paused, or nothing was set to look for (`reason: not_instructed`) |
 | `pending` | the module has not finished this time; `ref` is its last value if still fresh |
 | `sampled` | the module looks at one frame per interval by declaration; this row is between two |
 | `held` | nothing new; the last value is within its `freshness_ms` |
@@ -71,6 +71,14 @@ bound: a complete row there can still gain an interval. The cursor reports that.
 A row is `complete` only if every column is done with it. A column that is off does not hold a row back. Columns with
 unknown completeness, an uncalibrated clock or removed records do.
 
+## Instructions that change while a recipe runs
+
+Words and movements may be replaced or removed during a run (`set_instruction`, [handoff](handoff-feat-runtime-instructions.md)).
+The answer then has `instructions`: each reference with `reference_id`, `reference_revision`, `from_ms`, `until_ms`, `set_by`
+(self-declared), at most 8 that overlap the window (`instructions_omitted`). `from_ms` is where its completeness begins: nothing before
+it was looked for, so rows before a movement that was added later are `off` / `not_instructed` (and hold no row back), and
+the module's `complete_from_ms` is that time. Every event and value carries its revision. The change itself is a `pipeline.instructions` record, not a column.
+
 ## Two times and revisions
 
 - **Capture time** is when it happened. **Knowledge time** (`known_ms`) is when the Store learned it. `as_of_ms` is a
@@ -83,6 +91,8 @@ unknown completeness, an uncalibrated clock or removed records do.
   reacts to it.
 - `get_context`, the temporal packet, `count_events` and the timeline use the current revision. `get_observations`,
   `get_observation_page` and `inspect_interval` return every revision.
+- `count_events` counts the newest revision of an instruction only; events of the ones it replaced are in `other_instructions`
+  (choose one with `where: {"reference_revision": N}`), and `counted_from_ms` says since when.
 - `count_events` takes `as_of_ms` (window and gaps as of then) and never counts an event of a superseded record.
 - `depends_on` lists the record IDs a result says it came from; `depends_on_changed` those revised or retracted since.
   GAMST does not recompute a module.
@@ -147,6 +157,8 @@ delta was 2.1 KB.
 - `get_trends` averages every stored revision. A Watch does not un-fire when a record is corrected.
 - An interval record committed more than five minutes after the window is not found. At most 20000 records are scanned per
   window (`scan_truncated`).
+- An input that fails is a gap (`input_failed`) up to now, also while it is down; how many frames it would have given is unknown
+  (`lost_frames` counts one).
 - A module that failed or was off has a gap; the Pipeline lists its last 64, gap records in the Store cover older ones,
   merged per second, so a row between two merged gaps can read `gap` although it was processed and empty.
 - No model, network source or real remote clock was run; the tests use fake modules.

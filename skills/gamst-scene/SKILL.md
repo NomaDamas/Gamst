@@ -32,9 +32,36 @@ gamst recipe roles                                                     # what ca
   not know. Measure it (a clap in view), then `--offset-ms camera=-80`. The offset is in the report.
 - Recordings of different files need `--offset-ms ID=MS` (0: they start together). Live and recorded inputs do not mix.
 - `--input ID=SOURCE[:VALUE]` names a source for one input (two cameras, a separate sound file).
-- An optional role pauses while a needed part is behind. If an input fails, the run stops and names it.
+- An optional role pauses while a needed part is behind.
+- If an input or a part fails, the others go on: the loss is a declared gap (`input_failed`, `error`), `failures` names it, the run is
+  incomplete, and a live input is opened again (6 tries, then given up). `--stop-on-failure` ends the run instead.
+- `warnings` (status and report) name a part that needs longer per frame than the camera gives them, and `--camera-max-side`.
+- `--camera 0` with `--without movement` opens the camera for the window (or, with `--serve`, for what an agent adds later).
 
 Read the result with MCP/SDK `get_timeline` (one row per moment, all modules), `count_events`, or `gamst recipe export`.
+
+## Tell it what to count while it runs (MCP)
+
+```bash
+gamst recipe run scene --camera 0 --microphone --without movement --without voice --terms 대박 \
+    --serve --clips ~/my-clips --proposals p.json --headless
+gamst-mcp-live --url ws://127.0.0.1:8765        # the agent's MCP bridge, this computer only
+```
+
+| Tool | Example |
+|---|---|
+| `list_instructions` | `{}`: what is looked for, since when, who set it, which clip files there are, what is left out |
+| `set_instruction` | `{"kind": "terms", "actor": "jev", "terms": ["진짜"]}`, or `{"진짜": ["진짜", "찐"]}` for spellings |
+| | `{"kind": "exemplar", "actor": "jev", "text": "raises an arm", "mode": "sequence", "clips": [{"file": "a.mp4", "start_s": 2, "end_s": 3.5}], "negatives": [{"file": "wave.mp4"}]}` |
+| | `{"kind": "exemplar", "actor": "jev", "text": "wrist high", "rule": {"steps": [...]}}`, `"file": "move.json"`, `"proposals": ["ID"]` |
+| `remove_instruction` | `{"reference": "terms", "actor": "user"}` |
+| `search_retained` | `{"reference": "terms", "window": "10m"}`: the same words in what was transcribed before; not in the live count |
+
+- A change counts from `effective_from_ms` on. Old and new are never added up: `reference_id` and `reference_revision` are in every event,
+  `count_events` counts the newest and lists the others.
+- Files only from `--clips` folders. No path outside, no link out, no URL. A part that was left out is added if its model is set up and its
+  input is open; else the refusal names the command. No tool opens a device.
+- A person or a voice is never set this way. A movement the agent gave has `confirmed: false`. `actor` is self-declared.
 
 ## A sensor (IMU and similar)
 

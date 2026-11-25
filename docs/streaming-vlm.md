@@ -61,7 +61,8 @@ It travels beside the frame through the existing worker operation (`process_regi
 `depends_on_changed` when one was revised later. A recipe cannot list `vision.streaming_semantic` in `records`.
 
 Tests check the request's structure. Whether a given VLM obeys text in a transcript is not tested. With a hosted endpoint
-(`allow_remote`) the text leaves the machine like the frames; the run prints a note.
+(`allow_remote` is the consent for frames) nothing but frames is sent by default; the text needs its own consent:
+`--vlm-remote-context`, or `allow_remote_context` in the config. The worker refuses without it. Local endpoints are unchanged.
 
 ## Acceptance gate
 
