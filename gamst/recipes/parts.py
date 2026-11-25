@@ -193,6 +193,33 @@ async def _terms(options, context):
     return dict(module=module, spec=module.spec)
 
 
+async def _take_recorder(options, context):
+    from ..takes import TakeRecorder
+    source = context['inputs'][options['consumes'][0]]
+    emits = options.get('emits') or ['take']
+    return dict(module=TakeRecorder(context.get('record_dir') or 'gamst-takes', source=source, emits=emits[0]))
+
+
+async def _flip(options, context):
+    """After-take flip count of one named object; its ``yoloe`` and ``efficienttam`` stages run inside it."""
+    from ..demos.rotation import DEFAULT_MODELS
+    from ..takes import TakeFlips
+    stages = list(context.get('stages', {}).values())
+    find = next((item for item in stages if item['use'] == 'yoloe'), None)
+    if find is None or not any(item['use'] == 'efficienttam' for item in stages):
+        raise SystemExit('the flip count runs a yoloe and an efficienttam stage ("in": "<this module>")')
+    on = context.get('count_on') or options.get('on', 'analyze')
+    fast = context['fast'] if context.get('fast') is not None else options.get('fast', on == 'analyze')
+    counter = TakeFlips(
+        context['human'], label=','.join(context['labels']) if context.get('labels') else find['label'],
+        models=context.get('models') or DEFAULT_MODELS, device=context.get('device', 'cpu'),
+        efficienttam_source=context['efficienttam_source'], worker_python=context.get('worker_python'),
+        expected_max_rev_s=float(context.get('max_rev_s') or options['max_rev_s']), on=on, fast=fast,
+        count_at_end=bool(context.get('replay')), show=bool(context.get('show')), cached=context.get('cached'),
+        log_dir=context.get('record_dir') or 'gamst-takes')
+    return dict(module=counter.open())
+
+
 PARTS = {
     # inputs
     'camera': Part('input', extras=('rotation',)),
@@ -203,7 +230,8 @@ PARTS = {
     'gamst240': Part('input', extras=('rotation',)),
     # perception modules
     'rotation': Part('module', extras=('rotation',), build=_rotation, sampling=rotation_sampling),
-    'flip': Part('module', extras=('rotation',), sampling=rotation_sampling),
+    'take-recorder': Part('module', extras=('rotation',), build=_take_recorder),
+    'flip': Part('module', extras=('rotation',), build=_flip, sampling=rotation_sampling),
     'yoloe': Part('module', extras=('yoloe',), pip=('clip',), models='yoloe', build=_yoloe),
     'efficienttam': Part('module', extras=('efficienttam',), models='efficienttam', sources=('EfficientTAM',)),
     'mediapipe-pose': Part('module', extras=('mediapipe',), models=POSE_ASSETS, group='mediapipe',
