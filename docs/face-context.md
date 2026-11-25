@@ -11,7 +11,7 @@ It publishes bounded model-to-camera rotation estimates; real pose accuracy
 and calibration validation remain deferred.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 config = {'path': '/absolute/face_landmarker.task',
           'sha256': checkpoint_sha256, 'max_faces': 4}
 spec = ProcessProvider.capability('mediapipe.face', config)

@@ -5,10 +5,10 @@ try:
     import numpy as np
 except ImportError:
     np = None
-from humansense.providers.qwen_asr import QwenStreamingASR
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst.providers.qwen_asr import QwenStreamingASR
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 class EngineDouble:
@@ -84,7 +84,7 @@ class QwenLifecycle(unittest.TestCase):
 @unittest.skipIf(np is None, 'numpy not installed')
 class QwenPublication(unittest.IsolatedAsyncioTestCase):
     async def test_manual_output_sequence_allows_final_without_new_capture(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             p=provider(); human.register_capability(p.spec)
             start=timestamp()-1000; output_sequence=0
             for i in range(11):
@@ -100,8 +100,8 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot['utterances'][0]['update']['text'],'안녕하세요!')
 
     async def test_manual_endpoint_publication_uses_distinct_output_sequences(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider(); human.register_capability(p.spec)
             start=timestamp()-1000; output_sequence=0
             async def publish(value,f):
@@ -131,7 +131,7 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
                 if state.count >= 1600:
                     state.text = 'wrong' if state.count < 3200 else ''
                     state.language = 'English'
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             p=provider(RetractionEngine()); human.register_capability(p.spec)
             start=timestamp()-1000; emitted=[]
             for i in range(11):
@@ -153,8 +153,8 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot['utterances'][0]['status'],'final')
 
     async def test_forced_boundary_and_tail_remain_distinct_in_mcp_context(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider(); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('fixture','mic',[p.spec.id])
@@ -173,7 +173,7 @@ class QwenPublication(unittest.IsolatedAsyncioTestCase):
                              {'segment_limit','input_end'})
 
     async def test_managed_stream_finish_flushes_qwen_tail(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             engine=EngineDouble(); p=provider(engine)
             streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)

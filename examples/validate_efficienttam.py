@@ -11,10 +11,10 @@ import json
 from pathlib import Path
 import time
 
-from humansense import ProcessProvider
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.region_appearance import region_evidence
+from gamst import ProcessProvider
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.region_appearance import region_evidence
 
 
 async def run(args):

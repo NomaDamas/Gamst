@@ -13,10 +13,10 @@ from pathlib import Path
 
 
 async def main(args):
-    from websockets.asyncio.client import connect
+    from gamst.ws_auth import connect_local
     if not args.consent or not (args.wav or args.image):
         raise ValueError('Supply --consent and --wav and/or --image')
-    async with connect('ws://127.0.0.1:8765') as socket:
+    async with connect_local() as socket:
         counter=0
         async def rpc(method,params):
             nonlocal counter
@@ -27,11 +27,11 @@ async def main(args):
                 if response.get('id')==counter:
                     if 'error' in response: raise RuntimeError(response['error'])
                     return response['result']
-        await rpc('humansense/stream/start',{'consent':True})
+        await rpc('gamst/stream/start',{'consent':True})
         try:
             if args.image:
                 encoded=base64.b64encode(Path(args.image).read_bytes()).decode()
-                print(await rpc('humansense/media',dict(modality='video',jpeg=encoded,sequence=0)))
+                print(await rpc('gamst/media',dict(modality='video',jpeg=encoded,sequence=0)))
             if args.wav:
                 with wave.open(args.wav,'rb') as audio:
                     if audio.getnchannels()!=1 or audio.getsampwidth()!=2:
@@ -39,14 +39,14 @@ async def main(args):
                     rate=audio.getframerate();sequence=0
                     while data:=audio.readframes(rate//2):
                         samples=[v[0]/32768 for v in struct.iter_unpack('<h',data)]
-                        print(await rpc('humansense/media',dict(modality='audio',samples=samples,sample_rate=rate,sequence=sequence)))
+                        print(await rpc('gamst/media',dict(modality='audio',samples=samples,sample_rate=rate,sequence=sequence)))
                         sequence+=1
                         await asyncio.sleep(len(samples)/rate)
             # Allow bounded model work to finish; inspect router metrics on another client.
             await asyncio.sleep(3)
             print(await rpc('tools/call',{'name':'get_context','arguments':{}}))
         finally:
-            await rpc('humansense/stream/stop',{})
+            await rpc('gamst/stream/stop',{})
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

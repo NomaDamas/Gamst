@@ -4,11 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.mcp import MCPServer
-from humansense.streams import _finish
-from humansense.providers.visual_microphone_context import decode,LIMIT
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.mcp import MCPServer
+from gamst.streams import _finish
+from gamst.providers.visual_microphone_context import decode,LIMIT
 
 
 async def deliver(packet,python,interval_ms=100):
@@ -19,7 +19,7 @@ async def deliver(packet,python,interval_ms=100):
         coordinate_frame=meta['coordinate_frame'],calibration_id=meta['config']['calibration_id'],
         capture_sequence=meta['window_sequence'])
     frame=InputFrame(packet,'video',end,meta['subject_id'],sensor=sensor)
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams=SensorStreams(human)
         spec=ProcessProvider.capability('visual_microphone.phase',meta['config'])
         async def factory():return await ProcessProvider.open(python,'visual_microphone.phase',meta['config'])

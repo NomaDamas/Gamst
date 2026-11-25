@@ -7,13 +7,13 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense.engine import HumanSense
-from humansense.mcp import MCPServer
+from gamst.engine import Gamst
+from gamst.mcp import MCPServer
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         await self.human.__aenter__()
         self.server = MCPServer(self.human)
 
@@ -59,6 +59,42 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(json.loads(events["content"][0]["text"])), 0)
         await self.request("delete_data", {"subject_id": "alice"})
         self.assertEqual(await self.human.get_history(subject_id="alice"), [])
+
+    async def test_semantic_state_chain_is_bounded_and_mcp_read_only(self):
+        import time
+        now = int(time.time() * 1000)
+        first = await self.human.push_semantic_state(
+            {"phase": "preparing"}, subject_id="alice", timestamp_ms=now - 1000,
+            evidence_ids=["frame-1"], sources=["video"])
+        second = await self.human.push_semantic_state(
+            {"phase": "acting"}, subject_id="alice", timestamp_ms=now,
+            events=[{"type": "throw", "at_ms": now}], evidence_ids=["frame-2"],
+            sources=["video", "audio"])
+        self.assertEqual(first["state"]["phase"], "preparing")
+        chain = await self.human.get_semantic_state("alice", window="5s")
+        self.assertEqual([x["state"]["phase"] for x in chain["updates"]], ["preparing", "acting"])
+        response = await self.request("get_semantic_state", {"subject_id": "alice", "window": "5s"})
+        self.assertFalse(response["isError"], response)
+        payload = json.loads(response["content"][0]["text"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["updates"][1]["evidence_ids"], ["frame-2"])
+        self.assertEqual(len(chain["updates"]), 2)
+
+    async def test_video_state_and_signals_fuse_before_mcp_context(self):
+        import time
+        now = int(time.time() * 1000)
+        await self.human.observe_perception_signal({
+            "name": "audio.impact", "value": {"active": True}, "modality": "audio",
+            "timestamp_ms": now, "evidence_ids": ["audio-1"]})
+        await self.human.observe_semantic_video_state(
+            {"phase": "impact_after_motion"}, timestamp_ms=now,
+            evidence_ids=["frame-1"], model_id="streaming-vlm", model_version="pinned")
+        chain = await self.human.get_semantic_state("local-user", window="5s")
+        update = chain["updates"][-1]
+        self.assertEqual(update["state"]["video_state"]["phase"], "impact_after_motion")
+        self.assertIn("audio.impact", [s["name"] for s in update["state"]["fusion"]["signals"]])
+        context = await self.human.get_context(window="5s")
+        self.assertEqual(context["semantic_state_chain"]["count"], 2)
 
     async def test_invalid_rpc(self):
         for request in ([], {}, {"jsonrpc": "1.0", "method": "ping"},
@@ -108,7 +144,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             def status(self):
                 return {"running": self.running, "paused": self.paused}
 
-        with patch("humansense.capture.CaptureSession", Capture):
+        with patch("gamst.capture.CaptureSession", Capture):
             results = await asyncio.gather(
                 self.request("start_capture", {"consent": True, "video": None, "audio": True}),
                 self.request("start_capture", {"consent": True, "video": None, "audio": True}))
@@ -125,7 +161,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.server.capture)
 
     async def test_local_model_selection_rollback_reuse_and_subject_binding(self):
-        from humansense.plugins import PerceptionPlugin
+        from gamst.plugins import PerceptionPlugin
         created = []
 
         class Model(PerceptionPlugin):
@@ -156,25 +192,26 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         args = {"consent": True, "video": None, "audio": True,
                 "subject_id": "alice", "vad_model_path": "/tmp/vad.jit",
                 "asr_model_path": "/tmp/asr"}
-        with patch("humansense.capture.CaptureSession", Capture), \
-                patch("humansense.plugins.AudioLevelPlugin", Model), \
-                patch("humansense.plugins.SileroVADPlugin", Model), \
-                patch("humansense.plugins.FasterWhisperPlugin", side_effect=RuntimeError("missing local ASR")):
+        with patch("gamst.capture.CaptureSession", Capture), \
+                patch("gamst.plugins.AudioLevelPlugin", Model), \
+                patch("gamst.plugins.SileroVADPlugin", Model), \
+                patch("gamst.plugins.FasterWhisperPlugin", side_effect=RuntimeError("missing local ASR")):
             failed = await self.request("start_capture", args)
             self.assertTrue(failed["isError"])
             self.assertEqual(self.human.plugins, [])
             self.assertEqual(self.server._capture_plugins, {})
             self.assertTrue(all(model.closed for model in created))
-        with patch("humansense.capture.CaptureSession", Capture), \
-                patch("humansense.plugins.AudioLevelPlugin", Model), \
-                patch("humansense.plugins.SileroVADPlugin", Model), \
-                patch("humansense.plugins.FasterWhisperPlugin", Model):
+        with patch("gamst.capture.CaptureSession", Capture), \
+                patch("gamst.plugins.AudioLevelPlugin", Model), \
+                patch("gamst.plugins.SileroVADPlugin", Model), \
+                patch("gamst.plugins.FasterWhisperPlugin", Model):
             result = await self.request("start_capture", args)
             self.assertFalse(result["isError"], result)
             self.assertNotIn("vad_model_path", self.server.capture.args)
             models = list(self.human.plugins)
             await self.request("stop_capture", {})
-            self.assertTrue(all(model.resets == 1 for model in models))
+            # ASR is wrapped in a bounded queue; the wrapper forwards reset to the model.
+            self.assertTrue(all(getattr(model, "plugin", model).resets == 1 for model in models))
             result = await self.request("start_capture", args)
             self.assertFalse(result["isError"], result)
             self.assertEqual(self.human.plugins, models)
@@ -193,7 +230,7 @@ class StdioTests(unittest.TestCase):
                     json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
                     json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "push_text", "arguments": {"text": "Please explain again"}}}),
                     json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "get_events", "arguments": {}}})]
-        proc = subprocess.run([sys.executable, "-m", "humansense.mcp"], input="\n".join(messages) + "\n", text=True,
+        proc = subprocess.run([sys.executable, "-m", "gamst.mcp"], input="\n".join(messages) + "\n", text=True,
                               capture_output=True, timeout=15, env=os.environ.copy())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         output = [json.loads(line) for line in proc.stdout.splitlines()]

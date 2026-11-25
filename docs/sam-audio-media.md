@@ -4,7 +4,7 @@ This is the software transport/ownership slice of [#221](https://github.com/Noma
 
 ## Explicit local ownership
 
-Ordinary HumanSense operation retains no separation waveforms. Within the runtime event loop, an application with ingestion consent can explicitly grant one local owner:
+Ordinary Gamst operation retains no separation waveforms. Within the runtime event loop, an application with ingestion consent can explicitly grant one local owner:
 
 ```python
 owner = human.enable_separation_media(
@@ -13,7 +13,7 @@ owner = human.enable_separation_media(
 )
 ```
 
-Pass this object as `separation_owner=owner` when explicitly opening the reserved ProcessProvider profile. Every worker needs a fresh grant; factories must not reuse an owner across workers. The owner checks exact subject/source/sensor, provider epoch and HumanSense generation. Its first actual request binds the epoch. A generation change revokes all grants, including grants for another subject, consistent with existing runtime-wide processing reset behavior. A new runtime grant is necessary after revocation.
+Pass this object as `separation_owner=owner` when explicitly opening the reserved ProcessProvider profile. Every worker needs a fresh grant; factories must not reuse an owner across workers. The owner checks exact subject/source/sensor, provider epoch and Gamst generation. Its first actual request binds the epoch. A generation change revokes all grants, including grants for another subject, consistent with existing runtime-wide processing reset behavior. A new runtime grant is necessary after revocation.
 
 `owner.retrieve(reference, "target", stream_epoch=epoch)` and the corresponding `"residual"` call are the explicit authorized local Python API. They return immutable float32 bytes only to the exact active owner and epoch. `owner.lookup(reference, stream_epoch=epoch)` returns copied availability metadata. A reference is an identifier; it does not grant authorization. This is a capability boundary inside the application, not isolation against Python code already controlling the process.
 

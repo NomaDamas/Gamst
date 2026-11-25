@@ -1,14 +1,14 @@
 import asyncio
 import time
 import unittest
-from humansense import HumanSense
-from humansense.plugins import InputFrame
-from humansense.realtime import QueuedPlugin, LocalScenePlugin
+from gamst import Gamst
+from gamst.plugins import InputFrame
+from gamst.realtime import QueuedPlugin, LocalScenePlugin
 
 
 class RealtimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_throttle_keeps_signals_and_speech_transitions(self):
-        async with HumanSense(consent=True, sensor_inference_interval_ms=5000) as human:
+        async with Gamst(consent=True, sensor_inference_interval_ms=5000) as human:
             await human.push_signal('speech.activity', True, 'audio')
             await human.push_signal('speech.activity', False, 'audio')
             for i in range(20):
@@ -31,7 +31,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
                 return []
             def reset(self):
                 self.resets += 1
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             plugin = Video()
             worker = QueuedPlugin(human, plugin, capacity=1)
             human.register(worker)
@@ -43,7 +43,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
             await worker.task
 
     async def test_context_contains_compact_faces_but_no_raw_media(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.push_signal('scene.faces', [{'frame_face_index': 0, 'landmarks': [{'x': 1}] * 478,
                 'blendshapes': {'mouthSmileLeft': .8, 'eyeBlinkLeft': .1}}], 'video')
             await human.push_signal('scene.image', 'secret-image', 'video')
@@ -62,7 +62,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await asyncio.sleep(10)
                 return [{'name': 'text.transcript', 'value': 'late'}]
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             worker = QueuedPlugin(human, Slow(), capacity=2)
             human.register(worker)
             await asyncio.wait_for(human.push_audio([0] * 512), .1)
@@ -80,7 +80,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
             name, modalities = 'asr-fixture', ('audio',)
             async def process(self, frame):
                 return [{'name': 'text.transcript', 'value': 'Please explain again'}]
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             worker = QueuedPlugin(human, ASR())
             human.register(worker)
             await human.push_audio([0] * 512)
@@ -94,7 +94,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
             LocalScenePlugin('https://example.com/v1/chat/completions', 'test')
 
     async def test_stale_measurements_are_marked(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             await human.push_signal('audio.rms', .1, 'audio', timestamp_ms=int(time.time()*1000)-6000)
             context = await human.get_context()
             self.assertFalse(context['observations']['audio.rms']['fresh'])
@@ -104,7 +104,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
             name, modalities = 'broken', ('audio',)
             async def process(self, frame):
                 raise RuntimeError('fixture failure')
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             worker = QueuedPlugin(human, Broken())
             human.register(worker)
             await human.push_audio([0] * 512)

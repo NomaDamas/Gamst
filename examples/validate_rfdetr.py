@@ -9,10 +9,10 @@ import platform
 import sys
 import time
 
-from humansense import HumanSense, SensorMetadata, SensorStreams, ProcessProvider
-from humansense.plugins import InputFrame
-from humansense.providers.detection import RFDETRObjects
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, SensorStreams, ProcessProvider
+from gamst.plugins import InputFrame
+from gamst.providers.detection import RFDETRObjects
+from gamst.schema import timestamp
 
 
 async def run(args):
@@ -39,7 +39,7 @@ async def run(args):
         input_sha256=hashlib.sha256(Path(args.image).read_bytes()).hexdigest(),
         scenario='real image, repeated image, synthetic 5px translation, blank frame; not a natural video',
         load_ms=load_ms, frames=[])
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         streams = SensorStreams(human)
         streams.register(spec, lambda: provider)
         await streams.open('replay', 'image', [spec.id])

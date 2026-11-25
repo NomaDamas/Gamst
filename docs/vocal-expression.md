@@ -42,7 +42,7 @@ the streaming callback. In an explicitly selected environment with the SDK and
 `vocal-expression-export` extra already installed, run:
 
 ```sh
-/explicit/export-env/bin/python -m humansense.emotion2vec_export \
+/explicit/export-env/bin/python -m gamst.emotion2vec_export \
   --checkpoint /local/emotion2vec_plus_seed/model.pt \
   --config /local/emotion2vec_plus_seed/config.yaml \
   --tokens /local/emotion2vec_plus_seed/tokens.txt \
@@ -118,7 +118,7 @@ license, paced runtime/memory and SDK/MCP acceptance remain required#111.
 
 ## Local artifacts and loader
 
-Optional environment `humansense-sdk[vocal-expression]` selects
+Optional environment `gamst-sdk[vocal-expression]` selects
 `onnxruntime==1.23.2` and NumPy. Pass explicit local model/head paths and SHA256s.
 Discovery is standard-library-only. The loader reads each file once into bounded
 bytes, verifies its hash before native loading, and uses a CPU session with one
@@ -184,7 +184,7 @@ not establish feelings, intentions, truthfulness, identity or language quality.
 ## SDK / MCP
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 config = dict(model_path='/prepared/seed.onnx', head_path='/prepared/head.json',
               model_sha256=MODEL_SHA256, head_sha256=HEAD_SHA256,
               window_ms=2000, hop_ms=500)
@@ -199,7 +199,7 @@ await streams.open('microphone', 'mono', [spec.id])
 ```
 
 For direct calls use `Emotion2VecContext.from_local(...)` from
-`humansense.providers.vocal_expression` and register/publish its spec/result with
+`gamst.providers.vocal_expression` and register/publish its spec/result with
 capture provenance. Current tests (`python3 -m unittest discover -s tests -p
 test_vocal_expression.py -v`) validate window state, hash/IO/head contracts,
 actual NumPy linear-head arithmetic and managed SDK/MCP with predictor/session

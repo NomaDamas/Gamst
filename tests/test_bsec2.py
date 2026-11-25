@@ -9,9 +9,9 @@ import tempfile
 import unittest
 import zlib
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.providers.bsec2 import HEADER,ROW,MAGIC,BoschBSEC2,BSEC2Packets,decode_bsec2
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.providers.bsec2 import HEADER,ROW,MAGIC,BoschBSEC2,BSEC2Packets,decode_bsec2
 
 CONFIG=dict(config_sha256='a'*64,bsec_version='2.6.1.0',calibration_id='clock1',sensor_origin_ns='0',
             capture_origin_ms=1000,classes=['clean','coffee'])
@@ -103,7 +103,7 @@ class BSEC(unittest.TestCase):
         self.assertEqual(value['summary']['sensor_timestamp_ns'],str(ns))
         for change in ({'sensor_origin_ns':'-1'},{'capture_origin_ms':True},{'classes':['a']},{'bsec_version':'3.0.0.0'}):
             with self.assertRaises(ValueError):ProcessProvider.capability('bosch.bsec2',dict(CONFIG,**change))
-        code='import sys;from humansense import ProcessProvider;ProcessProvider.capability("bosch.bsec2",'+repr(CONFIG)+');assert not {"numpy","torch","serial"}&sys.modules.keys()'
+        code='import sys;from gamst import ProcessProvider;ProcessProvider.capability("bosch.bsec2",'+repr(CONFIG)+');assert not {"numpy","torch","serial"}&sys.modules.keys()'
         self.assertEqual(subprocess.run([sys.executable,'-c',code],capture_output=True).returncode,0)
 
     def test_cpp_callback_encoder_matches_python_transport(self):
@@ -131,10 +131,10 @@ size_t size=gamst::encode_bsec2(out,sizeof(out),data,version,7,hash);return fwri
 
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_real_worker_and_managed_mcp_context(self):
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         config=dict(CONFIG,capture_origin_ms=timestamp()-10)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);spec=ProcessProvider.capability('bosch.bsec2',config)
             async def factory():return await ProcessProvider.open(sys.executable,'bosch.bsec2',config)
             streams.register(spec,factory);await streams.open('env','environment',[spec.id])

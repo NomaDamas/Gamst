@@ -7,7 +7,7 @@ tracking state. It does not assign persistent person/hand/face identities. Captu
 and context delivery are still owned by SensorStreams and the consuming application.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 config = {'path': '/absolute/face_landmarker.task', 'sha256': checkpoint_sha256,
           'max_entities': 1, 'max_gap_ms': 1000}
 spec = ProcessProvider.capability('mediapipe.face.video', config)

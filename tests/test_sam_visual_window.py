@@ -1,8 +1,8 @@
 import copy
 import unittest
 import test_sam_visual_packet as fixtures
-from humansense.sam_visual_packet import visual_frame,unpack_visual_packet,visual_policy,validate_visual_policy
-from humansense.sam_visual_window import prepare_visual
+from gamst.sam_visual_packet import visual_frame,unpack_visual_packet,visual_policy,validate_visual_policy
+from gamst.sam_visual_window import prepare_visual
 
 
 @unittest.skipIf(fixtures.np is None,'optional numpy missing')

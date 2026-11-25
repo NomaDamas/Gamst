@@ -1,0 +1,16 @@
+name: GamstHighSpeedCamera
+options:
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  GamstHighSpeedCamera:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: org.nomadamas.gamst.highspeedcamera
+      GENERATE_INFOPLIST_FILE: NO
+      INFOPLIST_FILE: Info.plist
+      TARGETED_DEVICE_FAMILY: "1"
+      SWIFT_VERSION: "5.0"
+      CODE_SIGN_STYLE: Automatic

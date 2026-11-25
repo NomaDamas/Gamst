@@ -90,12 +90,12 @@ the default accepts local non-browser clients. These custom methods are separate
 from standard MCP JSON-RPC tools. Each media request requires an ID.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"humansense/stream/start","params":{"consent":true}}
-{"jsonrpc":"2.0","id":2,"method":"humansense/media","params":{"modality":"audio","samples":[0.0,0.1,-0.1],"sample_rate":16000,"sequence":0}}
-{"jsonrpc":"2.0","id":3,"method":"humansense/media","params":{"modality":"video","jpeg":"BASE64_JPEG","sequence":0}}
-{"jsonrpc":"2.0","id":4,"method":"humansense/subscribe","params":{"types":["context","signal"]}}
-{"jsonrpc":"2.0","id":5,"method":"humansense/stream/status","params":{}}
-{"jsonrpc":"2.0","id":6,"method":"humansense/stream/stop","params":{}}
+{"jsonrpc":"2.0","id":1,"method":"gamst/stream/start","params":{"consent":true}}
+{"jsonrpc":"2.0","id":2,"method":"gamst/media","params":{"modality":"audio","samples":[0.0,0.1,-0.1],"sample_rate":16000,"sequence":0}}
+{"jsonrpc":"2.0","id":3,"method":"gamst/media","params":{"modality":"video","jpeg":"BASE64_JPEG","sequence":0}}
+{"jsonrpc":"2.0","id":4,"method":"gamst/subscribe","params":{"types":["context","signal"]}}
+{"jsonrpc":"2.0","id":5,"method":"gamst/stream/status","params":{}}
+{"jsonrpc":"2.0","id":6,"method":"gamst/stream/stop","params":{}}
 ```
 
 `sequence` is independently increasing per modality. Optional `timestamp_ms` is
@@ -118,7 +118,7 @@ A plugin defines `name`, `modalities`, async `process(InputFrame)`, and optional
 No new thread or process is required for lightweight scalar processors.
 
 ```python
-from humansense.extensions import PluginManifest, classification, signal
+from gamst.extensions import PluginManifest, classification, signal
 
 class MyClassifier:
     name = "my_classifier"
@@ -134,7 +134,7 @@ class MyClassifier:
 Register a package entry point in the plugin's own `pyproject.toml`:
 
 ```toml
-[project.entry-points."catch_your_mind.plugins"]
+[project.entry-points."gamst.plugins"]
 my_classifier = "my_package:MyClassifier"
 ```
 
@@ -150,8 +150,8 @@ Supply an existing model directory; `from_local` does not download Hub models or
 run remote model code. Label semantics and model choice remain application-owned.
 
 ```python
-from humansense.providers.huggingface import HuggingFaceClassifier
-from humansense.realtime import QueuedPlugin
+from gamst.providers.huggingface import HuggingFaceClassifier
+from gamst.realtime import QueuedPlugin
 
 plugin = HuggingFaceClassifier.from_local(
     path="./my-local-model", modality="video",
@@ -175,7 +175,7 @@ Load plugins into the local dashboard with an explicit JSON file:
 ```
 
 Run `python scripts/run_local.py --plugins-config plugins.json`, or use
-`python -m humansense.dashboard --plugins-config plugins.json` with your other
+`python -m gamst.dashboard --plugins-config plugins.json` with your other
 model flags. `provider` may also name an installed third-party entry point.
 
 ## Classification observability
@@ -200,7 +200,7 @@ Install `python -m pip install -e ".[providers]"`. Ollama and the chosen model m
 already be available; this package does not pull models or launch Ollama.
 
 ```python
-from humansense.providers.ollama import OllamaChat
+from gamst.providers.ollama import OllamaChat
 
 backend = OllamaChat("YOUR_INSTALLED_MODEL")
 context = await human.get_context()

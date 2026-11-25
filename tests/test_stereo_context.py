@@ -9,15 +9,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorStreams
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.stereo_packet import stereo_frame, unpack_stereo
-from humansense.providers.stereo_context import StereoMetricContext
-from humansense.providers.detection_trajectories import RFDETRTrajectories
-from humansense.stereo_replay import recording, replay
+from gamst import Gamst, ProcessProvider, SensorStreams
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.stereo_packet import stereo_frame, unpack_stereo
+from gamst.providers.stereo_context import StereoMetricContext
+from gamst.providers.detection_trajectories import RFDETRTrajectories
+from gamst.stereo_replay import recording, replay
 from test_stereo_metric import calibration, np, cv2
 from test_detection_provider import Backend
 
@@ -43,7 +43,7 @@ def packet(seq=0, ts=1000, *, disparity=8, right_ts=None):
 
 class Discovery(unittest.TestCase):
     def test_no_optional_imports(self):
-        code = ('from humansense import ProcessProvider; import sys; '
+        code = ('from gamst import ProcessProvider; import sys; '
                 'ProcessProvider.capability("opencv.rfdetr.stereo",'+repr(CONFIG)+'); '
                 'assert not {"cv2","numpy","torch","rfdetr"}&sys.modules.keys()')
         got = subprocess.run([sys.executable,'-c',code],capture_output=True)
@@ -153,8 +153,8 @@ class Pipeline(unittest.TestCase):
 WORKER = '''
 import numpy as np
 from types import SimpleNamespace
-from humansense.providers.detection import RFDETRObjects
-import humansense.provider_worker as w
+from gamst.providers.detection import RFDETRObjects
+import gamst.provider_worker as w
 class Fixture:
     def predict(self,data,**kwargs):
         return SimpleNamespace(xyxy=np.array([[80,40,240,120]]),confidence=np.array([.9]),class_id=np.array([1]),data={'class_name':['fixture']})
@@ -198,7 +198,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with patch('asyncio.create_subprocess_exec',fixture_spawn):
             worker = await ProcessProvider.open(sys.executable,'opencv.rfdetr.stereo',CONFIG,inference_timeout=10)
             try:
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams = SensorStreams(human)
                     streams.register(worker.spec,lambda:worker)
                     await streams.open('rig','left',[worker.spec.id])

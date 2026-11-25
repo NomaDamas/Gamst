@@ -10,13 +10,13 @@ from unittest.mock import patch
 
 import test_camera_similarity as images
 import test_detection_provider as detection
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.compensated_trajectories import CompensatedTrajectories, ASSUMPTION
-from humansense.providers.tennis_image import TennisImageTask, configuration
-from humansense import HumanSense, ProcessProvider, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.compensated_trajectories import CompensatedTrajectories, ASSUMPTION
+from gamst.providers.tennis_image import TennisImageTask, configuration
+from gamst import Gamst, ProcessProvider, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 from test_compensated_runtime import WORKER
 
 
@@ -141,7 +141,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with patch('asyncio.create_subprocess_exec',spawn):
             worker=await ProcessProvider.open(sys.executable,'rfdetr.tennis_image',config)
         try:
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('cam','rgb',[worker.spec.id],subject_id='subject')
                 for i in range(2):

@@ -4,13 +4,13 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from humansense import HumanSense,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
-from humansense.mcp import MCPServer
-from humansense.observation_pages import observation_page
-from humansense.storage import Store
-from humansense.providers.trajectories import ImageTrajectories
-from humansense.schema import timestamp
+from gamst import Gamst,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
+from gamst.mcp import MCPServer
+from gamst.observation_pages import observation_page
+from gamst.storage import Store
+from gamst.providers.trajectories import ImageTrajectories
+from gamst.schema import timestamp
 import test_image_trajectories as trajectories
 
 
@@ -139,7 +139,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
     async def test_intermediate_trajectory_events_survive_latest_non_event_snapshot(self):
         p=ImageTrajectories(event_rules=[dict(id='zone',kind='roi',bounds=[.4,.3,.8,.7])])
         now=timestamp()-300
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(p.spec);server=MCPServer(human)
             cursor=(await server.call_tool('get_observation_page',dict(events_only=True)))['next_cursor']
             for i,x in enumerate((.2,.6,.2,.1)):
@@ -165,7 +165,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):await human.get_observation_page()
 
     async def test_prune_discloses_gap_and_subject_filter(self):
-        async with HumanSense(consent=True,retention_hours=1/3600) as human:
+        async with Gamst(consent=True,retention_hours=1/3600) as human:
             # The store can contain data ingested by different sources out of capture-time order.
             human.store.add(record(0,timestamp()-500,subject='local-user'))
             first=await human.get_observation_page()

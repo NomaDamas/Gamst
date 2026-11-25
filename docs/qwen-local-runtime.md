@@ -19,7 +19,7 @@ The owned child receives HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, disabled HF/v
 The [vLLM 0.14 environment source](https://github.com/vllm-project/vllm/blob/v0.14.0/vllm/envs.py) defines the multiprocessing switch. Process-tree cleanup and device compatibility still need real-runtime validation. Offline flags constrain supported library resolution; they are not a general network sandbox for arbitrary installed code. Use a trusted selected Python environment. Direct `from_local` callers must configure the required environment before importing inference libraries and own engine lifetime themselves; the ProcessProvider path supplies those settings and owns child teardown.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = {'path': '/absolute/path/to/verified-qwen-bundle',
           'files': trusted_file_hash_mapping}

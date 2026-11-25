@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-from humansense.providers.ollama import OllamaChat
+from gamst.providers.ollama import OllamaChat
 
 
 class OllamaTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +22,7 @@ class OllamaTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self,*a):pass
             def stream(self,method,url,json):
                 assert json['stream'] is True
-                assert json['messages'][0]['role']=='system'
+                assert json['messages'][0]['role']=='user' and '<sensor_context>' in json['messages'][0]['content']
                 return Response()
         with patch.dict('sys.modules',{'httpx':SimpleNamespace(AsyncClient=Client)}):
             provider=OllamaChat('fixture')

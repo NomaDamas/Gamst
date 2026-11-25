@@ -59,7 +59,7 @@ then takes the central112x112. Detection context, crop scale and tracking qualit
 remain external, explicit dependencies until the concrete bridge implements them.
 
 ```python
-from humansense import TalkNetWindows, decode_talknet_window
+from gamst import TalkNetWindows, decode_talknet_window
 
 windows = TalkNetWindows(clock_id='device-monotonic',
                         source_id='av-capture', sensor_id='face-1-mic',

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.hand_context import MediaPipeHandContext
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.hand_context import MediaPipeHandContext
+from gamst.schema import timestamp
 def points():
     return [SimpleNamespace(x=.2+(i%5)*.1,y=.2+(i//5)*.1,z=0.) for i in range(21)]
 try:
@@ -141,8 +141,8 @@ class Geometry(unittest.TestCase):
 @unittest.skipIf(np is None,'numpy not installed')
 class Publication(unittest.IsolatedAsyncioTestCase):
     async def test_hand_context_through_managed_lane_and_mcp(self):
-        from humansense.mcp import MCPServer
-        async with HumanSense(consent=True) as human:
+        from gamst.mcp import MCPServer
+        async with Gamst(consent=True) as human:
             p=provider([points()]); streams=SensorStreams(human)
             streams.register(p.spec,lambda:p)
             await streams.open('camera','sensor',[p.spec.id])

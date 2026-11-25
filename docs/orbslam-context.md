@@ -11,7 +11,7 @@ its dependencies; no model or dependency downloads happen during provider startu
 
 ```python
 import sys
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 config = dict(
     library_path='/absolute/path/libgamst_orb_bridge.so',
@@ -24,7 +24,7 @@ config = dict(
     max_frames=300, max_gap_ms=1000, sequence_step=1,
 )
 worker = await ProcessProvider.open(sys.executable, 'orbslam3.monocular', config)
-# Existing consent-enabled HumanSense; enough packet space for 1920x1080 BGR.
+# Existing consent-enabled Gamst; enough packet space for 1920x1080 BGR.
 streams = SensorStreams(human, max_packet_bytes=8*1024*1024)
 streams.register(worker.spec, lambda: worker)
 await streams.open('camera', 'video', [worker.spec.id])
@@ -77,4 +77,4 @@ latency and deployment license review remain required in
 [#186](https://github.com/NomaDamas/Gamst/issues/186). This does not close family6.
 The provider implementation slice is [#193](https://github.com/NomaDamas/Gamst/issues/193).
 
-For a hash-pinned recorded input run, use the [replay CLI](orbslam-replay.md).
+The former hash-pinned replay CLI is described in the [benchmark archive](archive/benchmarks-and-evaluation.md).

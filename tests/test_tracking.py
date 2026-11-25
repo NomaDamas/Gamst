@@ -1,6 +1,6 @@
 import unittest
 
-from humansense.tracking import PersonTracker, normalize_bbox, intersection_over_union
+from gamst.tracking import PersonTracker, normalize_bbox, intersection_over_union
 
 
 class BoxTests(unittest.TestCase):

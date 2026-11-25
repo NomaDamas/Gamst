@@ -7,7 +7,7 @@ try:
 except ImportError:
     np = torch = Image = None
 
-from humansense.providers.efficienttam_stream import EfficientTAMStream, _normalize
+from gamst.providers.efficienttam_stream import EfficientTAMStream, _normalize
 
 
 class Predictor:
@@ -85,7 +85,7 @@ class EfficientTAMStreaming(unittest.TestCase):
     def test_causal_retention_and_owned_masks(self):
         # Patch only image resizing to keep a long state-machine test inexpensive.
         from unittest.mock import patch
-        with patch('humansense.providers.efficienttam_stream._normalize', return_value=torch.zeros(3, 2, 2)):
+        with patch('gamst.providers.efficienttam_stream._normalize', return_value=torch.zeros(3, 2, 2)):
             for t in range(1000):
                 masks = self.stream.step(self.image, boxes=self.boxes if t == 0 else None)
                 self.assertEqual(masks.shape, (2, 32, 45))

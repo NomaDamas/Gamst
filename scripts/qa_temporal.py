@@ -2,12 +2,12 @@
 import asyncio,json,time
 from pathlib import Path
 import cv2
-from humansense import HumanSense
-from humansense.plugins import InputFrame,MediaPipeFacePlugin
-from humansense.realtime import LocalScenePlugin,QueuedPlugin
-from humansense.mcp import MCPServer
+from gamst import Gamst
+from gamst.plugins import InputFrame,MediaPipeFacePlugin
+from gamst.realtime import LocalScenePlugin,QueuedPlugin
+from gamst.mcp import MCPServer
 async def main():
-    async with HumanSense(consent=True) as h:
+    async with Gamst(consent=True) as h:
         image=cv2.imread('.local-run/qa/portrait.jpg')
         p=LocalScenePlugin('http://127.0.0.1:18767/v1/chat/completions','local-vlm',human=h)
         p.interval=60

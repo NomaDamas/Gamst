@@ -13,11 +13,11 @@ import types
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.providers.sparsh_context import SparshSlipContext, preprocess_pair, profile_value
-from humansense.providers.tactile import TactileSource, tactile_frame
+from gamst import Gamst, ProcessProvider, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.providers.sparsh_context import SparshSlipContext, preprocess_pair, profile_value
+from gamst.providers.tactile import TactileSource, tactile_frame
 
 AVAILABLE=all(importlib.util.find_spec(x) for x in ('numpy','PIL'))
 REFERENCE=bytes([100,120,140]*12)
@@ -66,7 +66,7 @@ def context(native=None, **changes):
 
 class Discovery(unittest.TestCase):
     def test_dependency_free_profile_and_explicit_reference_consent(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("sparsh.slip.local",'+repr(config())+');assert not {"torch","numpy","PIL","cv2"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("sparsh.slip.local",'+repr(config())+');assert not {"torch","numpy","PIL","cv2"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for change in ({'reference_consent':False},{'min_interval_ms':True},{'min_pair_span_ms':144},
@@ -74,7 +74,7 @@ class Discovery(unittest.TestCase):
             with self.assertRaises(ValueError):profile_value(profile(**change))
         with self.assertRaises(ValueError):ProcessProvider.capability('sparsh.slip.local',config(extra=True))
         with self.assertRaises(ValueError):ProcessProvider.capability('sparsh.slip.local',config(reference_path='relative'))
-        with patch('humansense.providers.sparsh_context.SparshSlipNative.from_local') as native:
+        with patch('gamst.providers.sparsh_context.SparshSlipNative.from_local') as native:
             with self.assertRaises(ValueError):SparshSlipContext.from_local(**config(profile=profile(reference_consent=False)))
             native.assert_not_called()
 
@@ -187,16 +187,16 @@ class Context(unittest.TestCase):
                 provider.close()
 
     def test_reference_before_native_and_worker_factory(self):
-        from humansense.provider_worker import _construct
+        from gamst.provider_worker import _construct
         with tempfile.TemporaryDirectory(dir='.') as tmp:
             path=Path(tmp).resolve()/'reference';path.write_bytes(REFERENCE)
             cfg=config(reference_path=str(path));native=Native()
-            with patch('humansense.providers.sparsh_context.SparshSlipNative.from_local',return_value=native):
+            with patch('gamst.providers.sparsh_context.SparshSlipNative.from_local',return_value=native):
                 provider,spec=_construct('sparsh.slip.local',cfg)
                 self.assertEqual(spec,provider.spec);self.assertTrue(provider._verified)
                 provider.close();self.assertEqual(native.closed,1)
             path.write_bytes(b'bad')
-            with patch('humansense.providers.sparsh_context.SparshSlipNative.from_local') as load:
+            with patch('gamst.providers.sparsh_context.SparshSlipNative.from_local') as load:
                 with self.assertRaises(ValueError):SparshSlipContext.from_local(**cfg)
                 load.assert_not_called()
 
@@ -211,12 +211,12 @@ class Context(unittest.TestCase):
             cfg=root/'config.json';cfg.write_text(json.dumps(config(reference_path=str(root/'reference'))))
             code='''
 import numpy as np
-from humansense.providers.sparsh_native import SparshSlipNative
+from gamst.providers.sparsh_native import SparshSlipNative
 class Fixture:
     def predict(self,x):return {'slip_logits':np.array([0,2],np.float32),'normalized_delta_force':np.zeros(3,np.float32)}
     def close(self):pass
 SparshSlipNative.from_local=lambda *a,**kw:Fixture()
-from humansense.sparsh_replay import main
+from gamst.sparsh_replay import main
 main()
 '''
             run=subprocess.run([sys.executable,'-c',code,'--manifest',str(manifest),'--config',str(cfg)],capture_output=True,text=True,timeout=15)
@@ -232,12 +232,12 @@ class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_real_owned_worker_dispatch_replay_and_close(self):
         code="""
 import numpy as np
-from humansense.providers.sparsh_native import SparshSlipNative
+from gamst.providers.sparsh_native import SparshSlipNative
 class Fixture:
     def predict(self,x):return {'slip_logits':np.array([0,2],np.float32),'normalized_delta_force':np.zeros(3,np.float32)}
     def close(self):pass
 SparshSlipNative.from_local=lambda *a,**kw:Fixture()
-from humansense.provider_worker import main
+from gamst.provider_worker import main
 main()
 """
         children=[];real_spawn=asyncio.create_subprocess_exec
@@ -248,7 +248,7 @@ main()
             ref=Path(tmp).resolve()/'reference';ref.write_bytes(REFERENCE)
             cfg=config(reference_path=str(ref))
             try:
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human)
                     spec=ProcessProvider.capability('sparsh.slip.local',cfg)
                     with patch('asyncio.create_subprocess_exec',side_effect=spawn):
@@ -271,7 +271,7 @@ main()
                     if child.returncode is None:child.kill();await child.wait()
 
     async def test_actual_context_stream_and_mcp(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             native=Native();provider=context(native);streams=SensorStreams(human)
             streams.register(provider.spec,lambda:provider)
             await streams.open('touch','finger',[provider.spec.id])

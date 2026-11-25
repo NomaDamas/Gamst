@@ -3,10 +3,10 @@ try:
     import numpy as np
 except ImportError:
     np = None
-from humansense.providers.direction import GCCPHATDirection
-from humansense.plugins import InputFrame
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.schema import timestamp
+from gamst.providers.direction import GCCPHATDirection
+from gamst.plugins import InputFrame
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.schema import timestamp
 
 
 def provider(**kwargs):
@@ -74,7 +74,7 @@ class Direction(unittest.TestCase):
 @unittest.skipIf(np is None, 'numpy not installed')
 class DirectionRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_window_direction_reaches_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = GCCPHATDirection.capability()
             streams.register(spec, provider)

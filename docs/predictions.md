@@ -25,7 +25,7 @@ await human.record_feedback(inference["id"], observed_help_request,
 Create train/validation JSONL files with `{"id":"unique-event-id","score":0.8,"outcome":true}`. Scores are prior model outputs and outcomes are later observed events. Separate participants/sessions/time ranges, use globally unique IDs, and select thresholds before examining held-out results. The tool detects ID overlap, not semantic duplicate sessions or invalid target labels.
 
 ```bash
-python -m humansense.calibrate \
+python -m gamst.calibrate \
   --training train.jsonl --validation validation.jsonl \
   --training-dataset train-participants-v1 --validation-dataset heldout-participants-v1 \
   --target user_requests_assistance \
@@ -37,7 +37,7 @@ The equal-width histogram fits probabilities as actual training-bin event freque
 
 ```python
 from pathlib import Path
-from humansense import CalibrationArtifact
+from gamst import CalibrationArtifact
 artifact = CalibrationArtifact.from_json(Path("help-calibration.json").read_text())
 human.define_prediction("needs_help", target=artifact.target,
     score_name="interaction.help_model_score", calibration=artifact)

@@ -1,5 +1,5 @@
-/** Browser-compatible HumanSense WebSocket RPC client. No build dependencies. */
-export class HumanSenseClient {
+/** Browser-compatible Gamst WebSocket RPC client. No build dependencies. */
+export class GamstClient {
   constructor(url = 'ws://127.0.0.1:8765', { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30000 } = {}) {
     if (!WebSocketImpl) throw new Error('A WebSocket implementation is required');
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be positive');
@@ -47,7 +47,7 @@ export class HumanSenseClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id); reject(new Error('HumanSense RPC timed out'));
+        this.pending.delete(id); reject(new Error('Gamst RPC timed out'));
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try { this.send({ jsonrpc: '2.0', id, method, params }); }
@@ -61,7 +61,7 @@ export class HumanSenseClient {
     if (typeof content !== 'string') return result;
     try { return JSON.parse(content); } catch { return content; }
   }
-  subscribe(types = ['event']) { return this.request('humansense/subscribe', { types }); }
+  subscribe(types = ['event']) { return this.request('gamst/subscribe', { types }); }
   onMessage(callback) { this.listeners.add(callback); return () => this.listeners.delete(callback); }
   close() { this.socket.close(); }
 }

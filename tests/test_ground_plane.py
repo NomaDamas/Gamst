@@ -4,11 +4,11 @@ import sys
 import unittest
 from dataclasses import replace
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.mcp import MCPServer
-from humansense.providers.ground_plane import GroundPlane
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.mcp import MCPServer
+from gamst.providers.ground_plane import GroundPlane
+from gamst.schema import timestamp
 
 CONFIG=dict(id='court-cal',reference_id='view-1',source_id='cam',sensor_id='points',
     input_frame='camera.image',output_frame='court.xy',image_size=[640,480],
@@ -62,7 +62,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
     async def test_real_dependency_free_worker_context_mcp(self):
         worker=await ProcessProvider.open(sys.executable,'geometry.ground_plane',CONFIG)
         try:
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                 await streams.open('cam','points',[worker.spec.id])
                 f=frame()
@@ -71,5 +71,9 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
                 response=await MCPServer(human).call_tool('get_observations',{'capability_id':worker.spec.id})
                 self.assertIn('off_plane_or_unknown',json.dumps(response))
                 self.assertIn('court.xy',json.dumps(response))
+                temporal=await human.build_temporal_context()
+                event=next(e for e in temporal['events'] if e['event_type']=='geometry.plane_points')
+                self.assertEqual(event['clock_id'],worker.clock_id)
+                self.assertEqual(event['clock_epoch'],worker.clock_epoch)
                 await human.pause();self.assertTrue(worker.closed)
         finally:await worker.close()

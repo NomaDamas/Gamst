@@ -9,7 +9,7 @@ SensorStreams and Python/MCP context consumers. The `mediapipe.hand` ProcessProv
 profile runs an explicitly chosen local Hand Landmarker task in CPU IMAGE mode.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 config = {'path': '/absolute/hand_landmarker.task',
           'sha256': checkpoint_sha256, 'max_hands': 4}
 spec = ProcessProvider.capability('mediapipe.hand', config)

@@ -8,10 +8,10 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from humansense.providers.sparsh_native import (
+from gamst.providers.sparsh_native import (
     SparshSlipNative, _header, construct, source_graph, strict_state,
 )
-from humansense.providers.sparsh_sources import STATE_SHAPES
+from gamst.providers.sparsh_sources import STATE_SHAPES
 
 TORCH = all(importlib.util.find_spec(x) for x in ('torch', 'safetensors', 'numpy'))
 SOURCE = os.environ.get('GAMST_TEST_SPARSH_SOURCE')
@@ -58,7 +58,7 @@ class HeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'encoder';p.write_bytes(b'x')
             import hashlib
-            with patch('humansense.providers.sparsh_native.construct') as builder:
+            with patch('gamst.providers.sparsh_native.construct') as builder:
                 with self.assertRaises(FileNotFoundError):
                     SparshSlipNative.from_local(tmp,str(p),str(Path(tmp)/'missing'),
                         encoder_sha256=hashlib.sha256(b'x').hexdigest(),head_sha256='0'*64)
@@ -95,7 +95,7 @@ class RuntimeTests(unittest.TestCase):
         payload=save({'wrong':torch.zeros(1)})
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'state';path.write_bytes(payload)
-            with patch('humansense.providers.sparsh_native.construct') as builder:
+            with patch('gamst.providers.sparsh_native.construct') as builder:
                 with self.assertRaisesRegex(ValueError,'keys/shapes'):
                     SparshSlipNative.from_local(tmp,str(path),str(path),
                         encoder_sha256=hashlib.sha256(payload).hexdigest(),
@@ -115,9 +115,9 @@ class RuntimeTests(unittest.TestCase):
                 return SparshSlipNative.from_local(tmp,*map(str,paths),
                     encoder_sha256=hashlib.sha256(paths[0].read_bytes()).hexdigest(),
                     head_sha256=hashlib.sha256(paths[1].read_bytes()).hexdigest())
-            with patch('humansense.providers.sparsh_native.STATE_SHAPES',shapes), \
-                 patch('humansense.providers.sparsh_native.source_graph',return_value=(None,None)), \
-                 patch('humansense.providers.sparsh_native.construct',return_value=(encoder,head)) as builder:
+            with patch('gamst.providers.sparsh_native.STATE_SHAPES',shapes), \
+                 patch('gamst.providers.sparsh_native.source_graph',return_value=(None,None)), \
+                 patch('gamst.providers.sparsh_native.construct',return_value=(encoder,head)) as builder:
                 runtime=load()
                 self.assertEqual(runtime.identity['trained_quality_verified'],False)
                 self.assertIs(runtime._encoder,encoder);runtime.close()

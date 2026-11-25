@@ -80,10 +80,8 @@ def main():
                 time.sleep(1)
         else:
             raise RuntimeError('VLM startup timed out')
-        env = dict(os.environ, HUMANSENSE_COMPANION_URL='http://127.0.0.1:18767/v1/chat/completions',
-                   HUMANSENSE_COMPANION_MODEL='local-vlm', MPLCONFIGDIR=str(logs/'matplotlib'))
-        # Companion remains optional. No automatic reasoning/emotion classification.
-        app = start([sys.executable, '-m', 'humansense.dashboard', '--face-model', models/'face_landmarker.task',
+        env = dict(os.environ, MPLCONFIGDIR=str(logs/'matplotlib'))
+        app = start([sys.executable, '-m', 'gamst.dashboard', '--face-model', models/'face_landmarker.task',
             '--asr-model', models/'whisper-small', '--vad-model', models/'silero_vad.jit',
             '--scene-url', 'http://127.0.0.1:18767/v1/chat/completions', '--scene-model', 'local-vlm',
             '--websocket-port', '8765', *(['--asr-language', args.language] if args.language else []),

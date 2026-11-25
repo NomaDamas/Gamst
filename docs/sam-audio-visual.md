@@ -2,7 +2,7 @@
 
 This implements the bounded visual-window path for [#202](https://github.com/NomaDamas/Gamst/issues/202): packet validation, causal frame selection, the native SAM Audio worker, scoped media ownership, Context/MCP metadata and recorded replay. The existing SAM Audio profile accepts an optional frozen `visual_policy`; no separate visual model is registered. Actual trained separation, device resource measurements and timing acceptance remain in #203/#187.
 
-`humansense.sam_visual_packet.visual_frame` accepts an original mono float32
+`gamst.sam_visual_packet.visual_frame` accepts an original mono float32
 48kHz audio InputFrame, plain RGB uint8 NCHW frames and uint8 N1HW masks. Its
 keyword arguments supply original capture intervals in microseconds, strictly
 increasing capture sequences, visual SensorMetadata, track/segment IDs, mask
@@ -37,7 +37,7 @@ geometry, track/segment, mask producer and mask polarity. It derives the full
 request hash, PCM hash and visual inventory hash locally; worker output cannot
 supply these ownership proofs. Hash integrity does not authenticate a sensor.
 
-`humansense.sam_audio_visual.align_visual_frames` maps each actual audio feature
+`gamst.sam_audio_visual.align_visual_frames` maps each actual audio feature
 time to the latest eligible original exposure. At48kHz each sample is exactly
 125 sixth-microseconds. This avoids rounding fractional sample timestamps.
 Eligibility requires the mapped exposure end **plus** declared clock error to
@@ -113,7 +113,7 @@ clock declaration (clock/alignment IDs, offset, error and maximum age).
 
 ## Recorded replay
 
-`python -m humansense.sam_visual_replay --manifest recording.json --sha256 HASH
+`python -m gamst.sam_visual_replay --manifest recording.json --sha256 HASH
 --consent --python /path/to/prepared/worker/python` replays immutable `.gsamv`
 packets through the same owned native worker. Prepare the worker dependencies and
 authenticated model assets separately; replay installs and downloads nothing.

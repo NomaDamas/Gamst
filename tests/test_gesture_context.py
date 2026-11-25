@@ -9,11 +9,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.provider_profiles import capability
-from humansense.providers.landmarker_video import MediaPipeVideoContext
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.provider_profiles import capability
+from gamst.providers.landmarker_video import MediaPipeVideoContext
+from gamst.schema import timestamp
 try:
     import numpy as np
 except ImportError:
@@ -83,7 +83,7 @@ class Gestures(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir='.') as temporary:
             path=Path(temporary).resolve()/'gesture.task'; payload=b'not-a-model'; path.write_bytes(payload)
             with patch.dict(sys.modules,native_modules(made,options)),patch('importlib.metadata.version',return_value='0.10.35'):
-                from humansense.provider_worker import _construct
+                from gamst.provider_worker import _construct
                 p,spec=_construct('mediapipe.gesture.video',dict(path=str(path),sha256=hashlib.sha256(payload).hexdigest(),max_entities=2))
             self.assertFalse(made)
             first=p.process(frame()); second=p.process(frame(1,1033))
@@ -145,7 +145,7 @@ import sys
 from test_gesture_context import native_modules
 sys.modules.update(native_modules([],[]))
 importlib.metadata.version=lambda name:'0.10.35'
-from humansense.provider_worker import main
+from gamst.provider_worker import main
 main()
 '''
         code = 'import sys; sys.path.insert(0, '+repr(str(Path(__file__).resolve().parent))+')\n'+code
@@ -156,14 +156,14 @@ main()
             path=Path(temporary).resolve()/'gesture.task'; payload=b'not-a-model'; path.write_bytes(payload)
             config=dict(path=str(path),sha256=hashlib.sha256(payload).hexdigest(),max_entities=2,max_gap_ms=100)
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     spec=capability('mediapipe.gesture.video',config); streams=SensorStreams(human)
                     async def factory(): return await ProcessProvider.open(sys.executable,'mediapipe.gesture.video',config)
                     streams.register(spec,factory); await streams.open('cam','sensor',[spec.id])
                     now=timestamp()-50
                     await streams.submit(frame(0,now)); await streams.drain()
                     await streams.submit(frame(2,now+30)); await streams.drain()
-                    from humansense.mcp import MCPServer
+                    from gamst.mcp import MCPServer
                     answer=await MCPServer(human).call_tool('get_observations',{'capability_id':spec.id})
                     self.assertEqual(answer['returned_count'],2)
                     items=answer['items']

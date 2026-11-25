@@ -3,10 +3,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from humansense import ProcessProvider, SensorMetadata, SensorStreams, HumanSense
-from humansense.plugins import InputFrame
-from humansense.providers.vad import SileroActivity
-from humansense.schema import timestamp
+from gamst import ProcessProvider, SensorMetadata, SensorStreams, Gamst
+from gamst.plugins import InputFrame
+from gamst.providers.vad import SileroActivity
+from gamst.schema import timestamp
 
 
 class Model:
@@ -119,7 +119,7 @@ class VADRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_sequence_gap_resets_native_state_and_retains_decisions(self):
         model = Model()
         provider = SileroActivity(model, model.score, version='fixture')
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             streams.register(provider.spec, lambda: provider)
             await streams.open('ambient', 'mic', [provider.spec.id])

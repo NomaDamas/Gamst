@@ -130,7 +130,7 @@ false. Synthetic backend tests leave integrity false and prove only contracts.
 ## Configuration
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 config = dict(
     checkpoint_path="/owned/models/yoloe-11s-seg.pt",
@@ -142,7 +142,7 @@ config = dict(
     device="cpu", imgsz=640, threshold=0.25, max_objects=16,
 )
 spec = ProcessProvider.capability("yoloe.local", config)
-streams = SensorStreams(human)  # Existing consented HumanSense instance.
+streams = SensorStreams(human)  # Existing consented Gamst instance.
 async def create():
     return await ProcessProvider.open(worker_python, "yoloe.local", config)
 streams.register(spec, create)

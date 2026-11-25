@@ -8,7 +8,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from humansense.sam_audio_artifact import (
+from gamst.sam_audio_artifact import (
     SOURCE_PINS, manifest_digest, validate_manifest, verify_manifest, verify_runtime, read_manifest,
 )
 
@@ -141,7 +141,7 @@ class ArtifactPreflight(unittest.TestCase):
 import os, sys
 from pathlib import Path
 from unittest.mock import patch
-from humansense.sam_audio_artifact import _file
+from gamst.sam_audio_artifact import _file
 target = Path(sys.argv[1]); expected = sys.argv[2]
 original_open = os.open
 def replace(path, flags):

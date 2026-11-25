@@ -15,11 +15,11 @@ try:
 except ImportError:
     np=None
 
-from humansense import HumanSense, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.vocal_expression import Emotion2VecContext, LABELS, SOURCE_SHA256
-from humansense.provider_profiles import capability
+from gamst import Gamst, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.vocal_expression import Emotion2VecContext, LABELS, SOURCE_SHA256
+from gamst.provider_profiles import capability
 
 CONFIG=dict(model_sha256='0'*64,head_sha256='1'*64,window_ms=1000,hop_ms=500)
 
@@ -34,7 +34,7 @@ def predictor(samples):return np.ones(9)/9
 
 class MetadataTests(unittest.TestCase):
     def test_discovery_and_config_bounds(self):
-        code="from humansense.providers.vocal_expression import Emotion2VecContext; import sys; Emotion2VecContext.capability(**"+repr(CONFIG)+"); assert 'numpy' not in sys.modules; assert 'onnxruntime' not in sys.modules"
+        code="from gamst.providers.vocal_expression import Emotion2VecContext; import sys; Emotion2VecContext.capability(**"+repr(CONFIG)+"); assert 'numpy' not in sys.modules; assert 'onnxruntime' not in sys.modules"
         subprocess.run([sys.executable,'-S','-c',code],check=True)
         for change in ({'window_ms':999},{'window_ms':4001},{'hop_ms':99},{'model_sha256':'a'},{'window_ms':True}):
             with self.assertRaises(ValueError):Emotion2VecContext.capability(**dict(CONFIG,**change))
@@ -125,7 +125,7 @@ class WindowTests(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy absent')
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_managed_window_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);spec=Emotion2VecContext.capability(**CONFIG)
             streams.register(spec,lambda:Emotion2VecContext(predictor,**CONFIG))
             await streams.open('test','mic',[spec.id]);now=int(time.time()*1000)
@@ -138,12 +138,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_profile_partial_window_reset_and_close(self):
         import asyncio
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         children=[];spawn_real=asyncio.create_subprocess_exec
         script='''
 import numpy as np
-from humansense.providers.vocal_expression import Emotion2VecContext
-from humansense.provider_worker import main
+from gamst.providers.vocal_expression import Emotion2VecContext
+from gamst.provider_worker import main
 Emotion2VecContext.from_local=classmethod(lambda cls,model_path,head_path,**config:cls(lambda x:np.ones(9)/9,**config))
 main()
 '''

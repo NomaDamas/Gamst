@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7">
+  <meta name="description" content="A live multimodal context playground for GAMST agents.">
+  <meta name="gamst-session-token" content="__SESSION_TOKEN__">
+  <title>GAMST Playground</title>
+  <link rel="stylesheet" href="/style.css">
+  <!-- The exact modulepreload URL is also used by dynamic import(), so its SRI
+       hash protects the module actually executed. Version and hash are pinned. -->
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" integrity="sha384-pv/a53slpd9r+c7gv5R/Yx+690OjBKfh44t0YEEQi74uhGupAjv0NpiHrzlmhiVn" crossorigin="anonymous">
+</head>
+<body>
+<a class="skip-link" href="#playground" data-i18n="skip">Skip to playground</a>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="wordmark" aria-label="GAMST">GAMST<span class="wordmark-dot">·</span><span class="wordmark-sub">PLAYGROUND</span></div>
+    <div class="connection-pill" id="connectionPill"><span class="status-dot" id="connectionDot"></span><span id="connectionLabel">Browser</span></div>
+    <div class="live-metrics" aria-label="Live packet metrics">
+      <span><small data-i18n="packetRate">Packet rate</small><strong id="metricRate">0.0 Hz</strong></span>
+      <span><small data-i18n="packetBytes">Packet bytes</small><strong id="metricBytes">0 B</strong></span>
+      <span><small data-i18n="endToEndAge">End-to-end age</small><strong id="metricAge">—</strong></span>
+      <span><small data-i18n="dropped">Dropped</small><strong id="metricDrops">0</strong></span>
+    </div>
+    <div class="top-actions">
+      <label class="sr-only" for="language" data-i18n="language">Language</label>
+      <select id="language" class="compact-select" aria-label="Language"><option value="en">EN</option><option value="ko">한국어</option><option value="zh">中文</option></select>
+      <button id="share" class="button quiet" type="button" data-i18n="share">Share</button>
+      <button id="copyJson" class="button quiet" type="button" data-i18n="copyJson">Copy JSON</button>
+    </div>
+  </header>
+
+  <main class="playground" id="playground">
+    <aside class="left-rail" aria-label="Playground controls">
+      <section class="rail-section presets-section">
+        <h2 data-i18n="presets">Presets</h2>
+        <div class="preset-list">
+          <button class="preset-card" type="button" data-preset="clarify"><span class="preset-icon">?</span><span><strong data-i18n="presetClarify">Clarify request</strong><small data-i18n="presetClarifyDetail">Resolve an ambiguous request</small></span><span class="preset-arrow">↗</span></button>
+          <button class="preset-card" type="button" data-preset="hand"><span class="preset-icon">✋</span><span><strong data-i18n="presetHand">Hand raised</strong><small data-i18n="presetHandDetail">Ground a visible gesture</small></span><span class="preset-arrow">↗</span></button>
+          <button class="preset-card" type="button" data-preset="that"><span class="preset-icon">↖</span><span><strong data-i18n="presetThat">“That one” reference</strong><small data-i18n="presetThatDetail">Ask what a reference points to</small></span><span class="preset-arrow">↗</span></button>
+          <button class="preset-card" type="button" data-preset="stale"><span class="preset-icon">◷</span><span><strong data-i18n="presetStale">Stale scene</strong><small data-i18n="presetStaleDetail">Inspect freshness before answering</small></span><span class="preset-arrow">↗</span></button>
+        </div>
+      </section>
+      <section class="rail-section">
+        <h2 data-i18n="inputs">Inputs</h2>
+        <div class="toggle-list">
+          <button class="toggle-row" id="inputCamera" type="button" aria-pressed="true"><span class="input-symbol">◉</span><span data-i18n="camera">Camera</span><span class="switch" aria-hidden="true"></span></button>
+          <button class="toggle-row" id="inputMicrophone" type="button" aria-pressed="true"><span class="input-symbol">♬</span><span data-i18n="microphone">Microphone</span><span class="switch" aria-hidden="true"></span></button>
+          <button class="toggle-row" id="inputText" type="button" aria-pressed="true"><span class="input-symbol">T</span><span data-i18n="text">Text</span><span class="switch" aria-hidden="true"></span></button>
+        </div>
+      </section>
+      <section class="rail-section">
+        <h2 data-i18n="overlays">Overlays</h2>
+        <div class="toggle-list">
+          <button class="toggle-row" id="overlayFace" type="button" aria-pressed="true"><span class="input-symbol">⌗</span><span data-i18n="faceLandmarks">Face landmarks</span><span class="switch" aria-hidden="true"></span></button>
+          <button class="toggle-row" id="overlayBody" type="button" aria-pressed="true"><span class="input-symbol">⋈</span><span data-i18n="bodyJoints">Body joints</span><span class="switch" aria-hidden="true"></span></button>
+          <button class="toggle-row" id="overlayPerson" type="button" aria-pressed="true"><span class="input-symbol">▯</span><span data-i18n="personRegions">Person regions</span><span class="switch" aria-hidden="true"></span></button>
+        </div>
+      </section>
+      <div class="capture-actions">
+        <button id="start" class="button primary" type="button"><span class="play-icon">▶</span><span data-i18n="start">Start</span></button>
+        <button id="stop" class="button secondary" type="button" disabled><span class="stop-icon">■</span><span data-i18n="stop">Stop</span></button>
+        <button id="clear" class="button text-button" type="button" data-i18n="clear">Clear data</button>
+        <button id="openLocalSettings" class="button text-button local-only" type="button" data-i18n="localSettings" hidden>Local settings</button>
+      </div>
+      <p class="rail-note" data-i18n="stageHint">Observations are measurements, not inner states.</p>
+    </aside>
+
+    <section class="center-workspace" aria-label="Live perception workspace">
+      <div class="camera-stage" id="cameraStage">
+        <video id="video" autoplay muted playsinline></video>
+        <img id="guidePreview" alt="Sample perception guide" hidden>
+        <svg id="cameraOverlay" class="camera-overlay" viewBox="0 0 640 360" aria-label="Perception overlays"></svg>
+        <div class="stage-empty" id="stageEmpty"><div class="stage-reticle" aria-hidden="true"><span></span><span></span><span></span><span></span></div><strong data-i18n="stageEmpty">Start a preset or enable an input</strong><small data-i18n="stageHint">Observations are measurements, not inner states.</small></div>
+        <div class="stage-topline"><span class="stage-chip" id="captureState" data-i18n="stopped">Stopped</span><span class="stage-chip" id="faceCount">0 faces</span></div>
+        <div class="stage-bottomline"><span id="previewNote" hidden data-i18n="guidePreview">Sample image · actual local model output</span><span id="stageDimensions">640 × 360</span></div>
+      </div>
+
+      <section class="gauge-row" aria-label="Live observability gauges">
+        <article class="gauge" data-gauge="smile"><div class="gauge-heading"><span data-i18n="smile">Smile</span><strong id="value-smile">—</strong></div><div class="gauge-track"><span id="bar-smile"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-smile"/></svg></article>
+        <article class="gauge" data-gauge="eyeClosure"><div class="gauge-heading"><span data-i18n="eyeClosure">Eye closure</span><strong id="value-eyeClosure">—</strong></div><div class="gauge-track"><span id="bar-eyeClosure"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-eyeClosure"/></svg></article>
+        <article class="gauge" data-gauge="jawOpen"><div class="gauge-heading"><span data-i18n="jawOpen">Jaw open</span><strong id="value-jawOpen">—</strong></div><div class="gauge-track"><span id="bar-jawOpen"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-jawOpen"/></svg></article>
+        <article class="gauge" data-gauge="browRaise"><div class="gauge-heading"><span data-i18n="browRaise">Brow raise</span><strong id="value-browRaise">—</strong></div><div class="gauge-track"><span id="bar-browRaise"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-browRaise"/></svg></article>
+        <article class="gauge" data-gauge="audioRms"><div class="gauge-heading"><span data-i18n="audioRms">Audio RMS</span><strong id="value-audioRms">—</strong></div><div class="gauge-track"><span id="bar-audioRms"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-audioRms"/></svg></article>
+        <article class="gauge" data-gauge="speechActivity"><div class="gauge-heading"><span data-i18n="speechActivity">Speech activity</span><strong id="value-speechActivity">—</strong></div><div class="gauge-track"><span id="bar-speechActivity"></span></div><svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline id="spark-speechActivity"/></svg></article>
+      </section>
+
+      <section class="timeline-panel">
+        <div class="section-title"><h2 data-i18n="timeline">Shared timeline</h2><span id="timelineStatus" data-i18n="noTimeline">Waiting for timestamped observations</span></div>
+        <div class="timeline-lane"><span data-i18n="speechAudio">Speech / audio</span><svg id="audioTimeline" viewBox="0 0 600 30" preserveAspectRatio="none" aria-hidden="true"><polyline/></svg><small id="audioTimelineLabel">—</small></div>
+        <div class="timeline-lane"><span data-i18n="framesScene">Frames / scene</span><svg id="sceneTimeline" viewBox="0 0 600 30" preserveAspectRatio="none" aria-hidden="true"><polyline/></svg><small id="sceneTimelineLabel">—</small></div>
+      </section>
+      <div class="observability-strip"><span><b data-i18n="voiceEmotion">Voice emotion</b><span id="voiceEmotion" data-i18n="noEmotion">No voice classification</span></span><span><b data-i18n="workers">Worker queues</b><span id="workers" data-i18n="noWorkers">No local worker statistics</span></span></div>
+
+      <section class="composer-panel">
+        <div id="providerNotice" class="provider-notice"></div>
+        <label class="sr-only" for="question" data-i18n="composerLabel">Question</label>
+        <div class="composer-box"><textarea id="question" rows="2" data-i18n-placeholder="composerPlaceholder" placeholder="Ask your agent…"></textarea><button id="send" class="send-button" type="button" aria-label="Send"><span data-i18n="send">Send</span><span aria-hidden="true">↑</span></button></div>
+        <div class="composer-footer"><span data-i18n="composerHelp">Enter to send · Shift+Enter for a new line</span><span id="status" role="status" aria-live="polite"></span></div>
+      </section>
+      <div id="error" class="error-message" role="alert"></div>
+    </section>
+
+    <aside class="inspector" aria-label="Inspector">
+      <div class="inspector-tabs" role="tablist" aria-label="Inspector">
+        <button id="tab-response" role="tab" aria-controls="panel-response" aria-selected="true" tabindex="0" data-i18n="response">Response</button>
+        <button id="tab-context" role="tab" aria-controls="panel-context" aria-selected="false" tabindex="-1" data-i18n="context">Context</button>
+        <button id="tab-json" role="tab" aria-controls="panel-json" aria-selected="false" tabindex="-1" data-i18n="json">JSON</button>
+        <button id="tab-metrics" role="tab" aria-controls="panel-metrics" aria-selected="false" tabindex="-1" data-i18n="metrics">Metrics</button>
+      </div>
+      <div class="inspector-content">
+        <section id="panel-response" class="tab-panel response-panel" role="tabpanel" aria-labelledby="tab-response" tabindex="0">
+          <div class="response-meta"><span id="responseProvider">—</span><span id="responseState"></span></div>
+          <div id="setupCard" class="setup-card" hidden><span class="setup-icon">⌘</span><h3 data-i18n="setupTitle">Connect a model to get a response</h3><p data-i18n="setupBody">No answer is generated until you configure an OpenAI-compatible endpoint or a local Companion is available.</p><button id="configureModel" class="button primary" type="button" data-i18n="configureModel">Configure model</button></div>
+          <div id="responseIdle" class="empty-state" data-i18n="responseIdle">Ask a question to inspect a grounded response.</div>
+          <div id="responseText" class="response-text" aria-live="polite"></div>
+          <div id="evidenceBlock" class="evidence-block" hidden><h3 data-i18n="evidenceSent">Evidence sent</h3><div id="evidenceIds" class="evidence-list"></div></div>
+        </section>
+        <section id="panel-context" class="tab-panel" role="tabpanel" aria-labelledby="tab-context" tabindex="0" hidden><div class="panel-heading"><h2 data-i18n="compactPacket">Compact packet sent to the model</h2><span id="contextSize">0 B</span></div><pre id="contextJson" class="json-view" data-i18n="noPacket">Start an input or send text to build a packet.</pre></section>
+        <section id="panel-json" class="tab-panel" role="tabpanel" aria-labelledby="tab-json" tabindex="0" hidden><div class="panel-heading"><h2 data-i18n="rawPacket">Latest raw context packet</h2><span id="jsonSize">0 B</span></div><pre id="rawJson" class="json-view">{}</pre></section>
+        <section id="panel-metrics" class="tab-panel" role="tabpanel" aria-labelledby="tab-metrics" tabindex="0" hidden><div class="panel-heading"><h2 data-i18n="metricHistory">Packet history</h2><span id="observationCount">0</span></div><div class="metric-chart"><div><span data-i18n="packetBytes">Packet bytes</span><strong id="detailBytes">—</strong></div><svg viewBox="0 0 240 42" preserveAspectRatio="none"><polyline id="bytesSpark"/></svg></div><div class="metric-chart"><div><span data-i18n="endToEndAge">End-to-end age</span><strong id="detailAge">—</strong></div><svg viewBox="0 0 240 42" preserveAspectRatio="none"><polyline id="ageSpark"/></svg></div><dl class="metrics-list"><div><dt data-i18n="dropped">Dropped</dt><dd id="detailDrops">0</dd></div><div><dt data-i18n="observations">observations</dt><dd id="detailObservations">0</dd></div><div><dt data-i18n="latestEvidence">Latest evidence</dt><dd id="detailEvidence">—</dd></div></dl></section>
+      </div>
+
+      <details class="settings-block" id="modelSettings">
+        <summary data-i18n="settings">Model &amp; packet settings</summary>
+        <div class="settings-content">
+          <div class="settings-grid"><label><span data-i18n="packetSetting">Packet rate</span><select id="packetRate"><option value="1">1 Hz</option><option value="2">2 Hz</option><option value="4" selected>4 Hz</option></select></label><label><span data-i18n="byteBudget">Context byte budget</span><input id="byteBudget" type="number" min="1024" max="131072" step="1024" value="16384"></label></div>
+          <label><span data-i18n="provider">Response provider</span><select id="provider"><option id="localCompanionOption" value="local" data-i18n="localCompanion" hidden>Local Companion</option><option value="byok" data-i18n="byok">Bring your own key</option></select></label>
+          <div id="byokFields"><label><span data-i18n="baseUrl">OpenAI-compatible base URL</span><input id="baseUrl" type="url" placeholder="https://api.openai.com/v1" autocomplete="url" spellcheck="false"></label><label><span data-i18n="model">Model</span><input id="model" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false"></label><label><span data-i18n="apiKey">API key</span><input id="apiKey" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"></label><label class="remember-row"><input id="rememberKey" type="checkbox"><span data-i18n="rememberKey">Remember key on this device</span></label></div>
+          <button id="useLocalMyProxy" class="button quiet full-width" type="button" data-i18n="useLocalMyProxy" disabled>Use local MyProxy</button><button id="saveSettings" class="button secondary full-width" type="button" data-i18n="saveSettings">Save settings</button><span id="settingsStatus" class="settings-status" role="status"></span>
+        </div>
+      </details>
+    </aside>
+  </main>
+</div>
+
+<dialog id="consentDialog" aria-labelledby="consentTitle"><form method="dialog" class="dialog-card"><div class="dialog-symbol">◉</div><h2 id="consentTitle" data-i18n="consentTitle">Allow live perception?</h2><p data-i18n="consentBody">Camera and microphone input are processed for this session. Browser mode keeps raw media on this device. Local mode sends media only to 127.0.0.1. No raw media is included in LLM context.</p><div class="dialog-actions"><button id="consentCancel" class="button secondary" value="cancel" data-i18n="consentCancel">Not now</button><button id="consentAccept" class="button primary" value="allow" data-i18n="consentContinue">Allow and start</button></div></form></dialog>
+
+<dialog id="localSettingsDialog" aria-labelledby="localDialogTitle"><div class="local-dialog-card"><div class="dialog-heading"><h2 id="localDialogTitle" data-i18n="localDialogTitle">Local model settings</h2><button id="closeLocalSettings" class="button quiet" type="button" data-i18n="close">Close</button></div><div class="local-dialog-content"><section><h3 data-i18n="models">Analysis models</h3><p class="muted" data-i18n="modelHint">Stop capture before changing a model.</p><div id="featureSwitches" class="feature-switches"></div></section><section><label><span data-i18n="asrLanguage">Speech recognition language</span><select id="asrLanguage"><option value="auto" data-i18n="auto">Auto detect</option><option value="en">English</option><option value="ko">한국어</option><option value="zh">中文</option></select></label></section><section><h3 data-i18n="sam3">SAM3</h3><pre id="sam3Status" class="settings-output">—</pre><button id="testGuides" class="button secondary" type="button" data-i18n="testGuides">Test guides</button></section><section><div class="section-title"><h3 data-i18n="vlm">VLM scene analysis</h3><button id="vlmEnabled" class="toggle-mini" type="button" aria-pressed="false" data-i18n="vlmEnabled">VLM enabled</button></div><div class="settings-grid three"><label><span data-i18n="interval">Interval · seconds</span><input id="vlmInterval" type="number" min="1" max="60" value="3"></label><label><span data-i18n="window">Window · seconds</span><input id="vlmWindow" type="number" min="1" max="30" value="4"></label><label><span data-i18n="sampleFps">Sample · FPS</span><input id="vlmFps" type="number" min="0.2" max="4" step="0.1" value="2"></label></div><div class="inline-actions"><button id="applyVlm" class="button secondary" type="button" data-i18n="apply">Apply</button><button id="testVlm" class="button secondary" type="button" data-i18n="testVlm">Test VLM</button></div><pre id="vlmTestResult" class="settings-output" role="status" data-i18n="testReady">Ready</pre></section><section><div class="section-title"><h3 data-i18n="capabilities">Capabilities / MCP</h3><button id="loadCapabilities" class="button quiet" type="button" data-i18n="loadCapabilities">Load capabilities</button></div><pre id="capabilitiesOutput" class="settings-output">—</pre></section></div></div></dialog>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

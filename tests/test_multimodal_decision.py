@@ -1,13 +1,13 @@
 import unittest
 
-from humansense import HumanSense, SensorMetadata, CapabilitySpec, OutputField
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
+from gamst import Gamst, SensorMetadata, CapabilitySpec, OutputField
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
 
 
 class MultimodalDecision(unittest.IsolatedAsyncioTestCase):
     async def test_internal_provider_fuses_registered_modalities_into_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             vision = CapabilitySpec("test.objects", "scene.objects", "video", "fixture.vision", "1",
                 (OutputField("objects", "array"),), "frame", freshness_ms=5000)
             audio = CapabilitySpec("test.audio", "audio.events", "audio", "fixture.audio", "1",
@@ -31,7 +31,7 @@ class MultimodalDecision(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(decisions[0]["value"]["evidence_ids"], value["evidence_ids"])
 
     async def test_stale_or_single_modality_abstains_and_mcp_can_invoke(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec = CapabilitySpec("test.objects", "scene.objects", "video", "fixture.vision", "1",
                 (OutputField("objects", "array"),), "frame", freshness_ms=10)
             human.register_capability(spec)

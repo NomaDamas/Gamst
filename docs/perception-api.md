@@ -2,7 +2,7 @@
 
 Applications register capability contracts and provider factories explicitly. Discovery describes registered metadata and active lanes; it never imports a model, downloads weights, starts a worker or enables a sensor. A registered contract is not proof of installed dependencies or validated model support.
 
-The same methods are available on `HumanSense` and as MCP tools:
+The same methods are available on `Gamst` and as MCP tools:
 
 - `list_capabilities(offset=0, limit=100, max_bytes=65536, revision=None)` returns a bounded page of exact registered contracts, including modality, streaming mode, windows, lookahead, units, model version and license. Registration alone does not activate anything.
 - `get_sensor_status()` reports typed SensorStreams managers with stable per-instance IDs, registered factories, active sensor lanes, queue size, drops, reset/error counts and last processing latency. `get_stream_status` remains the separate legacy MediaRouter view.
@@ -27,7 +27,7 @@ MCP callers use `tools/call` with the same tool names/arguments. The stdio serve
 WebSocket clients may configure their own context subscription independently of capture or inference cadence:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"humansense/subscribe","params":{"types":["context"],"subject_id":"alice","window":"5m","interval_ms":100}}
+{"jsonrpc":"2.0","id":1,"method":"gamst/subscribe","params":{"types":["context"],"subject_id":"alice","window":"5m","interval_ms":100}}
 ```
 
 The acknowledgement echoes accepted `context` options: subject, window and interval. Interval is an integer 50–60000 ms; window is a positive duration at most one day. Defaults are local-user, five minutes and 250 ms. These options apply to context snapshots only, not event/signal subscriptions. Unknown options and invalid values reject the update while preserving the prior subscription. Sending `types: []` cancels publication. Reconnecting creates a new subscription with defaults; specify options again. Retained runtime evidence survives transport reconnect, but no raw sensor stream is automatically resumed.
@@ -48,7 +48,7 @@ Discovery does not retain a server-side pagination session or import providers. 
 
 ## Passive per-connection cadence profile
 
-The custom WebSocket method `humansense/context_profile` takes an empty parameter object (or no params) and a JSON-RPC request ID. It reports only this connection's current subscription; it is not an MCP tool and does not expose another client's profile. A newly connected/unsubscribed client has no configured interval or recommendation. Reconnecting or successfully changing subscriptions starts a new profile. Invalid subscription updates preserve the existing profile and schedule.
+The custom WebSocket method `gamst/context_profile` takes an empty parameter object (or no params) and a JSON-RPC request ID. It reports only this connection's current subscription; it is not an MCP tool and does not expose another client's profile. A newly connected/unsubscribed client has no configured interval or recommendation. Reconnecting or successfully changing subscriptions starts a new profile. Invalid subscription updates preserve the existing profile and schedule.
 
 The result separates `requested_interval_ms`, `applied_interval_ms` and `recommended_interval_ms`. The first two remain the user's accepted idle delay **after a send completes**. They are not a promised snapshot-to-snapshot period. `work` gives rolling p50/p95 time from `get_context` through serialization, send-lock waiting and WebSocket send completion. It excludes sensor inference and subsequent network/LLM processing. `observed_completion_intervals` describes actual gaps between locally completed sends, including idle delay and scheduler delay. Send completion does not establish remote receipt or comprehension.
 
@@ -57,7 +57,7 @@ After at least eight completed deliveries, a simple heuristic recommends an idle
 No endpoint probe or sensor activation is performed. `consumer_comprehension` and `consumer_input_capacity` remain `unknown`; `automatic_application` is false. To apply a recommendation, the client explicitly submits a new subscription. This implements passive transport profiling only. Hardware/model/backend/precision-keyed profile caching, explicit capability handshake and opt-in bounded synthetic endpoint probes remain open in #12. This is separate from sensor calibration and statistical confidence calibration.
 
 ```json
-{"jsonrpc":"2.0","id":10,"method":"humansense/context_profile","params":{}}
+{"jsonrpc":"2.0","id":10,"method":"gamst/context_profile","params":{}}
 ```
 
 Validation includes bounded deterministic profile calculations, invalid reconfiguration, unsubscribe reset, and real loopback WebSocket profile queries before subscription and after reconnect. Generated contexts and controlled transports are software evidence, not consumer LLM comprehension validation.

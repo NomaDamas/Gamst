@@ -1,17 +1,17 @@
 import json
 import unittest
 from unittest.mock import patch
-from humansense import HumanSense
-from humansense.plugins import InputFrame
-from humansense.realtime import LocalScenePlugin, QueuedPlugin, configure_scene
-from humansense.mcp import MCPServer
+from gamst import Gamst
+from gamst.plugins import InputFrame
+from gamst.realtime import LocalScenePlugin, QueuedPlugin, configure_scene
+from gamst.mcp import MCPServer
 
 
 class TemporalSceneTests(unittest.IsolatedAsyncioTestCase):
     async def test_settings_shared_by_mcp_and_dashboard_and_validated(self):
-        from humansense.dashboard import Dashboard
+        from gamst.dashboard import Dashboard
         import asyncio
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             plugin = LocalScenePlugin('http://127.0.0.1:18767', 'fixture', human=human)
             human.register(QueuedPlugin(human, plugin, 1))
             mcp = MCPServer(human)
@@ -36,7 +36,7 @@ class TemporalSceneTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await gate.wait()
                 return [{'name': 'scene.description', 'value': 'late result'}]
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             plugin = SlowScene('http://127.0.0.1:18767', 'fixture')
             worker = QueuedPlugin(human, plugin, 1)
             human.register(worker)
@@ -54,7 +54,7 @@ class TemporalSceneTests(unittest.IsolatedAsyncioTestCase):
         import sys
         from types import SimpleNamespace
         encoder = SimpleNamespace(resize=lambda data, size: data, imencode=lambda *a: (True, b'fixture-jpeg'), IMWRITE_JPEG_QUALITY=1)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             plugin = LocalScenePlugin('http://127.0.0.1:18767', 'fixture', human=human)
             plugin.interval = 3
             import time

@@ -7,7 +7,7 @@ factory returning a fresh pipeline with SensorStreams. Discovery does not load
 models. No checkpoint is bundled or downloaded by this composition.
 
 ```python
-from humansense.providers.endpoint_asr import SileroEndpointASR
+from gamst.providers.endpoint_asr import SileroEndpointASR
 
 # asr and vad are already explicitly loaded, unused/reset concrete providers.
 pipeline = SileroEndpointASR(asr, vad, minimum_speech_ms=160, silence_ms=640)
@@ -92,7 +92,7 @@ No required family or overall goal is complete from these fixture tests.
 ## Explicit isolated profile
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = {
     'asr': {'path': '/absolute/qwen-bundle', 'files': qwen_file_sha256_manifest},

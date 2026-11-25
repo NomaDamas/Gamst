@@ -2,7 +2,7 @@
 import copy
 import unittest
 import test_detection_provider as fixtures
-from humansense.providers.detection import RFDETRObjects
+from gamst.providers.detection import RFDETRObjects
 
 
 @unittest.skipIf(fixtures.np is None, 'optional NumPy unavailable')

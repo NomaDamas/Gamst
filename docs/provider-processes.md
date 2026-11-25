@@ -18,10 +18,10 @@ flowchart LR
 
 The SDK owns capture timestamps, queues, stream epochs and context storage. Each `ProcessProvider` owns exactly one explicitly started child interpreter and provider instance. The worker owns native model state and dependency imports. This isolates incompatible Python libraries without asking an LLM to receive raw media or understand the transport protocol. It is local process isolation, not an untrusted-code sandbox or network service.
 
-Executable worker profiles include `rfdetr.nano`, `audio.prosody`, `emotion2vec.seed.onnx`, `webrtc.aec3` (context-only), `opencv.flow`, `opencv.fill`, `openpiv.flow`, `yamnet.events`, `silero.activity`, `qwen3.asr`, `qwen3.asr.endpoint`, MediaPipe `body`/`hand`/`face` (both frame and `.video` variants), `l2cs.gaze`, `depth_anything_v2.small`, `ppocr.mobile`, `dinov3.retrieval` and `dinov3.regions`. MediaPipe profile names have the `mediapipe.` prefix. These dispatch to concrete providers; executable code does not establish trained-model/device acceptance. Refer to each provider document and its open validation issue. Other inventory entries retain their individual implementation status. Core import and profile discovery use only the standard library; no child, model, capture device or download starts during discovery. The selected environment must already contain the SDK and the relevant optional dependencies. For example, use a separate virtualenv with `humansense-sdk[detection]` for RF-DETR's Transformers 5 requirements, keeping Transformers 4 in another environment. Install the SDK source/editable checkout into each environment during development; a production application need not depend on its working directory.
+Executable worker profiles include `rfdetr.nano`, `audio.prosody`, `emotion2vec.seed.onnx`, `webrtc.aec3` (context-only), `opencv.flow`, `opencv.fill`, `openpiv.flow`, `yamnet.events`, `silero.activity`, `qwen3.asr`, `qwen3.asr.endpoint`, MediaPipe `body`/`hand`/`face` (both frame and `.video` variants), `l2cs.gaze`, `depth_anything_v2.small`, `video_depth_anything.small`, `sam3.1.video`, `ppocr.mobile`, `dinov3.retrieval` and `dinov3.regions`. MediaPipe profile names have the `mediapipe.` prefix. These dispatch to concrete providers; executable code does not establish trained-model/device acceptance. Refer to each provider document and its open validation issue. Other inventory entries retain their individual implementation status. Core import and profile discovery use only the standard library; no child, model, capture device or download starts during discovery. The selected environment must already contain the SDK and the relevant optional dependencies. For example, use a separate virtualenv with `gamst-sdk[detection]` for RF-DETR's Transformers 5 requirements, keeping Transformers 4 in another environment. VDA-S and SAM3.1 each require their own pinned native environment and local source/checkpoint; their worker selection never reuses the DAV2 or sampled-SAM3 runtime implicitly. Install the SDK source/editable checkout into each environment during development; a production application need not depend on its working directory.
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 config = dict(path='/models/rf-detr-nano.pth', sha256=CHECKPOINT_SHA256, device='mps')
 spec = ProcessProvider.capability('rfdetr.nano', config)
@@ -35,7 +35,7 @@ streams = SensorStreams(human)
 streams.register(spec, create_detector)
 await streams.open('camera', 'device0', [spec.id])
 # Submit the same InputFrame/SensorMetadata values as for the local provider.
-# HumanSense/stream shutdown closes the owned worker.
+# Gamst/stream shutdown closes the owned worker.
 ```
 
 The worker startup handshake must match the selected capability, including model/checkpoint version, mode, units, window and state flags. SensorStreams also checks a provider's declared `CapabilitySpec` against registration, preventing a factory configured for a different window or checkpoint from silently emitting mislabeled context. Configuration is bounded JSON; Python code and shell commands cannot be passed through profile configuration. The executable itself is an explicitly trusted application choice.
@@ -59,7 +59,7 @@ Local process isolation cannot guarantee a model's latency or native memory foot
 ## Reproduction and evidence
 
 ```sh
-python -S -c "import humansense; print('stdlib-only core import')"
+python -S -c "import gamst; print('stdlib-only core import')"
 python -m unittest discover -s tests -p test_process_provider.py -v
 PYTHONPATH=. python examples/validate_rfdetr.py \
   --checkpoint /models/rf-detr-nano.pth --sha256 CHECKPOINT_SHA256 \

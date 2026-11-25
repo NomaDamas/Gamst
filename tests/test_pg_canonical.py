@@ -12,12 +12,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense.pg_artifact import manifest_digest
-from humansense.pg_sources import PG_REVISION,PG_BYTES,PG_SHA256
-from humansense.pg_graph import _inventory
-from humansense.pg_canonical import (FORMAT,MIN_WORKSPACE,validate_canonical,schema_digest,
+from gamst.pg_artifact import manifest_digest
+from gamst.pg_sources import PG_REVISION,PG_BYTES,PG_SHA256
+from gamst.pg_graph import _inventory
+from gamst.pg_canonical import (FORMAT,MIN_WORKSPACE,validate_canonical,schema_digest,
     _snapshot_into,_headers,_coverage,_materialize,_planned)
-from humansense.pg_canonical_process import PGCanonicalProcess
+from gamst.pg_canonical_process import PGCanonicalProcess
 from test_pg_artifact import declaration
 
 
@@ -110,7 +110,7 @@ class CanonicalContract(unittest.TestCase):
                 def opened(fd,mode,*args,**kwargs):
                     stream=original(fd,mode,*args,**kwargs)
                     return Reader(stream) if mode=='rb' else stream
-                with patch('humansense.pg_canonical.os.fdopen',side_effect=opened):
+                with patch('gamst.pg_canonical.os.fdopen',side_effect=opened):
                     with self.assertRaises(ValueError):snapshots(bundle,spec,stage)
                 self.assertTrue(fired)
 
@@ -221,7 +221,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
             real=asyncio.create_subprocess_exec
             async def spawn(*args,**kwargs):
                 child=await real(*args,**kwargs);children.append(child);return child
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
                 with self.assertRaisesRegex(RuntimeError,'runtime_mismatch'):
                     await PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage))
             self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
@@ -238,7 +238,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
                 kwargs['stderr']=asyncio.subprocess.PIPE
                 child=await real(sys.executable,'-u','-c',code,request,**kwargs)
                 children.append(child);entered.set();return child
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
                 task=asyncio.create_task(PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage)))
                 await asyncio.wait_for(entered.wait(),5)
                 await asyncio.wait_for(children[0].stderr.readexactly(1),5)
@@ -259,7 +259,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
                 child=await real(sys.executable,'-u','-c',code,request,**kwargs);children.append(child)
                 await asyncio.wait_for(child.stderr.readexactly(1),5)
                 return child
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
                 with self.assertRaises(TimeoutError) as caught:
                     await PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage),startup_timeout=.01)
             self.assertIsNotNone(children[0].returncode);self.assertTrue(children[0]._transport.is_closing())
@@ -278,7 +278,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
                     child=await real(sys.executable,'-u','-c',code,request,**kwargs);children.append(child);spawned.set()
                     if late:await release.wait()
                     return child
-                with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
+                with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn):
                     task=asyncio.create_task(PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage)))
                     await asyncio.wait_for(spawned.wait(),5)
                     if late:
@@ -302,7 +302,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(invalid.read_text(),'not an executable image')
 
     async def test_spawn_deadline_keeps_late_handle_only_for_reap(self):
-        from humansense import pg_canonical_process as process_module
+        from gamst import pg_canonical_process as process_module
         with tempfile.TemporaryDirectory(dir='.') as temp:
             root=Path(temp).resolve();bundle=root/'bundle';bundle.mkdir();stage=root/'stage';stage.mkdir()
             graph,sha,lock,lock_sha,spec,_=basic(bundle);children=[]
@@ -316,8 +316,8 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
             async def deadline(task,seconds):
                 try:return await real_deadline(task,seconds)
                 except TimeoutError:expired.set();raise
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
-                 patch('humansense.pg_canonical_process._deadline',side_effect=deadline):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
+                 patch('gamst.pg_canonical_process._deadline',side_effect=deadline):
                 task=asyncio.create_task(PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage),startup_timeout=.01))
                 try:
                     await asyncio.wait_for(spawned.wait(),5)
@@ -329,7 +329,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(stage.iterdir()),[])
 
     async def test_response_uses_remaining_startup_budget(self):
-        from humansense import pg_canonical_process as process_module
+        from gamst import pg_canonical_process as process_module
         with tempfile.TemporaryDirectory(dir='.') as temp:
             root=Path(temp).resolve();bundle=root/'bundle';bundle.mkdir();stage=root/'stage';stage.mkdir()
             graph,sha,lock,lock_sha,spec,_=basic(bundle);children=[];budgets=[]
@@ -342,9 +342,9 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
                 budgets.append(seconds);return await real_deadline(task,seconds)
             # Controlled application clock; actual asyncio timers/subprocesses
             # are unchanged. No host scheduling-speed assumption is involved.
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
-                 patch('humansense.pg_canonical_process._deadline',side_effect=deadline), \
-                 patch('humansense.pg_canonical_process._now',side_effect=[100.,100.,104.,104.,105.]):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=spawn), \
+                 patch('gamst.pg_canonical_process._deadline',side_effect=deadline), \
+                 patch('gamst.pg_canonical_process._now',side_effect=[100.,100.,104.,104.,105.]):
                 owner=await PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(stage),startup_timeout=10)
                 await owner.close()
             self.assertEqual(budgets[:2],[10.,6.])
@@ -353,7 +353,7 @@ class OwnedWorker(unittest.IsolatedAsyncioTestCase):
     async def test_source_stage_overlap_rejected_before_spawn(self):
         with tempfile.TemporaryDirectory(dir='.') as temp:
             root=Path(temp).resolve();graph,sha,lock,lock_sha,spec,_=basic(root)
-            with patch('humansense.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=AssertionError('must not spawn')):
+            with patch('gamst.pg_canonical_process.asyncio.create_subprocess_exec',side_effect=AssertionError('must not spawn')):
                 with self.assertRaisesRegex(ValueError,'overlap'):
                     await PGCanonicalProcess.open(sys.executable,graph,sha,lock,lock_sha,spec,manifest_digest(spec),stage_root=str(root))
 

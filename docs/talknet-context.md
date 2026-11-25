@@ -120,15 +120,15 @@ follows from the selected parameter count or a synthetic graph test.
 ## SDK and MCP path
 
 ```python
-from humansense import ProcessProvider, SensorStreams, TalkNetWindows, talknet_stream_frame
-from humansense.providers.talknet import prepare_talknet_face
+from gamst import ProcessProvider, SensorStreams, TalkNetWindows, talknet_stream_frame
+from gamst.providers.talknet import prepare_talknet_face
 
 config = {'source_dir': '/local/TalkNet-ASD/model',
           'checkpoint_path': '/local/pretrain_AVA.model',
           'checkpoint_sha256': '<explicit-trusted-local-sha256>',
           'window_frames': 25, 'device': 'cpu'}
 spec = ProcessProvider.capability('talknet.local', config)
-streams = SensorStreams(human)  # Existing consented HumanSense instance.
+streams = SensorStreams(human)  # Existing consented Gamst instance.
 async def create():
     return await ProcessProvider.open('/explicit/env/bin/python', 'talknet.local', config)
 streams.register(spec, create)

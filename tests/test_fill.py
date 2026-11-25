@@ -11,11 +11,11 @@ try:
 except ImportError:
     cv2=np=None
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.fill import CalibratedColorFill
-from humansense.provider_profiles import capability
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.fill import CalibratedColorFill
+from gamst.provider_profiles import capability
 
 CONFIG=dict(width=128,height=128,roi=[16,16,112,112],hsv_lower=[100,100,50],hsv_upper=[130,255,255],
             volume_curve_ml=[[0,0],[.5,100],[1,400]],calibration_id='beaker-v1',container_id='beaker',coordinate_frame='image')
@@ -30,7 +30,7 @@ def frame(fraction=.5,sequence=0):
 
 class MetadataTests(unittest.TestCase):
     def test_core_discovery_and_configuration(self):
-        code="from humansense.provider_profiles import capability; import sys; capability('opencv.fill',"+repr(CONFIG)+"); assert 'cv2' not in sys.modules; assert 'numpy' not in sys.modules"
+        code="from gamst.provider_profiles import capability; import sys; capability('opencv.fill',"+repr(CONFIG)+"); assert 'cv2' not in sys.modules; assert 'numpy' not in sys.modules"
         subprocess.run([sys.executable,'-S','-c',code],check=True)
         bad=({'width':True},{'width':4096},{'roi':[0,0,5,15]},{'hsv_lower':[180,100,50]},
              {'hsv_lower':[100,0,0]},{'hsv_upper':[90,255,255]},
@@ -101,7 +101,7 @@ class FillTests(unittest.TestCase):
 @unittest.skipIf(cv2 is None,'optional OpenCV/NumPy absent')
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_worker_stream_mcp_and_unknown_replacement(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec=capability('opencv.fill',CONFIG)
             streams=SensorStreams(human)
             async def create():return await ProcessProvider.open(sys.executable,'opencv.fill',CONFIG)

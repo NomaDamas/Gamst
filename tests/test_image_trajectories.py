@@ -3,10 +3,10 @@ import json
 import time
 import unittest
 
-from humansense import HumanSense, SensorMetadata
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.providers.trajectories import ImageTrajectories
+from gamst import Gamst, SensorMetadata
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.providers.trajectories import ImageTrajectories
 
 
 def frame(seq=0, ts=0, x=0):
@@ -89,7 +89,7 @@ class Context(unittest.IsolatedAsyncioTestCase):
     async def test_real_store_mcp_and_original_evidence(self):
         p=ImageTrajectories();now=int(time.time()*1000)
         p.process(frame(0,now-100));f=frame(1,now,.1)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.register_capability(p.spec)
             await human.push_observation(p.spec.id,p.process(f),sensor=f.sensor,timestamp_ms=now)
             ctx=(await human.get_context())['observations']

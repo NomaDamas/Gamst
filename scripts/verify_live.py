@@ -5,14 +5,14 @@ import json
 import time
 from collections import Counter
 
-from humansense import HumanSense
-from humansense.capture import CaptureSession
-from humansense.plugins import AudioLevelPlugin, OpenCVPersonPlugin, MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
-from humansense.realtime import QueuedPlugin, LocalScenePlugin
+from gamst import Gamst
+from gamst.capture import CaptureSession
+from gamst.plugins import AudioLevelPlugin, OpenCVPersonPlugin, MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin
+from gamst.realtime import QueuedPlugin, LocalScenePlugin
 
 
 async def verify(args):
-    async with HumanSense(consent=args.consent, sensor_inference_interval_ms=250) as human:
+    async with Gamst(consent=args.consent, sensor_inference_interval_ms=250) as human:
         if args.camera is not None:
             human.register(MediaPipeFacePlugin(args.face_model) if args.face_model else OpenCVPersonPlugin())
         if args.audio:

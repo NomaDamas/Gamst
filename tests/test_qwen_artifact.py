@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-from humansense.qwen_artifact import REQUIRED, artifact_version, verify_bundle
-from humansense.provider_profiles import capability
-from humansense.providers.qwen_asr import QwenStreamingASR
+from gamst.qwen_artifact import REQUIRED, artifact_version, verify_bundle
+from gamst.provider_profiles import capability
+from gamst.providers.qwen_asr import QwenStreamingASR
 
 
 class Artifacts(unittest.TestCase):

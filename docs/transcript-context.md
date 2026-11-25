@@ -3,9 +3,9 @@
 The runtime now reduces registered ASR updates into one latest entry per utterance. A model adapter owns recognition, acoustic state and endpoint detection; this layer owns revision ordering, evidence, bounded retention and LLM context. No ASR model is loaded by this feature. It does not turn windowed inference into native streaming.
 
 ```python
-from humansense import HumanSense, SensorMetadata, transcript_capability
+from gamst import Gamst, SensorMetadata, transcript_capability
 
-async with HumanSense(consent=True) as human:
+async with Gamst(consent=True) as human:
     spec = transcript_capability('asr.example', 'your.asr', 'checkpoint.version',
         streaming_mode='native', window_ms=320, lookahead_ms=240)
     human.register_capability(spec)

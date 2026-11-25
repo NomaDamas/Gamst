@@ -21,7 +21,7 @@ CUDA is selectable but unverified. Local absolute source/checkpoint paths and
 checkpoint SHA256 are required:
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = {
     "source_path": "/absolute/EfficientPhys.py",
@@ -41,10 +41,10 @@ trained assets have not been installed or validated by this implementation.
 ## Capture and stream integration
 
 ```python
-from humansense import SensorStreams
-from humansense.providers.efficientphys_context import face_frame
+from gamst import SensorStreams
+from gamst.providers.efficientphys_context import face_frame
 
-streams = SensorStreams(human)  # existing consent-enabled HumanSense instance
+streams = SensorStreams(human)  # existing consent-enabled Gamst instance
 async def factory():
     return await ProcessProvider.open("/absolute/runtime/bin/python", "efficientphys.local", config)
 streams.register(spec, factory)

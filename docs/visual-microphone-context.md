@@ -18,7 +18,7 @@ flowchart LR
 ## Explicit input
 
 ```python
-from humansense.providers.visual_microphone_context import window_frame
+from gamst.providers.visual_microphone_context import window_frame
 
 config = dict(fps_numerator=2200, fps_denominator=1, jitter_ns=100,
               native_origin_ns="0", capture_origin_ms=known_capture_origin_ms,
@@ -81,7 +81,7 @@ older successful observation remains historical until normal retention/freshness
 rules apply. The next complete window starts a fresh segment after reset/error.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 spec = ProcessProvider.capability("visual_microphone.phase", config)
 worker = await ProcessProvider.open("/absolute/python", "visual_microphone.phase", config)
 try:

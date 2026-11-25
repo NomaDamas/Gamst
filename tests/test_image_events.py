@@ -5,11 +5,11 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense,ProcessProvider,SensorStreams
-from humansense.mcp import MCPServer
-from humansense.providers.trajectories import ImageTrajectories
-from humansense.providers.detection_trajectories import RFDETRTrajectories
-from humansense.schema import timestamp
+from gamst import Gamst,ProcessProvider,SensorStreams
+from gamst.mcp import MCPServer
+from gamst.providers.trajectories import ImageTrajectories
+from gamst.providers.detection_trajectories import RFDETRTrajectories
+from gamst.schema import timestamp
 import test_image_trajectories as trajectory
 import test_detection_trajectories as detection
 
@@ -121,7 +121,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with patch('asyncio.create_subprocess_exec',fixture):
             worker=await ProcessProvider.open(sys.executable,'rfdetr.trajectories',dict(detection.CONFIG,event_rules=rules))
             try:
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                     await streams.open('cam','sensor',[worker.spec.id]);now=timestamp()-200
                     for i in range(2):

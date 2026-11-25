@@ -2,10 +2,10 @@ import math
 import struct
 import unittest
 from dataclasses import replace
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.imu import BNO055IMU
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.imu import BNO055IMU
+from gamst.schema import timestamp
 
 
 def provider(**kwargs):
@@ -73,7 +73,7 @@ class IMU(unittest.TestCase):
 
 class IMURuntime(unittest.IsolatedAsyncioTestCase):
     async def test_decoded_si_measurements_reach_context(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = BNO055IMU.capability()
             streams.register(spec, provider)

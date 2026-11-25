@@ -7,19 +7,19 @@ No capture is started and no model is downloaded by this example.
 import argparse
 import asyncio
 import json
-from humansense.providers.ollama import OllamaChat
+from gamst.providers.ollama import OllamaChat
 
 
 async def main(model, question):
-    from websockets.asyncio.client import connect
+    from gamst.ws_auth import connect_local
     latest = asyncio.Queue(maxsize=1)
-    async with connect('ws://127.0.0.1:8765') as socket:
-        await socket.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'humansense/subscribe',
+    async with connect_local() as socket:
+        await socket.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'gamst/subscribe',
                                       'params':{'types':['context']}}))
         async def receive():
             async for raw in socket:
                 message=json.loads(raw)
-                if message.get('method')=='notifications/humansense/context':
+                if message.get('method')=='notifications/gamst/context':
                     if latest.full(): latest.get_nowait()
                     latest.put_nowait(message['params'])
         receiver=asyncio.create_task(receive())

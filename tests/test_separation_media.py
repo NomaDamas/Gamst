@@ -11,10 +11,10 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorMetadata, SensorStreams
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
-from humansense.separation_media import (PROFILE, PROTOCOL, MAX_PAIR_BYTES,
+from gamst import Gamst, ProcessProvider, SensorMetadata, SensorStreams
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
+from gamst.separation_media import (PROFILE, PROTOCOL, MAX_PAIR_BYTES,
     SeparationPair, capability, frame_binding, pack_pair, unpack_pair)
 
 try:
@@ -103,6 +103,15 @@ class PairWire(unittest.TestCase):
         head, pcm = request(); head['metadata']['sensor']['stream_epoch'] = None
         with self.assertRaises(ValueError): frame_binding(head, pcm, generation=0, config_id='test')
 
+    def test_clock_aware_sensor_metadata_roundtrips_without_accepting_unknown_fields(self):
+        from gamst.separation_metadata import _sensor
+        head, pcm = request()
+        head['metadata']['sensor'].update(clock_id='audio-clock', clock_epoch='epoch-1')
+        self.assertTrue(_sensor(head['metadata']['sensor']))
+        unknown = deepcopy(head)
+        unknown['metadata']['sensor']['clock_extra'] = 'reject'
+        self.assertFalse(_sensor(unknown['metadata']['sensor']))
+
     def test_closed_metadata_rejects_raw_arrays_and_unknown_nested_fields(self):
         variants = []
         for field in ('separation', 'window', 'prompt', 'model', 'media'):
@@ -119,7 +128,7 @@ class PairWire(unittest.TestCase):
 
 class Retention(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.owner = self.human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device')
         self.spec = capability({})
         self.binding = frame_binding(*request(), generation=0, config_id=self.spec.version)
@@ -151,7 +160,7 @@ class Retention(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.owner.retrieve(refs[-1], 'residual', stream_epoch='epoch'), self.pair.residual)
 
     async def test_global_byte_budget_evicts_pairs_before_count_limit(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             owner = human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device',
                 capacity=32, max_bytes=MAX_PAIR_BYTES)
             refs = [owner._admit(self.pair, self.binding)['reference'] for _ in range(5)]
@@ -160,14 +169,14 @@ class Retention(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(owner.retrieve(refs[-1], 'residual', stream_epoch='epoch'), self.pair.residual)
 
     async def test_ttl_timer_releases_bytes_without_reads(self):
-        with patch('humansense.separation_media.time.monotonic', return_value=100): meta = self.admit()
+        with patch('gamst.separation_media.time.monotonic', return_value=100): meta = self.admit()
         store = self.owner._store
-        with patch('humansense.separation_media.time.monotonic', return_value=130): store._prune()
+        with patch('gamst.separation_media.time.monotonic', return_value=130): store._prune()
         self.assertEqual((store.bytes, len(store.entries), store.timer), (0, 0, None))
         with self.assertRaises(PermissionError): self.owner.retrieve(meta['reference'], 'target', stream_epoch='epoch')
 
     async def test_actual_expiry_callback_runs_without_lookup(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             owner = human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device', ttl_ms=10)
             owner._admit(self.pair, self.binding)
             for _ in range(100):
@@ -191,7 +200,7 @@ class Retention(unittest.IsolatedAsyncioTestCase):
 
     async def test_generation_consent_pause_delete_reset_and_close_revoke(self):
         for action in ('pause', 'delete_data', 'reset_processing', 'consent', 'close'):
-            human = HumanSense(consent=True)
+            human = Gamst(consent=True)
             owner = human.enable_separation_media(subject_id='alice', source_id='mic', sensor_id='device')
             meta = self.admit(owner)
             if action == 'consent': human.consent = False
@@ -212,11 +221,11 @@ class Retention(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError): self.owner.retrieve(meta['reference'], 'target', stream_epoch='new')
 
     async def test_opt_in_limits_and_subject_binding(self):
-        async with HumanSense() as human:
+        async with Gamst() as human:
             self.assertIsNone(human._separation_media)
             with self.assertRaises(PermissionError): human.enable_separation_media(source_id='mic', sensor_id='device')
         for options in ({'ttl_ms': True}, {'ttl_ms': 60001}, {'capacity': 33}, {'max_bytes': MAX_PAIR_BYTES-1}):
-            async with HumanSense(consent=True) as human:
+            async with Gamst(consent=True) as human:
                 with self.assertRaises(ValueError): human.enable_separation_media(source_id='mic', sensor_id='device', **options)
         with self.assertRaises(ValueError):
             self.human.enable_separation_media(source_id='mic', sensor_id='device', ttl_ms=1000)
@@ -226,8 +235,8 @@ class Retention(unittest.IsolatedAsyncioTestCase):
 
 FIXTURE = '''
 import time
-from humansense import provider_worker as w
-from humansense.separation_media import SeparationPair, capability
+from gamst import provider_worker as w
+from gamst.separation_media import SeparationPair, capability
 w.capability=lambda profile,config:capability(config)
 class Fixture:
     def __init__(self, config): self.config=config
@@ -249,7 +258,7 @@ w.main()
 @unittest.skipIf(np is None, 'optional numpy unavailable')
 class OwnedPipes(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.children = []
         self.real_spawn = asyncio.create_subprocess_exec
         self.providers = []
@@ -267,12 +276,12 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
             child = await self.real_spawn(sys.executable, '-u', '-c', code, **kwargs)
             self.children.append(child)
             return child
-        from humansense.provider_profiles import capability as production_capability
+        from gamst.provider_profiles import capability as production_capability
         # Explicit fixture contract; production discovery accepts only native
         # manifest/prompt configuration and has no fixture option or fallback.
         def contract(profile, config):
             return capability(config) if profile == PROFILE else production_capability(profile,config)
-        with patch('asyncio.create_subprocess_exec', spawn), patch('humansense.process_provider.capability',contract):
+        with patch('asyncio.create_subprocess_exec', spawn), patch('gamst.process_provider.capability',contract):
             yield
 
     async def open(self, config=None, **kwargs):
@@ -309,7 +318,7 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dict(os.environ), before)
 
     async def test_public_context_and_mcp_contain_metadata_only(self):
-        from humansense.mcp import MCPServer
+        from gamst.mcp import MCPServer
         with self.fixture():
             provider, owner = await self.open()
             streams = SensorStreams(self.human)
@@ -335,7 +344,7 @@ class OwnedPipes(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError): owner.retrieve(ref, 'target', stream_epoch=epoch)
 
     async def test_native_and_malicious_pipe_pcm_metadata_never_reaches_context_or_mcp(self):
-        from humansense.mcp import MCPServer
+        from gamst.mcp import MCPServer
         code_paths = [FIXTURE.replace("window=dict(sample_count=n)",
             "window=dict(sample_count=n,target_pcm=frame.data[:100].tolist())"),
             FIXTURE.replace('w.main()', '''
@@ -363,7 +372,7 @@ w.main()
                 await streams.close()
 
     async def test_direct_registered_observation_cannot_bypass_closed_metadata(self):
-        from humansense.mcp import MCPServer
+        from gamst.mcp import MCPServer
         spec = capability({})
         self.human.register_capability(spec)
         value = observation(); value['separation']['target_pcm'] = self.frame().data[:100].tolist()
@@ -375,8 +384,8 @@ w.main()
         self.assertNotIn('target_pcm', json.dumps(response))
 
     async def test_network_context_subscription_is_metadata_only(self):
-        from humansense.mcp import MCPServer
-        from humansense.server import handle_connection
+        from gamst.mcp import MCPServer
+        from gamst.server import handle_connection
         from test_server import Socket
         with self.fixture():
             provider, owner = await self.open()
@@ -389,7 +398,7 @@ w.main()
             task = asyncio.create_task(handle_connection(server, socket))
             try:
                 await socket.incoming.put({'jsonrpc': '2.0', 'id': 1,
-                    'method': 'humansense/subscribe', 'params': dict(types=['context'], interval_ms=50, subject_id='alice')})
+                    'method': 'gamst/subscribe', 'params': dict(types=['context'], interval_ms=50, subject_id='alice')})
                 messages = [await asyncio.wait_for(socket.outgoing.get(), 1) for _ in range(2)]
                 context = next(x['params'] for x in messages if x.get('method', '').endswith('/context'))
                 ack = next(x for x in messages if x.get('id') == 1)
@@ -398,7 +407,7 @@ w.main()
                 self.assertEqual(value, result)
                 self.assertNotIn('base64', json.dumps(context))
                 # No public method is installed for reference-based waveform access.
-                await socket.incoming.put({'jsonrpc':'2.0','id':2,'method':'humansense/separation/retrieve',
+                await socket.incoming.put({'jsonrpc':'2.0','id':2,'method':'gamst/separation/retrieve',
                     'params':{'reference': result['media']['reference']}})
                 while True:
                     response = await asyncio.wait_for(socket.outgoing.get(), 1)
@@ -408,7 +417,7 @@ w.main()
                 await socket.incoming.put(None); await task
 
     async def test_slow_separation_does_not_block_independent_sensor_or_context(self):
-        from humansense import CapabilitySpec, OutputField
+        from gamst import CapabilitySpec, OutputField
         done = asyncio.Event()
         class Fast:
             async def process(self, frame): done.set(); return {'value': 1}

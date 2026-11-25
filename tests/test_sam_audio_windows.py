@@ -7,7 +7,7 @@ try:
 except ImportError:
     np = None
 
-from humansense.sam_audio_windows import prepare_window, validate_outputs
+from gamst.sam_audio_windows import prepare_window, validate_outputs
 
 
 @unittest.skipIf(np is None, 'optional numpy unavailable')

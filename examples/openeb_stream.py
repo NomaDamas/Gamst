@@ -7,9 +7,9 @@ import argparse
 import asyncio
 import json
 
-from humansense import HumanSense, OpenEBProcess, ProcessProvider, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.streams import _finish
+from gamst import Gamst, OpenEBProcess, ProcessProvider, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.streams import _finish
 
 
 async def run(args):
@@ -23,7 +23,7 @@ async def run(args):
         print(json.dumps({'selection': source.selection, 'context_config': source.config,
                           'epoch': source.epoch, 'pacing': args.pacing,
                           'native_acceptance_verified': False}))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = ProcessProvider.capability('openeb.eventcd', source.config)
             async def factory():

@@ -7,10 +7,10 @@ import time
 async def main():
     import cv2
     from faster_whisper.audio import decode_audio
-    from humansense.plugins import MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin, InputFrame
-    from humansense.realtime import LocalScenePlugin
-    from humansense import HumanSense
-    from humansense.companion import Companion, LocalChatBackend
+    from gamst.plugins import MediaPipeFacePlugin, FasterWhisperPlugin, SileroVADPlugin, InputFrame
+    from gamst.realtime import LocalScenePlugin
+    from gamst import Gamst
+    from examples.companion import Companion, LocalChatBackend
     root = Path(__file__).resolve().parents[1]
     assets = root / '.local-models'
     qa = root / '.local-run/qa'
@@ -50,7 +50,7 @@ async def main():
     t = time.monotonic()
     result = await scene.process(frame)
     report['vlm'] = {'description': result[0]['value'], 'latency_ms': round((time.monotonic()-t)*1000)}
-    async with HumanSense(consent=True) as human:
+    async with Gamst(consent=True) as human:
         await human.push_signal('scene.description', result[0]['value'], 'video')
         companion = Companion(human, LocalChatBackend('http://127.0.0.1:18767/v1/chat/completions', 'local-vlm'))
         t = time.monotonic()

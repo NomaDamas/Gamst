@@ -34,7 +34,7 @@ assets currently present on a machine.
 
 The core package has no mandatory third-party dependencies and requires Python
 3.10+. [pyproject.toml](../pyproject.toml) is authoritative for optional extras;
-[provider_profiles.py](../humansense/provider_profiles.py) is authoritative for
+[provider_profiles.py](../gamst/provider_profiles.py) is authoritative for
 worker profile names. A generic Hugging Face callback is not candidate support.
 
 Use an explicitly selected, already provisioned interpreter for each worker as
@@ -82,6 +82,12 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
 5. **BoT-SORT — not integrated.** No camera-motion/ReID BoT-SORT runtime;
    code and any ReID weights unreviewed.
    [#17](https://github.com/NomaDamas/Gamst/issues/17).
+5a. **OC-SORT — implemented adapter; real-weight acceptance pending.**
+   Optional pure-NumPy `OCSORTPersonTracker`, selected with `tracker='ocsort'`;
+   IoU remains the default. CVPR 2023 algorithm, pinned MIT upstream revision,
+   Kalman/re-update/momentum/recovery and synthetic occlusion checks.
+   [Contract](ocsort.md), `test_ocsort`; real detector/benchmark parity remains
+   [#17](https://github.com/NomaDamas/Gamst/issues/17).
 6. **YOLOE — implemented text/exemplar adapter, real acceptance pending.**
    `yoloe.local`, `yoloe` extra, Ultralytics 8.4.212/Torch 2.8.0/TorchVision
    0.23.0, explicit CPU/CUDA FP32. [Contract](yoloe-context.md), `test_yoloe`.
@@ -92,8 +98,12 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
    [Contract and gated-asset setup](sam3.md), `test_sam3`. Model access and exact
    model terms must be accepted separately; no trained inference certification
    is inferred from `ready.json`. [#19](https://github.com/NomaDamas/Gamst/issues/19).
-8. **SAM3.1 video — not integrated.** SAM3 image calls do not supply its native
-   tracker. Runtime and model terms unreviewed for this path;
+8. **SAM3.1 video — implemented adapter; real-weight acceptance pending.**
+   Optional `sam3.1.video` bounded Object Multiplex worker with per-stream clip
+   state, timestamped compact masklets, track/session eviction and synchronous
+   backpressure; sampled SAM3 and EfficientTAM remain defaults. Pinned source,
+   custom SAM License and gated `facebook/sam3.1` asset.
+   [Contract](sam31-video.md), `test_sam31_video`; trained CUDA acceptance remains
    [#19](https://github.com/NomaDamas/Gamst/issues/19).
 9. **EfficientTAM — implemented tiny512 video path.** `efficienttam.tiny512`,
    `efficienttam` extra and pinned upstream source; CPU/CUDA explicit.
@@ -144,11 +154,13 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
     (supported releases declare Apache-2.0); no weights. Synthetic translation
     tests execute OpenCV, not real-camera validation;
     [#22](https://github.com/NomaDamas/Gamst/issues/22).
-17. **Kalman filters — no standalone SDK Kalman provider.** IoU continuity and
-    finite-difference kinematics are not Kalman filtering. TI firmware-produced
-    tracks below do not prove a host Kalman implementation. Runtime/license not
-    selected; [#17](https://github.com/NomaDamas/Gamst/issues/17),
-    [#31](https://github.com/NomaDamas/Gamst/issues/31).
+17. **Kalman filters — implemented inside OC-SORT; no standalone SDK Kalman provider.**
+   The optional OC-SORT adapter above includes the seven-state host NumPy filter
+   and observation-centric re-update. The default IoU continuity and
+   finite-difference kinematics remain distinct. TI firmware-produced tracks do
+   not prove host filtering. `test_ocsort`;
+   [#17](https://github.com/NomaDamas/Gamst/issues/17),
+   [#31](https://github.com/NomaDamas/Gamst/issues/31).
 18. **RANSAC/homography — partial algorithm coverage.** OpenCV RANSAC similarity
     fitting in `BackgroundSimilarity` and explicitly supplied projective
     homography projection in `geometry.ground_plane` are implemented. Arbitrary
@@ -164,8 +176,13 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
     [contract](depth-context.md), `test_depth`. Reference Small weights/code
     declare Apache-2.0; supplied artifact provenance remains separate. Actual
     inference/ordinal quality [#95](https://github.com/NomaDamas/Gamst/issues/95).
-21. **Video Depth Anything — not integrated.** No temporal model/runtime;
-    code/checkpoint terms unreviewed. [#22](https://github.com/NomaDamas/Gamst/issues/22).
+21. **Video Depth Anything Small — implemented adapter; real-weight acceptance pending.**
+    Optional `video_depth_anything.small` native streaming-cache worker, pinned
+    CVPR 2025 source, `video-depth` extra and explicit local Small checkpoint;
+    DAV2-Small remains the default. Small Apache-2.0; Base/Large CC-BY-NC-4.0
+    are not selected. [Contract](video-depth-stream.md), `test_video_depth`;
+    trained temporal/parity/resource acceptance remains
+    [#22](https://github.com/NomaDamas/Gamst/issues/22).
 22. **Depth Anything 3 streaming — not integrated.** No selected streaming state,
     resource profile or assets; code/weights unreviewed.
     [#22](https://github.com/NomaDamas/Gamst/issues/22).
@@ -225,8 +242,13 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
     [contract/evidence](speech-activity.md), `test_vad_provider`.
     Reference code/model MIT; Torch terms separate. Recorded continuity does not
     establish live accuracy or ASR acceptance [#23](https://github.com/NomaDamas/Gamst/issues/23).
-34. **TEN-VAD — not integrated.** No selected native runtime/assets; code/model
-    terms unreviewed. [#23](https://github.com/NomaDamas/Gamst/issues/23).
+34. **TEN-VAD — implemented adapter; real native/weight acceptance pending.**
+    `TENActivity`, explicit hashed local native library, 10/16 ms hops;
+    `test_ten_vad`. The upstream license is Apache-2.0 with additional Agora
+    deployment/non-compete and direct-end-user conditions, not plain Apache-2.0;
+    bundled BSD notices also apply. NumPy comes from `audio`; no TEN-VAD PyPI
+    dependency is selected. Actual native/noise/latency acceptance
+    [#23](https://github.com/NomaDamas/Gamst/issues/23).
 35. **Nemotron 3.5 ASR Streaming 0.6B — not integrated.** The diarization model
     below is not ASR. No selected ASR runtime/license compatibility;
     [#68](https://github.com/NomaDamas/Gamst/issues/68).
@@ -237,6 +259,13 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
     Reference model Apache-2.0 declared; vLLM/runtime distributions separate.
     Accumulated audio is re-fed; constant-work cached inference is not proven.
     Actual bilingual/runtime gate [#68](https://github.com/NomaDamas/Gamst/issues/68).
+36a. **Moonshine v2 Tiny Streaming English — implemented adapter; real-weight acceptance pending.**
+    `MoonshineStreamingASR`, `moonshine` extra with moonshine-voice 0.0.45,
+    explicit seven-file hashed local bundle and `test_moonshine_asr`. Upstream
+    revision `49bc3af5bb0d767d5156fb579fa5f9853b559bf3`; code and English model
+    MIT declared. This is optional English low-latency ASR, not a replacement for
+    the default multilingual Qwen/faster-whisper paths. Trained latency/quality
+    acceptance [#23](https://github.com/NomaDamas/Gamst/issues/23).
 37. **FasterWhisper — implemented legacy windowed ASR.** `FasterWhisperPlugin`,
     `asr` extra (faster-whisper >=1,<2), local Whisper small/CTranslate2;
     [setup](local-setup.md), `test_plugins`, `test_transcripts`. Runtime, converted
@@ -263,6 +292,13 @@ inputs; process isolation is not an OS sandbox. No installer is run by this matr
     [contract/evidence](environment-audio.md), `test_environment_audio`.
     Reference code/model Apache-2.0 declared; four labeled recordings are not
     general accuracy or live hardware acceptance [#24](https://github.com/NomaDamas/Gamst/issues/24).
+41a. **CED-Tiny and CED-Mini — implemented adapters; real-weight acceptance pending.**
+    `CEDEvents`, `ced` extra, official `feats` ONNX exports, explicit hashed
+    model/527-label JSON and `test_ced_events`. Upstream revision
+    `4b2149dc9ba1ed25c6348083f82dba03f00a5022`; CED code is GPL-3.0, so this
+    remains an optional isolated extra and is never imported by default. Model,
+    AudioSet data/label and runtime terms are separate. Trained window/latency/
+    tagging acceptance [#24](https://github.com/NomaDamas/Gamst/issues/24).
 42. **PANNs — not integrated.** No selected checkpoint/window profile/runtime;
     code/weights unreviewed. [#24](https://github.com/NomaDamas/Gamst/issues/24).
 43. **RMS/dBFS, autocorrelation pitch, silence/voicing — implemented DSP or

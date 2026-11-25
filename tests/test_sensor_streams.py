@@ -3,9 +3,9 @@ from dataclasses import replace
 import threading
 import unittest
 
-from humansense import HumanSense, SensorStreams, CapabilitySpec, OutputField, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, CapabilitySpec, OutputField, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 def spec(name='imu.motion', modality='imu'):
@@ -33,7 +33,7 @@ class Counter:
 
 class Streams(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.runtime = SensorStreams(self.human, capacity=1)
         self.instances = []
         def factory():

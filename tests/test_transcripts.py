@@ -1,9 +1,9 @@
 import unittest
 
-from humansense import HumanSense, SensorMetadata, SensorStreams, transcript_capability
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
-from humansense.transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
+from gamst import Gamst, SensorMetadata, SensorStreams, transcript_capability
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
+from gamst.transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 
 
 def update(text='안녕하세요', revision=0, status='partial', utterance='u1', start=1000, end=1100):
@@ -130,7 +130,7 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
         return transcript_capability('asr.test', 'fixture', '1', streaming_mode='native')
 
     async def test_context_replaces_partial_and_keeps_previous_final(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec = self.spec()
             human.register_capability(spec)
             now = timestamp()-1000
@@ -159,7 +159,7 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
                 return update(start=frame.timestamp_ms-10, end=frame.timestamp_ms)
             def reset(self):
                 pass
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             spec = self.spec()
             streams.register(spec, Backend)
@@ -176,7 +176,7 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(e['status'] == 'interrupted' for e in (await human.get_context())['transcripts']['utterances']))
 
     async def test_failed_persistence_does_not_commit_reducer(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec = self.spec()
             human.register_capability(spec)
             original = human.store.add
@@ -191,7 +191,7 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
             human.store.add = original
 
     async def test_capacity_rejection_does_not_commit_or_publish(self):
-        async with HumanSense(consent=True, max_payload_bytes=100) as human:
+        async with Gamst(consent=True, max_payload_bytes=100) as human:
             import asyncio
             queue = asyncio.Queue()
             human._subscribers.add((queue, ('observation.signal',)))
@@ -217,7 +217,7 @@ class TranscriptRuntime(unittest.IsolatedAsyncioTestCase):
                 return update(start=frame.timestamp_ms-10, end=frame.timestamp_ms)
             def reset(self):
                 pass
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             spec = self.spec()
             managers, backends = [], []
             now = timestamp()-1000

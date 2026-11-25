@@ -26,7 +26,7 @@ not evidence that a checkpoint was trained or licensed correctly.
 
 ```python
 import sys
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(
     checkpoint_path='/absolute/path/food.safetensors',

@@ -8,10 +8,10 @@ from pathlib import Path
 import sys
 import time
 
-from humansense import ProcessProvider, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.provider_wire import spec_value
-from humansense.schema import timestamp
+from gamst import ProcessProvider, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.provider_wire import spec_value
+from gamst.schema import timestamp
 
 
 async def run(args):

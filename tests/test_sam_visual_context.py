@@ -2,8 +2,8 @@ import unittest
 from dataclasses import replace
 import test_sam_visual_window as windows
 import test_sam_audio_context as audio
-from humansense.sam_visual_packet import visual_policy,unpack_visual_packet
-from humansense.providers.sam_audio_context import SAMAudioContext
+from gamst.sam_visual_packet import visual_policy,unpack_visual_packet
+from gamst.providers.sam_audio_context import SAMAudioContext
 
 
 class Backend(audio.FixtureBackend):
@@ -56,9 +56,9 @@ class VisualContext(unittest.TestCase):
 
     def test_clock_provenance_and_maximum_shape_wire_budget(self):
         import json
-        from humansense.provider_wire import encode_frame,envelope,parse_header
-        from humansense.separation_media import request_binding,pack_pair
-        from humansense.separation_metadata import _visual
+        from gamst.provider_wire import encode_frame,envelope,parse_header
+        from gamst.separation_media import request_binding,pack_pair
+        from gamst.separation_metadata import _visual
         np=windows.fixtures.np
         source=windows.Window();source.setUp();f=source.fixture
         name='x'*128
@@ -108,10 +108,10 @@ class OwnedVisual(unittest.IsolatedAsyncioTestCase):
         if windows.fixtures.np is None:self.skipTest('optional numpy missing')
         import asyncio,json,os,sys
         from unittest.mock import patch
-        from humansense import HumanSense,ProcessProvider,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
-        from humansense.separation_media import PROFILE
+        from gamst import Gamst,ProcessProvider,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.separation_media import PROFILE
         fixture=windows.Window();fixture.setUp(); f=fixture.fixture
         now=timestamp(); shift=(now-f.audio.timestamp_ms)*1000
         f.audio=replace(f.audio,timestamp_ms=now)
@@ -119,8 +119,8 @@ class OwnedVisual(unittest.IsolatedAsyncioTestCase):
         packet=f.packet(); policy=visual_policy(unpack_visual_packet(packet.data)[0])
         config=dict(audio.CONFIG,prompt='',visual_policy=policy)
         child_code='''
-from humansense import provider_worker as w
-from humansense.providers.sam_audio_native import SAMAudioNative
+from gamst import provider_worker as w
+from gamst.providers.sam_audio_native import SAMAudioNative
 from test_sam_visual_context import Backend
 SAMAudioNative.from_local=classmethod(lambda cls,config:Backend())
 w.main()
@@ -131,7 +131,7 @@ w.main()
             kwargs['env']=env
             child=await real_spawn(sys.executable,'-u','-c',child_code,**kwargs)
             children.append(child);return child
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             owner=human.enable_separation_media(subject_id='subject',source_id='microphone',sensor_id='mic0',
                 visual_source={'source_id':'camera','sensor_id':'cam0'})
             with patch('asyncio.create_subprocess_exec',spawn):
@@ -173,12 +173,12 @@ w.main()
         if windows.fixtures.np is None:self.skipTest('optional numpy missing')
         import sys
         from unittest.mock import patch,AsyncMock
-        from humansense import HumanSense,ProcessProvider
-        from humansense.separation_media import PROFILE
+        from gamst import Gamst,ProcessProvider
+        from gamst.separation_media import PROFILE
         fixture=windows.Window();fixture.setUp()
         policy=visual_policy(unpack_visual_packet(fixture.packet)[0])
         config=dict(audio.CONFIG,visual_policy=policy)
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             owner=human.enable_separation_media(subject_id='subject',source_id='microphone',sensor_id='mic0')
             with patch('asyncio.create_subprocess_exec',new_callable=AsyncMock) as spawn:
                 with self.assertRaises(PermissionError):
@@ -198,8 +198,8 @@ class NativeVisualCall(unittest.TestCase):
         if not path or not native_tests.HAS_TORCH:
             self.skipTest('explicit pinned processor and optional Torch required')
         import torch
-        from humansense.sam_visual_window import prepare_visual
-        from humansense.sam_audio_windows import prepare_window
+        from gamst.sam_visual_window import prepare_visual
+        from gamst.sam_audio_windows import prepare_window
         f=windows.Window();f.setUp();source=f.fixture
         for i in range(10):source.rgb[i]=i+1
         source.masks[:,:,:,8:]=1

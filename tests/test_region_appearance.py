@@ -3,10 +3,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from humansense import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.region_appearance import RegionAppearance,region_evidence
-from humansense.provider_profiles import capability
+from gamst import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.region_appearance import RegionAppearance,region_evidence
+from gamst.provider_profiles import capability
 try:
     import numpy as np
 except ImportError:np=None
@@ -75,12 +75,12 @@ class Regions(unittest.TestCase):
 
     def test_lifecycle_ownership_expiry_and_disappearance(self):
         p=provider(capacity=2,retention_ms=10)
-        with patch('humansense.providers.region_appearance.time.monotonic',return_value=1):
+        with patch('gamst.providers.region_appearance.time.monotonic',return_value=1):
             f=frame();p.process_regions(f,evidence(f))
             f=frame(10,1005);empty=p.process_regions(f,evidence(f,[]));self.assertEqual(empty['objects'],[])
             f=frame(11,1006);self.assertEqual(len(p.process_regions(f,evidence(f))['objects'][0]['attributes']['appearance_candidates']),2)
             self.assertEqual(len(p._entries),2)
-        with patch('humansense.providers.region_appearance.time.monotonic',return_value=2):
+        with patch('gamst.providers.region_appearance.time.monotonic',return_value=2):
             f=frame(12,1007);self.assertFalse(p.process_regions(f,evidence(f))['objects'][0]['attributes']['appearance_candidates'])
         f=frame(epoch='two');self.assertFalse(p.process_regions(f,evidence(f))['objects'][0]['attributes']['appearance_candidates'])
         p.reset();self.assertFalse(p._entries);p.close();p.close()
@@ -90,8 +90,8 @@ class Regions(unittest.TestCase):
 @unittest.skipIf(np is None,'optional numpy absent')
 class Pipeline(unittest.IsolatedAsyncioTestCase):
     def build(self):
-        from humansense.object_appearance import ObjectAppearancePipeline
-        from humansense.providers.detection import RFDETRObjects
+        from gamst.object_appearance import ObjectAppearancePipeline
+        from gamst.providers.detection import RFDETRObjects
         class Detector:
             spec=RFDETRObjects.capability('test')
             closed=False;resets=0;rows=objects()
@@ -106,11 +106,11 @@ class Pipeline(unittest.IsolatedAsyncioTestCase):
         d,r=Detector(),Regions();return ObjectAppearancePipeline(d,r),d,r
 
     async def test_sampling_disappearance_memory_and_mcp(self):
-        from humansense import HumanSense,SensorStreams
-        from humansense.mcp import MCPServer
-        from humansense.schema import timestamp
+        from gamst import Gamst,SensorStreams
+        from gamst.mcp import MCPServer
+        from gamst.schema import timestamp
         p,d,r=self.build()
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);streams.register(p.spec,lambda:p)
             await streams.open('cam','sensor',[p.spec.id]);now=timestamp()-100
             for seq in (0,10,11):
@@ -164,12 +164,12 @@ class Pipeline(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(r.closed)
 
     async def test_partial_open_failure_releases_first_runtime(self):
-        from humansense.object_appearance import ObjectAppearancePipeline
+        from gamst.object_appearance import ObjectAppearancePipeline
         from unittest.mock import AsyncMock
         p,d,r=self.build()
         config=dict(path='/explicit',sha256='0'*64)
         opening=AsyncMock(side_effect=[d,RuntimeError('second environment unavailable')])
-        with patch('humansense.object_appearance.ProcessProvider.open',opening):
+        with patch('gamst.object_appearance.ProcessProvider.open',opening):
             with self.assertRaises(RuntimeError):await ObjectAppearancePipeline.open('/det/python',config,'/embed/python',config)
         self.assertTrue(d.closed);self.assertEqual(opening.call_args_list[0].args[0],'/det/python')
         self.assertEqual(opening.call_args_list[1].args[0],'/embed/python')
@@ -177,11 +177,11 @@ class Pipeline(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_worker_region_operation_and_capture_rejection(self):
         import asyncio,sys
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         children=[];real_spawn=asyncio.create_subprocess_exec
         code='''
-from humansense import provider_worker as w
-from humansense.providers.region_appearance import RegionAppearance
+from gamst import provider_worker as w
+from gamst.providers.region_appearance import RegionAppearance
 from types import SimpleNamespace
 import numpy as np
 w._construct=lambda profile,config:(RegionAppearance(SimpleNamespace(predictor=lambda rgb:np.ones(384),close=lambda:None),sha256=config['sha256']),w.capability(profile,config))

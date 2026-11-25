@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense.provider_profiles import capability
-from humansense.provider_worker import _construct
-from humansense.providers.endpoint_asr import SileroEndpointASR
-from humansense.providers.qwen_asr import QwenStreamingASR
-from humansense.providers.vad import SileroActivity
-from humansense.qwen_artifact import REQUIRED, artifact_version
+from gamst.provider_profiles import capability
+from gamst.provider_worker import _construct
+from gamst.providers.endpoint_asr import SileroEndpointASR
+from gamst.providers.qwen_asr import QwenStreamingASR
+from gamst.providers.vad import SileroActivity
+from gamst.qwen_artifact import REQUIRED, artifact_version
 from test_qwen_asr import EngineDouble, np
 from test_qwen_endpoint import ActivityModel
 
@@ -25,8 +25,8 @@ class EndpointDiscovery(unittest.TestCase):
     def test_discovery_is_import_light_and_does_not_touch_files(self):
         code="""
 import sys
-from humansense.provider_profiles import capability
-from humansense.qwen_artifact import REQUIRED
+from gamst.provider_profiles import capability
+from gamst.qwen_artifact import REQUIRED
 config=dict(asr=dict(path='/not-installed',files={name:'0'*64 for name in REQUIRED}),
     vad=dict(path='/not-installed',sha256='1'*64),minimum_speech_ms=160,silence_ms=640)
 spec=capability('qwen3.asr.endpoint',config)

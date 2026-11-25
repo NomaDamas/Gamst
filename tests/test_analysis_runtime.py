@@ -1,7 +1,7 @@
 import asyncio
 import unittest
-from humansense import HumanSense
-from humansense.reasoning import _normalize, parse_analysis, prepare_records
+from gamst import Gamst
+from gamst.reasoning import _normalize, parse_analysis, prepare_records
 
 
 class AnalysisRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -14,7 +14,7 @@ class AnalysisRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return _normalize(parse_analysis({'expressions': [], 'interaction': [
                     {'name': 'needs_clarification', 'hypothesis': 'May need clarification', 'evidence_ids': ids}],
                     'consistency': []}, prepared))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.set_analysis_backend(Backend())
             await human.push_text('I do not understand this step')
             await human.push_signal('head.yaw', 4., 'video', model_id='vision', model_version='1')
@@ -32,7 +32,7 @@ class AnalysisRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await release.wait()
                 return _normalize(parse_analysis({'expressions': [], 'interaction': [], 'consistency': []}, prepare_records(records)))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.set_analysis_backend(Backend())
             await human.push_text('private')
             task = asyncio.create_task(human.analyze())
@@ -51,7 +51,7 @@ class AnalysisRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return _normalize(parse_analysis({'expressions': [], 'interaction': [
                     {'name': 'may_want_shorter_answer', 'hypothesis': 'May prefer brevity',
                      'evidence_ids': [prepared[0]['id']]}], 'consistency': []}, prepared))
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             human.set_analysis_backend(Backend())
             await human.push_text('This explanation is very long')
             analyzed = await human.analyze()

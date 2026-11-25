@@ -44,7 +44,7 @@ A separately audited conversion must establish provenance and exact canonical
 keys; a fabricated head with valid shapes cannot establish trained quality.
 
 ```python
-from humansense.providers.sparsh_native import SparshSlipNative
+from gamst.providers.sparsh_native import SparshSlipNative
 
 native = SparshSlipNative.from_local(
     "/absolute/supplied/sparsh",

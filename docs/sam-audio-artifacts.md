@@ -3,7 +3,7 @@
 This is the file/declaration slice of [#234](https://github.com/NomaDamas/Gamst/issues/234), required by native integration [#201](https://github.com/NomaDamas/Gamst/issues/201). It does not load a model, attest upstream source authenticity or establish checkpoint compatibility. Native import-origin/source verification and actual tensor coverage remain required before inference; this slice does not close those requirements.
 
 ```python
-from humansense.sam_audio_artifact import read_manifest, verify_manifest, verify_runtime
+from gamst.sam_audio_artifact import read_manifest, verify_manifest, verify_runtime
 
 manifest = read_manifest("/absolute/local/manifest.json", expected_sha256=frozen_digest)
 checked = verify_manifest(manifest, expected_sha256=frozen_digest)

@@ -5,9 +5,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from humansense.plugins import InputFrame
-from humansense.realtime import LocalScenePlugin, QueuedPlugin, scene_status
-from humansense.vlm_metrics import VLMCallMetrics, reported_usage
+from gamst.plugins import InputFrame
+from gamst.realtime import LocalScenePlugin, QueuedPlugin, scene_status
+from gamst.vlm_metrics import VLMCallMetrics, reported_usage
 
 
 class Metrics(unittest.TestCase):

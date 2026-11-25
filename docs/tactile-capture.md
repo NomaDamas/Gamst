@@ -21,8 +21,8 @@ The DIGIT bridge verifies installed `digit_interface.digit` and `digit_handler` 
 GelSight uses the documented [official OpenCV camera API](https://github.com/gelsightinc/gsrobotics/blob/321d6a22da64529138ff10237335038fd8c5189f/utilities/gelsightmini.py): explicit `VideoCapture(device)`, `isOpened`, set width/height, `read`, `release`. It does not import or copy the GUI SDK or its crop/rescale pipeline. Select an explicit numeric local camera index or `/dev/` device path; files/URLs are rejected. This API cannot independently authenticate that the selected webcam is a GelSight device. The caller binds the serial/model; actual device validation remains required. GelSight fps and LEDs are not configured, so their source settings must be `None`. Each returned image must match declared uint8 BGR geometry exactly; no driver resize fallback is applied. Installed OpenCV version and reference API revision accompany packets.
 
 ```python
-from humansense.providers.tactile import TactileSource
-from humansense.providers.tactile_capture import TactileCapture
+from gamst.providers.tactile import TactileSource
+from gamst.providers.tactile_capture import TactileCapture
 
 # local_reference_bgr is caller-supplied raw uint8 BGR bytes, exactly320*240*3.
 source = TactileSource(
@@ -55,7 +55,7 @@ The manifest is bounded to256KiB/1024 entries. Packet names are unique local bas
 Run the implemented command:
 
 ```sh
-python3 -m humansense.tactile_replay --manifest /absolute/path/recording.json --max-gap-ms 100
+python3 -m gamst.tactile_replay --manifest /absolute/path/recording.json --max-gap-ms 100
 ```
 
 It prints bounded acquisition observations as JSON lines, not raw pixels, task inference or an acceptance verdict. To reach the SDK's normal Context/MCP surface, register `TactileInputContext.capability()` with `SensorStreams`, open its explicit source/sensor lane, submit tactile InputFrames, then drain. SensorStreams owns its runtime epoch separately from the recorded `source_epoch`. The provider publishes `tactile.input` with input hashes, declared sensor/reference identities, acquisition intervals, raw geometry, backend provenance and `window_ready`; `task_inference_performed` and physical calibration verification remain false. It never calls an LLM.

@@ -8,7 +8,7 @@ The consumer LLM receives numerical context, not image arrays. This is a
 conditional 2D image estimate, not metric camera pose or verified object identity.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = {
     'path': '/absolute/local/rfdetr-checkpoint.pth',

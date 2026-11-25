@@ -7,7 +7,7 @@ local library/vocabulary/calibration hashes; no assets are installed automatical
 
 ```python
 import sys
-from humansense import ORBSLAMProcess, SensorStreams
+from gamst import ORBSLAMProcess, SensorStreams
 
 # config is the explicit local asset configuration in orbslam-context.md.
 provider = await ORBSLAMProcess.open(
@@ -57,7 +57,7 @@ quality/latency acceptance remains separate. No raw frame history or unbounded
 attempt journal is retained; application observability can snapshot these counters.
 
 Direct `close()` cancels and joins the active operation before returning. Managed
-HumanSense pause/delete/stream clear cancels rotation, prevents late publication
+Gamst pause/delete/stream clear cancels rotation, prevents late publication
 and reaps the child. Reopening is explicit after stop. Calling close repeatedly or
 cancelling its waiter does not abandon owned cleanup.
 

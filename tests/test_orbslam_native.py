@@ -10,7 +10,7 @@ from unittest.mock import patch
 try:
     import numpy as np
 except ImportError:np=None
-from humansense.providers.orbslam_native import ORBSLAMNative
+from gamst.providers.orbslam_native import ORBSLAMNative
 
 ROOT=Path(__file__).resolve().parents[1]
 HEADER='''#pragma once

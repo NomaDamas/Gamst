@@ -1,10 +1,10 @@
 import asyncio
 import unittest
 
-from humansense import HumanSense
-from humansense.cadence import ContextCadenceProfile
-from humansense.mcp import MCPServer
-from humansense.server import handle_connection
+from gamst import Gamst
+from gamst.cadence import ContextCadenceProfile
+from gamst.mcp import MCPServer
+from gamst.server import handle_connection
 from test_perception_api import Socket
 
 
@@ -44,33 +44,33 @@ class ConnectionProfile(unittest.IsolatedAsyncioTestCase):
                 return message
 
     async def test_profiles_are_passive_reset_and_preserve_invalid_subscription(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             socket = Socket()
             task = asyncio.create_task(handle_connection(MCPServer(human), socket))
             async def request(ident, method, params={}):
                 await socket.incoming.put(dict(jsonrpc='2.0', id=ident, method=method, params=params))
                 return await self.receive_id(socket, ident)
             try:
-                initial = (await request(1, 'humansense/context_profile'))['result']
+                initial = (await request(1, 'gamst/context_profile'))['result']
                 self.assertFalse(initial['configured'])
                 self.assertEqual(initial['probes_sent'], 0)
-                await request(2, 'humansense/subscribe', {'types': ['context'], 'interval_ms': 50})
+                await request(2, 'gamst/subscribe', {'types': ['context'], 'interval_ms': 50})
                 for _ in range(8):
                     await asyncio.wait_for(socket.outgoing.get(), 2)
-                active = (await request(3, 'humansense/context_profile'))['result']
+                active = (await request(3, 'gamst/context_profile'))['result']
                 self.assertGreaterEqual(active['completed'], 8)
                 self.assertEqual(active['applied_interval_ms'], 50)
                 self.assertIsNotNone(active['recommended_interval_ms'])
                 self.assertTrue(active['running'])
-                invalid = await request(4, 'humansense/subscribe', {'types': ['context'], 'interval_ms': 0})
+                invalid = await request(4, 'gamst/subscribe', {'types': ['context'], 'interval_ms': 0})
                 self.assertIn('error', invalid)
-                after = (await request(5, 'humansense/context_profile'))['result']
+                after = (await request(5, 'gamst/context_profile'))['result']
                 self.assertGreaterEqual(after['completed'], active['completed'])
-                await request(6, 'humansense/subscribe', {'types': []})
-                stopped = (await request(7, 'humansense/context_profile'))['result']
+                await request(6, 'gamst/subscribe', {'types': []})
+                stopped = (await request(7, 'gamst/context_profile'))['result']
                 self.assertFalse(stopped['configured'])
                 self.assertEqual(stopped['completed'], 0)
-                self.assertIn('error', await request(8, 'humansense/context_profile', {'probe': True}))
+                self.assertIn('error', await request(8, 'gamst/context_profile', {'probe': True}))
             finally:
                 await socket.incoming.put(None)
                 await task

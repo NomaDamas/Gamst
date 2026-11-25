@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from humansense.pg_artifact import (ORIGINS,PACKAGES,CANDIDATE_PACKAGES,MAX_WEIGHT,MAX_AGGREGATE,
+from gamst.pg_artifact import (ORIGINS,PACKAGES,CANDIDATE_PACKAGES,MAX_WEIGHT,MAX_AGGREGATE,
     manifest_digest,validate_manifest,inspect_manifest,read_manifest,_file)
-from humansense.pg_sources import SOURCE_HASHES,PG_REVISION,LAVIS_CANDIDATE,PG_BYTES,PG_SHA256
+from gamst.pg_sources import SOURCE_HASHES,PG_REVISION,LAVIS_CANDIDATE,PG_BYTES,PG_SHA256
 
 
 def declaration(root):
@@ -60,8 +60,8 @@ class Manifest(unittest.TestCase):
 
     def test_matching_runtime_metadata_still_never_claims_compatibility(self):
         value=declaration(Path('/bundle'))
-        with patch('humansense.pg_artifact.metadata.version',side_effect=lambda name:value['runtime']['packages'][name]), \
-             patch('humansense.pg_artifact.platform.python_version',return_value=value['runtime']['python']):
+        with patch('gamst.pg_artifact.metadata.version',side_effect=lambda name:value['runtime']['packages'][name]), \
+             patch('gamst.pg_artifact.platform.python_version',return_value=value['runtime']['python']):
             result=inspect_manifest(value,expected_sha256=manifest_digest(value))
         self.assertEqual(result['runtime_mismatches'],[])
         self.assertFalse(result['runtime_compatibility_verified'])
@@ -117,7 +117,7 @@ class Manifest(unittest.TestCase):
             code='''
 import sys,socket
 socket.create_connection=lambda *a,**kw:(_ for _ in ()).throw(AssertionError('network'))
-from humansense.pg_artifact import main
+from gamst.pg_artifact import main
 main()
 assert not {'torch','transformers','timm','fairscale','lavis','safetensors','numpy'} & sys.modules.keys()
 '''
@@ -164,7 +164,7 @@ class StreamedFiles(unittest.TestCase):
                             else:
                                 replacement=root/'replacement';replacement.write_bytes(data);replacement.replace(path)
                         return result
-                with patch('humansense.sam_audio_artifact.os.fdopen',side_effect=Reader):
+                with patch('gamst.sam_audio_artifact.os.fdopen',side_effect=Reader):
                     with self.assertRaises(ValueError):_file(path,hashlib.sha256(data).hexdigest(),len(data))
                 self.assertEqual(done,[True])
 

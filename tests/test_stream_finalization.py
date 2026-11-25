@@ -2,11 +2,11 @@ import asyncio
 import threading
 import unittest
 from dataclasses import replace
-from humansense import HumanSense, SensorStreams, SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.transcripts import transcript_capability
-from humansense.schema import timestamp
-from humansense.mcp import MCPServer
+from gamst import Gamst, SensorStreams, SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.transcripts import transcript_capability
+from gamst.schema import timestamp
+from gamst.mcp import MCPServer
 
 
 def spec():
@@ -36,7 +36,7 @@ class ASR:
 
 class Finalization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human=HumanSense(consent=True); self.streams=SensorStreams(self.human)
+        self.human=Gamst(consent=True); self.streams=SensorStreams(self.human)
         self.instances=[]
         def factory():
             p=ASR(); self.instances.append(p); return p

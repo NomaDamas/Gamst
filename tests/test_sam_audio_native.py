@@ -12,9 +12,9 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from humansense.sam_audio_sources import VerifiedSources
-from humansense.sam_audio_source_hashes import SOURCE_HASHES
-from humansense.providers import sam_audio_native as native
+from gamst.sam_audio_sources import VerifiedSources
+from gamst.sam_audio_source_hashes import SOURCE_HASHES
+from gamst.providers import sam_audio_native as native
 
 HAS_TORCH = importlib.util.find_spec('torch') is not None
 HAS_SAFETENSORS = importlib.util.find_spec('safetensors') is not None
@@ -32,7 +32,7 @@ class Sources(unittest.TestCase):
             data = b'VALUE = 17\n'; path = root/'sam_audio/__init__.py'; path.write_bytes(data)
             trusted = {'sam_audio':{'sam_audio/__init__.py':hashlib.sha256(data).hexdigest()}}
             declaration = dict(sources={'sam_audio':dict(root=str(root),files=trusted['sam_audio'])})
-            with patch('humansense.sam_audio_sources.SOURCE_HASHES',trusted):
+            with patch('gamst.sam_audio_sources.SOURCE_HASHES',trusted):
                 finder = VerifiedSources(declaration)
                 path.write_text('raise AssertionError("changed disk or stale pyc executed")')
                 finder.install()
@@ -51,7 +51,7 @@ class Sources(unittest.TestCase):
             root=Path(directory).absolute();(root/'core').mkdir();(root/'core/__init__.py').write_bytes(b'')
             trusted={'perception_models':{'core/__init__.py':SOURCE_HASHES['perception_models']['core/__init__.py']}}
             declaration=dict(sources={'perception_models':dict(root=str(root),files=trusted['perception_models'])})
-            with patch('humansense.sam_audio_sources.SOURCE_HASHES',trusted):
+            with patch('gamst.sam_audio_sources.SOURCE_HASHES',trusted):
                 finder=VerifiedSources(declaration);finder.install()
                 try:
                     import core
@@ -330,7 +330,7 @@ class ActualProcessorParity(unittest.TestCase):
         if not path: self.skipTest('explicit authenticated local upstream processor source not supplied')
         import numpy as np
         import torch
-        from humansense.sam_audio_windows import prepare_window
+        from gamst.sam_audio_windows import prepare_window
         with pinned_processor(path) as Processor:
             processor = Processor(1920,48000)
             for count,anchors in ((48000,None),(48001,[['+',0,.2],['-',.2,.5]]),(48100,[['+',.001,.2]])):
@@ -391,7 +391,7 @@ class ActualCallBoundary(unittest.TestCase):
 
     def test_actual_separate_signature_tokenizer_evidence_and_trimmed_pair(self):
         import numpy as np
-        from humansense.sam_audio_windows import prepare_window
+        from gamst.sam_audio_windows import prepare_window
         backend=self.backend()
         window=prepare_window(np.full(48001,.25,np.float32),sample_rate=48000,prompt='private fixture',hop_length=1920,anchors=[['+',0,.2]])
         target,residual,tokens,elapsed=backend.predict(window)
@@ -404,7 +404,7 @@ class ActualCallBoundary(unittest.TestCase):
     def test_malformed_native_output_or_processor_cannot_be_published(self):
         import numpy as np
         import torch
-        from humansense.sam_audio_windows import prepare_window
+        from gamst.sam_audio_windows import prepare_window
         window=prepare_window(np.full(48000,.25,np.float32),sample_rate=48000,prompt='fixture',hop_length=1920)
         for values in (torch.ones(48000,dtype=torch.float64),torch.full((48000,),float('nan')),torch.ones(47999)):
             backend=self.backend()

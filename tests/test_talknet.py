@@ -11,10 +11,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorStreams, TalkNetWindows, talknet_stream_frame
-from humansense.mcp import MCPServer
-from humansense.providers import talknet
-from humansense.providers.talknet import TalkNetContext, mfcc
+from gamst import Gamst, ProcessProvider, SensorStreams, TalkNetWindows, talknet_stream_frame
+from gamst.mcp import MCPServer
+from gamst.providers import talknet
+from gamst.providers.talknet import TalkNetContext, mfcc
 from test_audiovisual import audio, video
 
 try:
@@ -44,7 +44,7 @@ def packet(join=None, offset=0):
 
 class Discovery(unittest.TestCase):
     def test_profile_dependency_light_and_configuration(self):
-        code="from humansense import ProcessProvider; import sys; ProcessProvider.capability('talknet.local', {'source_dir':'/x','checkpoint_path':'/x','checkpoint_sha256':'a'*64}); assert not {'torch','numpy','scipy'} & sys.modules.keys()"
+        code="from gamst import ProcessProvider; import sys; ProcessProvider.capability('talknet.local', {'source_dir':'/x','checkpoint_path':'/x','checkpoint_sha256':'a'*64}); assert not {'torch','numpy','scipy'} & sys.modules.keys()"
         result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for options in ({'window_frames':True},{'device':'auto'},{'checkpoint_sha256':'bad'}):
@@ -163,8 +163,8 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         script='''import sys
 sys.path.insert(0,'tests')
 from test_talknet import predictor
-from humansense.providers.talknet import TalkNetContext
-from humansense.provider_worker import main
+from gamst.providers.talknet import TalkNetContext
+from gamst.provider_worker import main
 TalkNetContext.from_local=classmethod(lambda cls,source_dir,checkpoint_path,**kw:cls(predictor,**kw))
 main()
 '''
@@ -173,7 +173,7 @@ main()
         config={'source_dir':'/fixture','checkpoint_path':'/fixture','checkpoint_sha256':'a'*64}
         try:
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human)
                     spec=ProcessProvider.capability('talknet.local',config)
                     async def create():return await ProcessProvider.open(sys.executable,'talknet.local',config)

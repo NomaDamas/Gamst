@@ -5,7 +5,7 @@ The adapter classifies an explicitly selected ambient audio channel into bounded
 `YAMNetEvents` uses 975 ms trailing windows of normalized 16 kHz PCM, with a configurable hop (20–975 ms, default 480 ms). This is windowed streaming, not recurrent neural inference. The first output needs 15,600 samples; there is no zero padding. Each submitted block is at most one second and yields at most one latest window. Larger hops in capture delivery therefore skip intermediate windows. Twenty-millisecond capture blocks preserve the normal cadence. Collection latency is additional to inference and queue latency.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(path='/models/yamnet.tflite', hop_ms=480, top_k=8,
               score_threshold=0.05)
@@ -25,7 +25,7 @@ The capability is `audio.yamnet.events`, producing `audio.environment_events`. O
 
 ## Artifact and dependencies
 
-Install `humansense-sdk[environment-audio]` in the selected runtime, which pins MediaPipe 0.10.35. Core discovery does not import NumPy or MediaPipe. Local loading requires the official MediaPipe YAMNet v1 artifact and verifies SHA256:
+Install `gamst-sdk[environment-audio]` in the selected runtime, which pins MediaPipe 0.10.35. Core discovery does not import NumPy or MediaPipe. Local loading requires the official MediaPipe YAMNet v1 artifact and verifies SHA256:
 
 `4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf`
 

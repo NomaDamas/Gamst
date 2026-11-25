@@ -1,6 +1,6 @@
 # PG-InstructBLIP artifact preflight prerequisite
 
-`python -m humansense.pg_artifact` inspects a frozen local inventory. It does **not**
+`python -m gamst.pg_artifact` inspects a frozen local inventory. It does **not**
 load a checkpoint, construct a graph, register an inference provider, produce
 physical-concept Context, or establish model readiness. #249 is the inspection
 software slice. Actual native runtime, captured-object Context and trained-model
@@ -19,7 +19,7 @@ was performed. Stock startup is not a lightweight or proven realtime route.
 - [Historical LAVIS candidate](https://github.com/salesforce/LAVIS/tree/ac8fc98c93c02e2dfb727e24a361c4c309c8dbbc)
   is `ac8fc98c93c02e2dfb727e24a361c4c309c8dbbc`. The authors did not pin it; its date
   does not establish the author runtime or compatibility.
-- `humansense.pg_sources.SOURCE_HASHES` lists the exact known PG source and selected
+- `gamst.pg_sources.SOURCE_HASHES` lists the exact known PG source and selected
   candidate graph/config/license files. This is **not** the complete executed
   import closure. Matching these hashes alone cannot authorize native execution.
 - The official test constructs with Q-Former text enabled, loads its state, then
@@ -103,7 +103,7 @@ Canonicalize and freeze the manifest using `manifest_digest(manifest)` before
 calling `inspect_manifest(manifest, expected_sha256=...)` or the actual command:
 
 ```sh
-python -m humansense.pg_artifact \
+python -m gamst.pg_artifact \
   --manifest /absolute/local/manifest.json --sha256 <canonical-manifest-sha256>
 ```
 
@@ -111,7 +111,7 @@ Default mode reads only the bounded manifest plus installed distribution metadat
 Add `--inspect-files` only when intending to read **all** declared local assets:
 
 ```sh
-python -m humansense.pg_artifact \
+python -m gamst.pg_artifact \
   --manifest /absolute/local/manifest.json --sha256 <canonical-manifest-sha256> \
   --inspect-files
 ```

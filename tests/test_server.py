@@ -1,9 +1,9 @@
 import asyncio
 import json
 import unittest
-from humansense import HumanSense
-from humansense.mcp import MCPServer
-from humansense.server import handle_connection
+from gamst import Gamst
+from gamst.mcp import MCPServer
+from gamst.server import handle_connection
 
 
 class Socket:
@@ -18,10 +18,10 @@ class Socket:
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_subscription_streams_actual_runtime_records_and_cleans_up(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server, socket = MCPServer(human), Socket()
             task = asyncio.create_task(handle_connection(server, socket))
-            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'humansense/subscribe', 'params': {'types': ['inference','signal']}})
+            await socket.incoming.put({'jsonrpc': '2.0', 'id': 1, 'method': 'gamst/subscribe', 'params': {'types': ['inference','signal']}})
             ack = await asyncio.wait_for(socket.outgoing.get(), 1)
             self.assertEqual(ack['result']['types'], ['inference','signal'])
             result = await human.push_text('hello')
@@ -35,15 +35,15 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             await server.close()
 
     async def test_invalid_subscriptions_and_default_events(self):
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             server, socket = MCPServer(human), Socket()
             task = asyncio.create_task(handle_connection(server, socket))
             await asyncio.sleep(0); await asyncio.sleep(0)
             for kinds in (['unknown'], ['event','event'], 'event'):
-                await socket.incoming.put({'jsonrpc':'2.0','id':2,'method':'humansense/subscribe','params':{'types':kinds}})
+                await socket.incoming.put({'jsonrpc':'2.0','id':2,'method':'gamst/subscribe','params':{'types':kinds}})
                 response = await asyncio.wait_for(socket.outgoing.get(),1)
                 self.assertEqual(response['error']['code'],-32602)
             await human.push_text('help me')
             event = await asyncio.wait_for(socket.outgoing.get(),1)
-            self.assertEqual(event['method'],'notifications/humansense/event')
+            self.assertEqual(event['method'],'notifications/gamst/event')
             await socket.incoming.put(None); await task; await server.close()

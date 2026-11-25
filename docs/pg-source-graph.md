@@ -3,7 +3,7 @@
 This is the concrete architecture step after the [artifact prerequisite](pg-artifact-preflight.md), toward issue #242. It constructs the original graph only when an explicitly supplied compatible runtime and local source/config/tokenizer assets exist. It does not load trained tensors, generate an answer, register a provider, or claim PG native compatibility. #242, #105 and #38 remain open.
 
 ```
-python -m humansense.pg_graph --manifest /absolute/manifest.json --sha256 CANONICAL_SHA256
+python -m gamst.pg_graph --manifest /absolute/manifest.json --sha256 CANONICAL_SHA256
 ```
 
 Run this as a dedicated local worker. The frozen manifest is the same strict declaration used by `pg_artifact`; the CLI compares installed dependency metadata before importing ML. A mismatch returns `status=unavailable` without opening model assets or importing torch, transformers, accelerate, timm or LAVIS. Matching metadata is only an admission check, not proof of compatibility. The current development runtime mismatches the historical candidate; actual full-graph execution has **not** been validated.

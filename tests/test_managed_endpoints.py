@@ -3,10 +3,10 @@ from dataclasses import replace
 import threading
 import unittest
 
-from humansense import HumanSense, SensorStreams, SensorMetadata, transcript_capability
-from humansense.mcp import MCPServer
-from humansense.plugins import InputFrame
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata, transcript_capability
+from gamst.mcp import MCPServer
+from gamst.plugins import InputFrame
+from gamst.schema import timestamp
 
 
 class Provider:
@@ -44,7 +44,7 @@ class Provider:
 
 class ManagedEndpoints(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human=HumanSense(consent=True); self.streams=SensorStreams(self.human,capacity=1)
+        self.human=Gamst(consent=True); self.streams=SensorStreams(self.human,capacity=1)
         self.spec=transcript_capability('fixture.asr','fixture','1',streaming_mode='native')
         self.providers=[]
         def factory():

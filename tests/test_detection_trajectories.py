@@ -8,10 +8,10 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from humansense import HumanSense, ProcessProvider, SensorStreams
-from humansense.mcp import MCPServer
-from humansense.providers.detection_trajectories import RFDETRTrajectories
-from humansense.schema import timestamp
+from gamst import Gamst, ProcessProvider, SensorStreams
+from gamst.mcp import MCPServer
+from gamst.providers.detection_trajectories import RFDETRTrajectories
+from gamst.schema import timestamp
 import test_detection_provider as detection
 
 np = detection.np
@@ -25,7 +25,7 @@ def frame(seq=0,ts=None):
 
 class Discovery(unittest.TestCase):
     def test_discovery_no_optional_import_and_strict_config(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("rfdetr.trajectories",'+repr(CONFIG)+');assert not {"numpy","torch","rfdetr"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("rfdetr.trajectories",'+repr(CONFIG)+');assert not {"numpy","torch","rfdetr"}&sys.modules.keys()'
         result=subprocess.run([sys.executable,'-c',code],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         for change in ({'max_objects':9},{'max_samples':True},{'device':'bad'},{'camera_motion':'auto'},{'sha256':'bad'}):
@@ -108,8 +108,8 @@ class Pipeline(unittest.TestCase):
 WORKER = '''
 import numpy as np
 from types import SimpleNamespace
-from humansense.providers.detection import RFDETRObjects
-import humansense.provider_worker as w
+from gamst.providers.detection import RFDETRObjects
+import gamst.provider_worker as w
 class Backend:
     def __init__(self): self.index=0
     def predict(self,data,**kwargs):
@@ -132,7 +132,7 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         with patch('asyncio.create_subprocess_exec',spawn):
             worker=await ProcessProvider.open(sys.executable,'rfdetr.trajectories',CONFIG)
             try:
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human);streams.register(worker.spec,lambda:worker)
                     await streams.open('cam','sensor',[worker.spec.id]);now=timestamp()-200
                     for i in range(2):

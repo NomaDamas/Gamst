@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "humansense-sdk"
-version = "0.3.1"
+name = "gamst-sdk"
+version = "0.6.0"
 description = "gamst: local-first real-time sensory context for AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,21 +20,38 @@ food = ["transformers==4.57.6", "torch==2.8.0", "huggingface-hub==0.36.0", "safe
 visual-microphone = ["numpy>=1.24", "scipy>=1.10"]
 efficientphys = ["torch==2.8.0", "numpy>=1.24", "opencv-python>=4.8"]
 efficienttam = ["torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"]
+# The YOLOE text encoder also requires the pinned ultralytics/CLIP revision:
+# pip install "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
 yoloe = ["ultralytics==8.4.212", "torch==2.8.0", "torchvision==0.23.0", "numpy>=1.24", "Pillow>=10"]
 talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
+# Generic vision.rotation provider and `gamst demo rotation`; detection models stay optional.
+rotation = ["opencv-python>=4.8,<5", "numpy>=1.24", "Pillow>=10"]
 audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]
+# TEN-VAD uses an explicitly hashed local native library and NumPy from `audio`;
+# no TEN-VAD PyPI dependency is installed (Agora additional license conditions).
 asr = ["faster-whisper>=1.0,<2"]
+moonshine = ["moonshine-voice==0.0.45", "numpy>=1.24"]
 mediapipe = ["mediapipe>=0.10,<0.11"]
 huggingface = ["transformers>=4.45,<5", "torch>=2.2,<3", "Pillow>=10", "numpy>=1.24"]
 providers = ["httpx>=0.27,<1"]
+gemini = ["google-genai>=1.0"]
 detection = ["rfdetr==1.12.1"]
 environment-audio = ["mediapipe==0.10.35", "numpy>=1.24"]
+# CED is GPL-3.0: optional isolated extra only, never a default dependency.
+ced = ["onnxruntime==1.23.2", "torch==2.8.0", "torchaudio==2.8.0", "numpy>=1.24"]
 websocket = ["websockets>=13,<16"]
 gaze = ["torch==2.8.0", "torchvision==0.23.0", "mediapipe==0.10.35", "opencv-python>=4.8,<5", "numpy>=1.24", "Pillow>=10"]
 
 depth = ["transformers==4.57.6", "torch==2.8.0", "huggingface-hub>=0.34,<1", "safetensors>=0.4.3,<1", "numpy>=1.24", "Pillow>=10"]
+
+# Versions follow the pinned upstream requirements/install instructions. OpenCV,
+# TorchVision and several SAM libraries are intentionally not assigned invented
+# exact versions where upstream leaves them unpinned.
+video-depth = ["torch==2.1.1", "torchvision==0.16.1", "numpy==1.24.0", "einops==0.4.1", "opencv-python"]
+
+sam31-video = ["torch==2.10.0", "torchvision", "timm>=1.0.17", "numpy>=1.26,<2", "ftfy==6.1.1", "regex", "iopath>=0.1.10", "typing_extensions", "huggingface-hub", "Pillow>=10", "tqdm"]
 
 ocr = ["rapidocr==3.10.0", "onnxruntime==1.23.2"]
 
@@ -50,23 +67,20 @@ vocal-expression-export = ["torch==2.8.0", "funasr==1.4.26", "onnx==1.18.0", "on
 
 diarization = ["transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"]
 
+decision = ["torch==2.9.1", "torchvision==0.24.1", "transformers==5.14.1", "Pillow>=10,<13"]
+
 [project.scripts]
-gamst = "humansense.cli:main"
-gamst-serve = "humansense.server:main"
-gamst-mcp = "humansense.mcp:main"
-gamst-mcp-live = "humansense.mcp_live:main"
-gamst-dashboard = "humansense.dashboard:main"
-humansense = "humansense.cli:main"
-humansense-serve = "humansense.server:main"
-humansense-mcp = "humansense.mcp:main"
-humansense-mcp-live = "humansense.mcp_live:main"
-humansense-dashboard = "humansense.dashboard:main"
+gamst = "gamst.cli:main"
+gamst-serve = "gamst.server:main"
+gamst-mcp = "gamst.mcp:main"
+gamst-mcp-live = "gamst.mcp_live:main"
+gamst-dashboard = "gamst.dashboard:main"
 
 [project.urls]
 Repository = "https://github.com/NomaDamas/Gamst"
 
 [tool.setuptools.packages.find]
-include = ["humansense*"]
+include = ["gamst*"]
 
 [tool.setuptools.package-data]
-humansense = ["dashboard.html", "observability.js", "i18n.js"]
+gamst = ["dashboard.html", "observability.js", "i18n.js", "demos/assets/*.png", "recipes/*.json"]

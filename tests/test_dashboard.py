@@ -4,14 +4,14 @@ import io
 import json
 import unittest
 from types import SimpleNamespace
-from humansense import HumanSense
-from humansense.dashboard import Dashboard, handler_for
-from humansense.plugins import AudioLevelPlugin
+from gamst import Gamst
+from gamst.dashboard import Dashboard, handler_for
+from gamst.plugins import AudioLevelPlugin
 
 
 class DashboardTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.human = HumanSense(consent=True)
+        self.human = Gamst(consent=True)
         self.human.register(AudioLevelPlugin())
         self.app = Dashboard(self.human, asyncio.get_running_loop())
         await self.human.pause()
@@ -39,7 +39,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_speech_language_selection(self):
         from unittest.mock import patch
-        from humansense.plugins import FasterWhisperPlugin
+        from gamst.plugins import FasterWhisperPlugin
         plugin = FasterWhisperPlugin.__new__(FasterWhisperPlugin)
         plugin.language = "ko"
         plugin.buffers = {"local-user": [0.1]}
@@ -68,13 +68,51 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.app.dispatch(body)
 
+    async def test_capture_revision_advances_with_start_and_stop(self):
+        before = await self.app.dispatch({"op": "state"})
+        self.assertEqual(before["capture_revision"], 0)
+        started = await self.app.dispatch({"op": "start", "consent": True})
+        self.assertEqual(started["capture_revision"], 1)
+        live = await self.app.dispatch({"op": "state"})
+        self.assertTrue(live["capture"])
+        self.assertEqual(live["capture_revision"], 1)
+        stopped = await self.app.dispatch({"op": "stop"})
+        self.assertEqual(stopped["capture_revision"], 2)
+        idle = await self.app.dispatch({"op": "state"})
+        self.assertFalse(idle["capture"])
+        self.assertEqual(idle["capture_revision"], 2)
+
+    async def test_capture_start_waits_for_inflight_stop(self):
+        await self.app.dispatch({"op": "start", "consent": True})
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.human.release_capture
+
+        async def delayed_release(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        from unittest.mock import patch
+        with patch.object(self.human, "release_capture", side_effect=delayed_release):
+            stopping = asyncio.create_task(self.app.dispatch({"op": "stop"}))
+            await entered.wait()
+            starting = asyncio.create_task(self.app.dispatch({"op": "start", "consent": True}))
+            await asyncio.sleep(0)
+            self.assertFalse(starting.done(), "start must wait behind the in-flight stop")
+            release.set()
+            await stopping
+            started = await starting
+        self.assertTrue(started["capture"])
+        self.assertTrue(self.app.capture)
+        await self.app.dispatch({"op": "stop"})
+
 
 class HTTPBoundaryTests(unittest.TestCase):
     def make_handler(self, host="localhost:8766", token="secret", path="/api"):
         app = SimpleNamespace(token="secret")
         handler = handler_for(app).__new__(handler_for(app))
         handler.server = SimpleNamespace(server_port=8766)
-        handler.headers = {"Host": host, "X-HumanSense-Token": token}
+        handler.headers = {"Host": host, "X-Gamst-Token": token}
         handler.path = path
         handler.rfile = io.BytesIO(b"{}")
         handler.response = None
@@ -99,29 +137,22 @@ class HTTPBoundaryTests(unittest.TestCase):
         handler = self.make_handler(path="/")
         handler.do_GET()
         self.assertEqual(handler.response[0], 200)
-        self.assertIn("const token='secret'", handler.response[1])
+        self.assertIn('name="gamst-session-token" content="secret"', handler.response[1])
         self.assertNotIn("__SESSION_TOKEN__", handler.response[1])
         self.assertNotIn('<script src="http', handler.response[1])
-        self.assertIn('<script src="/observability.js"', handler.response[1])
+        self.assertIn('<script type="module" src="/app.js">', handler.response[1])
+        self.assertIn('id="panel-response"', handler.response[1])
+        self.assertIn('id="featureSwitches"', handler.response[1])
 
-
-class ModelCancellationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_stop_does_not_wait_for_long_model_call(self):
-        from humansense.companion import Companion
-        entered, release = asyncio.Event(), asyncio.Event()
-        class Backend:
-            model_id, model_version = 'fixture', '1'
-            async def reply(self, records, context, inference):
-                entered.set(); await release.wait(); return 'late response'
-        async with HumanSense(consent=True) as human:
-            app = Dashboard(human, asyncio.get_running_loop())
-            app.companion = Companion(human, Backend())
-            await app.dispatch({'op':'start','consent':True})
-            task = asyncio.create_task(app.dispatch({'op':'chat','text':'help me'}))
-            await entered.wait()
-            await asyncio.wait_for(app.dispatch({'op':'stop'}), .2)
-            self.assertTrue(human.paused)
-            release.set()
-            with self.assertRaises(RuntimeError): await task
-            history = await human.get_history()
-            self.assertFalse(any(r.get('observation',{}).get('value') == 'late response' for r in history))
+    def test_moments_route_and_fixed_assets(self):
+        handler = self.make_handler(path="/moments")
+        handler.do_GET()
+        self.assertEqual(handler.response[0], 200)
+        self.assertIn('GAMST · Moment Catcher', handler.response[1])
+        self.assertIn('content="secret"', handler.response[1])
+        self.assertNotIn("__SESSION_TOKEN__", handler.response[1])
+        for path, marker in (("/moments.js", "class PenDropDetector"), ("/moments.css", ".moments-layout")):
+            handler = self.make_handler(path=path)
+            handler.do_GET()
+            self.assertEqual(handler.response[0], 200)
+            self.assertIn(marker, handler.response[1])

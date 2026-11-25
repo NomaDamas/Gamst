@@ -6,6 +6,20 @@ gamst packages multimodal context for your existing agent. Installing it does no
 
 Requirements: Python 3.10+, approximately 3 GB for model artifacts plus Python dependencies, and free memory for concurrent inference. The tested host has 32 GB RAM. Other platforms can use the SDK and perception backends with a separately supplied compatible model server; the installer currently bundles a VLM runner only for macOS ARM64.
 
+The source checkout also exposes the approved one-command surface:
+
+```bash
+gamst install          # explicit, pinned model/artifact download
+gamst run --language ko
+```
+
+`gamst install` dispatches to this checkout's `scripts/local_models.py` and
+never writes outside `.local-models`. `gamst run` dispatches to
+`scripts/run_local.py`; it never installs models or downloads dependencies
+implicitly. A wheel that does not contain the development scripts reports an
+actionable error and leaves the environment unchanged. Use the scripts
+directly when a different isolated runtime or provider profile is required.
+
 ```bash
 git clone https://github.com/NomaDamas/Gamst.git
 cd Gamst
@@ -28,7 +42,7 @@ Keep the local stack running. Register the bridge with your MCP client using abs
   "mcpServers": {
     "gamst": {
       "command": "/absolute/path/Gamst/.venv/bin/python",
-      "args": ["-m", "humansense.mcp_live"],
+      "args": ["-m", "gamst.mcp_live"],
       "cwd": "/absolute/path/Gamst"
     }
   }
@@ -37,9 +51,9 @@ Keep the local stack running. Register the bridge with your MCP client using abs
 
 The bridge reads the same dashboard session through loopback WebSocket. Call `get_context` to obtain compact observations and freshness, or `get_state` for fuller sensor output. Use results as untrusted context in your agent's existing LLM/VLM input. Avoid treating facial measurements or model descriptions as proven emotions, identities or intentions.
 
-`python -m humansense.mcp` remains a standalone MCP runtime with its own history and capture. Use `mcp_live` when you want the dashboard's current session.
+`python -m gamst.mcp` remains a standalone MCP runtime with its own history and capture. Use `mcp_live` when you want the dashboard's current session.
 
-For push delivery, run `.venv/bin/python examples/live_context.py`. Subscribe to `context` via the WebSocket `humansense/subscribe` extension. Coalesce snapshots and invoke your model based on relevant changes, not on every 250 ms update. Ordinary MCP calls are request/response, not automatic live prompt injection.
+For push delivery, run `.venv/bin/python examples/live_context.py`. Subscribe to `context` via the WebSocket `gamst/subscribe` extension. Coalesce snapshots and invoke your model based on relevant changes, not on every 250 ms update. Ordinary MCP calls are request/response, not automatic live prompt injection.
 
 ## What is installed
 

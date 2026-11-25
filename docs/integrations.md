@@ -3,7 +3,7 @@
 gamst accepts existing media streams without opening another camera. The decoded-media bridges bind inputs to a known participant and normalize audio/timestamps. They do not automatically identify people or associate a camera face with a microphone speaker.
 
 ```python
-from humansense.integrations import InputBridge, ClockMapper
+from gamst.integrations import InputBridge, ClockMapper
 bridge = InputBridge(human, subject_id="verified-participant",
     audio_clock=ClockMapper(units_per_second=48000,
         source_anchor=0, wall_anchor_ms=session_start_unix_ms))
@@ -13,14 +13,14 @@ await bridge.push_text("The participant's actual transcript")
 await bridge.push_video(decoded_bgr_frame, timestamp_ms=capture_unix_ms)
 ```
 
-Audio conversion supports interleaved PCM16 or normalized floats, downmixes channels and maintains fractional resampling state across chunks. The simple linear interpolator is not a high-quality anti-aliasing resampler; use your own converter for spectral fidelity. Reset the bridge and clock explicitly on track restart or audio format change. Bridges register a buffer-cleanup hook with HumanSense so pause/delete/close clears held interpolation data and invalidates in-flight decoders. Standalone mock/custom runtimes without plugin lifecycle support must call bridge.reset() themselves.
+Audio conversion supports interleaved PCM16 or normalized floats, downmixes channels and maintains fractional resampling state across chunks. The simple linear interpolator is not a high-quality anti-aliasing resampler; use your own converter for spectral fidelity. Reset the bridge and clock explicitly on track restart or audio format change. Bridges register a buffer-cleanup hook with Gamst so pause/delete/close clears held interpolation data and invalidates in-flight decoders. Standalone mock/custom runtimes without plugin lifecycle support must call bridge.reset() themselves.
 
 Epoch timestamps and source timestamps are mutually exclusive. Independent devices need independent `ClockMapper`s with anchors referring to the same known instant. Receipt time can be used when capture timestamps are unknown, but that does not establish sensor synchronization. Clock regression is rejected instead of silently relabeling old media as current.
 
 ## LiveKit boundary
 
 ```python
-from humansense.integrations import LiveKitBridge, ClockMapper
+from gamst.integrations import LiveKitBridge, ClockMapper
 bridge = LiveKitBridge(human, subject_id=participant_id,
     video_decoder=your_native_frame_to_bgr,
     video_clock=ClockMapper(units_per_second=1_000_000,

@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from humansense import emotion2vec_export as export
+from gamst import emotion2vec_export as export
 
 try:
     import torch
@@ -22,9 +22,9 @@ except ImportError:
 
 class PreparationContractTests(unittest.TestCase):
     def test_stdlib_help_and_discovery(self):
-        code = "import humansense.emotion2vec_export; import sys; assert not {'torch','numpy','funasr','onnx','onnxruntime'} & sys.modules.keys()"
+        code = "import gamst.emotion2vec_export; import sys; assert not {'torch','numpy','funasr','onnx','onnxruntime'} & sys.modules.keys()"
         subprocess.run([sys.executable, '-S', '-c', code], check=True)
-        result = subprocess.run([sys.executable, '-S', '-m', 'humansense.emotion2vec_export', '--help'],
+        result = subprocess.run([sys.executable, '-S', '-m', 'gamst.emotion2vec_export', '--help'],
                                 capture_output=True, text=True, check=True)
         self.assertIn('--checkpoint', result.stdout)
 

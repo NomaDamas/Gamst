@@ -5,8 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
-from humansense.plugins import InputFrame
-from humansense.providers.sam3 import LocalSAM3Plugin, validate_segments
+from gamst.plugins import InputFrame
+from gamst.providers.sam3 import LocalSAM3Plugin, validate_segments
 
 SEGMENT = {'bbox': {'x': .1, 'y': .2, 'width': .3, 'height': .4}, 'score': .9,
            'polygons': [[[.1,.2],[.4,.2],[.4,.6]]]}

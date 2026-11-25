@@ -1,8 +1,8 @@
 import copy
 import unittest
-from humansense.sam_visual_history import VisualCaptureHistory
+from gamst.sam_visual_history import VisualCaptureHistory
 import test_sam_visual_packet as packet_tests
-from humansense.sam_visual_packet import unpack_visual_packet
+from gamst.sam_visual_packet import unpack_visual_packet
 
 
 @unittest.skipIf(packet_tests.np is None,'optional numpy missing')

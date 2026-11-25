@@ -4,14 +4,13 @@ import hashlib
 import sys
 import unittest
 
-from humansense import HumanSense,SensorMetadata
-from humansense.capabilities import CapabilitySpec,OutputField
-from humansense.call_budget import CallBudget
-from humansense.call_controller import CallController
-from humansense.call_policy import CallPolicy
-from humansense.mcp import MCPServer
-from humansense.schema import timestamp
-from humansense.smolvlm_call import SmolVLMCalls,smolvlm_frame_sha256
+from gamst import Gamst,SensorMetadata
+from gamst.capabilities import CapabilitySpec,OutputField
+from gamst.call_controller import CallController
+from gamst.call_policy import CallPolicy
+from gamst.mcp import MCPServer
+from gamst.schema import timestamp
+from gamst.smolvlm_call import SmolVLMCalls,smolvlm_frame_sha256
 import test_smolvlm_context as smol_tests
 from test_smolvlm_context import frame,np
 from test_smolvlm_native import CONFIG
@@ -24,11 +23,10 @@ class Calls(unittest.IsolatedAsyncioTestCase):
     fixture=smol_tests.Managed.fixture
 
     def setup_human(self):
-        human=HumanSense(consent=True)
+        human=Gamst(consent=True)
         spec=CapabilitySpec('thin.detect','thin.objects','video','thin.fixture','1',(OutputField('count','integer'),),'frame',freshness_ms=1000)
         human.register_capability(spec)
-        controller=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=0),
-            budget=CallBudget(unit='fixture',pricing_revision='1',ceiling=20,max_inflight=8))
+        controller=CallController(policy=CallPolicy(mode='escalation',cooldown_ms=0))
         human.register_call_controller('calls',controller)
         return human,controller,spec
 
@@ -42,22 +40,19 @@ class Calls(unittest.IsolatedAsyncioTestCase):
         d=controller.submit(source,r,sequence=index,now_ms=timestamp(),visual_reference=ref,**(rules or {'unknown_candidate':True}))
         return d['request_id'],r,f
 
-    async def test_actual_worker_admission_context_mcp_and_late_cost(self):
+    async def test_actual_worker_admission_context_and_mcp(self):
         with self.fixture():
             human,c,spec=self.setup_human()
             async with human:
                 async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
                     request,r,f=await self.request(human,c,spec)
-                    result=await adapter.execute(request,r,f,maximum_charge=2)
-                    self.assertEqual(result['status'],'published');self.assertIsNone(result['actual_cost'])
+                    result=await adapter.execute(request,r,f)
+                    self.assertEqual(result['status'],'published')
                     output=result['observation'];self.assertEqual(output['timestamp_ms'],f.timestamp_ms)
                     self.assertEqual(output['observation']['value']['semantic']['text'],'worker description')
-                    self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
-                    self.assertEqual(c.snapshot()['budget']['unknown_reports'],1)
                     reply=await MCPServer(human).call_tool('get_observations',{'capability_id':adapter.worker.spec.id})
                     self.assertIn('worker description',str(reply))
-                    c.settle(request,components={'local_compute':1},now_ms=timestamp())
-                    self.assertEqual(c.snapshot()['budget']['spent_known'],1)
+                    self.assertFalse(c.snapshot()['requests'])
 
     async def test_denial_route_record_and_pixels_never_dispatch(self):
         with self.fixture():
@@ -68,27 +63,25 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                     reshaped=replace(f,data=f.data.reshape(48,32,3))
                     self.assertEqual(f.data.tobytes(),reshaped.data.tobytes())
                     self.assertNotEqual(smolvlm_frame_sha256(f.data),smolvlm_frame_sha256(reshaped.data))
-                    with self.assertRaises(ValueError):await adapter.execute(request,r,reshaped,maximum_charge=2)
-                    self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+                    with self.assertRaises(ValueError):await adapter.execute(request,r,reshaped)
+                    self.assertTrue(all(r['state']=='pending' for r in c.snapshot()['requests']))
                     bad=replace(f,data=f.data.copy());bad.data[:]=77
-                    with self.assertRaises(ValueError):await adapter.execute(request,r,bad,maximum_charge=2)
-                    with self.assertRaises(ValueError):await adapter.execute(request,dict(r,id='changed'),f,maximum_charge=2)
-                    with self.assertRaises(ValueError):await adapter.execute(request,r,replace(f,sensor=replace(f.sensor,sequence=99)),maximum_charge=2)
-                    result=await adapter.execute(request,r,f,maximum_charge=None)
-                    self.assertEqual(result['blockers'],['unknown_charge_ceiling'])
+                    with self.assertRaises(ValueError):await adapter.execute(request,r,bad)
+                    with self.assertRaises(ValueError):await adapter.execute(request,dict(r,id='changed'),f)
+                    with self.assertRaises(ValueError):await adapter.execute(request,r,replace(f,sensor=replace(f.sensor,sequence=99)))
                     strong,r2,f2=await self.request(human,c,spec,index=1,conflict_rule='verified-rule')
-                    with self.assertRaises(ValueError):await adapter.execute(strong,r2,f2,maximum_charge=2)
-                    self.assertEqual(c.snapshot()['budget']['dispatched'],0)
+                    with self.assertRaises(ValueError):await adapter.execute(strong,r2,f2)
+                    self.assertTrue(all(r['state']=='pending' for r in c.snapshot()['requests']))
 
-    async def test_lifecycle_discards_late_results_without_erasing_bill(self):
+    async def test_lifecycle_discards_late_results(self):
         for action in ('pause','reset','delete','consent','close'):
             with self.subTest(action=action),self.fixture(delay=.15):
                 human,c,spec=self.setup_human()
                 async with human:
                     async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
                         request,r,f=await self.request(human,c,spec)
-                        task=asyncio.create_task(adapter.execute(request,r,f,maximum_charge=2))
-                        while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
+                        task=asyncio.create_task(adapter.execute(request,r,f))
+                        while not any(r['state']=='dispatched' for r in c.snapshot()['requests']):await asyncio.sleep(.001)
                         if action=='pause':await human.pause()
                         elif action=='reset':await human.reset_processing()
                         elif action=='delete':await human.delete_data(f.subject_id)
@@ -96,9 +89,7 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                         else:await human.close()
                         result=await task
                         self.assertEqual(result['status'],'discarded')
-                        self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
-                        c.settle(request,components={'local_compute':1},now_ms=timestamp())
-                        self.assertEqual(c.snapshot()['budget']['spent_known'],1)
+                        self.assertFalse(c.snapshot()['requests'])
                         if not human.closed:
                             self.assertFalse(human.store.query(f.subject_id,kind='observation.signal',name=adapter.worker.spec.output_name))
 
@@ -109,15 +100,13 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                 adapter=await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG)
                 try:
                     request,r,f=await self.request(human,c,spec)
-                    task=asyncio.create_task(adapter.execute(request,r,f,maximum_charge=2))
-                    while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
-                    with self.assertRaises(RuntimeError):await adapter.execute(request,r,f,maximum_charge=2)
+                    task=asyncio.create_task(adapter.execute(request,r,f))
+                    while not any(r['state']=='dispatched' for r in c.snapshot()['requests']):await asyncio.sleep(.001)
+                    with self.assertRaises(RuntimeError):await adapter.execute(request,r,f)
                     f.data[:]=99
                     await adapter.close()
                     with self.assertRaises(asyncio.CancelledError):await task
                     self.assertTrue(adapter.worker.closed)
-                    self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
-                    self.assertEqual(c.snapshot()['budget']['unknown_reports'],1)
                 finally:await adapter.close()
 
     async def test_retained_copy_and_empty_or_mismatched_results(self):
@@ -127,8 +116,8 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                 async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
                     request,r,f=await self.request(human,c,spec)
                     digest=hashlib.sha256(f.data.tobytes()).hexdigest()
-                    task=asyncio.create_task(adapter.execute(request,r,f,maximum_charge=2))
-                    while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
+                    task=asyncio.create_task(adapter.execute(request,r,f))
+                    while not any(r['state']=='dispatched' for r in c.snapshot()['requests']):await asyncio.sleep(.001)
                     f.data[:]=99
                     result=await task
                     self.assertEqual(result['observation']['observation']['value']['window']['captures'][0]['pixels_sha256'],digest)
@@ -144,11 +133,10 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                     async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
                         request,r,f=await self.request(human,c,spec)
                         if mode=='empty':
-                            self.assertEqual((await adapter.execute(request,r,f,maximum_charge=2))['status'],'discarded')
+                            self.assertEqual((await adapter.execute(request,r,f))['status'],'discarded')
                         else:
-                            with self.assertRaises(ValueError):await adapter.execute(request,r,f,maximum_charge=2)
-                        self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
-                        self.assertTrue(all(s['last_semantic'] is None for s in c.snapshot()['sources'].values()))
+                            with self.assertRaises(ValueError):await adapter.execute(request,r,f)
+                            self.assertTrue(all(s['last_semantic'] is None for s in c.snapshot()['sources'].values()))
 
     async def test_external_close_does_not_join_context_owner(self):
         with self.fixture(delay=60):
@@ -158,55 +146,18 @@ class Calls(unittest.IsolatedAsyncioTestCase):
                 request,r,f=await self.request(human,c,spec)
                 async def owner():
                     async with adapter:
-                        await adapter.execute(request,r,f,maximum_charge=2)
+                        await adapter.execute(request,r,f)
                 task=asyncio.create_task(owner())
                 try:
                     async def dispatched():
-                        while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
+                        while not any(r['state']=='dispatched' for r in c.snapshot()['requests']):await asyncio.sleep(.001)
                     await asyncio.wait_for(dispatched(),5)
                     await asyncio.wait_for(adapter.close(),5)
                     with self.assertRaises(asyncio.CancelledError):await task
                     self.assertTrue(adapter.worker.closed)
                     self.assertTrue(all(child.returncode is not None for child in self.children))
-                    self.assertEqual(c.snapshot()['budget']['reserved_liability'],2)
                 finally:
                     if not task.done():task.cancel()
                     await asyncio.gather(task,return_exceptions=True)
                     await adapter.close()
 
-    async def test_verified_receipt_before_result_and_lifecycle_invalidation(self):
-        for action in ('normal','cancel','pause','reset','delete','delete_then_bill','close','invalid'):
-            code=smol_tests.WORKER.replace('DELAY','.15')
-            if action=='invalid':
-                extra="original=SmolVLMContext._observation\ndef bad(self,*args):\n    value=original(self,*args);value['model']['prompt_sha256']='0'*64;return value\nSmolVLMContext._observation=bad\n"
-                code=code.replace('w._construct=',extra+'w._construct=')
-            with self.subTest(action=action),self.fixture(code=code):
-                human,c,spec=self.setup_human()
-                async with human:
-                    async with await SmolVLMCalls.open(human,'calls',sys.executable,CONFIG) as adapter:
-                        request,r,f=await self.request(human,c,spec)
-                        task=asyncio.create_task(adapter.execute(request,r,f,maximum_charge=2))
-                        async def dispatched():
-                            while c.snapshot()['budget']['dispatched']<1:await asyncio.sleep(.001)
-                        await asyncio.wait_for(dispatched(),5)
-                        if action=='delete_then_bill':await human.delete_data(f.subject_id)
-                        c.settle(request,components={'local_compute':1},now_ms=timestamp())
-                        if action=='pause':await human.pause()
-                        elif action=='reset':await human.reset_processing()
-                        elif action=='delete':await human.delete_data(f.subject_id)
-                        elif action=='close':await human.close()
-                        elif action=='cancel':task.cancel()
-                        if action in ('cancel','invalid'):
-                            with self.assertRaises(asyncio.CancelledError if action=='cancel' else ValueError):await task
-                        else:
-                            result=await task
-                            self.assertEqual(result['status'],'published' if action=='normal' else 'discarded')
-                            if action=='normal':self.assertEqual(result['observation']['timestamp_ms'],f.timestamp_ms)
-                        state=c.snapshot()
-                        self.assertEqual(state['budget']['spent_known'],1)
-                        self.assertEqual(state['budget']['reserved_liability'],0)
-                        self.assertEqual(state['budget']['unknown_reports'],0)
-                        self.assertFalse(state['requests']);self.assertFalse(state['detached_financial_requests'])
-                        if not human.closed:
-                            records=human.store.query(f.subject_id,kind='observation.signal',name=adapter.worker.spec.output_name)
-                            self.assertEqual(len(records),1 if action=='normal' else 0)

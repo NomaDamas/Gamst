@@ -10,8 +10,8 @@ from unittest.mock import patch,AsyncMock
 
 import test_sam_visual_window as fixtures
 import test_sam_audio_context as audio
-from humansense.sam_visual_packet import unpack_visual_packet,visual_policy
-from humansense.sam_visual_replay import recording,replay
+from gamst.sam_visual_packet import unpack_visual_packet,visual_policy
+from gamst.sam_visual_replay import recording,replay
 
 
 @unittest.skipIf(fixtures.fixtures.np is None,'optional numpy missing')
@@ -34,8 +34,8 @@ class Replay(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_owned_replay_preserves_historical_capture_and_discards_media(self):
         code='''
-from humansense import provider_worker as w
-from humansense.providers.sam_audio_native import SAMAudioNative
+from gamst import provider_worker as w
+from gamst.providers.sam_audio_native import SAMAudioNative
 from test_sam_visual_context import Backend
 SAMAudioNative.from_local=classmethod(lambda cls,config:Backend())
 w.main()
@@ -76,9 +76,9 @@ w.main()
         # constructor inside its owned worker is replaced by the explicit fixture.
         code = r"""
 import asyncio, os, sys
-from humansense.sam_visual_replay import main
+from gamst.sam_visual_replay import main
 real = asyncio.create_subprocess_exec
-worker_code = "from humansense import provider_worker as w; from humansense.providers.sam_audio_native import SAMAudioNative; from test_sam_visual_context import Backend; SAMAudioNative.from_local=classmethod(lambda cls,config:Backend()); w.main()"
+worker_code = "from gamst import provider_worker as w; from gamst.providers.sam_audio_native import SAMAudioNative; from test_sam_visual_context import Backend; SAMAudioNative.from_local=classmethod(lambda cls,config:Backend()); w.main()"
 async def spawn(*args, **kwargs):
     env = dict(kwargs.get('env', {}))
     env['PYTHONPATH'] = os.path.abspath('tests') + os.pathsep + os.path.abspath('.')

@@ -28,7 +28,7 @@ training or grant a license. MediaPipe code is Apache-2.0; selected task weights
 and training data terms require separate verification.
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(path='/absolute/gesture_recognizer.task', sha256=task_sha256,
               max_entities=2, max_gap_ms=1000)

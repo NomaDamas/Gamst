@@ -7,15 +7,9 @@ the [24-family product acceptance map](perception-acceptance.md).
 
 ## Integrated software
 
-- Persistent recording A/B/C runtime (#270): independently owned child/SDK/source
-  lifetimes, frozen task windows and snapshots, bounded original artifacts,
-  actual parent receipt timing, source opportunities, and failed-prefix evidence.
-  Preflight failure, cancellation and cleanup preserve unknowns and original
-  liability rather than manufacturing a successful run.
-- Full-lifetime evaluator (#274): separately selected matched-source-exposure v2,
-  original execution/source/task/financial lineage, exact currency and atomic
-  units, settlement/finality boundaries and full-lifetime costs. Existing v1
-  behavior and the 20% cost, 10% latency and quality requirements are unchanged.
+- The former persistent recording A/B/C runtime and full-lifetime evaluator are
+  preserved as historical contracts in the [benchmark and evaluation archive](archive/benchmarks-and-evaluation.md);
+  they are not current SDK facilities.
 - Selected provider additions: MediaPipe VIDEO gestures and camera/model-bound
   head orientation; bounded tennis image events, exact reference-bound rules and
   supplied projective ground-plane transforms; STFT/MFCC and eligibility-gated
@@ -48,7 +42,7 @@ Reproduction from the integration checkout (already provisioned interpreter):
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/dashboard_ui_test.cjs
-python3 -m humansense demo
+python3 -m gamst demo
 git diff --check
 ```
 

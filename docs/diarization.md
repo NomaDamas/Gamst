@@ -116,12 +116,12 @@ memory, real-time factor and sustained throughput remain unmeasured.
 ## SDK integration
 
 ```python
-from humansense import ProcessProvider, SensorStreams
+from gamst import ProcessProvider, SensorStreams
 
 config = {'path': '/local/Nemotron-3-Diarization',
           'mode': 'ultra_low_latency', 'threshold': 0.5, 'device': 'cpu'}
 spec = ProcessProvider.capability('nemotron3.diarization', config)
-streams = SensorStreams(human)  # Existing consented HumanSense instance.
+streams = SensorStreams(human)  # Existing consented Gamst instance.
 
 async def create():
     return await ProcessProvider.open('/explicit/python311/bin/python',
@@ -138,8 +138,7 @@ await streams.open('capture', 'mic', [spec.id])
 
 Observations reach existing Python/MCP `get_observations` and context queries;
 context subscription cadence remains user-controlled. Querying does not advance
-the model. The compatible Python import/class remains `humansense`/`HumanSense`;
-the product is gamst. This profile does not install or open a sensor on discovery.
+the model. This profile does not install or open a sensor on discovery.
 
 ## Validation and remaining acceptance
 

@@ -1,49 +1,93 @@
 <div align="center">
 
-# GAMST
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/gamst-logo-dark.png">
+    <img src="docs/images/gamst-logo-light.png" alt="GAMST" width="420">
+  </picture>
+</h1>
 
-### Real-time multimodal context for your LLM or VLM.
+### Continuous multimodal observation and decision context for agents.
 
-Turn speech, voice activity, facial movement, and surroundings into bounded, timestamped context for your existing AI agent.
+Turn high-frequency vision, sound, physical, environmental, and spatial streams into time-aligned state, semantic episodes, and bounded decisions for your existing AI agent. GAMST keeps observing continuously, fuses evidence across time, and invokes an expensive VLM or LLM only when the world changes or the evidence is insufficient.
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
-[Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
+[Rotation](#rotation) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
+
+⭐ If GAMST is useful to you, a [GitHub star](https://github.com/NomaDamas/Gamst) helps the project a lot.
 
 </div>
 
 ---
 
-gamst gives agents a shared layer for observing behavior, tracking changes, and adapting a conversation. The Python import remains `humansense` for compatibility. The product's core is context delivery; Companion replies are optional.
+GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.2 alpha.** Includes bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, an explicit local model installer, and a browser preview. See [release QA](docs/qa-v0.2.0.md) for actual validation and limitations. No model establishes a person's inner emotions or intentions.
+**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
-· [🌱 Context layer](#overview) <br>
-· [✨ Capabilities](#capabilities) <br>
-· [🚀 Quick start](#quick-start) <br>
-· [🏠 Complete local stack](#local-stack)<br>
-· [🐍 Python SDK](#python-sdk) <br>
-· [🔌 Context MCP](#mcp) <br>
-· [🎥 Vision & voice](#perception) <br>
-· [🤝 Companion](#companion) <br>
-· [🌐 Integrations](#integrations)<br>
-· [🖥️ Dashboard guide](#dashboard-guide) <br>
-· [🗄️ Retention](#retention) <br>
-· [🧩 Optional providers](#providers) <br>
-· [📊 Benchmarking](#benchmarking)<br>
-· [🔒 Privacy](#privacy) <br>
-· [🧪 Validation](#validation) <br>
-· [📚 Documentation](#documentation) <br>
-· [📄 License](#license)<br>
+- [🌱 Context layer](#overview)
+- [✨ Capabilities](#capabilities)
+- [🔄 Object rotation](#rotation)
+- [🚀 Quick start](#quick-start)
+- [🏠 Complete local stack](#local-stack)
+- [🐍 Python SDK](#python-sdk)
+- [🔌 Context MCP](#mcp)
+- [🎥 Vision & voice](#perception)
+- [🤝 Companion](#companion)
+- [🌐 Integrations](#integrations)
+- [🖥️ Playground](#dashboard-guide)
+- [🗄️ Retention](#retention)
+- [🧩 Optional providers](#providers)
+- [🔬 Research & roadmap](#research)
+- [🧭 Product direction](docs/product-direction.md)
+- [📊 Benchmarking](#benchmarking)
+- [🔒 Privacy](#privacy)
+- [🧪 Validation](#validation)
+- [📚 Documentation](#documentation)
+- [📄 License](#license)
 
 <a id="overview"></a>
 ## 🌱 A context layer for an ecosystem of tools
 
-Connect vision, voice and other perception tools once; reuse their timestamped
-observations in dashboards, LLM/VLM prompts, MCP agents and streaming applications.
-Models, transports and consuming applications can evolve independently.
+Connect high-frequency vision, sound, physical, environmental, and spatial
+perception tools once; reuse their timestamped observations, cross-modal events,
+semantic episodes, and bounded decisions in dashboards, LLM/VLM prompts, MCP
+agents, realtime sessions, and streaming applications. Models, transports, and
+consuming applications can evolve independently.
+
+GAMST is not a raw-media relay and not a model that thinks about every frame.
+It is a temporal observation runtime:
+
+```text
+camera 30–120 Hz · audio 16 kHz · IMU/force/tactile 100–1000 Hz
+        ↓
+high-frequency modality plugins
+- tracking · geometry · physics · audio features · ASR · OCR
+        ↓
+GAMST signals + short-term semantic state chain
+- current state · state transitions · episode memory · evidence IDs
+        ↓
+MCP Context requested by the application
+        ↓
+strong VLM/LLM fuses selected frames, audio/text and state chain
+        ↓
+agent answer or action
+```
+
+Application-owned rules may choose when to request Context or call the strong
+model. GAMST does not run a hidden trigger model and does not replace the
+strong VLM/LLM's semantic understanding.
+
+The central promise is **continuous observation, temporal sensor fusion,
+event-driven Context, evidence-backed state, and semantic episode construction**.
+High-frequency input is preserved; the runtime converts it into low-token Context
+that an agent can use without repeatedly asking a VLM to re-understand the same
+scene. The selected small streaming-video profile is the official StreamingVLM
+implementation (MIT, pinned upstream revision); its checkpoint must be hosted
+explicitly by the operator. GAMST does not bundle weights or pretend a generic
+chat endpoint is streaming-KV inference.
 
 **Application examples:** AI companions; travel assistants describing surroundings;
 interview or interrogation-session transcription and timeline review; health and
@@ -75,7 +119,174 @@ implementation, not a fork or endorsement of those projects.
 | 🔎 **Statement Consistency** | Conflicting assertions and possible contradictions | Structured claim comparison; optional model candidates with exact source excerpts |
 | 🧠 **Temporal Memory** | Current state, history, context | SQLite storage, configurable retention, evidence inspection |
 | 🤝 **Agent Responses** | Suggested next action or generated reply | Context-aware Companion using a configured local or authorized remote provider |
-| 🎥 **Perception Plugins** | Video/audio measurements and transcripts | OpenCV, MediaPipe, Silero VAD, faster-whisper adapters |
+| 🧭 **Temporal Fusion & State Chain** | Time-aligned state, semantic episodes, evidence and bounded context | Freshness watermarks, physical-state precomputation, deterministic rules, optional multimodal observation plugin |
+| 🎥 **Perception Plugins** | High-frequency vision/audio/physical measurements and semantic windows | OpenCV, MediaPipe, Silero VAD, faster-whisper, depth, tracking and pluggable workers |
+| 🔄 **Rotation Counting (Experimental)** | Turn counts and `undersampled` status | High-frame-rate ellipse-ratio fitting; live 240 fps iPhone HUD and per-take replay |
+
+### Why GAMST exists
+
+Realtime APIs provide a low-latency, bidirectional interaction channel. Media
+pipelines move bytes, robotics stacks run control loops, and strong VLMs/LLMs
+interpret selected evidence. GAMST sits between those layers and the agent: it
+aligns multirate streams, computes state and physical relations, preserves
+evidence, and builds a short-term semantic state chain. An MCP client or
+application requests that Context and owns the heavy-model prompt and trigger.
+GAMST itself does not secretly invoke a strong model.
+
+GAMST is for teams whose systems observe continuously, combine several
+asynchronous modalities, care about short-lived events, and must change an
+agent's action from that evidence. A single-image caption, one-shot transcript,
+or ordinary chatbot is intentionally outside this target.
+
+The reusable boundary is the common temporal contract, not a list of sensors:
+
+```text
+Signal → Observation → Track/State → Event → Episode → Decision → Action context
+```
+
+Vision and sound are both high-frequency streams. Their useful submodalities
+include tracking, optical flow, pose, gaze, depth, segmentation, OCR, VAD,
+partial ASR, sound events, speaker activity, direction, prosody, vibration and
+cross-modal timing. Additional physical, environmental, and spatial modalities
+include IMU, force/torque, tactile, vibration, radar/CSI, thermal, pressure,
+flow, temperature, gas, calibration, and mapped coordinates. GAMST combines
+these only where their timing and evidence explain a state or event that a
+single modality cannot establish.
+
+The product claim is measurable rather than absolute: on a declared task and
+sensor set, compare VLM-only, always-on small streaming VLM, and GAMST hybrid
+routing on event recall, miss rate, detection latency, p95 answer-ready latency,
+VLM tokens/cost, drops, and task quality. GAMST must preserve critical-event
+quality while reducing unnecessary semantic inference.
+
+The first Halo is [generic object rotation](docs/halo-coin.md): measure how
+many times tracked objects turn from camera frames, a task a frame-sampling
+VLM cannot do. A coin, wheel or fan is only a detector label, not a code path.
+The next Halo is a high-frequency, multimodal game or sports episode,
+such as a table-tennis rally: ball and racket trajectories, impact timing,
+player pose, sound onsets, spatial relations, and a semantic rally summary.
+Fast state estimation and action timing run below the semantic layer. A bounded
+semantic state chain keeps current state, episode transitions and evidence IDs;
+application-owned rules decide when an MCP client asks an LLM/VLM for deeper
+interpretation. This demonstrates continuous physical observation, semantic
+understanding over time, selective reasoning, and an agent-visible action
+without claiming that a language model is the motor controller.
+
+The first practical customers are teams building embodied agents, interactive
+robotics, sports and game agents, multimodal field systems, and perception
+infrastructure. GAMST is valuable when each team would otherwise rebuild clock
+alignment, bounded queues, gap handling, cross-modal events, episode memory,
+evidence provenance, model routing, replay, and latency/cost/quality evaluation.
+
+<a id="rotation"></a>
+## 🔄 Object rotation
+
+https://github.com/user-attachments/assets/419dba58-2668-43c7-b8a9-20a7088b1b9d
+
+An iPhone at 240 fps streams a coin toss to GAMST. GAMST follows the coin
+through the flight, counts its flips and hands the count to an agent as
+timestamped context. Gemini Live takes video at 1 fps; on the same toss it
+answered "Zero." Korean and vertical cuts:
+[issue #355](https://github.com/NomaDamas/Gamst/issues/355#issuecomment-7125967905).
+Recipe: `gamst recipe run coin-flip` ([`skills/gamst-coin-flip`](skills/gamst-coin-flip/SKILL.md)).
+
+`vision.rotation` is a generic fast-lane capability. It measures in-plane turns
+and out-of-plane flips for every tracked region, with rev/s, `counting`,
+`undersampled` or `idle` status, and `rotation.started` / `rotation.ended`
+events. Regions come from any object-detection observations already in GAMST
+(RF-DETR, optional YOLOE or a fine-tuned detector), an explicit ROI, or
+detector-free motion. Labels are optional; coin, wheel and fan are examples,
+not separate implementations.
+
+```python
+from gamst.providers.rotation import RotationPlugin
+
+plugin = RotationPlugin(human, expected_max_rev_s=8, targets=["coin", "wheel"])
+human.register(plugin)                 # also consumes detector records in the Store
+await human.push_video(frame)          # one vision.rotation observation per capture
+```
+
+For capture-timed/high-fps sources, use the same `RotationProvider` in a
+SensorStreams lane or the `vision.rotation` ProcessProvider profile (ROI/motion
+regions in the isolated worker). The demo only pushes frames and renders
+committed records and Watch alarms:
+
+```bash
+pip install "gamst-sdk[rotation,yoloe]" "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
+gamst demo rotation --fetch-models   # optional pinned YOLOE + MobileCLIP2 weights
+gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
+gamst demo rotation --video spin.mp4 --detector motion  # no detector required
+```
+
+For fans, wheels and turntables, the `rotation` recipe counts in-plane turns by polar registration: it correlates,
+in angle around the axis, what moved between frames, so static grills cancel and repeating blades still count. Pass the
+number of identical blades or spokes as `--symmetry`. A camera counts only below `fps / (2 × symmetry)` rev/s, and
+`check` says whether yours does. Measured on synthetic fan videos and two real stock clips: a record turned 0.7% less
+than frame-rotation matching found, and a 30 fps ceiling fan sat at the limit and is refused at a realistic speed
+([`skills/gamst-rotation`](skills/gamst-rotation/SKILL.md)).
+
+```bash
+gamst recipe check rotation --symmetry 3 --max-rpm 1500 --fps 240
+gamst recipe run rotation --camera 0 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
+```
+
+Role-based hardware defaults are delegated to GamstCrew:
+`gamst setup plan --goals rotation,speech --json` and
+`gamst setup apply PLAN.json` (agents: MCP `plan_setup` / `apply_setup`). If
+GamstCrew is not installed, `gamst setup` prints its installation command
+instead of silently choosing another setup. Apply writes
+`~/.config/gamst/profile.json`; `await ProfileRuntime.open(human)` from
+`gamst.profile` then registers every selected role as an ordinary plugin
+(isolated workers behind a queue, model-free roles such as `vision.rotation`
+in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
+the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
+
+### Rotation counting (experimental)
+
+For a followed flat object, GAMST measures each frame's ellipse (minor/major
+axis ratio) and fits the periodic `r^2` signal in 250 ms windows to integrate
+turns, without a learned counting model. Counting a flip needs at least four
+frames per turn, so 240 fps counts up to 60 rev/s. Below the rate a throw needs,
+GAMST reports `undersampled` instead of an aliased count.
+
+An iPhone can supply 240 fps (iOS 15+; tested on iPhone 13 mini and iPhone SE
+2nd gen) using `apps/ios-highspeed-camera`, which streams capture-timestamped
+frames over Wi-Fi. The Mac HUD is a camera monitor with REC/camera/zoom
+controls. Dragging a box makes the phone stream a native-resolution strip
+around it, which keeps 240 fps when Wi-Fi cannot carry full frames. Each take
+saves `raw.gmst`, `hud.mp4` and `summary.json`.
+
+Throws are counted after the take. A per-frame tracker cheap enough for 240 fps
+lost glinting coins, so the HUD shows no live count. With `--refine LABEL`:
+
+- YOLOE, given a text prompt such as `"metal coin"`, finds the object in
+  native-resolution tiles.
+- EfficientTAM follows that one object through each throw.
+- Only the parabolic flight is counted. A throw whose object was lost for a
+  large part of the flight is reported as `partial` (a lower bound).
+
+Each throw becomes a timestamped `vision.rotation.refined` observation
+(flips, turns, rev/s, flight start and end) that agents read from GAMST context.
+The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
+(each throw at 8× slow motion with the running count) are written next to the
+take.
+
+The `coin-flip` recipe runs this pipeline. `setup` installs only its parts: the extras, the SHA256-pinned YOLOE and
+EfficientTAM tiny weights, and EfficientTAM at its pinned revision. `check` tells whether a camera's frame rate can
+count the recipe's speed.
+
+```bash
+gamst recipe setup coin-flip
+gamst recipe check coin-flip --fps 240
+gamst recipe run coin-flip --iphone 9123
+gamst recipe run coin-flip --take take-20261124-140345
+```
+
+On one 240 fps take with 7 hand tosses, GAMST matched a person's
+frame-by-frame flip count within one flip on 6 tosses; it missed the
+remaining toss by 6 flips. Accuracy is not guaranteed. Use even lighting, keep
+the whole flight in frame and fix the phone on a stand.
+[Details, measurements and limits](docs/halo-coin.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start
@@ -88,10 +299,10 @@ source .venv/bin/activate
 python -m pip install -e .
 
 # Synthetic inputs: inspect all three output domains.
-python -m humansense demo
+python -m gamst demo
 
 # Local dashboard.
-python -m humansense dashboard
+python -m gamst dashboard
 ```
 
 Open **http://127.0.0.1:8766**, give processing consent, and enter a message such as `I am having trouble understanding. Please explain again.`
@@ -102,7 +313,7 @@ The core SDK and MCP have **no runtime dependencies**. The dashboard supports te
 python -m pip install -e '.[vision,audio]'
 ```
 
-The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). For compatibility, the distribution remains `humansense-sdk`, the Python import remains `humansense`, and the SDK class remains `HumanSense`. Existing `humansense*` commands, plugin entry points and wire protocol names remain supported.
+The project is **GAMST**, hosted at [NomaDamas/Gamst](https://github.com/NomaDamas/Gamst). The distribution is `gamst-sdk`, the Python package is `gamst`, and the SDK class is `Gamst`.
 
 <details>
 <summary>🧩 Additional sensor and model integrations</summary>
@@ -118,7 +329,9 @@ The project is **gamst**, hosted at [NomaDamas/Gamst](https://github.com/NomaDam
 
 </details>
 
-After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`; these are aliases of the existing commands. For example, `gamst demo` and `python -m humansense demo` run the same CLI. Install from this repository or a built wheel; a PyPI release under the new name is not claimed.
+After installing, use `gamst`, `gamst-serve`, `gamst-mcp`, `gamst-mcp-live`, or `gamst-dashboard`. `gamst demo` and `python -m gamst demo` run the same CLI. Releases are published to PyPI as `gamst-sdk` (`pip install gamst-sdk`) by the tag-triggered trusted-publishing workflow.
+
+The first interactive `gamst demo|install|run` asks once whether to star the repository with your own GitHub CLI account; nothing happens without an explicit yes (`gamst star` asks again, `GAMST_NO_STAR_PROMPT=1` turns it off). AI agents installing GAMST follow [AGENTS.md](AGENTS.md) and ask you first.
 
 <a id="local-stack"></a>
 ## 🏠 Run the complete local stack
@@ -139,7 +352,7 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 .venv/bin/python examples/live_context.py
 
 # MCP stdio bridge to that running session
-.venv/bin/python -m humansense.mcp_live
+.venv/bin/python -m gamst.mcp_live
 
 # Stop this checkout's stack, then remove installer-owned models
 .venv/bin/python scripts/run_local.py --stop
@@ -153,10 +366,10 @@ The explicit installer downloads Whisper small, Silero VAD, MediaPipe Face Landm
 
 ```python
 import asyncio
-from humansense import HumanSense
+from gamst import Gamst
 
 async def main():
-    async with HumanSense(
+    async with Gamst(
         consent=True,
         store="sqlite:///local.db",
         retention_hours=24,
@@ -207,14 +420,30 @@ Every record carries a subject ID, timestamp, schema version, model provenance, 
 
 **Scores have distinct meanings:** `model_score` is a pattern score; `probability` requires a registered calibration artifact and held-out validation. Without that evidence, probabilities remain `null`. See the [output contract](docs/contract.md) and [prediction/feedback workflow](docs/predictions.md).
 
-### Dashboard workspace
+### Playground workspace
 
-Camera controls stay in the left panel. Drag the divider to resize camera and
-analysis panels; arrow keys resize it when focused. On narrow screens they stack.
-The right panel has Observability, Context, Categories/Time series, Text/Companion
-and VLM tabs. Category plots have observation and individual-label subtabs.
-Tab changes preserve live capture, context streaming and chart history. The
-active observation state uses rainbow colors; stopped state is gray.
+The browser preview and the local dashboard share one Playground. The left rail
+holds presets, input switches (camera, microphone, text) and overlays; the center
+shows the camera with face/body overlays, live gauges with sparklines and a shared
+speech/frame timeline; the right inspector has Response, Context, JSON and Metrics
+tabs. The top bar reports packet rate, packet bytes, end-to-end age and drops,
+computed from the context packet actually sent.
+
+In the browser, MediaPipe runs locally and responses stream from an
+OpenAI-compatible endpoint you configure (bring your own key; stored in
+sessionStorage unless you opt in). Only the question and bounded sensor text are
+sent, as untrusted user-role `<sensor_context>`; raw camera/audio never leaves the
+page. Without a configured model the Response tab shows setup, never a fabricated
+answer. Served locally, the same UI uses the full stack (ASR, VLM, Companion).
+
+For a local-only MyProxy shortcut, copy
+[`site/local-config.example.js`](site/local-config.example.js) to
+`site/local-config.js`, then fill `baseUrl`, `model`, and `apiKey` locally. The
+actual file is ignored by git; the example pins `https://proxy.nomadamas.org/v1`,
+`gpt-6.1-terra`, and `reasoningEffort: "low"`. Reload the Playground and use
+**Use local MyProxy** in Model settings; it fills the current page and keeps the
+key in session storage only. No endpoint, model, or key is committed by this
+repository.
 
 Optional voice emotion: run `sh scripts/setup_voice.sh`, then restart the local
 launcher while capture is stopped. It adds SUPERB Wav2Vec2 with 3-second windows
@@ -241,7 +470,7 @@ Run `PYTHONPATH=. .venv/bin/python scripts/qa_temporal.py` to verify the
 Changing settings or stopping capture clears the buffer and invalidates queued
 results. Already-running HTTP inference may finish, but its output is discarded.
 
-Agents connected to the same runtime through `humansense.mcp_live` can use:
+Agents connected to the same runtime through `gamst.mcp_live` can use:
 
 ```json
 {"name":"configure_vlm","arguments":{"enabled":true,"interval":3,"window_seconds":4,"sample_fps":2}}
@@ -256,8 +485,8 @@ subscription include the temporal result. Settings do not start camera capture.
 Start the stdio server:
 
 ```bash
-python -m humansense.mcp
-# Installed entry point: humansense-mcp
+python -m gamst.mcp
+# Installed entry point: gamst-mcp
 ```
 
 Add it to your MCP client's server configuration, replacing the absolute paths:
@@ -267,7 +496,7 @@ Add it to your MCP client's server configuration, replacing the absolute paths:
   "mcpServers": {
     "gamst": {
       "command": "/path/to/Gamst/.venv/bin/python",
-      "args": ["-m", "humansense.mcp"],
+      "args": ["-m", "gamst.mcp"],
       "cwd": "/path/to/Gamst"
     }
   }
@@ -303,7 +532,7 @@ Use `video: null` for microphone-only capture. Optional local model paths are `f
 | faster-whisper | `asr` | Transcripts and transcribed-word-rate measurements; local model directory |
 
 ```python
-from humansense.plugins import AudioLevelPlugin, MediaPipeFacePlugin
+from gamst.plugins import AudioLevelPlugin, MediaPipeFacePlugin
 
 human.register(AudioLevelPlugin())
 human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
@@ -314,29 +543,36 @@ human.register(MediaPipeFacePlugin("models/face_landmarker.task"))
 No weights are bundled or automatically downloaded. Native capture uses `CaptureSession`; see [the capture example](examples/realtime_capture.py). HOG can miss seated webcam users. Track IDs represent geometry within a stream, not verified identity or audio-speaker ownership. SAM3 is an optional gated-model provider; biometric re-identification is not included.
 
 <a id="companion"></a>
-## 🤝 Context-aware Companion
+## 🤝 Context-aware Companion (example consumer)
 
-Configure an actual chat-completions server and installed model:
+GAMST delivers context; replying to a person is the consumer's job. The
+Companion is therefore an example application in `examples/companion/` (source
+checkout), not a core, MCP or dashboard feature. It reads GAMST context and asks
+a configured chat model for a reply:
 
-```bash
-export HUMANSENSE_COMPANION_URL=http://127.0.0.1:11434/v1/chat/completions
-export HUMANSENSE_COMPANION_MODEL=YOUR_INSTALLED_MODEL_NAME
-python -m humansense dashboard
+```python
+from gamst import Gamst
+from examples.companion import Companion, companion_backend_from_env
+
+async with Gamst(consent=True) as human:   # GAMST_COMPANION_URL / _MODEL or a Gemini preset
+    reply = await Companion(human, companion_backend_from_env()).reply("What changed?")
 ```
 
-Choose **Send to Companion** in the dashboard, or call the MCP `chat` tool. The Companion uses conversation history, observation context, and the suggested strategy to generate a reply. Without a configured backend it reports an error instead of producing a fake model response.
+Gemini Flash / Live presets: [docs/gemini-providers.md](docs/gemini-providers.md). Without a configured backend it reports an error instead of producing a fake model response.
 
-For evidence-citing semantic analysis, configure `HUMANSENSE_REASONING_URL` and `HUMANSENSE_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
+For evidence-citing semantic analysis (expression and interaction hypotheses delivered as context), configure `GAMST_REASONING_URL` and `GAMST_REASONING_MODEL`, then call `analyze`. Remote providers require explicit permission to transmit text and measurements. See [Companion setup](docs/companion.md) and [reasoning configuration](docs/reasoning.md).
 
 <a id="integrations"></a>
 ## 🌐 WebSocket & integrations
 
 ```bash
 python -m pip install -e '.[websocket]'
-python -m humansense.server --port 8765 --origin http://localhost:3000
+python -m gamst.server --port 8765 --origin http://localhost:3000
 ```
 
-The loopback WebSocket service exposes the same tool calls. Events are the default stream; the `humansense/subscribe` extension selects events, signals, and inferences.
+The loopback WebSocket service exposes the same tool calls. Events are the default stream; the `gamst/subscribe` extension selects events, signals, and inferences.
+
+Every connection needs the per-launch token. The server writes it to `~/.gamst/websocket-token` (mode 0600; override with `GAMST_WS_TOKEN_FILE`). Python clients use `gamst.ws_auth.connect_local()`; other clients send `Authorization: Bearer <token>` or, for browsers, `?token=<token>`. Media streams take capture ownership: the runtime returns to its prior paused state when the last consenting client stops or disconnects.
 
 - **JavaScript / TypeScript:** [Promise-based client](integrations/typescript/README.md) with subscriptions, timeouts, and response matching.
 - **LiveKit / Pipecat:** [Decoded-media bridges](docs/integrations.md) with explicit participant attribution, media-clock mapping, and mono/16kHz conversion. Native framework compatibility still needs validation.
@@ -402,7 +638,7 @@ The SDK default is 24 hours. Both now also enforce **5,000 records** and **32 Mi
 serialized UTF-8 record payload**, whichever limit is reached first. Oldest inserted
 records are evicted; a single oversized record can be streamed but is not retained.
 These limits bound retained payload, not total process RAM or model weight memory.
-They are configurable via `HumanSense(max_records=..., max_payload_bytes=...)`.
+They are configurable via `Gamst(max_records=..., max_payload_bytes=...)`.
 Age expiry is applied on ingestion and reads. Storage counters are exposed in
 `get_state().storage`; summaries describe retained evidence, not an unlimited archive.
 
@@ -503,9 +739,9 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 
 [Optional call budget ledger](docs/call-budget.md): bounded atomic reservations, explicit unknown liabilities and verified-charge settlement. Controller/API integration remains separate.
 
-[Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; HumanSense/MCP lifecycle integration remains required.
+[Explicit call controller](docs/call-controller.md): source-owned history, bounded evidence-preserving requests and separate result/billing acknowledgements. Applications explicitly perform admitted calls; Gamst/MCP lifecycle integration remains required.
 
-[HumanSense/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.
+[Gamst/MCP controller integration](docs/call-integration.md): explicit registration, consent/pause/delete/close handling, bounded read-only status and an executable synthetic application example.
 
 [Call admission diagnostics](docs/call-admission.md): desired/reserved/dispatched routes, bounded denial outcomes, provider provenance and unresolved semantic coverage.
 
@@ -515,9 +751,39 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 
 [Evaluation attempt recorder](docs/call-attempts.md): explicit async call/error/cancellation records, late receipts and frozen itemized-cost reduction.
 
-[On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to HumanSense/MCP.
+[On-demand small VLM](docs/smolvlm-calls.md): admitted single-frame requests invoke the owned local SmolVLM worker and publish capture-bound context to Gamst/MCP.
 
 </details>
+
+<a id="research"></a>
+## 🔬 Research basis & roadmap
+
+The product boundary, Halo direction, customer fit, competitive position and
+code roadmap are recorded in [Product direction](docs/product-direction.md).
+
+Defaults stay lightweight and local; higher-accuracy models are opt-in extras with pinned revisions and licenses. The full per-modality comparison, evidence links and Jev-style decision-model notes are in **[research basis and roadmap](docs/research-roadmap.md)**.
+
+| Area | Default | Optional (implemented adapter) | Basis |
+|---|---|---|---|
+| Multimodal decision | Deterministic rules | Intern-Decision-2B / 4B | Jev-style typed decisions, 84.7% / 90.0% seven-suite mean ([arXiv 2610.22131](https://arxiv.org/abs/2610.22131)) |
+| Tracking | IoU | OC-SORT | Observation-centric SORT, CVPR 2023 |
+| Video masks | EfficientTAM tiny512 | SAM3.1 video | Object Multiplex, ~7× at 128 objects (H100) |
+| Temporal depth | DAV2-Small per frame | Video Depth Anything Small | CVPR 2025, Apache-2.0 |
+| ASR / VAD / tagging | Qwen3-ASR, Silero, YAMNet | Moonshine v2, TEN-VAD, CED-Tiny (GPL, opt-in) | Edge latency, noisy-speech PR, AudioSet mAP |
+| Physics | — | Deterministic physical state (kinematics, trajectory envelopes, contacts, cross-modal impacts) | Precompute before learned world models |
+
+
+**How fusion works today.** Each specialist emits timestamped typed observations; GAMST aligns fresh evidence, computes deterministic state/physics where supported, and updates a bounded semantic state chain. An optional `decision.multimodal` plugin structures retained observations but does not invoke a strong model. An MCP client or application requests Context and owns any LLM/VLM trigger and prompt. This is modular, missing-modality tolerant and auditable, but it can lose fine cross-modal timing and geometry before learned fusion.
+
+1. Calibrate the learned decision provider on GAMST traces (coverage-risk, abstention precision) — [#285](https://github.com/NomaDamas/Gamst/issues/285).
+2. Event-gated hybrid streaming with heartbeat fallback ([StreamMind, ICCV 2025](https://openaccess.thecvf.com/content/ICCV2025/html/Ding_StreamMind_Unlocking_Full_Frame_Rate_Streaming_Video_Dialogue_through_Event-Gated_ICCV_2025_paper.html); [Dispider, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Qian_Dispider_Enabling_Video_LLMs_with_Active_Real-Time_Interaction_via_Disentangled_CVPR_2025_paper.html)).
+3. Shared retrieval embeddings without replacing typed evidence ([ImageBind, CVPR 2023](https://openaccess.thecvf.com/content/CVPR2023/html/Girdhar_ImageBind_One_Embedding_Space_To_Bind_Them_All_CVPR_2023_paper.html); [LanguageBind, ICLR 2024](https://proceedings.iclr.cc/paper_files/paper/2024/hash/2862ccf01e3843c81623b246895bcc45-Abstract-Conference.html)).
+4. Bounded intermediate-fusion AV specialists ([MBT, NeurIPS 2021](https://proceedings.neurips.cc/paper/2021/hash/76ba9f564ebbc35b1014ac498fafadd0-Abstract.html)) and latent compression ([Perceiver IO, ICLR 2022](https://iclr.cc/virtual/2022/poster/6269)).
+5. Streaming-VLM comparison as bench arm E ([StreamingVLM, ICLR 2026](https://arxiv.org/abs/2510.09608); [StreamingLLM, ICLR 2024](https://iclr.cc/virtual/2024/poster/NG7sS51zVF)) and response-timing metrics ([OVO-Bench, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Niu_OVO-Bench_How_Far_is_Your_Video-LLMs_from_Real-World_Online_Video_CVPR_2025_paper.html); [VideoLLM-online, CVPR 2024](https://openaccess.thecvf.com/content/CVPR2024/html/Chen_VideoLLM-online_Online_Video_Large_Language_Model_for_Streaming_Video_CVPR_2024_paper.html)).
+6. Latent-prediction novelty gates ([V-JEPA, ICLR 2025](https://www.iclr.cc/virtual/2025/poster/31477)) and physics world models as labeled synthetic tests only ([Cosmos](https://arxiv.org/abs/2501.03575); [Genie, ICML 2024](https://proceedings.mlr.press/v235/bruce24a.html)).
+7. Goal-level handoff to embodied policies ([RT-2, Science Robotics 2023](https://www.science.org/doi/10.1126/scirobotics.adi9579); [OpenVLA, CoRL 2024](https://proceedings.mlr.press/v270/kim25c.html); [π0, RSS 2025](https://www.roboticsproceedings.org/rss21/p010.html)).
+
+Issues: event gating [#286](https://github.com/NomaDamas/Gamst/issues/286) · retrieval embeddings [#287](https://github.com/NomaDamas/Gamst/issues/287) · intermediate fusion [#288](https://github.com/NomaDamas/Gamst/issues/288) · streaming arm E [#289](https://github.com/NomaDamas/Gamst/issues/289) · physics/world models [#290](https://github.com/NomaDamas/Gamst/issues/290) · embodied handoff [#291](https://github.com/NomaDamas/Gamst/issues/291) · optional-provider acceptance [#292](https://github.com/NomaDamas/Gamst/issues/292). None of these papers has been reproduced here; each issue states its acceptance test.
 
 <a id="benchmarking"></a>
 ## 📊 Benchmarking with Gamst Bench
@@ -531,7 +797,7 @@ in#125. Synthetic pipeline tests do not establish model inference or FPS.
 - **Matched systems:** full VLM, Gamst + LLM, Gamst + selective VLM + LLM, periodic VLM and native reference methods. Freeze checkpoint, consumer, hardware, prompts and input availability before comparing.
 - **Evidence:** published numbers, directly reproduced official scores and modified Gamst tracks remain separate. A native runner's successful exit is not an independently validated score.
 
-✅ Evaluation MCP, ten native execution recipes, dashboard and source-linked documentation are implemented in Gamst Bench.<br>
+✅ Evaluation MCP, 10 recipe records (6 executable, 4 reference-only), dashboard and source-linked documentation are implemented in Gamst Bench.<br>
 ⏳ GCP setup, data access, Gamst-specific model adapters, actual native runs, independent scoring and full cost/event-latency evidence remain pending. No superiority or completed long-duration acceptance is claimed.
 
 For this evaluation campaign, model execution and benchmark dataset downloads happen **on GCP only**. The local SDK/demo instructions elsewhere in this README describe product capabilities, not instructions to run the evaluation campaign locally.
@@ -552,7 +818,7 @@ For this evaluation campaign, model execution and benchmark dataset downloads ha
 ```bash
 python -m unittest discover -s tests -v
 node integrations/typescript/client.test.mjs
-python -m humansense demo
+python -m gamst demo
 python -m benchmarks.runtime --samples 200
 ```
 
@@ -564,12 +830,16 @@ The streaming refactor is covered by **150 Python tests** plus dashboard/categor
 | Guide | Contents |
 | --- | --- |
 | [Output contract](docs/contract.md) | Layers, evidence, scores, timestamps |
+| [Product direction](docs/product-direction.md) | Product boundary, Halo, customers, competitive edge and code roadmap |
+| [Positioning](docs/positioning.md) | Why GAMST exists, realtime/omni comparison and measurable Halo |
+| [Multimodal decisions](docs/multimodal-decision.md) | Rules and Jev-style decision provider contract |
 | [Predictions & feedback](docs/predictions.md) | Target registration, outcomes, held-out calibration |
 | [Model reasoning](docs/reasoning.md) | Local/provider analysis and citation validation |
 | [Companion](docs/companion.md) | Context-aware conversations |
 | [Tracking](docs/tracking.md) | Stream-local association and ambiguity |
 | [Media bridges](docs/integrations.md) | External streams, clocks, PCM conversion |
 | [Evaluation](docs/evaluation.md) | Hardware checks and evaluation gates |
+| [Product direction](docs/product-direction.md) | Product boundary, competitive edge, Halo, customers and code roadmap |
 | [Completion audit](docs/completion-audit.md) | Implemented, missing, and unverified requirements |
 | [GitHub publishing](docs/github-push.md) | Publish the delivery bundle from a connected host |
 

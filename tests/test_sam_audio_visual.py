@@ -1,7 +1,7 @@
 import unittest
 from fractions import Fraction
 
-from humansense.sam_audio_visual import align_visual_frames, visual_allocation_bounds
+from gamst.sam_audio_visual import align_visual_frames, visual_allocation_bounds
 
 
 class VisualAlignmentTests(unittest.TestCase):

@@ -3,7 +3,6 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,10 +17,10 @@ try:
 except ImportError:
     np = None
 
-from humansense.capabilities import SensorMetadata
-from humansense.plugins import InputFrame
-from humansense.providers.yoloe import YOLOEContext, mask_context, prompt_labels, visual_examples
-from humansense.providers.yoloe_native import configuration, _read, NativeYOLOE
+from gamst.capabilities import SensorMetadata
+from gamst.plugins import InputFrame
+from gamst.providers.yoloe import YOLOEContext, mask_context, prompt_labels, visual_examples
+from gamst.providers.yoloe_native import configuration, _read, NativeYOLOE
 
 CONFIG = dict(labels=['cup','glass'],prompt_sha256='a'*64,checkpoint_sha256='b'*64,mode='text')
 NATIVE = dict(labels=['cup','glass'],checkpoint_path='/fixture.pt',checkpoint_sha256='b'*64,
@@ -40,6 +39,16 @@ class Backend:
     def close(self): self.closed = True
 
 
+class BatchBackend(Backend):
+    def __init__(self):
+        super().__init__()
+        self.batches = []
+
+    def predict_batch(self,images):
+        self.batches.append(images)
+        return [self.predict(image) for image in images]
+
+
 def frame(i=0,h=33,w=47):
     return InputFrame(np.zeros((h,w,3),dtype=np.uint8),'video',1000+i*50,
         sensor=SensorMetadata('camera1','video',i,coordinate_frame='image1',stream_epoch='e1'))
@@ -56,9 +65,12 @@ class Labels(unittest.TestCase):
         a,_,_ = configuration(NATIVE)
         b,_,_ = configuration(dict(NATIVE,encoder_sha256='c'*64))
         self.assertNotEqual(a['prompt_sha256'],b['prompt_sha256'])
-        for change in ({'imgsz':True},{'device':'mps'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
+        args,device,_ = configuration(dict(NATIVE,device='mps'))
+        self.assertEqual(device,'mps')
+        self.assertIn('mps',YOLOEContext.capability(**args).devices)
+        for change in ({'imgsz':True},{'device':'auto'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
             with self.assertRaises(ValueError): configuration(dict(NATIVE,**change))
-        code = 'import sys;from humansense import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
+        code = 'import sys;from gamst import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
         result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -70,7 +82,7 @@ class Labels(unittest.TestCase):
             with self.assertRaises(ValueError): _read(path,digest,6)
             with self.assertRaises(ValueError): _read(path,'a'*64,7)
             code = '''import os,socket,sys
-from humansense.providers.yoloe_native import _bootstrap
+from gamst.providers.yoloe_native import _bootstrap
 os.environ['GAMST_PROVIDER_WORKER']='1'
 _bootstrap(sys.argv[1])
 assert os.environ['YOLO_AUTOINSTALL']=='False'
@@ -116,9 +128,10 @@ class Context(unittest.TestCase):
             def __init__(self): self.calls=[]
             def predict(self,**kw):
                 self.calls.append(kw)
-                h,w=kw['source'].shape[:2]
-                return [SimpleNamespace(orig_shape=(h,w),boxes=SimpleNamespace(data=Tensor(
-                    np.array([[0,0,w,h,.5,0]],np.float32))),masks=SimpleNamespace(data=Tensor(np.ones((1,h,w),np.uint8))))]
+                images = kw['source'] if isinstance(kw['source'],list) else [kw['source']]
+                return [SimpleNamespace(orig_shape=image.shape[:2],boxes=SimpleNamespace(data=Tensor(
+                    np.array([[0,0,image.shape[1],image.shape[0],.5,0]],np.float32))),
+                    masks=SimpleNamespace(data=Tensor(np.ones((1,*image.shape[:2]),np.uint8)))) for image in images]
         model=Model(); ref=np.zeros((32,32,3),np.uint8)
         native=NativeYOLOE(model,device='cpu',imgsz=320,threshold=.25,max_objects=16,
             reference=ref,prompts={'bboxes':np.array([[0,0,16,16]],np.float32),'cls':np.array([0])})
@@ -128,6 +141,12 @@ class Context(unittest.TestCase):
         self.assertIn('refer_image',model.calls[0]); self.assertNotIn('refer_image',model.calls[1])
         self.assertTrue(model.calls[0]['retina_masks']); self.assertFalse(model.calls[0]['save'])
         self.assertEqual(model.calls[0]['max_det'],16)
+        calls = len(model.calls)
+        output = native.predict_batch([ref,ref])
+        self.assertEqual(len(output),2)
+        self.assertEqual(len(model.calls),calls+1)
+        self.assertIsInstance(model.calls[-1]['source'],list)
+        self.assertEqual(model.calls[-1]['batch'],2)
         # Shape must be bounded before a GPU/host transfer or copy is attempted.
         model.predict = lambda **kw:[SimpleNamespace(orig_shape=(32,32),
             boxes=SimpleNamespace(data=SimpleNamespace(shape=(17,6))),masks=None)]
@@ -180,6 +199,21 @@ class Context(unittest.TestCase):
         p.close(); p.reset(); self.assertTrue(backend.closed)
         with self.assertRaises(RuntimeError): p.process(frame(1))
 
+    def test_process_batch_schema_parity_and_capture_sequence(self):
+        serial = YOLOEContext(Backend(),**CONFIG)
+        backend = BatchBackend()
+        batched = YOLOEContext(backend,**CONFIG)
+        frames = [frame(),frame(1)]
+        expected = [serial.process(item) for item in frames]
+        self.assertEqual(batched.process_batch([]),[])
+        self.assertEqual(batched.process_batch(frames),expected)
+        self.assertEqual(len(backend.batches),1)
+        self.assertTrue(all(not item.data.any() for item in frames))
+        with self.assertRaises(ValueError): batched.process_batch([frame(2),frame(2)])
+        self.assertEqual(len(backend.batches),1)
+        # A failed batch resets the capture guard, just like a failed single process call.
+        self.assertEqual(batched.process_batch([frame()])[0]['summary']['capture_timestamp_ms'],1000)
+
     def test_empty_bad_native_output_and_metadata(self):
         backend = Backend(); p = YOLOEContext(backend,**CONFIG)
         backend.output = (np.empty((0,6),np.float32),np.empty((0,33,47),np.uint8))
@@ -197,7 +231,7 @@ class Context(unittest.TestCase):
 @unittest.skipIf(np is None,'NumPy optional runtime is unavailable')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_real_loader_missing_assets_fails_and_reaps_without_runtime_writes(self):
-        from humansense import ProcessProvider
+        from gamst import ProcessProvider
         children=[];real_spawn=asyncio.create_subprocess_exec
         async def spawn(*args,**kw):
             child=await real_spawn(*args,**kw);children.append(child);return child
@@ -216,15 +250,15 @@ class Managed(unittest.IsolatedAsyncioTestCase):
                     if child.returncode is None:child.kill();await child.wait()
 
     async def test_owned_worker_context_to_mcp_with_explicit_test_backend(self):
-        from humansense import HumanSense,ProcessProvider,SensorStreams
-        from humansense.mcp import MCPServer
+        from gamst import Gamst,ProcessProvider,SensorStreams
+        from gamst.mcp import MCPServer
         children=[]; real_spawn=asyncio.create_subprocess_exec
         script='''import sys
 sys.path.insert(0,'tests')
 from test_yoloe import Backend
-from humansense.providers.yoloe import YOLOEContext
-from humansense.providers import yoloe_native
-from humansense.provider_worker import main
+from gamst.providers.yoloe import YOLOEContext
+from gamst.providers import yoloe_native
+from gamst.provider_worker import main
 yoloe_native.load_worker=lambda config:YOLOEContext(Backend(),**yoloe_native.configuration(config)[0])
 main()
 '''
@@ -232,7 +266,7 @@ main()
             child=await real_spawn(sys.executable,'-u','-c',script,**kw); children.append(child); return child
         try:
             with patch('asyncio.create_subprocess_exec',spawn):
-                async with HumanSense(consent=True) as human:
+                async with Gamst(consent=True) as human:
                     streams=SensorStreams(human);spec=ProcessProvider.capability('yoloe.local',NATIVE)
                     async def create():return await ProcessProvider.open(sys.executable,'yoloe.local',NATIVE)
                     streams.register(spec,create);await streams.open('camera1','video',[spec.id])

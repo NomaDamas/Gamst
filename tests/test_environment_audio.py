@@ -9,10 +9,10 @@ try:
 except ImportError:
     np = None
 
-from humansense import HumanSense, SensorStreams, SensorMetadata, CapabilitySpec, OutputField, ProcessProvider
-from humansense.plugins import InputFrame
-from humansense.providers.environment_audio import YAMNetEvents, MODEL_VERSION
-from humansense.schema import timestamp
+from gamst import Gamst, SensorStreams, SensorMetadata, CapabilitySpec, OutputField, ProcessProvider
+from gamst.plugins import InputFrame
+from gamst.providers.environment_audio import YAMNetEvents, MODEL_VERSION
+from gamst.schema import timestamp
 
 
 class Classifier:
@@ -146,7 +146,7 @@ class AmbientRuntime(unittest.IsolatedAsyncioTestCase):
                 return {'cleaned': True}
         classifier = Classifier()
         provider = YAMNetEvents(classifier, lambda array: array, version='test')
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams = SensorStreams(human)
             cleaning = CapabilitySpec('clean', 'clean', 'audio', 'fixture', '1',
                 (OutputField('cleaned', 'boolean'),), 'frame')

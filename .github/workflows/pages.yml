@@ -2,7 +2,7 @@ name: public-site
 on:
   push:
     branches: ["feat/humansense-20261112-154922"]
-    paths: ["site/**", "docs/promo/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "gamst/dashboard.html", "gamst/dashboard.py", "gamst/observability.js", "gamst/i18n.js", "tests/dashboard_ui_test.cjs", "docs/promo/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,12 +23,14 @@ jobs:
         with:
           node-version: '22'
       - run: node --check site/app.js
+      - run: node --check site/playground.js
       - run: node --check site/observability.js
       - run: node tests/dashboard_ui_test.cjs
-      - name: Include promotional slides
+      - name: Assemble shared playground and promotional slides
         run: |
           mkdir -p _site/promo
           cp -R site/. _site/
+          cp gamst/observability.js gamst/i18n.js _site/
           cp -R docs/promo/. _site/promo/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

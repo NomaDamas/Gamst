@@ -45,7 +45,7 @@ under family19 [#35](https://github.com/NomaDamas/Gamst/issues/35).
 ## Context input and clock
 
 ```python
-from humansense import ProcessProvider
+from gamst import ProcessProvider
 
 config = dict(width=640, height=480,
               sensor_origin_us="0", capture_origin_ms=known_capture_origin_ms,
@@ -57,7 +57,7 @@ worker = await ProcessProvider.open("/absolute/python", "openeb.eventcd", config
 
 For an existing native EventCD producer, use
 `event_packet(events, width=..., height=..., start_us=..., end_us=...)` from
-`humansense.providers.openeb`. Input is a plain one-dimensional NumPy structured
+`gamst.providers.openeb`. Input is a plain one-dimensional NumPy structured
 array with integer fields in x,y,p,t order. Masked/subclass arrays, noninteger
 fields, out-of-image coordinates, polarities other than0/1, unordered/negative
 timestamps and more than8192events are rejected. Input record itemsize is limited to32bytes (at most262144input bytes), before
@@ -101,7 +101,7 @@ Reset clears state; close is idempotent and permanent.
 ## Explicit native source
 
 ```python
-from humansense.providers.openeb_capture import OpenEBCapture
+from gamst.providers.openeb_capture import OpenEBCapture
 
 options = dict(source_id="event-camera", sensor_id="events",
                sensor_origin_us="0", capture_origin_ms=known_capture_origin_ms,

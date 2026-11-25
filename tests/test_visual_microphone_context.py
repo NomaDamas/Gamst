@@ -7,8 +7,8 @@ import sys
 import unittest
 import zlib
 
-from humansense import HumanSense,ProcessProvider,SensorStreams
-from humansense.providers.visual_microphone_context import VisualMicrophoneContext,window_frame,decode,configuration,PREFIX,MAGIC
+from gamst import Gamst,ProcessProvider,SensorStreams
+from gamst.providers.visual_microphone_context import VisualMicrophoneContext,window_frame,decode,configuration,PREFIX,MAGIC
 
 try:
     import numpy as np
@@ -37,7 +37,7 @@ def remeta(f,change):
 
 class Discovery(unittest.TestCase):
     def test_dependency_light_and_configuration(self):
-        code='from humansense import ProcessProvider;import sys;ProcessProvider.capability("visual_microphone.phase",'+repr(CONFIG)+');assert not {"numpy","scipy","torch"}&sys.modules.keys()'
+        code='from gamst import ProcessProvider;import sys;ProcessProvider.capability("visual_microphone.phase",'+repr(CONFIG)+');assert not {"numpy","scipy","torch"}&sys.modules.keys()'
         p=subprocess.run([sys.executable,'-c',code],capture_output=True);self.assertEqual(p.returncode,0,p.stderr)
         for bad in ({'fps_numerator':True},{'fps_numerator':99},{'jitter_ns':5001},{'native_origin_ns':'01'},{'capture_origin_ms':-1},{'other':0}):
             with self.assertRaises(ValueError):configuration(dict(CONFIG,**bad))
@@ -99,12 +99,12 @@ class Windows(unittest.TestCase):
 @unittest.skipIf(np is None,'optional NumPy/SciPy absent')
 class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_owned_worker_sensorstreams_mcp_and_freshness(self):
-        from humansense.schema import timestamp
-        from humansense.mcp import MCPServer
+        from gamst.schema import timestamp
+        from gamst.mcp import MCPServer
         config=dict(CONFIG,capture_origin_ms=timestamp()-400)
         worker=await ProcessProvider.open(sys.executable,'visual_microphone.phase',config)
         child=worker._process
-        async with HumanSense(consent=True) as human:
+        async with Gamst(consent=True) as human:
             streams=SensorStreams(human);spec=worker.spec
             streams.register(spec,lambda:worker);await streams.open('cam','video',[spec.id])
             try:
@@ -129,7 +129,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
         import io
         from unittest.mock import patch
         from examples.visual_microphone_context import deliver
-        from humansense.mcp import MCPServer
+        from gamst.mcp import MCPServer
         calls=[];original_call=MCPServer.call_tool;original_process=ProcessProvider.process
         async def call(server,*a,**kw):
             calls.append(asyncio.get_running_loop().time())
@@ -139,7 +139,7 @@ class Managed(unittest.IsolatedAsyncioTestCase):
             return await original_process(provider,value)
         before=set(asyncio.all_tasks())
         with patch.object(MCPServer,'call_tool',call),patch.object(ProcessProvider,'process',slow),contextlib.redirect_stdout(io.StringIO()):
-            from humansense.schema import timestamp
+            from gamst.schema import timestamp
             result=await deliver(frame(config=dict(CONFIG,capture_origin_ms=timestamp()-200)).data,sys.executable,20)
         self.assertIn('125.0',str(result));self.assertGreaterEqual(len(calls),5)
         count=len(calls);await asyncio.sleep(.05);self.assertEqual(count,len(calls))
@@ -148,9 +148,9 @@ class Managed(unittest.IsolatedAsyncioTestCase):
     async def test_owned_profile_timeout_and_cancel_reap_only_child(self):
         from unittest.mock import patch
         real_spawn=asyncio.create_subprocess_exec;children=[]
-        code="import time;from humansense.providers.visual_microphone_context import VisualMicrophoneContext;VisualMicrophoneContext.process=lambda *a:time.sleep(60);from humansense.provider_worker import main;main()"
+        code="import time;from gamst.providers.visual_microphone_context import VisualMicrophoneContext;VisualMicrophoneContext.process=lambda *a:time.sleep(60);from gamst.provider_worker import main;main()"
         async def spawn(*args,**kwargs):
-            if 'humansense.provider_worker' in args:
+            if 'gamst.provider_worker' in args:
                 value=await real_spawn(sys.executable,'-u','-c',code,**kwargs)
             else:value=await real_spawn(*args,**kwargs)
             children.append(value);return value
