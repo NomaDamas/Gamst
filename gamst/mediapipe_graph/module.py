@@ -5,8 +5,8 @@ revision). Give the module its own bounded Pipeline lane (``add_module(..., queu
 in parallel with, and independent of, the other modules. The lane is the only GAMST-side queue:
 
 - at most ``max_in_flight`` frames (the graph's FlowLimiter side packet) are inside the runner.
-  ``process`` sends a frame only when there is room, so a slow graph drops frames in the lane
-  (``dropped`` in the Pipeline status), not somewhere unseen. With ``max_in_flight=1`` a frame's
+  ``process`` sends a frame only when there is room, so a slow graph builds its backlog in
+  the lane (``backlog`` in the Pipeline status), not somewhere unseen. With ``max_in_flight=1`` a frame's
   records come back from the call that fed it; with more, calls return the records of frames that
   finished meanwhile, each with its own capture time.
 - timestamps: a packet's timestamp is the GAMST capture time in microseconds (``timestamp_ms *
@@ -230,6 +230,11 @@ class MediaPipeGraphModule:
             await self._write(f'FRAME {us} {width} {height}\n'.encode() + image.tobytes(order='C'))
         await self._make_room()
         return self._take()
+
+    @property
+    def pending_since_ms(self):
+        """The oldest frame still inside the graph (the Pipeline does not call it complete yet)."""
+        return min((entry['ms'] for entry in self._pending.values()), default=None)
 
     async def finish(self):
         """End of input: wait for the frames still inside the graph, return their records."""

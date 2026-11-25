@@ -78,6 +78,9 @@ class CountView(_Window):
                 lines += textwrap.wrap(json.dumps(event, ensure_ascii=False), 52, initial_indent='  - ',
                                        subsequent_indent='    ')
             lines.append('')
+        lost = [self.pipeline.lost(capability) for capability in self.capabilities]
+        if any(item['gaps'] for item in lost):
+            lines += [f"INCOMPLETE: {max(item['frames'] for item in lost)} frames lost", '']
         status = self.pipeline.status()['modules']
         lines.append('modules (r: reset, q: quit)')
         lines += [f"  {name}: {'on' if item['enabled'] else 'off'}  {item['last_latency_ms'] or 0:.0f} ms"

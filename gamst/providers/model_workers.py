@@ -278,6 +278,7 @@ class RemoteExtractor(_Client):
 
 class RemoteWhisper(_Client):
     """Pipeline module: the Whisper worker's windows as ``speech.transcript_words`` records."""
+    owns_process = True
 
     def __init__(self, worker, profile, config):
         super().__init__(worker, profile, config)

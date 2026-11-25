@@ -807,7 +807,11 @@ class Gamst:
 
     async def count_events(self, capability_id, subject_id='local-user', window='1h', event=None,
                            where=None, group_by=None, max_evidence=20):
-        """Count events of retained records of one capability, with bounded evidence record IDs."""
+        """Count events of retained records of one capability, with bounded evidence record IDs.
+
+        ``complete`` is False when the Pipeline lost frames this capability depends on in the window (``lost``
+        says how much), or when not every record was scanned: the true count may differ.
+        """
         if self.closed:
             raise RuntimeError('runtime is closed')
         identifier(capability_id)
@@ -815,17 +819,22 @@ class Gamst:
             raise ValueError('where must be an object of at most 16 path: value pairs')
         if type(max_evidence) is not int or not 0 <= max_evidence <= 100:
             raise ValueError('max_evidence must be 0..100')
-        from .counting import MAX_SCAN, count_events
+        from .counting import GAP_CAPABILITY, MAX_SCAN, count_events, gaps_of, lost
+        if self.pipeline is not None:
+            await self.pipeline.commit_gaps(force=True)
         self._prune()
         now = timestamp()
         start = max(0, now - _window_ms(window))
         rows = self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN + 1,
                                 registered_only=True, capability_id=capability_id)
         truncated = len(rows) > MAX_SCAN
+        gaps = gaps_of(self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN,
+                                        registered_only=True, capability_id=GAP_CAPABILITY), capability_id)
         result = count_events(rows[-MAX_SCAN:], event=event, where=where, group_by=group_by,
                               max_evidence=max_evidence)
         return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
-                    scanned_records=min(len(rows), MAX_SCAN), scan_truncated=truncated)
+                    scanned_records=min(len(rows), MAX_SCAN), scan_truncated=truncated,
+                    complete=not gaps and not truncated, lost=lost(gaps))
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
                                    max_bytes=65536, capability_id=None, source_id=None,

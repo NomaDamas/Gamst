@@ -87,6 +87,7 @@ def to_poses(keypoints, scores, boxes, width, height):
 class Sapiens2PosePlugin(PerceptionPlugin):
     name = 'sapiens2_pose'
     modalities = ('video',)
+    owns_process = True
 
     def __init__(self, pose, processor, detector, detector_processor, *, device, version, max_poses=4,
                  bbox_threshold=.3, nms_threshold=.3, flip_test=True, tracker='ocsort',

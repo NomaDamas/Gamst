@@ -105,7 +105,7 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     found = dict(face=[], body=[])
     first, last, joints = {}, {}, _Joints()
     async with Gamst(consent=True) as human:
-        pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream)
+        pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream, lanes=False)
         pipeline.add_module('enrollment_joints', joints, consumes=[upstream[0]['joints']])
 
         async def on_frame(input_id, frame, records):

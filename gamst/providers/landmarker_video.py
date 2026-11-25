@@ -20,12 +20,13 @@ _FORMATTERS = {'body': (MediaPipeBodyContext, 'max_poses'),
 
 class MediaPipeVideoContext:
     def __init__(self, kind, detector_factory, image_api, *, sha256,
-                 max_entities=4, max_gap_ms=1000):
-        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+                 max_entities=4, max_gap_ms=1000, allow_skips=False):
+        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
+                                    allow_skips=allow_skips)
         if not callable(detector_factory):
             raise ValueError('a fresh VIDEO detector factory is required')
         self.factory = detector_factory
-        self.kind, self.max_gap_ms = kind, max_gap_ms
+        self.kind, self.max_gap_ms, self.allow_skips = kind, max_gap_ms, allow_skips
         self.lock = threading.RLock()
         self.closed, self.detector = False, None
         self.owner = self.last_sequence = self.last_ts = self.shape = None
@@ -36,20 +37,22 @@ class MediaPipeVideoContext:
                                    image_api, sha256=sha256, **{count_key: max_entities})
 
     @staticmethod
-    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000):
+    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False):
         if type(kind) is not str or kind not in _FORMATTERS:
             raise ValueError('kind must be body, hand, face or gesture')
         if type(max_gap_ms) is not int or not 1 <= max_gap_ms <= 60000:
             raise ValueError('max_gap_ms must be integer milliseconds in 1..60000')
+        if type(allow_skips) is not bool:
+            raise ValueError('allow_skips must be boolean')
         formatter, count_key = _FORMATTERS[kind]
         base = formatter.capability(sha256, **{count_key: max_entities})
         return replace(base, id=f'vision.mediapipe.{kind}_video_context',
-            provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms),
+            provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms)+('.skips' if allow_skips else ''),
             streaming_mode='native', stateful=True, reset_on_gap=True)
 
     @classmethod
-    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000):
-        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False):
+        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms, allow_skips=allow_skips)
         path = Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local task path required')
@@ -76,7 +79,8 @@ class MediaPipeVideoContext:
                     min_tracking_confidence=.5,
                     canned_gesture_classifier_options=classifier_options.ClassifierOptions(max_results=8, score_threshold=.5),
                     custom_gesture_classifier_options=classifier_options.ClassifierOptions(max_results=8, score_threshold=.5)))
-            return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+            return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
+                       allow_skips=allow_skips)
         name, count_key = {'body': ('Pose', 'num_poses'), 'hand': ('Hand', 'num_hands'),
                            'face': ('Face', 'num_faces')}[kind]
         options_type = getattr(vision, name+'LandmarkerOptions')
@@ -88,7 +92,8 @@ class MediaPipeVideoContext:
             return detector_type.create_from_options(options_type(
                 base_options=python.BaseOptions(model_asset_buffer=payload, delegate=python.BaseOptions.Delegate.CPU),
                 running_mode=vision.RunningMode.VIDEO, **{count_key: max_entities}, **extra))
-        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
+                   allow_skips=allow_skips)
 
     def _detect(self, image):
         method = 'recognize_for_video' if self.kind == 'gesture' else 'detect_for_video'
@@ -154,7 +159,10 @@ class MediaPipeVideoContext:
                 if self.owner is not None:
                     if owner == self.owner and (sensor.sequence <= self.last_sequence or ts <= self.last_ts):
                         raise ValueError('capture sequence and timestamps must strictly increase')
-                    if (owner != self.owner or sensor.sequence != self.last_sequence+1 or
+                    # VIDEO mode needs increasing timestamps, not every frame: with allow_skips a skipped
+                    # frame within max_gap_ms keeps the tracking state (a rebuild costs far more).
+                    if (owner != self.owner or
+                            not self.allow_skips and sensor.sequence != self.last_sequence+1 or
                             ts-self.last_ts > self.max_gap_ms or shape != self.shape):
                         self._reset()
                 self.current_ts = ts

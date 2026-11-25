@@ -209,6 +209,7 @@ async def enroll(embedder, clips, sample_rate=SAMPLE_RATE, *, min_dbfs=-45.):
 
 class SpeakerVerify:
     """Pipeline module: audio frames (16 kHz mono) and final transcripts in, speaker matches out."""
+    owns_process = True    # the embedding model runs in its worker
 
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,

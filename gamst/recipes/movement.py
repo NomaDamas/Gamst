@@ -94,7 +94,7 @@ async def demonstration(recipe, args, clip):
     start, end = clip.start or 0., clip.end
     async with Gamst(consent=True) as human:
         pipeline = await build_pipeline(dict(recipe, references=[]), run, human, source=source,
-                                        modules=feature_modules(recipe))
+                                        modules=feature_modules(recipe), lanes=False)
 
         async def on_frame(input_id, frame, records):
             origin = getattr(source, 'origin_ms', None)
@@ -469,6 +469,7 @@ async def find_in(recipe, args, kind, path):
         try:
             keep(await pipeline.run(on_frame=on_frame) or [])
             movement = pipeline.modules[item['name']]['module'].status()
+            lost = pipeline.lost(capability)
         finally:
             await pipeline.close()
     rows = []
@@ -477,7 +478,8 @@ async def find_in(recipe, args, kind, path):
         for key in ('start', 'end'):
             row[f'{key}_s'] = round((row[f'{key}_ms'] - seen['start_ms']) / 1000, 3)
         rows.append(row)
-    return rows, dict(source=Path(path).name, frames=seen['frames'], count=len(rows), movement=movement)
+    return rows, dict(source=Path(path).name, frames=seen['frames'], count=len(rows), movement=movement,
+                      complete=not lost['gaps'], **({'lost': lost} if lost['gaps'] else {}))
 
 
 async def find(recipe, args):
@@ -506,22 +508,32 @@ async def find(recipe, args):
 
 
 def export(args):
-    """Events of a store file as JSONL or CSV. The store is opened read-only."""
-    from ..counting import event_rows, write_rows
+    """Events of a store file as JSONL or CSV. The store is opened read-only.
+
+    What the Pipeline lost is part of the data: ``pipeline.gap`` rows that affect the exported capability come
+    with its events (unless ``--event`` asks for one kind), and the summary line counts them.
+    """
+    from ..counting import GAP_CAPABILITY, event_rows, gaps_of, write_rows
     from ..storage import Store
     try:
         store = Store.open_read_only(args.store)
     except FileNotFoundError as error:
         raise SystemExit(str(error)) from error
     try:
-        records, position = [], 0
-        while True:
-            page, _ = store.observation_page_rows(subject=args.subject, after=position, limit=1000,
-                                                  capability_id=args.capability, events_only=True)
-            if not page:
-                break
-            records += [record for _, record in page]
-            position = page[-1][0]
+        def stored(capability):
+            records, position = [], 0
+            while True:
+                page, _ = store.observation_page_rows(subject=args.subject, after=position, limit=1000,
+                                                      capability_id=capability, events_only=True)
+                if not page:
+                    return records
+                records += [record for _, record in page]
+                position = page[-1][0]
+
+        records, gaps = stored(args.capability), gaps_of(stored(GAP_CAPABILITY), args.capability)
+        if args.capability is not None:
+            others = gaps if args.capability != GAP_CAPABILITY else []
+            records = sorted([*records, *others], key=lambda record: record['timestamp_ms'])
         removed = store.removed_records()
     finally:
         store.close()
@@ -531,5 +543,6 @@ def export(args):
             write_rows(rows, out, args.format)
     else:
         write_rows(rows, sys.stdout, args.format)
-    print(json.dumps(dict(events=len(rows), records_no_longer_in_the_store=removed)), file=sys.stderr)
+    print(json.dumps(dict(events=sum(row['event'] != 'pipeline.gap' for row in rows), records_no_longer_in_the_store=removed, complete=not gaps and not removed,
+                          gap_records=len(gaps))), file=sys.stderr)
     return rows

@@ -13,6 +13,20 @@ import json
 from .capabilities import bounded_json
 
 MAX_SCAN = 20000
+GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames that never reached a module
+
+
+def gaps_of(records, capability=None):
+    """The gap records whose loss affects ``capability`` (None: all of them)."""
+    return [record for record in records if capability in (None, GAP_CAPABILITY) or any(
+        capability in event.get('capabilities', ()) for event in record['observation']['value']['events'])]
+
+
+def lost(records):
+    """``{gaps, frames, longest_ms}`` of gap records; one record may hold several gaps."""
+    events = [event for record in records for event in record['observation']['value']['events']]
+    return dict(gaps=sum(event['gaps'] for event in events), frames=sum(event['lost_frames'] for event in events),
+                longest_ms=max((event['end_ms'] - event['start_ms'] for event in events), default=0))
 
 
 def _lookup(value, path):
@@ -62,7 +76,7 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
 # ---------------------------------------------------------------- events as data (JSONL / CSV)
 
 COLUMNS = ('capability', 'event', 'label', 'method', 'confirmed', 'reference', 'reference_id', 'index', 'example',
-           'start_ms', 'end_ms', 'duration_ms', 'distance', 'best_distance', 'person', 'timestamp_ms', 'subject_id',
+           'start_ms', 'end_ms', 'duration_ms', 'gap_frames', 'distance', 'best_distance', 'person', 'timestamp_ms', 'subject_id',
            'source_id', 'sensor_id', 'record_id')
 
 
@@ -95,7 +109,7 @@ def event_rows(records, *, capability=None, event=None):
                    item.get('start_ms'))
             if phase == 'ended' and key in open_matches:
                 row = open_matches.pop(key)
-                for field in ('end_ms', 'best_distance', 'cut'):
+                for field in ('end_ms', 'best_distance', 'cut', 'gap_frames'):
                     if field in item:
                         row[field] = item[field]
                 row['duration_ms'] = row['end_ms'] - row['start_ms']

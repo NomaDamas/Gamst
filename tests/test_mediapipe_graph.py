@@ -419,7 +419,7 @@ class InstallTest(unittest.IsolatedAsyncioTestCase):
             async with Gamst(consent=True) as human:
                 runtime = await ProfileRuntime.open(human, profile)
                 status = runtime.pipeline.status()['modules']['vision.mediapipe_graph']
-                self.assertEqual(status['queue'], 1)
+                self.assertEqual(status['lane'], 'vision.mediapipe_graph')
                 await runtime.pipeline.push('camera', image(), timestamp_ms=now())
                 await runtime.pipeline.drain()
                 status = runtime.pipeline.status()['modules']['vision.mediapipe_graph']

@@ -243,6 +243,8 @@ def derived_chunks(name, samples, start_ms, chunk_ms=100):
 class TargetSpeech:
     """Pipeline module: mixture audio in, ``Derived(emits, separated block)`` out (enrollment-audio TSE)."""
 
+    owns_process = True
+
     def __init__(self, extractor, *, reference='voice', emits=None, block_ms=2000, context_ms=2000):
         self.extractor, self.reference_name = extractor, reference
         self.emits = emits or f'voice:{reference}'
@@ -316,6 +318,11 @@ class SpeakerGate:
         self.pending += [(start, end, window) for start, end, window, _ in
                          self.blocks.push(value, int(frame.timestamp_ms))]
         return self._emit(self.blocks.ring.end_ms - self.segment_ms)
+
+    @property
+    def pending_since_ms(self):
+        """Audio that waits for its verdict (the Pipeline does not call it complete yet)."""
+        return int(self.pending[0][0]) if self.pending else None
 
     def finish(self):
         self.pending += [(start, end, window) for start, end, window, _ in self.blocks.flush()]
@@ -416,6 +423,8 @@ class SAMSpanSpeech:
     ``backend`` is :class:`SAMSpanBackend` (complete windows of 1..4 s) or its worker client. Windows
     with no ``+`` span emit silence for the person (nothing of theirs to keep).
     """
+
+    owns_process = True
 
     def __init__(self, backend, *, reference='voice', emits=None, window_ms=2000, include_other=True):
         if not 1000 <= window_ms <= 4000:

@@ -16,8 +16,8 @@ host-fed inputs (``camera``, ``microphone``) are fed by the engine's own intake
 same helper recipes use:
 
 * a role with a worker Python runs in its own ProcessProvider subprocess, in a bounded Pipeline
-  lane so a slow model never blocks capture; its validated output is committed with
-  ``push_observation`` under the worker's capability;
+  lane (lossless, bounded) so a slow model never blocks capture; its validated output
+  is committed with ``push_observation`` under the worker's capability;
 * an in-process candidate (``vision.rotation``) runs on the caller's runtime, reading the latest
   detector observations the workers committed.
 
@@ -69,7 +69,7 @@ class ProfileRuntime:
 
     @classmethod
     async def open(cls, human, path=None, *, roles=None, startup_timeout=120, inference_timeout=30,
-                   queue_capacity=1):
+                   queue_capacity='auto'):
         from .crew.modules import RoleUnavailable, candidate_for, role_module
         from .pipeline import Pipeline
         self = cls(human, read_profile(path))

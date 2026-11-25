@@ -144,10 +144,11 @@ def capability(profile, config):
             arch=config.get('arch','ResNet50'),max_faces=config.get('max_faces',4))
     if profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video', 'mediapipe.gesture.video'):
         from .providers.landmarker_video import MediaPipeVideoContext
-        if set(config)-{'path','sha256','max_entities','max_gap_ms'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
-            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms')
+        if set(config)-{'path','sha256','max_entities','max_gap_ms','allow_skips'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms/allow_skips')
         return MediaPipeVideoContext.capability(profile.split('.')[1], config['sha256'],
-            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000))
+            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000),
+            allow_skips=config.get('allow_skips',False))
     if profile == 'mediapipe.face':
         from .providers.face_context import MediaPipeFaceContext
         if set(config)-{'path','sha256','max_faces'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
