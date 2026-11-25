@@ -115,3 +115,14 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
   - 데모 환경의 OpenCV 중복은 11/25 18:18에 mediapipe를 설치하면서 생겼습니다(mediapipe → opencv-contrib-python 5.1, ultralytics → opencv-python 4.11).
   - PyPI의 gamst-sdk 최신은 0.6.0이지만, 그 0.6.0에는 이 브랜치의 새 모듈이 없습니다. 머지할 때 버전을 올려야 합니다.
   - "PyTorch는 MediaPipe 노드로 못 넣는다"는 과장입니다. 기본 제공 노드가 없을 뿐, LibTorch를 쓰는 C++ calculator를 직접 만들면 가능합니다.
+
+## 8. 추가 진행 (2026-11-25 밤)
+
+- 코인 회귀: A와 B를 합친 1f1019c에서 같은 take를 다시 돌렸고, `refined.json` 결과 7개가 옮기기 전과 완전히 같았습니다.
+- owner 확정: 새 버전으로 PyPI 배포(0.7.0, 머지 때 다시 확인), 가중치 루트 하나, 모델마다 환경 하나(레시피 설치도). 실제 설치·다운로드·실모델 테스트는 **구현이 끝난 뒤**에 합니다.
+- E: 서브에이전트 A가 `feat/one-env-per-model`(wt-crew)에서 위 결정을 구현합니다. 합치는 순서는 C → E → D입니다(E와 D는 `gamst/crew/registry.py`, `setup.py`, `recipes/parts.py`가 겹칩니다).
+- 발견한 결함(수정 맡김):
+  - 레지스트리 `qwen3.asr_1_7b`는 transformers 5.23.0을 설치하지만, `qwen_asr.py`는 qwen-asr 0.0.6 / transformers 4.57.6이 아니면 거부합니다 → D.
+  - `pose_channels`가 화면 비율을 보정하지 않아, 가로 영상으로 등록하고 세로 영상에서 세면 각도가 달라집니다 → E.
+  - `mediapipe.body.video` worker는 랜드마크를 내보내지 않아 시연 매칭에 쓸 수 없습니다 → E.
+- 동작 지정 방식 두 가지(논의 중, 구현하지 않음): (1) 예시 영상 few-shot (2) 텍스트. 제안은 텍스트로 후보를 찾고 → 사용자가 확인하면 → 예시로 등록하고 → 빠른 계산으로 세는 것입니다. 텍스트를 받는 카운터로는 OVRCounter가 있습니다(arXiv 2407.17085). 코드 공개 여부는 확인 안 함입니다. "동작을 지정할 수 있는 건 exemplar 방식뿐"이라는 앞의 설명은 틀렸습니다.
