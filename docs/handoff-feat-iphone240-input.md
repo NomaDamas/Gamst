@@ -31,25 +31,31 @@ view: halo-coin (HaloCoinView). 레코드와 모듈 상태를 읽어 그리기�
 ## 테스트 (2026-11-25 측정)
 
 - `tests/test_gamst240.py` 10개 통과: wire format, 재생, 디코드, 실제 TCP 수신(take 프레임 유지, 끊김 이벤트, crop 명령), 기록+카운트(refine은 mock), stop 모드, 모듈 끄기, `recipe run`+HUD, `demo rotation` 얇은 경로.
-- `tests.test_recipes` 수정(옛 `demo_argv` 테스트 → Pipeline 테스트).
-- 전체 스위트: 아래 "남은 일" 참고(아직 안 돌림).
+- `tests/test_recipes.py`: 옛 `demo_argv` 테스트를 Pipeline 테스트로 바꿈.
+- 전체: `python -m unittest discover -s tests -q` → 1174개, errors 15, skipped 40. 오류 15개는 main에도 있는 것(test_stereo_context 7, test_stereo_metric 6, test_sam_audio_native 2)입니다.
 
-## 회귀 (진행 중)
+## 회귀 (끝남, 2026-11-25, M2 Pro, MPS, 같은 가중치)
 
-원본 take `~/Desktop/gamst-takes/take-20261124-140345`는 건드리지 않았습니다. 복사본과 스크립트:
-`/private/tmp/claude-501/-Users-jinminseong-Desktop-catch-your-mind/8a5839a6-55dd-4971-9dc0-28736ef356d3/scratchpad/reg/`
+take `140345` 복사본을 옛 코드(30b705f)와 새 Pipeline으로 headless 재생했습니다. 원본 폴더는 건드리지 않았습니다.
 
-- 옛 코드: `reg/oldwt`(30b705f, detached worktree), `reg/run_old.sh`. 끝나면 `git worktree remove` 해야 합니다.
-  - `old-fast`: 옛 레시피 argv(`--refine-on button --refine-fast`) + `--headless`. 끝남(87 s).
-  - `old-full`: 모든 throw 카운트(`docs/halo-coin.md` 측정 경로). 진행 중.
-- 새 코드(할 일): 같은 모델(`~/.cache/gamst/demo/models`), MPS.
-  - `gamst recipe run coin-flip --take reg/copy-new --headless --models M --record-dir reg/new-fast`
-  - `gamst recipe run coin-flip --take reg/copy-new --headless --models M --record-dir reg/new-full --all-throws`
-- 비교: 각 `take-*/refined.json`의 `results[*].turns`(flips = 2 × turns)를 throw별로 비교합니다. 정확히 같아야 합니다.
+| 토스 | 옛 경로 (flips) | Pipeline (flips) |
+|---:|---:|---:|
+| 1 | 8.8 | 8.8 |
+| 2 | 5.2 | 5.2 |
+| 3 | 14.4 | 14.4 |
+| 4 | 8.6 | 8.6 |
+| 5 | 11.6 | 11.6 |
+| 6 | 2.4 | 2.4 |
+| 7 | 10.2 | 10.2 |
+
+- 모든 throw: `refined.json`의 results가 필드 단위로 같습니다(프레임별 타원 포함). 저장된 `vision.rotation.refined` 레코드 7개의 flips도 같습니다.
+  - 새 쪽은 `gamst recipe run coin-flip --all-throws`와 `gamst demo rotation --iphone-replay … --refine "metal coin"` 둘 다 확인했습니다.
+- 레시피 기본값(throw 하나, 모델 유지): 옛 경로와 새 경로 모두 토스 5를 11.4 flips로 셌고, detections는 둘 다 55개입니다.
+- 다시 저장된 take의 `raw.gmst` sha256은 원본과 같습니다(88ef534b…).
+- 시간(각 1회): every throw는 옛 6분 50초, 새 7분 37초, demo 5분 54초입니다. 기본값은 옛 1분 28초, 새 1분 39초입니다. 새 실행 중에 테스트 스위트가 같이 돌아서 시간 비교는 못 합니다.
+- 다시 해보려면: `scratchpad/reg/run_old.sh`(옛 worktree는 지웠으니 `git worktree add --detach … 30b705f`로 다시 만들어야 함), `run_new.sh`, `compare.py OLD_RUN NEW_RUN`.
 
 ## 남은 일
 
-1. 새 경로 회귀 실행과 표 작성.
-2. 전체 테스트(`python -m unittest discover -s tests -q`, 기존 오류 15개는 main에도 있음).
-3. `docs/halo-coin.md`, `skills/gamst-coin-flip/SKILL.md`, `docs/pipeline-plan.md` 9절 갱신.
-4. 회귀용 detached worktree 제거.
+- 실제 iPhone으로 live 실행(창, 키, 마우스 drag crop, ANALYZE)은 확인 안 함입니다. TCP 수신은 테스트에서 소켓으로만 확인했습니다.
+- `docs/runtime-and-recipes.md` 47행(replay 상태)은 고치지 않았습니다.

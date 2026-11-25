@@ -5,6 +5,9 @@ Each module has ``frames()``, an async iterator of :class:`gamst.plugins.InputFr
 hosts that own capture themselves keep using ``Gamst.push_video`` / ``push_audio`` or
 ``Pipeline.push``. Third-party inputs plug in the same way (any object with ``frames()``).
 
+``IPhone240Input`` is the GAMST 240 iPhone app (live over TCP, or a ``raw.gmst`` replayed): its
+frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
+
 Recorded inputs are re-timed onto the wall clock so the newest frame is not in the future (the
 runtime rejects capture times more than 5 s ahead), keeping the recording's own spacing.
 """
