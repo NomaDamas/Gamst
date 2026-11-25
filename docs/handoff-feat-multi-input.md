@@ -68,7 +68,7 @@ gamst recipe run my-imu.json --sensor file.csv
 
 ## 5. 테스트
 
-`PYTHONPATH=. ~/.cache/gamst/demo/venv/bin/python -m unittest discover -s tests -q`: 1530개, 오류는 원래 있던 15개(stereo 13, sam_audio_native 2)뿐입니다.
+`PYTHONPATH=. ~/.cache/gamst/demo/venv/bin/python -m unittest discover -s tests -q`: 1529개, 오류는 원래 있던 15개(stereo 13, sam_audio_native 2)뿐입니다.
 
 - `tests/test_multi_input.py`: 합성 영상(ffmpeg, 없으면 skip)에서 번쩍임과 딸깍이 레코드와 `get_timeline`에서 한 프레임 안, 시작 시각 차이(mp4/mkv), 소리 구멍, offset, 앞서가지 않음, 끝, gap, 일시정지, 한 입력 실패, 멈춤, 센서.
 - `tests/test_scene_recipe.py`: 역할 부품(가중치 없는 실제 worker 2개), VLM 문맥(실제 worker 프로세스와 가짜 서버), 주입 문구, 단어 예시, 인물 없이 세기, `scene` 전체.
