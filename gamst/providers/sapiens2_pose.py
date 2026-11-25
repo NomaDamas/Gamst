@@ -15,9 +15,9 @@ with flip test.
 individuals. Use this module for pose (gesture/repetition counting) only; identity comes from
 :mod:`gamst.providers.person_match`, never from Sapiens2 keypoints.
 
-Output matches :class:`gamst.providers.pose.MediaPipePosePlugin` (``scene.poses`` with normalized
-``landmarks``, ``bbox`` and a stream-local ``track_id``), so :class:`PoseChannels` uses it with
-``mapping=GOLIATH_BODY``. Its keypoints are never used to find or align a face.
+Records are ``scene.poses`` with ``bbox`` and a stream-local ``track_id`` and no joint positions. The
+normalized joints leave the module only as the derived input ``joints``, which :class:`PoseChannels` reads
+with ``mapping=GOLIATH_BODY``. Its keypoints are never used to find or align a face.
 ``accept_license=True`` records that the owner read and accepted the licence.
 """
 from __future__ import annotations
@@ -27,7 +27,8 @@ import hashlib
 from pathlib import Path
 import threading
 
-from ..plugins import PerceptionPlugin, _signal
+from ..plugins import PerceptionPlugin
+from .pose import associate, committed
 from ..tracking import create_tracker
 
 # Goliath-308 indices (sapiens2 ``configs/_base_/keypoints308.py`` at 7e5bae8, teeth removed).
@@ -89,13 +90,14 @@ class Sapiens2PosePlugin(PerceptionPlugin):
 
     def __init__(self, pose, processor, detector, detector_processor, *, device, version, max_poses=4,
                  bbox_threshold=.3, nms_threshold=.3, flip_test=True, tracker='ocsort',
-                 remote=None):
+                 remote=None, joints=None):
         self.pose, self.processor = pose, processor
         self.detector, self.detector_processor = detector, detector_processor
         self.device, self.version, self.max_poses = device, version, int(max_poses)
         self.bbox_threshold, self.nms_threshold, self.flip_test = bbox_threshold, nms_threshold, flip_test
         self.tracker, self.tracker_name = create_tracker(tracker), tracker
         self.remote = remote   # RemotePose: the models live in their own environment
+        self.joints = joints   # derived input that receives the joint positions (never a record)
         self._native_lock = threading.Lock()
 
     @classmethod
@@ -169,16 +171,8 @@ class Sapiens2PosePlugin(PerceptionPlugin):
     async def process(self, frame):
         poses = await (self.remote.infer(frame.data) if self.remote is not None
                        else asyncio.to_thread(self.infer, frame.data))
-        boxes = [pose['bbox'] for pose in poses if pose['bbox'] is not None]
-        tracks = self.tracker.update(boxes, frame.timestamp_ms, stream_id=frame.subject_id + ':body')
-        for pose in poses:
-            matches = [track for track in tracks if track['visible'] and track['bbox'] == pose['bbox']]
-            if len(matches) == 1 and matches[0]['association_quality'] != 'uncertain':
-                pose['track_id'] = matches[0]['track_id']
-                pose['association_quality'] = matches[0]['association_quality']
-        return [_signal(frame, 'scene.poses', poses, self.name, self.version),
-                _signal(frame, 'scene.pose_count', len(poses), self.name, self.version),
-                _signal(frame, 'scene.body_tracks', tracks, f'{self.name}:{self.tracker_name}-tracker', '0.1')]
+        tracks = associate(poses, self.tracker, frame)
+        return committed(frame, poses, tracks, self.name, self.version, self.tracker_name, self.joints)
 
     def reset(self):
         self.tracker.reset()

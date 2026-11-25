@@ -40,6 +40,10 @@
       "tracker": "ocsort",
       "consumes": [
         "camera"
+      ],
+      "joints": "pose_joints",
+      "emits": [
+        "pose_joints"
       ]
     },
     {
@@ -49,18 +53,22 @@
       "reference": "person",
       "consumes": [
         "camera",
-        "pose:scene.poses"
+        "pose_joints"
+      ],
+      "joints": "target_joints",
+      "emits": [
+        "target_joints"
       ]
     },
     {
       "name": "pose_channels",
       "use": "pose-channels",
       "consumes": [
-        "target_person:scene.target_poses"
+        "target_joints"
       ],
       "consumes_without": {
         "target_person": [
-          "pose:scene.poses"
+          "pose_joints"
         ]
       }
     },

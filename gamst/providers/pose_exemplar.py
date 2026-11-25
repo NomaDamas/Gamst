@@ -32,6 +32,7 @@ import math
 import threading
 
 from ..capabilities import CapabilitySpec, OutputField
+from ..private_payload import poses_of
 
 # COCO-17 indices into MediaPipe's 33 landmarks; other keypoint models pass their own mapping.
 MEDIAPIPE_BODY = dict(left_shoulder=11, right_shoulder=12, left_elbow=13, right_elbow=14, left_wrist=15,
@@ -93,32 +94,20 @@ def distance(a, mask_a, b, mask_b):
     return sum(pairs) / len(pairs) if len(pairs) >= 4 else None
 
 
-def _landmarks(pose):
-    """``landmarks`` [{x, y, visibility}] or ``keypoints`` [[x, y, score], ...] (normalized image units)."""
-    if not isinstance(pose, dict):
-        return None
-    if pose.get('landmarks'):
-        return pose['landmarks']
-    keypoints = pose.get('keypoints')
-    if isinstance(keypoints, list) and keypoints:
-        return [dict(x=point[0], y=point[1], visibility=point[2] if len(point) > 2 else 1.) for point in keypoints]
-    return None
-
-
-def _aspect(*sources):
-    """Image width / height from the first source that reports both, else None."""
-    for source in sources:
-        if isinstance(source, dict) and source.get('image_width') and source.get('image_height'):
-            return source['image_width'] / source['image_height']
+def _aspect(pose):
+    """Width / height of the image this pose is normalized to, else None."""
+    if pose.get('image_width') and pose.get('image_height'):
+        return pose['image_width'] / pose['image_height']
     return None
 
 
 class PoseChannels:
     """Pose record -> the largest visible person's feature vector.
 
-    Reads a pose list (``scene.poses``) or a ``{"poses": [...], "summary": {...}}`` value. The image
-    size comes from each pose or the summary; a source that reports neither is taken as square and its
-    record has no ``image_aspect``.
+    Reads the joints input of a pose or target-person module (:class:`gamst.private_payload.PrivatePoses`),
+    or a legacy ``scene.poses`` value with landmarks. Each pose names the size of its own image (a crop's
+    own size for poses found in a crop); a pose without one is taken as square and its record has no
+    ``image_aspect``.
     """
 
     def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5):
@@ -131,16 +120,18 @@ class PoseChannels:
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
 
     def process(self, frame):
-        # A pose list (``scene.poses``, ``scene.target_poses``) or a record with ``poses`` (a worker's value).
-        value = frame.data
-        poses = value if isinstance(value, list) else (value.get('poses') or []) if isinstance(value, dict) else []
-        summary = value.get('summary') if isinstance(value, dict) else None
+        poses = poses_of(frame.data)
+        if poses is None:
+            return None
+        poses = [pose for pose in poses if isinstance(pose, dict)]
+        if poses and not any('landmarks' in pose for pose in poses):
+            raise ValueError('these poses carry no joint positions; consume the pose module\'s joints input')
         best = None
         for index, pose in enumerate(poses):
-            landmarks = _landmarks(pose)
+            landmarks = pose.get('landmarks')
             if not landmarks:
                 continue
-            aspect = _aspect(pose, summary)
+            aspect = _aspect(pose)
             values, mask = pose_channels(landmarks, self.mapping, min_visibility=self.min_visibility,
                                          aspect=1. if aspect is None else aspect)
             if best is None or sum(mask) > sum(best[1]):

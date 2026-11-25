@@ -89,15 +89,16 @@ async def _yoloe(options, context):
 
 
 async def _mediapipe_pose(options, context):
-    """MediaPipe Pose (VIDEO mode) in its own environment; its poses are the ``scene.poses`` record."""
-    from ..crew.modules import open_worker
+    """MediaPipe Pose (VIDEO mode) in its own environment; ``scene.poses`` records, joints on the derived ``joints`` input."""
+    from ..crew.modules import open_private_worker
     from ..providers.pose import PoseWorkerPlugin
     entry = context['installed'](options)
-    worker = await open_worker(context.get('worker_python') or entry.get('python') or sys.executable,
-                               entry['provider_profile'],
-                               dict(entry['config'], landmarks=True, max_entities=int(options.get('max_poses', 1))))
+    worker = await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
+                                       entry['provider_profile'],
+                                       dict(entry['config'], max_entities=int(options.get('max_poses', 1))))
     # No lane: VIDEO tracking needs every frame in order, so the input waits for this module.
-    return dict(module=PoseWorkerPlugin(worker, tracker=options.get('tracker', 'iou')))
+    return dict(module=PoseWorkerPlugin(worker, joints=options.get('joints'),
+                                        tracker=options.get('tracker', 'iou')))
 
 
 async def _mediapipe_graph(options, context):

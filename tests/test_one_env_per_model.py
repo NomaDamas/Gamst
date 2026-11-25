@@ -16,8 +16,7 @@ from unittest.mock import patch
 
 from gamst import Gamst, recipes
 from gamst.crew import registry, setup
-from gamst.crew.modules import RoleUnavailable, role_module
-from gamst.provider_profiles import capability
+from gamst.private_payload import PrivatePoses
 from gamst.providers.pose_exemplar import PoseChannels, pose_channels
 
 try:
@@ -284,7 +283,8 @@ class CoinFlipEnvironment(Temporary):
 def body(width=1., height=1.):
     """33 keypoints of one pose given in pixels-like units, normalized per axis by width and height."""
     pixel = {11: (40, 30), 12: (60, 30), 13: (40, 50), 14: (75, 45), 15: (60, 50), 16: (75, 25),
-             23: (42, 70), 24: (58, 70), 25: (42, 90), 26: (62, 88), 27: (42, 110), 28: (66, 106)}
+             23: (42, 70), 24: (58, 70), 25: (42, 90), 26: (62, 88), 27: (42, 110), 28: (66, 106),
+             0: (50, 24), 2: (70, 8), 5: (30, 8), 9: (62, 40), 10: (38, 40)}  # a face large enough to align
     return [(pixel.get(i, (50, 20))[0] / width, pixel.get(i, (50, 20))[1] / height) for i in range(33)]
 
 
@@ -302,9 +302,8 @@ class Aspect(unittest.TestCase):
         for width, height in ((1920, 1080), (1080, 1920), (500, 500)):
             size = dict(image_width=width, image_height=height)
             plugin = module.process(SimpleNamespace(data=[dict(landmarks=landmarks(width, height), **size)]))
-            worker = module.process(SimpleNamespace(data=dict(
-                poses=[dict(keypoints=[[x, y, .9, .9] for x, y in body(width, height)])], summary=size)))
-            self.assertEqual(plugin['channels'], worker['channels'])
+            joints = module.process(SimpleNamespace(data=PrivatePoses([dict(landmarks=landmarks(width, height), **size)])))
+            self.assertEqual(plugin['channels'], joints['channels'])
             for got, expected in zip(plugin['channels'], truth):
                 self.assertAlmostEqual(got, expected, places=4)
             self.assertAlmostEqual(plugin['image_aspect'], width / height, places=4)
@@ -346,86 +345,83 @@ class VideoDetector:
         self.closed = True
 
 
-class KeypointContract(unittest.TestCase):
-    def test_off_by_default_and_a_different_version_when_on(self):
-        config = dict(path='/not-installed', sha256='0' * 64)
-        for profile in ('mediapipe.body', 'mediapipe.body.video'):
-            off, on = capability(profile, config), capability(profile, dict(config, landmarks=True))
-            self.assertEqual(off.version, capability(profile, dict(config, landmarks=False)).version)
-            self.assertNotIn('k33', off.version)
-            self.assertNotEqual(off.version, on.version)
-            with self.assertRaises(ValueError):
-                capability(profile, dict(config, landmarks=1))
-        for kind in ('hand', 'face', 'gesture'):
-            with self.assertRaises(ValueError):
-                capability(f'mediapipe.{kind}.video', dict(config, landmarks=True))
-
-    def test_a_profile_role_never_commits_keypoints(self):
-        async def run():
-            async with Gamst(consent=True) as human:
-                await role_module(human, 'vision.pose', dict(
-                    model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python=sys.executable,
-                    config=dict(path='/x', sha256='0' * 64, landmarks=True)))
-        with self.assertRaisesRegex(RoleUnavailable, 'never context'):
-            asyncio.run(run())
-
-
 @unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
 class PoseWorker(Temporary):
     """The mediapipe-pose part with the worker process replaced by its own provider on a fake detector."""
 
     async def open(self, python, profile, config, **_):
-        from gamst.crew.modules import WorkerModule
+        from gamst.private_payload import CONTRACTS, Private
         from gamst.providers.landmarker_video import MediaPipeVideoContext
         self.opened = (python, profile, config)
         api = SimpleNamespace(Image=lambda **kw: kw['data'], ImageFormat=SimpleNamespace(SRGB=1))
         provider = MediaPipeVideoContext('body', VideoDetector, api, sha256=config['sha256'],
-                                         max_entities=config['max_entities'], landmarks=config['landmarks'])
+                                         max_entities=config['max_entities'])
 
         class Worker:
-            spec = provider.spec
+            spec, private = provider.spec, True
 
-            async def process(self, frame):
-                return provider.process(frame)
+            async def query(self, frame, request=None):
+                public, joints = provider.query(frame, request)
+                CONTRACTS[profile].check_shape(list(joints.shape), None)
+                return public, Private('joints', joints)
 
             async def reset(self):
                 provider.reset()
 
             async def close(self):
                 provider.close()
-        return WorkerModule(Worker())
+        return Worker()
 
-    def run_frames(self, frames, *, between=None):
+    def run_frames(self, frames, *, between=None, target=False):
         VideoDetector.made = []
-        recipe = recipes.load('person-action-count', exclude=['target_person'])
+        recipe = recipes.load('person-action-count', exclude=[] if target else ['target_person'])
         entry = dict(model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python='/env/python',
                      config=dict(path='/m/pose.task', sha256='1' * 64))
 
+        class Face:
+            model_id = 'face'
+
+            def embed(self, crop):
+                return [1., 0., 0.]
+
+        async def embedders(client, config):
+            return Face()
+
         async def scenario():
+            from gamst.mcp import MCPServer
             from gamst.pipeline import Pipeline
             from gamst.schema import timestamp
             async with Gamst(consent=True) as human:
                 pipeline = Pipeline(human, 'poses')
                 pipeline.add_input('camera', modality='video')
+                pipeline.add_reference('person', 'person', dict(face_model='face', face=[[1., 0., 0.]], body_model=None, body=[]),
+                                       consent=dict(statement='owner'))
                 context = dict(installed=lambda item: entry)
-                for item in recipe['modules'][:2]:
+                for item in recipe['modules'][:3 if target else 2]:
                     built = await recipes.PARTS[item['use']].build(item, context)
-                    pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'))
+                    pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
+                                        emits=tuple(item.get('emits', ())))
                 start, records = timestamp() - 2000, []
                 for index, frame in enumerate(frames):
                     if between is not None:
                         await between(pipeline, index)
                     records += await pipeline.push('camera', frame, timestamp_ms=start + 33 * index)
-                context_text = json.dumps(await human.get_context(), ensure_ascii=False)
+                server = MCPServer(human)
+                seen = [await server.call_tool(name, arguments) for name, arguments in (
+                    ('get_state', {}), ('get_context', {}), ('get_pipeline', {}), ('get_observations', {}),
+                    ('inspect_interval', dict(start_ms=start - 1000, end_ms=start + 9000)))]
+                everything = json.dumps([records, seen, human.store.query('local-user')], default=str)
+                await server.close()
                 await pipeline.close()
-                return records, context_text
-        with patch('gamst.crew.modules.open_worker', self.open):
+                return records, everything
+        with patch('gamst.crew.modules.open_private_worker', self.open), \
+                patch('gamst.recipes.perception_parts._open', embedders):
             return asyncio.run(scenario())
 
     def test_video_tracking_survives_the_pipeline_and_feeds_pose_channels(self):
-        records, context = self.run_frames([np.zeros((720, 1280, 3), np.uint8)] * 5)
+        records, everything = self.run_frames([np.zeros((720, 1280, 3), np.uint8)] * 5)
         self.assertEqual(self.opened[:2], ('/env/python', 'mediapipe.body.video'))
-        self.assertIs(self.opened[2]['landmarks'], True)
+        self.assertNotIn('landmarks', self.opened[2])  # private, not a configured output
         [detector] = VideoDetector.made  # one native tracker for the whole run: never reset
         self.assertEqual(detector.stamps, [0, 33, 66, 99, 132])
         self.assertTrue(detector.closed)
@@ -440,8 +436,38 @@ class PoseWorker(Temporary):
         poses = next(record['observation']['value'] for record in records if record['observation']['name'] == 'scene.poses')
         self.assertEqual((poses[0]['image_width'], poses[0]['image_height']), (1280, 720))
         self.assertIsNotNone(poses[0]['track_id'])
-        for word in ('keypoints', '"landmarks"'):
-            self.assertNotIn(word, context)
+        # no joint position in the Store or any MCP answer (33 x 4 numbers per pose, under any name)
+        for word in ('keypoints', 'landmarks'):
+            self.assertNotIn(word, everything)
+        x, y = body(1280, 720)[12]  # not an extreme point: box edges are public
+        self.assertNotIn(str(np.float32(x).item())[:9], everything)
+        self.assertNotIn(str(np.float32(y).item())[:9], everything)
+
+    def test_the_default_recipe_counts_the_enrolled_person_from_the_frames_own_size(self):
+        """camera -> pose -> target_person -> pose_channels, the recipe's own links."""
+        records, everything = self.run_frames([np.zeros((720, 1280, 3), np.uint8)] * 4, target=True)
+        [detector] = VideoDetector.made
+        self.assertEqual(detector.stamps, [0, 33, 66, 99])  # tracking is on the full frames, never reset
+        target = [r['observation']['value'] for r in records if r['observation']['name'] == 'vision.target_person']
+        self.assertEqual([value['state'] for value in target], ['face'] * 4)
+        channels = [r['observation']['value'] for r in records
+                    if (r['observation'].get('capability') or {}).get('id') == 'vision.pose_channels']
+        self.assertEqual(len(channels), 4)
+        truth, _ = pose_channels(landmarks(1, 1))
+        for got, expected in zip(channels[-1]['channels'], truth):
+            self.assertAlmostEqual(got, expected, places=3)
+        self.assertNotIn('landmarks', everything)
+
+    def test_poses_found_in_a_changing_crop_use_each_crops_own_size(self):
+        """A derived crop changes size; the same body must give the same channels in every crop."""
+        records, _ = self.run_frames([np.zeros((h, w, 3), np.uint8) for h, w in ((400, 200), (300, 260), (200, 400))])
+        channels = [r['observation']['value'] for r in records
+                    if (r['observation'].get('capability') or {}).get('id') == 'vision.pose_channels']
+        self.assertEqual([value['image_aspect'] for value in channels], [.5, round(260 / 300, 5), 2.])
+        for value in channels[1:]:
+            for got, expected in zip(value['channels'], channels[0]['channels']):
+                self.assertAlmostEqual(got, expected, places=3)
+        self.assertEqual(len(VideoDetector.made), 3)  # a size change is a continuity boundary of VIDEO mode
 
     def test_a_large_frame_is_scaled_for_the_worker_and_keeps_its_proportions(self):
         records, _ = self.run_frames([np.zeros((2160, 3840, 3), np.uint8)])
@@ -474,7 +500,7 @@ class PoseWorker(Temporary):
             model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python='/env/python',
             config=dict(path='/m/pose.task', sha256='1' * 64))}}))
         out = self.tmp / 'exemplar.json'
-        with patch('gamst.crew.modules.open_worker', self.open), patch('gamst.inputs.open_source', lambda *a, **k: Clip()):
+        with patch('gamst.crew.modules.open_private_worker', self.open), patch('gamst.inputs.open_source', lambda *a, **k: Clip()):
             recipes.main(['enroll', 'person-action-count', '--video', 'x.mp4', '--out', str(out), '--profile', str(profile)])
         saved = json.loads(out.read_text())
         self.assertTrue(saved['channels'].startswith('vision.pose_channels@2.'))

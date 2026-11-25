@@ -20,9 +20,8 @@ _FORMATTERS = {'body': (MediaPipeBodyContext, 'max_poses'),
 
 class MediaPipeVideoContext:
     def __init__(self, kind, detector_factory, image_api, *, sha256,
-                 max_entities=4, max_gap_ms=1000, landmarks=False):
-        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
-                                    landmarks=landmarks)
+                 max_entities=4, max_gap_ms=1000):
+        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
         if not callable(detector_factory):
             raise ValueError('a fresh VIDEO detector factory is required')
         self.factory = detector_factory
@@ -34,26 +33,23 @@ class MediaPipeVideoContext:
         formatter, count_key = _FORMATTERS[kind]
         # Reuse bounded geometry conversion; this proxy owns no native resource.
         self.formatter = formatter(SimpleNamespace(detect=self._detect, close=lambda: None),
-                                   image_api, sha256=sha256, **{count_key: max_entities},
-                                   **({'landmarks': landmarks} if landmarks else {}))
+                                   image_api, sha256=sha256, **{count_key: max_entities})
 
     @staticmethod
-    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000, landmarks=False):
+    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000):
         if type(kind) is not str or kind not in _FORMATTERS:
             raise ValueError('kind must be body, hand, face or gesture')
         if type(max_gap_ms) is not int or not 1 <= max_gap_ms <= 60000:
             raise ValueError('max_gap_ms must be integer milliseconds in 1..60000')
-        if type(landmarks) is not bool or landmarks and kind != 'body':
-            raise ValueError('landmarks is a boolean and applies to body only')
         formatter, count_key = _FORMATTERS[kind]
-        base = formatter.capability(sha256, **{count_key: max_entities}, **({'landmarks': True} if landmarks else {}))
+        base = formatter.capability(sha256, **{count_key: max_entities})
         return replace(base, id=f'vision.mediapipe.{kind}_video_context',
             provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms),
             streaming_mode='native', stateful=True, reset_on_gap=True)
 
     @classmethod
-    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000, landmarks=False):
-        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms, landmarks=landmarks)
+    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000):
+        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
         path = Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local task path required')
@@ -92,8 +88,7 @@ class MediaPipeVideoContext:
             return detector_type.create_from_options(options_type(
                 base_options=python.BaseOptions(model_asset_buffer=payload, delegate=python.BaseOptions.Delegate.CPU),
                 running_mode=vision.RunningMode.VIDEO, **{count_key: max_entities}, **extra))
-        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
-                   landmarks=landmarks)
+        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
 
     def _detect(self, image):
         method = 'recognize_for_video' if self.kind == 'gesture' else 'detect_for_video'
@@ -135,6 +130,15 @@ class MediaPipeVideoContext:
                     self.formatter.close()
 
     def process(self, frame):
+        return self._run(frame)[0]
+
+    def query(self, frame, request=None):
+        """Body only: (public value, joint rows) for the module that owns this worker."""
+        if self.kind != 'body':
+            raise ValueError('only body video has a private payload')
+        return self._run(frame, private=True)
+
+    def _run(self, frame, private=False):
         with self.lock:
             if self.closed: raise RuntimeError('video provider is closed')
             try:
@@ -154,7 +158,7 @@ class MediaPipeVideoContext:
                             ts-self.last_ts > self.max_gap_ms or shape != self.shape):
                         self._reset()
                 self.current_ts = ts
-                result = self.formatter.process(frame)
+                result, joints = self.formatter.query(frame) if private else (self.formatter.process(frame), None)
                 result['summary'].update(running_mode='VIDEO', temporal_tracking=True,
                     persistent_track_ids='unavailable', smoothing='runtime_default',
                     state_segment=self.segment_id, native_timestamp_ms=ts-self.origin_ts)
@@ -162,7 +166,7 @@ class MediaPipeVideoContext:
                     result['summary']['smoothing'] = 'none_by_adapter'
                 result = self.spec.validate(result)
                 self.owner, self.last_sequence, self.last_ts, self.shape = owner, sensor.sequence, ts, shape
-                return result
+                return result, joints
             except BaseException:
                 self._reset()
                 raise

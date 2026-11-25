@@ -191,7 +191,7 @@ def main():
     provider = spec = None
     separation_protocol = None
     separation_config = None
-    private_audio = False
+    private = None
     try:
         while True:
             head_size, payload_size = sizes(_read_exact(source, 8))
@@ -213,11 +213,24 @@ def main():
                         raise ValueError('JSON providers cannot negotiate separation media')
                     separation_config = request['config']
                     provider, spec = _construct(request['profile'], request['config'])
-                    from .providers.model_workers import PRIVATE_AUDIO
-                    private_audio = request['profile'] in PRIVATE_AUDIO
                     result = dict(spec=spec_value(spec))
+                    if request.get('private_protocol') is not None:
+                        from .private_payload import CONTRACTS, PROTOCOL as PRIVATE_PROTOCOL
+                        if request['private_protocol'] != PRIVATE_PROTOCOL or request['profile'] not in CONTRACTS:
+                            raise ValueError('private payload negotiation failed')
+                        private = request['profile']
+                        result['private_protocol'] = PRIVATE_PROTOCOL
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
+                elif operation == 'query' and provider is not None and private is not None:
+                    from .private_payload import pack
+                    public, value = provider.query(decode_frame(request['frame'], payload), request.get('request'))
+                    public = spec.validate(public)
+                    descriptor, binary = pack(private, public, value, request['frame'])
+                    output.write(envelope(dict(id=number, ok=True, result=public, private=descriptor), binary))
+                    continue
+                elif private is not None and operation in ('process', 'process_regions', 'finish', 'endpoint'):
+                    raise PermissionError('private workers answer queries only')
                 elif operation == 'process' and provider is not None:
                     if separation_protocol is not None:
                         from .separation_media import request_binding, pack_pair
@@ -233,9 +246,6 @@ def main():
                             result=observation, separation=media), binary))
                         continue
                     result = provider.process(decode_frame(request['frame'], payload))
-                    if private_audio:
-                        output.write(envelope(dict(id=number, ok=True, result=None), result.astype('<f4').tobytes()))
-                        continue
                     if result is not None:
                         result = spec.validate(result)
                 elif operation == 'process_regions' and provider is not None:

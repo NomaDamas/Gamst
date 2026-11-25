@@ -144,12 +144,10 @@ def capability(profile, config):
             arch=config.get('arch','ResNet50'),max_faces=config.get('max_faces',4))
     if profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video', 'mediapipe.gesture.video'):
         from .providers.landmarker_video import MediaPipeVideoContext
-        optional = {'max_entities','max_gap_ms'} | ({'landmarks'} if profile == 'mediapipe.body.video' else set())
-        if set(config)-{'path','sha256'}-optional or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
-            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms (body: landmarks)')
+        if set(config)-{'path','sha256','max_entities','max_gap_ms'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms')
         return MediaPipeVideoContext.capability(profile.split('.')[1], config['sha256'],
-            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000),
-            landmarks=config.get('landmarks',False))
+            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000))
     if profile == 'mediapipe.face':
         from .providers.face_context import MediaPipeFaceContext
         if set(config)-{'path','sha256','max_faces'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
@@ -162,10 +160,9 @@ def capability(profile, config):
         return MediaPipeHandContext.capability(config['sha256'],max_hands=config.get('max_hands',4))
     if profile == 'mediapipe.body':
         from .providers.body_context import MediaPipeBodyContext
-        if set(config)-{'path','sha256','max_poses','landmarks'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
-            raise ValueError('body profile requires local path, sha256 and optional max_poses/landmarks')
-        return MediaPipeBodyContext.capability(config['sha256'],max_poses=config.get('max_poses',4),
-            landmarks=config.get('landmarks',False))
+        if set(config)-{'path','sha256','max_poses'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('body profile requires local path, sha256 and optional max_poses')
+        return MediaPipeBodyContext.capability(config['sha256'],max_poses=config.get('max_poses',4))
     if profile == 'qwen3.asr.endpoint':
         from .providers.endpoint_asr import endpoint_capability
         from .providers.vad import SileroActivity

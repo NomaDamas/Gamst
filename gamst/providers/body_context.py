@@ -9,35 +9,28 @@ from .pose import MediaPipePosePlugin
 
 
 class MediaPipeBodyContext:
-    def __init__(self, detector, image_api, *, sha256, max_poses=4, landmarks=False):
-        self.spec = self.capability(sha256, max_poses=max_poses, landmarks=landmarks)
+    def __init__(self, detector, image_api, *, sha256, max_poses=4):
+        self.spec = self.capability(sha256, max_poses=max_poses)
         if not callable(getattr(detector, 'detect', None)) or not callable(getattr(detector, 'close', None)):
             raise ValueError('explicit MediaPipe image-mode detector required')
         self.detector, self.image_api = detector, image_api
-        self.max_poses, self.landmarks, self.closed = max_poses, landmarks, False
+        self.max_poses, self.closed = max_poses, False
 
     @staticmethod
-    def capability(sha256, *, max_poses=4, landmarks=False):
-        """``landmarks``: each pose also carries ``keypoints``, 33 [x, y, visibility, presence] rows.
-
-        Off by default: body geometry is context, joint positions are only for the module that asked.
-        (The field is not called ``landmarks`` because registered observations refuse that name.)
-        """
+    def capability(sha256, *, max_poses=4):
         if type(sha256) is not str or not re.fullmatch('[0-9a-f]{64}', sha256):
             raise ValueError('lowercase task model SHA256 required')
         if type(max_poses) is not int or not 1 <= max_poses <= 4:
             raise ValueError('max_poses must be 1..4')
-        if type(landmarks) is not bool:
-            raise ValueError('landmarks must be boolean')
         return CapabilitySpec('vision.mediapipe.body_context', 'vision.body_geometry', 'video',
-            'mediapipe.pose.image', '0.10.35.sha256.'+sha256+'.p'+str(max_poses)+('.k33' if landmarks else ''),
+            'mediapipe.pose.image', '0.10.35.sha256.'+sha256+'.p'+str(max_poses),
             (OutputField('poses','array'),OutputField('summary','object')), 'frame',
             freshness_ms=1000, interpretation='estimate', devices=('cpu',),
             sensor_requirements=('uint8-bgr-camera',), license='code:Apache-2.0;weights:unspecified')
 
     @classmethod
-    def from_local(cls, path, sha256, *, max_poses=4, landmarks=False):
-        cls.capability(sha256,max_poses=max_poses,landmarks=landmarks)
+    def from_local(cls, path, sha256, *, max_poses=4):
+        cls.capability(sha256,max_poses=max_poses)
         path=Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local pose task path required')
@@ -58,7 +51,7 @@ class MediaPipeBodyContext:
             base_options=python.BaseOptions(model_asset_buffer=payload,delegate=python.BaseOptions.Delegate.CPU),
             running_mode=vision.RunningMode.IMAGE,num_poses=max_poses,output_segmentation_masks=False))
         try:
-            return cls(detector,mp,sha256=sha256,max_poses=max_poses,landmarks=landmarks)
+            return cls(detector,mp,sha256=sha256,max_poses=max_poses)
         except BaseException:
             detector.close()
             raise
@@ -95,6 +88,13 @@ class MediaPipeBodyContext:
         return round(math.degrees(math.acos(cosine)),3)
 
     def process(self, frame):
+        return self._infer(frame)[0]
+
+    def query(self, frame, request=None):
+        """(public geometry, joint rows) for the module that owns this worker (``gamst.private_payload``)."""
+        return self._infer(frame)
+
+    def _infer(self, frame):
         if self.closed: raise RuntimeError('body provider is closed')
         try:
             import numpy as np
@@ -111,9 +111,10 @@ class MediaPipeBodyContext:
         raw=result.pose_landmarks
         if not isinstance(raw,(list,tuple)) or len(raw)>self.max_poses:
             raise ValueError('pose detector exceeded selected output bound')
-        poses=[]
+        poses,joints=[],[]
         for index,body in enumerate(raw):
             points=self._points(body)
+            joints.append([[p['x'],p['y'],p['visibility'],p['presence']] for p in points])
             geometry=MediaPipePosePlugin._gestures(points)
             # Off-image joints are not enough evidence for projected comparisons.
             for side,shoulder,wrist in (('left',11,15),('right',12,16)):
@@ -124,13 +125,11 @@ class MediaPipeBodyContext:
                 geometry[name+'_projected_angle_deg']=self._angle(points,ids,width,height)
             poses.append(dict(frame_pose_index=index,bbox=MediaPipePosePlugin._bbox(points),
                 geometry=geometry,visible_joint_count=sum(min(p['visibility'],p['presence'])>=.5 for p in points)))
-            if self.landmarks:
-                poses[-1]['keypoints']=[[round(p['x'],6),round(p['y'],6),round(p['visibility'],4),
-                                         round(p['presence'],4)] for p in points]
-        return self.spec.validate(dict(poses=poses,summary=dict(count=len(poses),max_poses=self.max_poses,
+        value=self.spec.validate(dict(poses=poses,summary=dict(count=len(poses),max_poses=self.max_poses,
             coordinate_frame='normalized_image_xy',angle_space='pixel_plane',
             image_width=width,image_height=height,mirror_status='unspecified',
             identity='unavailable',temporal_tracking=False,metric_3d=False)))
+        return value,np.asarray(joints,dtype=np.float32).reshape(len(joints),33,4)
 
     def close(self):
         if not self.closed:

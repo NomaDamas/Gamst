@@ -127,10 +127,11 @@ async def _target_person(options, context):
     from ..providers.person_match import TargetPerson
     arguments = {name: options[name] for name in ('face_threshold', 'face_reject', 'body_threshold',
                                                   'face_every_ms', 'body_every_ms', 'hold_ms') if name in options}
-    emits = options.get('emits') or ()
+    joints = options.get('joints')
+    emits = [name for name in options.get('emits') or () if name != joints]
     return dict(module=TargetPerson(await face_embedder(options, context), await body_embedder(options, context),
                                     reference=options.get('reference', 'person'),
-                                    emits=emits[0] if emits else None, **arguments))
+                                    emits=emits[0] if emits else None, joints=joints, **arguments))
 
 
 async def _sapiens2_pose(options, context):
@@ -138,6 +139,7 @@ async def _sapiens2_pose(options, context):
     entry = _entry(options, context, 'sapiens2.pose')
     remote = await _open('RemotePose', entry)
     return dict(module=Sapiens2PosePlugin(None, None, None, None, device=None, version=remote.model_id, remote=remote,
+                                          joints=options.get('joints'),
                                           tracker=options.get('tracker', 'ocsort')))
 
 

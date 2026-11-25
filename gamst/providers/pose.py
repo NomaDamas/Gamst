@@ -161,38 +161,46 @@ class MediaPipePosePlugin(PerceptionPlugin):
         await asyncio.to_thread(close_native)
 
 
-class PoseWorkerPlugin(PerceptionPlugin):
-    """``mediapipe.body.video`` (an isolated worker with ``landmarks=True``) as the ``scene.poses`` plugin.
+def committed(frame, poses, tracks, name, version, tracker_name, joints=None):
+    """What a pose module with private joints returns: records without joint positions, and the joints on
+    the derived input ``joints`` (when the recipe asked for them)."""
+    from ..pipeline import Derived
+    from ..private_payload import PrivatePoses, public_pose
+    output = [_signal(frame, "scene.poses", [public_pose(pose) for pose in poses], name, version),
+              _signal(frame, "scene.pose_count", len(poses), name, version),
+              _signal(frame, "scene.body_tracks", tracks, f"{name}:{tracker_name}-tracker", "0.1")]
+    if joints is not None:
+        output.append(Derived(joints, PrivatePoses(poses), "video"))
+    return output
 
-    Same signals as :class:`MediaPipePosePlugin`, so every consumer of ``scene.poses`` works with
-    either. The worker's keypoints become ``landmarks`` of that signal and nothing else is committed:
-    context and agents keep seeing pose geometry without joint positions.
+
+class PoseWorkerPlugin(PerceptionPlugin):
+    """MediaPipe body in VIDEO mode in its own process, owned by this module.
+
+    Records carry boxes, tracks and geometry. Joint positions are the worker's private payload; they
+    leave this module only as the derived input ``joints``, which the Pipeline never commits.
     """
     name = "mediapipe_pose_landmarker"
     modalities = ("video",)
 
-    def __init__(self, worker, *, tracker='iou', **tracker_options):
-        self.worker, self.version = worker, f"mediapipe:{worker.spec.version}"
+    def __init__(self, worker, *, joints=None, tracker='iou', **tracker_options):
+        self.worker, self.joints, self.version = worker, joints, f"mediapipe:{worker.spec.version}"
         self.tracker = create_tracker(tracker, **tracker_options)
         self.tracker_name = tracker
 
     async def process(self, frame: InputFrame) -> list[dict]:
-        value = await self.worker.process(frame)
-        if value is None:
-            return []
+        from dataclasses import replace
+        from ..crew.modules import bounded_image
+        from ..private_payload import CONTRACTS, landmarks
+        value, private = await self.worker.query(replace(frame, data=bounded_image(frame.data)))
         size = dict(image_width=value["summary"]["image_width"], image_height=value["summary"]["image_height"])
-        poses = [dict(frame_pose_index=pose["frame_pose_index"],
-                      landmarks=[dict(x=x, y=y, visibility=visibility, presence=presence)
-                                 for x, y, visibility, presence in pose["keypoints"]],
-                      bbox=pose["bbox"],
-                      geometry={key: item for key, item in pose["geometry"].items() if key.endswith("_above_shoulder")},
-                      track_id=None, association_quality="unavailable",
+        columns = CONTRACTS["mediapipe.body.video"].columns
+        poses = [dict(frame_pose_index=pose["frame_pose_index"], landmarks=landmarks(rows, columns), bbox=pose["bbox"],
+                      geometry=pose["geometry"], track_id=None, association_quality="unavailable",
                       identity_verified=False, speaker_association="unavailable", **size)
-                 for pose in value["poses"]]
+                 for pose, rows in zip(value["poses"], private.take("joints"))]
         tracks = associate(poses, self.tracker, frame)
-        return [_signal(frame, "scene.poses", poses, self.name, self.version),
-                _signal(frame, "scene.pose_count", len(poses), self.name, self.version),
-                _signal(frame, "scene.body_tracks", tracks, f"{self.name}:{self.tracker_name}-tracker", "0.1")]
+        return committed(frame, poses, tracks, self.name, self.version, self.tracker_name, self.joints)
 
     async def reset(self):
         self.tracker.reset()

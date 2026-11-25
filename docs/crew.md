@@ -59,7 +59,8 @@ and `model.safetensors` collide across models.
 
 `--models DIR` replaces the root. An existing flat directory (for example one filled by an older version) still
 works for reading: it is used for a model only when it holds all of that model's files and `DIR/<model>` does not;
-apply also requires their SHA256 to match. It is never moved or written to. Weights from the former default
+apply also requires their SHA256 to match. A `bundle` candidate (its loader reads the whole directory, e.g. faster-whisper) always
+gets its own. It is never moved or written to. Weights from the former default
 `~/.cache/gamst/models/yoloe` can be read with `--models ~/.cache/gamst/models/yoloe`.
 
 Apply writes `~/.config/gamst/profile.json` (`$XDG_CONFIG_HOME` honoured, the same path

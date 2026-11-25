@@ -326,8 +326,11 @@ class Gamst:
                 units={f.name: f.unit for f in spec.fields if f.unit is not None})
         elif sensor is not None:
             raise ValueError('sensor metadata requires a registered capability')
-        elif modality not in ("video", "audio", "text"):
-            raise ValueError("modality must be video, audio, or text")
+        else:
+            from .private_payload import refuse
+            refuse(value)
+            if modality not in ("video", "audio", "text"):
+                raise ValueError("modality must be video, audio, or text")
         if not name or not model_id or not model_version:
             raise ValueError("signal name and model provenance are required")
         ts = timestamp(timestamp_ms)
@@ -544,6 +547,8 @@ class Gamst:
     def register(self, plugin):
         if not callable(getattr(plugin, "process", None)):
             raise TypeError("plugin must implement process(InputFrame)")
+        if getattr(plugin, "private", False):
+            raise PermissionError("a private worker answers its owning module only")
         self.plugins.append(plugin)
         return self
 
