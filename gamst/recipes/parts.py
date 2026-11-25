@@ -81,7 +81,7 @@ async def _yoloe(options, context):
     python = context.get('worker_python') or entry.get('python') or sys.executable
     _check_worker_dependencies(python)
     labels = context.get('labels') or [options['label']]
-    models = Path(context.get('models') or Path(entry['config']['checkpoint_path']).parent)
+    models = context.get('models') or Path(entry['config']['checkpoint_path']).parent
     module = await open_worker(python, entry['provider_profile'], detector_config(models, labels,
                                                                                   context.get('device', 'cpu')))
     context['detector'] = True
@@ -89,11 +89,15 @@ async def _yoloe(options, context):
 
 
 async def _mediapipe_pose(options, context):
-    from ..crew.setup import verified_file
-    from ..providers.pose import MediaPipePosePlugin
-    config = context['installed'](options)['config']
-    path = verified_file(config['path'], config['sha256'])
-    return dict(module=MediaPipePosePlugin(str(path), max_poses=int(options.get('max_poses', 1))))
+    """MediaPipe Pose (VIDEO mode) in its own environment; its poses are the ``scene.poses`` record."""
+    from ..crew.modules import open_worker
+    from ..providers.pose import PoseWorkerPlugin
+    entry = context['installed'](options)
+    worker = await open_worker(context.get('worker_python') or entry.get('python') or sys.executable,
+                               entry['provider_profile'],
+                               dict(entry['config'], landmarks=True, max_entities=int(options.get('max_poses', 1))))
+    # No lane: VIDEO tracking needs every frame in order, so the input waits for this module.
+    return dict(module=PoseWorkerPlugin(worker, tracker=options.get('tracker', 'iou')))
 
 
 async def _pose_channels(options, context):
@@ -157,9 +161,21 @@ async def _take_recorder(options, context):
     return dict(module=TakeRecorder(context.get('record_dir') or 'gamst-takes', source=source, emits=emits[0]))
 
 
+def _shared_python(*entries):
+    """The one interpreter of candidates that must load in one process (they share an environment)."""
+    pythons = {entry.get('python') for entry in entries}
+    if len(pythons) != 1:
+        raise SystemExit(f"{' and '.join(entry['model'] for entry in entries)} run in one process but were set up in "
+                         'different environments; run: gamst recipe setup <recipe>')
+    python = pythons.pop()
+    if python is not None and not Path(python).is_file():
+        raise SystemExit(f'{python} does not exist any more; run: gamst recipe setup <recipe>')
+    return python
+
+
 async def _flip(options, context):
     """After-take flip count of one named object; its ``yoloe`` and ``efficienttam`` stages run inside it."""
-    from ..demos.rotation import DEFAULT_MODELS
+    from ..profile import role_python
     from ..takes import TakeFlips
     stages = list(context.get('stages', {}).values())
     find = next((item for item in stages if item['use'] == 'yoloe'), None)
@@ -167,16 +183,26 @@ async def _flip(options, context):
     if find is None or follow is None:
         raise SystemExit('the flip count runs a yoloe and an efficienttam stage ("in": "<this module>")')
     models, source = context.get('models'), context.get('efficienttam_source')
-    if source is None:  # a recipe run: weights and sources are where `gamst recipe setup` put them
+    python, checkpoint = context.get('worker_python'), None
+    if source is None:  # a recipe run: weights, sources and the environment are where setup put them
         detector, refiner = context['installed'](find), context['installed'](follow)
-        models = models or str(Path(detector['config']['checkpoint_path']).parent)
+        if models is None:
+            models = str(Path(detector['config']['checkpoint_path']).parent)
+            checkpoint = refiner['config'].get('checkpoint_path')
         source = refiner['config']['source_dir']
+        python = python or _shared_python(detector, refiner)
+    elif python is None:  # gamst demo rotation: the environment setup made for both, else this one
+        pythons = {role_python(PARTS[item['use']].role, item.get('candidate', PARTS[item['use']].candidate))
+                   for item in (find, follow)}
+        python = pythons.pop() if len(pythons) == 1 else None
+    else:  # gamst demo rotation --worker-python: only the detector worker runs there
+        python = sys.executable
     on = context.get('count_on') or options.get('on', 'analyze')
     fast = context['fast'] if context.get('fast') is not None else options.get('fast', on == 'analyze')
     counter = TakeFlips(
         context['human'], label=','.join(context['labels']) if context.get('labels') else find['label'],
-        models=models or DEFAULT_MODELS, device=context.get('device', 'cpu'),
-        efficienttam_source=source, worker_python=context.get('worker_python'),
+        models=models, device=context.get('device', 'cpu'), efficienttam_source=source,
+        efficienttam_checkpoint=checkpoint, python=python, worker_python=context.get('worker_python'),
         expected_max_rev_s=float(context.get('max_rev_s') or options['max_rev_s']), on=on, fast=fast,
         count_at_end=bool(context.get('replay')), show=bool(context.get('show')), cached=context.get('cached'),
         log_dir=context.get('record_dir') or 'gamst-takes')
@@ -204,5 +230,5 @@ PARTS = {
     # views
     'count': Part('view'),
     'rotation-view': Part('view'),
-    'halo-coin': Part('view'),
+    'halo-coin': Part('view', role='view.hud', candidate='pillow'),
 }

@@ -5,7 +5,7 @@
   "hardware": {
     "min_fps": null,
     "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
-    "compute": "CPU (MediaPipe Pose Landmarker, real time)"
+    "compute": "CPU (MediaPipe Pose Landmarker, VIDEO mode, its own process and environment)"
   },
   "inputs": [{"id": "camera", "use": "camera", "sources": ["camera", "video", "take"]}],
   "references": [{"name": "exemplar", "kind": "exemplar", "label": "the demonstrated pose or movement"}],

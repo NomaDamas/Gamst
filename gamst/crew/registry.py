@@ -15,8 +15,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import __version__
-
 
 @dataclass(frozen=True)
 class ProviderProfile:
@@ -210,7 +208,9 @@ class Role:
     defaults: dict[str, str]
     dependencies: tuple[str, ...] = ()
     capture_fps: int | None = None
-    kind: str = "module"  # "input": packages an input source needs; it runs no model
+    # "module": a model role. "input" / "view": packages an input source or a view needs in the
+    # Pipeline process itself; it runs no model.
+    kind: str = "module"
 
 
 def _weight(name, url, sha=None, size=0, source="estimated"):
@@ -231,9 +231,14 @@ CPU_MEASURED = {
     "vram": "VERIFY.md measured 0 MiB GPU on RTX PRO 6000 host (CPU worker)",
     "disk": "estimated; pinned artifact sizes are exact where supplied",
 }
-# A worker environment speaks the caller's provider wire, so it gets the caller's GAMST release.
-BASE = ("gamst-sdk==" + __version__,)
 TORCH = ("torch==2.8.0", "torchvision==0.23.0")
+# Distributions that install the same ``cv2`` files: at most one of them belongs in an environment.
+CV2_DISTRIBUTIONS = ("opencv-python", "opencv-contrib-python", "opencv-python-headless", "opencv-contrib-python-headless")
+# What a declared package pulls in by itself (from its own metadata).
+CV2_DEPENDENCY = {"mediapipe": "opencv-contrib-python", "ultralytics": "opencv-python"}
+# YOLOE and EfficientTAM run in one process for the after-take count (gamst.takes refine), so they share
+# one environment; both pin the same torch.
+REFINE_ENVIRONMENT = "yoloe-efficienttam"
 MEDIAPIPE = ("mediapipe==0.10.35", "numpy>=1.24")
 RF_NANO_SHA = "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d"
 RF_LARGE_SHA = "0f4e20e19a99c0f8a62b5685f57f6c8b5c371c59081feda6752a0561a79ccf38"
@@ -283,9 +288,9 @@ DETECTION = {
         ("cpu", "mps", "cuda"), 2048, 1024, 4500, ESTIMATED,
         "Ultralytics AGPL-3.0; MobileCLIP/weights terms require review",
         "GAMST #357: real-clip p50 45.7 ms on Apple MPS, 157.1 ms on CPU; trained target-host acceptance not established",
-        (_weight("yoloe-26s-seg.pt", "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt", "48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654", 50 * MIB),
-         _weight("mobileclip2_b.ts", "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts", MOBILECLIP_SHA, 350 * MIB)),
-        environment="yoloe", config={"mode": "text", "labels": ["object"], "encoder_family": "mobileclip2:b", "device": "cpu"},
+        (_weight("yoloe-26s-seg.pt", "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt", "48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654", 31072171, "pinned source bytes"),
+         _weight("mobileclip2_b.ts", "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts", MOBILECLIP_SHA, 253794476, "pinned source bytes")),
+        environment=REFINE_ENVIRONMENT, config={"mode": "text", "labels": ["object"], "encoder_family": "mobileclip2:b", "device": "cpu"},
     ),
     "yoloe.26x": _candidate(
         "yoloe.26x", "yoloe.local",
@@ -297,7 +302,7 @@ DETECTION = {
         "Ultralytics AGPL-3.0; MobileCLIP/weights terms require review",
         "VERIFY.md: real-video success, 12.0 ms compute, 16.9 ms p95",
         (_weight("yoloe-26x-seg.pt", "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26x-seg.pt", "d08d390a08f98195f7c87807839fe4ff93a5491645fef1bc3bf0700efafdd639", 250 * MIB),
-         _weight("mobileclip2_b.ts", "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts", MOBILECLIP_SHA, 350 * MIB)),
+         _weight("mobileclip2_b.ts", "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts", MOBILECLIP_SHA, 253794476, "pinned source bytes")),
         environment="yoloe", config={"mode": "text", "labels": ["object"], "encoder_family": "mobileclip2:b", "device": "cpu"},
     ),
     "custom": _candidate(
@@ -345,7 +350,7 @@ ROLES = {
         "gamst.rotation": _candidate("gamst.rotation", "vision.rotation", OPENCV, ("cpu",), 256, 0, 150, ESTIMATED, "Apache-2.0;OpenCV:Apache-2.0", "GAMST per-frame tracker + spin/angular counters; no learned model; count accuracy unvalidated", environment="opencv", in_process="gamst.providers.rotation:RotationPlugin"),
     }, _defaults("gamst.rotation"), ("vision.detect",), 160),
     "vision.video_segmentation": Role("vision.video_segmentation", "Promptable video object segmentation and tracking", {
-        "efficienttam.ti_512": _candidate("efficienttam.ti_512", "efficienttam.tiny512", ("torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"), ("cpu", "mps", "cuda"), 2048, 0, 1500, ESTIMATED, "Apache-2.0 upstream code; checkpoint license requires review", "GAMST efficienttam.tiny512 loader; coin-flip refine 6 of 7 tosses within one flip of a human count (docs/halo-coin.md); trained-checkpoint quality otherwise unverified", (_weight("efficienttam_ti_512x512.pt", EFFICIENTTAM_URL, "7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b", 40 * MIB),), environment="efficienttam", source=EFFICIENTTAM_SOURCE, config={"device": "cpu"}),
+        "efficienttam.ti_512": _candidate("efficienttam.ti_512", "efficienttam.tiny512", ("torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"), ("cpu", "mps", "cuda"), 2048, 0, 1500, ESTIMATED, "Apache-2.0 upstream code; checkpoint license requires review", "GAMST efficienttam.tiny512 loader; coin-flip refine 6 of 7 tosses within one flip of a human count (docs/halo-coin.md); trained-checkpoint quality otherwise unverified", (_weight("efficienttam_ti_512x512.pt", EFFICIENTTAM_URL, "7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b", 71620052, "pinned source bytes"),), environment=REFINE_ENVIRONMENT, source=EFFICIENTTAM_SOURCE, config={"device": "cpu"}),
     }, _defaults("efficienttam.ti_512"), ("vision.detect",)),
     "input.video": Role("input.video", "Camera, video file and recorded-take decoding (no model)", {
         "opencv": _candidate("opencv", None, OPENCV, ("cpu",), 128, 0, 150, ESTIMATED, "Apache-2.0", "decoder only; no model", environment="opencv"),
@@ -353,6 +358,9 @@ ROLES = {
     "input.microphone": Role("input.microphone", "Live microphone capture (no model)", {
         "sounddevice": _candidate("sounddevice", None, ("sounddevice>=0.4,<1", "numpy>=1.24"), ("cpu",), 64, 0, 20, ESTIMATED, "MIT (python-sounddevice); PortAudio MIT", "capture only; no model", environment="audio-input"),
     }, _defaults("sounddevice"), kind="input"),
+    "view.hud": Role("view.hud", "HUD drawing and take rendering (no model)", {
+        "pillow": _candidate("pillow", None, (*OPENCV, "Pillow>=10"), ("cpu",), 64, 0, 170, ESTIMATED, "Apache-2.0 (OpenCV); HPND (Pillow)", "drawing only; no model", environment="opencv"),
+    }, _defaults("pillow"), kind="view"),
     "vision.pose": Role("vision.pose", "Body pose landmarks", {
         "mediapipe.pose_lite": _mediapipe("pose_lite", "pose_landmarker_lite.task", POSE_LITE_URL, "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a", 5777746, "scripts/local_models.py pinned; real target-host acceptance unmeasured"),
         "mediapipe.pose_full": _mediapipe("pose_full", "pose_landmarker_full.task", POSE_FULL_URL, "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1", 9398198, "pinned float16/1 bytes (size and SHA256 measured on a downloaded copy); target-host acceptance unmeasured"),
@@ -425,6 +433,27 @@ def candidate(role_id, model):
     if model not in role.candidates:
         raise ValueError(f"unknown model {model!r} for {role_id}; choose from {', '.join(role.candidates)}")
     return role.candidates[model]
+
+
+def runs_in_host(role_id, model):
+    """True when the Pipeline process itself imports this entry's packages.
+
+    Input and view roles, and ``in_process`` candidates; every other candidate is an isolated
+    worker in its own environment.
+    """
+    return ROLES[role_id].kind != "module" or bool(candidate(role_id, model).in_process)
+
+
+def cv2_distributions(packages):
+    """The OpenCV distributions a package list installs, declared or pulled in by a declared package."""
+    found = set()
+    for package in packages:
+        name = re.match(r"[A-Za-z0-9_.-]+", package).group(0).lower().replace("_", "-")
+        if name in CV2_DISTRIBUTIONS:
+            found.add(name)
+        if name in CV2_DEPENDENCY:
+            found.add(CV2_DEPENDENCY[name])
+    return found
 
 
 def weight_assets(role_id, model):

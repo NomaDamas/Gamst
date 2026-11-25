@@ -19,6 +19,11 @@ shoulders in shoulder widths. The same vector feeds :class:`gamst.providers.repe
 
 Distances are mean absolute differences per channel over channels visible in both, so a value
 reads as "average joint-angle difference" (angles are in units of pi radians).
+
+Keypoints are normalized per axis (x by the image width, y by its height), so on a non-square image
+angles and lengths only mean something after x is scaled by the aspect ratio. ``PoseChannels`` does
+that from the image size the pose source reports (``CHANNELS_VERSION`` 2; version 1 did not, so
+exemplars enrolled with it do not match on non-square images and have to be enrolled again).
 """
 from __future__ import annotations
 
@@ -38,6 +43,7 @@ ANGLES = (('left_elbow', 'left_shoulder', 'left_wrist'), ('right_elbow', 'right_
           ('left_knee', 'left_hip', 'left_ankle'), ('right_knee', 'right_hip', 'right_ankle'))
 CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
     'left_wrist_dx', 'left_wrist_dy', 'right_wrist_dx', 'right_wrist_dy', 'wrist_gap')
+CHANNELS_VERSION = 2
 
 
 def _angle(a, vertex, b):
@@ -49,14 +55,17 @@ def _angle(a, vertex, b):
     return math.acos(cosine) / math.pi
 
 
-def pose_channels(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5):
-    """``landmarks``: list of {x, y, visibility?}. Returns (channels, mask); masked channels are 0."""
+def pose_channels(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
+    """``landmarks``: list of {x, y, visibility?}. Returns (channels, mask); masked channels are 0.
+
+    ``aspect`` is image width / height when x and y are normalized per axis.
+    """
     points = {}
     for name, index in mapping.items():
         if index < len(landmarks):
             point = landmarks[index]
             if point.get('visibility', 1.) >= min_visibility:
-                points[name] = (float(point['x']), float(point['y']))
+                points[name] = (float(point['x']) * aspect, float(point['y']))
     values, mask = [], []
     for vertex, a, b in ANGLES:
         angle = _angle(points[a], points[vertex], points[b]) if {vertex, a, b} <= points.keys() else None
@@ -84,32 +93,64 @@ def distance(a, mask_a, b, mask_b):
     return sum(pairs) / len(pairs) if len(pairs) >= 4 else None
 
 
+def _landmarks(pose):
+    """``landmarks`` [{x, y, visibility}] or ``keypoints`` [[x, y, score], ...] (normalized image units)."""
+    if not isinstance(pose, dict):
+        return None
+    if pose.get('landmarks'):
+        return pose['landmarks']
+    keypoints = pose.get('keypoints')
+    if isinstance(keypoints, list) and keypoints:
+        return [dict(x=point[0], y=point[1], visibility=point[2] if len(point) > 2 else 1.) for point in keypoints]
+    return None
+
+
+def _aspect(*sources):
+    """Image width / height from the first source that reports both, else None."""
+    for source in sources:
+        if isinstance(source, dict) and source.get('image_width') and source.get('image_height'):
+            return source['image_width'] / source['image_height']
+    return None
+
+
 class PoseChannels:
-    """Pose record (``scene.poses``) -> the largest visible person's feature vector."""
+    """Pose record -> the largest visible person's feature vector.
+
+    Reads a pose list (``scene.poses``) or a ``{"poses": [...], "summary": {...}}`` value. The image
+    size comes from each pose or the summary; a source that reports neither is taken as square and its
+    record has no ``image_aspect``.
+    """
 
     def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5):
         self.mapping, self.min_visibility = mapping, min_visibility
         self.spec = CapabilitySpec(
-            'vision.pose_channels', 'vision.pose_channels', 'video', 'gamst.pose_channels', f'1.{source}',
+            'vision.pose_channels', 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
             (OutputField('channels', 'array'), OutputField('mask', 'array'), OutputField('visible', 'integer'),
-             OutputField('pose_index', 'integer', required=False)),
+             OutputField('pose_index', 'integer', required=False),
+             OutputField('image_aspect', 'number', unit='width/height', required=False)),
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
 
     def process(self, frame):
-        poses = frame.data if isinstance(frame.data, list) else []
+        value = frame.data
+        poses = value if isinstance(value, list) else (value.get('poses') or []) if isinstance(value, dict) else []
+        summary = value.get('summary') if isinstance(value, dict) else None
         best = None
         for index, pose in enumerate(poses):
-            landmarks = pose.get('landmarks') if isinstance(pose, dict) else None
+            landmarks = _landmarks(pose)
             if not landmarks:
                 continue
-            values, mask = pose_channels(landmarks, self.mapping, min_visibility=self.min_visibility)
+            aspect = _aspect(pose, summary)
+            values, mask = pose_channels(landmarks, self.mapping, min_visibility=self.min_visibility,
+                                         aspect=1. if aspect is None else aspect)
             if best is None or sum(mask) > sum(best[1]):
-                best = (values, mask, index)
+                best = (values, mask, index, aspect)
         if best is None:
             return None
-        values, mask, index = best
-        return self.spec.validate(dict(channels=[round(v, 5) for v in values], mask=mask, visible=sum(mask),
-                                       pose_index=index))
+        values, mask, index, aspect = best
+        result = dict(channels=[round(v, 5) for v in values], mask=mask, visible=sum(mask), pose_index=index)
+        if aspect is not None:
+            result['image_aspect'] = round(aspect, 5)
+        return self.spec.validate(result)
 
 
 def subsequence_dtw(template, series):

@@ -112,10 +112,8 @@ why `plan` can be useful even when `apply` correctly refuses a candidate.
 ## Recipes
 
 `gamst recipe setup <recipe>` plans exactly the roles its parts name
-(`make_plan(roles=..., dependencies=False, isolation="current")`): packages go into the running
-interpreter (recipe modules run in-process or as workers of it) and every weight goes into one
-directory (`--models`, default `~/.cache/gamst/models/yoloe`, the directory `gamst demo rotation`
-reads). It then runs the same `apply_plan` and writes the same profile; `gamst recipe run` reads
+(`make_plan(roles=..., dependencies=False)`), with the same environments and the same weight root as
+`gamst setup` (see [crew.md](../crew.md)). It then runs the same `apply_plan` and writes the same profile; `gamst recipe run` reads
 the role entries from that profile.
 
 ## MCP
@@ -125,7 +123,7 @@ The tools are on the one GAMST MCP server (`gamst mcp`):
 - `plan_setup`: `{ "goals": ["rotation", "speech"], "overrides": {"audio.asr": "faster_whisper.small"} }`,
   or `{ "roles": {"vision.pose": "mediapipe.pose_full"}, "dependencies": false, "isolation": "current" }`
 - `apply_setup`: `{ "plan": PLAN_OBJECT, "prefix": "/optional/prefix", "profile": "/optional/profile.json",
-  "models_dir": "/optional/flat/weights/dir" }`, or supply `plan_path` instead of `plan`.
+  "models_dir": "/optional/weight/root" }`, or supply `plan_path` instead of `plan`.
 
 Both tools have the same validation and refusal behavior as the CLI.
 
@@ -152,7 +150,7 @@ Default path: `~/.config/gamst/profile.json`.
       "provider_profile": "mediapipe.body.video",
       "python": "/prefix/venvs/mediapipe/bin/python",
       "config": {
-        "path": "/prefix/models/mediapipe-pose_lite/pose_landmarker_lite.task",
+        "path": "/home/me/.cache/gamst/models/mediapipe.pose_lite/pose_landmarker_lite.task",
         "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a"
       }
     }

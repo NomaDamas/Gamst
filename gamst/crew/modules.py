@@ -89,8 +89,8 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
     plugin module. ``config`` / ``python`` override the profile's values (a recipe narrows
     labels or the device). Raises :class:`RoleUnavailable` with the reason.
     """
-    if ROLES.get(role) is not None and ROLES[role].kind == 'input':
-        raise RoleUnavailable('input role: its packages serve an input source; it runs no model')
+    if ROLES.get(role) is not None and ROLES[role].kind != 'module':
+        raise RoleUnavailable(f'{ROLES[role].kind} role: its packages serve the Pipeline process; it runs no model')
     config = dict(entry.get('config') or {}) if config is None else dict(config)
     chosen = candidate_for(role, entry.get('model'))
     if chosen is not None and chosen.in_process:
@@ -98,6 +98,8 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
         spec = getattr(plugin, 'spec', None)
         return dict(module=plugin, spec=None, modality=tuple(plugin.modalities)[0],
                     capability=None if spec is None else spec.id, in_process=True)
+    if config.get('landmarks'):
+        raise RoleUnavailable('keypoint output is for the recipe module that asked for it; it is never context')
     python = python or entry.get('python')
     if not python or not entry.get('provider_profile'):
         raise RoleUnavailable('no isolated worker in profile; register its in-process adapter explicitly')

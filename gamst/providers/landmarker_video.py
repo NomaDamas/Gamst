@@ -20,8 +20,9 @@ _FORMATTERS = {'body': (MediaPipeBodyContext, 'max_poses'),
 
 class MediaPipeVideoContext:
     def __init__(self, kind, detector_factory, image_api, *, sha256,
-                 max_entities=4, max_gap_ms=1000):
-        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+                 max_entities=4, max_gap_ms=1000, landmarks=False):
+        self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
+                                    landmarks=landmarks)
         if not callable(detector_factory):
             raise ValueError('a fresh VIDEO detector factory is required')
         self.factory = detector_factory
@@ -33,23 +34,26 @@ class MediaPipeVideoContext:
         formatter, count_key = _FORMATTERS[kind]
         # Reuse bounded geometry conversion; this proxy owns no native resource.
         self.formatter = formatter(SimpleNamespace(detect=self._detect, close=lambda: None),
-                                   image_api, sha256=sha256, **{count_key: max_entities})
+                                   image_api, sha256=sha256, **{count_key: max_entities},
+                                   **({'landmarks': landmarks} if landmarks else {}))
 
     @staticmethod
-    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000):
+    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000, landmarks=False):
         if type(kind) is not str or kind not in _FORMATTERS:
             raise ValueError('kind must be body, hand, face or gesture')
         if type(max_gap_ms) is not int or not 1 <= max_gap_ms <= 60000:
             raise ValueError('max_gap_ms must be integer milliseconds in 1..60000')
+        if type(landmarks) is not bool or landmarks and kind != 'body':
+            raise ValueError('landmarks is a boolean and applies to body only')
         formatter, count_key = _FORMATTERS[kind]
-        base = formatter.capability(sha256, **{count_key: max_entities})
+        base = formatter.capability(sha256, **{count_key: max_entities}, **({'landmarks': True} if landmarks else {}))
         return replace(base, id=f'vision.mediapipe.{kind}_video_context',
             provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms),
             streaming_mode='native', stateful=True, reset_on_gap=True)
 
     @classmethod
-    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000):
-        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000, landmarks=False):
+        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms, landmarks=landmarks)
         path = Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local task path required')
@@ -88,7 +92,8 @@ class MediaPipeVideoContext:
             return detector_type.create_from_options(options_type(
                 base_options=python.BaseOptions(model_asset_buffer=payload, delegate=python.BaseOptions.Delegate.CPU),
                 running_mode=vision.RunningMode.VIDEO, **{count_key: max_entities}, **extra))
-        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms)
+        return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
+                   landmarks=landmarks)
 
     def _detect(self, image):
         method = 'recognize_for_video' if self.kind == 'gesture' else 'detect_for_video'

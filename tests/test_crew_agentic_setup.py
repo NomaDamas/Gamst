@@ -104,8 +104,8 @@ class Artifacts(unittest.TestCase):
             profile = root / "profile.json"
             prefix = root / "prefix"
             with patch("gamst.crew.setup._install_environment", return_value=(str(root / "python"), "tested")):
-                first = apply_plan(plan, prefix=prefix, profile_path=profile)
-                second = apply_plan(plan, prefix=prefix, profile_path=profile)
+                first = apply_plan(plan, prefix=prefix, profile_path=profile, models_dir=root / "models")
+                second = apply_plan(plan, prefix=prefix, profile_path=profile, models_dir=root / "models")
             self.assertEqual(first["profile"], second["profile"])
             value = json.loads(profile.read_text())
             self.assertEqual(value["version"], 1)
@@ -169,8 +169,6 @@ class CurrentInterpreter(unittest.TestCase):
         self.assertFalse(any(item.startswith("gamst-sdk") for item in plan["install"][0]["packages"]))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "pose.task"
-            source.write_bytes(b"pose")
             weight = plan["roles"]["vision.pose"]["weights"][0]
             calls = []
             with patch("gamst.crew.setup._run", side_effect=lambda args: calls.append(args)), \
@@ -182,7 +180,7 @@ class CurrentInterpreter(unittest.TestCase):
             self.assertEqual(calls[0][:3], [sys.executable, "-m", "pip"])
             entry = result["roles"]["vision.pose"]
             self.assertEqual(entry["python"], sys.executable)
-            self.assertEqual(entry["config"]["path"], str((root / "models" / weight["name"]).absolute()))
+            self.assertEqual(entry["config"]["path"], str((root / "models" / "mediapipe.pose_full" / weight["name"]).absolute()))
 
     def test_plan_for_another_interpreter_is_refused(self):
         import platform

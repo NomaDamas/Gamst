@@ -9,28 +9,35 @@ from .pose import MediaPipePosePlugin
 
 
 class MediaPipeBodyContext:
-    def __init__(self, detector, image_api, *, sha256, max_poses=4):
-        self.spec = self.capability(sha256, max_poses=max_poses)
+    def __init__(self, detector, image_api, *, sha256, max_poses=4, landmarks=False):
+        self.spec = self.capability(sha256, max_poses=max_poses, landmarks=landmarks)
         if not callable(getattr(detector, 'detect', None)) or not callable(getattr(detector, 'close', None)):
             raise ValueError('explicit MediaPipe image-mode detector required')
         self.detector, self.image_api = detector, image_api
-        self.max_poses, self.closed = max_poses, False
+        self.max_poses, self.landmarks, self.closed = max_poses, landmarks, False
 
     @staticmethod
-    def capability(sha256, *, max_poses=4):
+    def capability(sha256, *, max_poses=4, landmarks=False):
+        """``landmarks``: each pose also carries ``keypoints``, 33 [x, y, visibility, presence] rows.
+
+        Off by default: body geometry is context, joint positions are only for the module that asked.
+        (The field is not called ``landmarks`` because registered observations refuse that name.)
+        """
         if type(sha256) is not str or not re.fullmatch('[0-9a-f]{64}', sha256):
             raise ValueError('lowercase task model SHA256 required')
         if type(max_poses) is not int or not 1 <= max_poses <= 4:
             raise ValueError('max_poses must be 1..4')
+        if type(landmarks) is not bool:
+            raise ValueError('landmarks must be boolean')
         return CapabilitySpec('vision.mediapipe.body_context', 'vision.body_geometry', 'video',
-            'mediapipe.pose.image', '0.10.35.sha256.'+sha256+'.p'+str(max_poses),
+            'mediapipe.pose.image', '0.10.35.sha256.'+sha256+'.p'+str(max_poses)+('.k33' if landmarks else ''),
             (OutputField('poses','array'),OutputField('summary','object')), 'frame',
             freshness_ms=1000, interpretation='estimate', devices=('cpu',),
             sensor_requirements=('uint8-bgr-camera',), license='code:Apache-2.0;weights:unspecified')
 
     @classmethod
-    def from_local(cls, path, sha256, *, max_poses=4):
-        cls.capability(sha256,max_poses=max_poses)
+    def from_local(cls, path, sha256, *, max_poses=4, landmarks=False):
+        cls.capability(sha256,max_poses=max_poses,landmarks=landmarks)
         path=Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local pose task path required')
@@ -51,7 +58,7 @@ class MediaPipeBodyContext:
             base_options=python.BaseOptions(model_asset_buffer=payload,delegate=python.BaseOptions.Delegate.CPU),
             running_mode=vision.RunningMode.IMAGE,num_poses=max_poses,output_segmentation_masks=False))
         try:
-            return cls(detector,mp,sha256=sha256,max_poses=max_poses)
+            return cls(detector,mp,sha256=sha256,max_poses=max_poses,landmarks=landmarks)
         except BaseException:
             detector.close()
             raise
@@ -117,6 +124,9 @@ class MediaPipeBodyContext:
                 geometry[name+'_projected_angle_deg']=self._angle(points,ids,width,height)
             poses.append(dict(frame_pose_index=index,bbox=MediaPipePosePlugin._bbox(points),
                 geometry=geometry,visible_joint_count=sum(min(p['visibility'],p['presence'])>=.5 for p in points)))
+            if self.landmarks:
+                poses[-1]['keypoints']=[[round(p['x'],6),round(p['y'],6),round(p['visibility'],4),
+                                         round(p['presence'],4)] for p in points]
         return self.spec.validate(dict(poses=poses,summary=dict(count=len(poses),max_poses=self.max_poses,
             coordinate_frame='normalized_image_xy',angle_space='pixel_plane',
             image_width=width,image_height=height,mirror_status='unspecified',

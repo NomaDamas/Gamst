@@ -152,17 +152,16 @@ def roles(recipe):
     return selected
 
 
-def plan(recipe, models=None, hardware=None):
+def plan(recipe, models=None, hardware=None, isolation='venv'):
     """The setup plan for exactly the recipe's parts (``gamst.crew.setup.make_plan``; installs nothing).
 
-    Packages go into this interpreter (recipe modules run in-process or as workers of it), and
-    every planned weight goes into one directory, ``models`` (default: the one ``gamst demo
-    rotation`` reads), so the coin-flip view finds the detector and the refiner side by side.
+    Same isolation as ``gamst setup``: one environment per model environment; only what the
+    Pipeline process itself imports goes into this interpreter. ``models`` replaces the weight root.
     """
-    from ..crew.setup import make_plan
-    steps = make_plan(roles=roles(recipe), dependencies=False, isolation='current', hardware=hardware)
+    from ..crew.setup import make_plan, models_root
+    steps = make_plan(roles=roles(recipe), dependencies=False, isolation=isolation, hardware=hardware)
     steps['recipe'] = recipe['name']
-    steps['models_dir'] = str(Path(models or demo.DEFAULT_MODELS).expanduser().absolute())
+    steps['models_dir'] = str(Path(models).expanduser().absolute() if models else models_root())
     return steps
 
 
@@ -170,10 +169,10 @@ def weight_files(steps):
     return [weight['name'] for selection in steps['roles'].values() for weight in selection['weights']]
 
 
-def setup(recipe, *, models=None, dry_run=False, prefix=None, profile=None):
+def setup(recipe, *, models=None, dry_run=False, prefix=None, profile=None, isolation='venv'):
     """Install only the recipe's parts with the same apply as ``gamst setup``; writes the profile."""
     from ..crew.setup import SetupError, apply_plan
-    steps = plan(recipe, models)
+    steps = plan(recipe, models, isolation=isolation)
     print(json.dumps(steps, indent=2))
     if dry_run:
         return steps
@@ -261,6 +260,16 @@ def from_rotation_demo(args):
     return recipe, options
 
 
+def _check_exemplar(saved, path):
+    """Refuse a pose exemplar whose channels were computed another way (it would silently not match)."""
+    from ..providers.pose_exemplar import CHANNELS_VERSION
+    channels = saved.get('channels', 'vision.pose_channels@1.')  # files without the field are version 1
+    current = f'vision.pose_channels@{CHANNELS_VERSION}.'
+    if channels.startswith('vision.pose_channels@') and not channels.startswith(current):
+        raise SystemExit(f'{path} was enrolled before pose channels were corrected for the image aspect ratio; '
+                         'enroll it again: gamst recipe enroll')
+
+
 def _reference_value(reference, args):
     kind, name = reference['kind'], reference['name']
     if kind == 'exemplar':
@@ -268,6 +277,8 @@ def _reference_value(reference, args):
             raise SystemExit(f"this recipe needs a demonstrated exemplar: run 'gamst recipe enroll' and pass "
                              f'--exemplar FILE ({name})')
         saved = json.loads(Path(args.exemplar).read_text())
+        if isinstance(saved, dict) and 'value' in saved:
+            _check_exemplar(saved, args.exemplar)
         return saved['value'] if isinstance(saved, dict) and 'value' in saved else saved
     if kind == 'terms':
         if not args.terms:
@@ -393,6 +404,7 @@ async def enroll(recipe, args):
                     capability = (record['observation'].get('capability') or {}).get('id')
                     if capability == 'vision.pose_channels':
                         samples.append(record['observation']['value'])
+                        first['channels'] = f"{capability}@{record['models'][0]['version']}"
             return True
 
         try:
@@ -413,7 +425,7 @@ async def enroll(recipe, args):
         step = max(1, len(samples) // 30)
         value = [dict(channels=item['channels'], mask=item['mask']) for item in samples[::step]]
     saved = dict(kind='exemplar', recipe=recipe['name'], mode=mode, frames=len(samples),
-                 window_s=[args.start, args.start + args.seconds], value=value)
+                 channels=first['channels'], window_s=[args.start, args.start + args.seconds], value=value)
     Path(args.out).write_text(json.dumps(saved))
     print(json.dumps(dict(out=args.out, mode=mode, frames=len(samples))), flush=True)
     return saved
@@ -441,8 +453,8 @@ def _source_options(parser):
     source.add_argument('--microphone', action='store_true', help='the default microphone')
     parser.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
     parser.add_argument('--frames', type=int, help='stop after this many frames')
-    parser.add_argument('--models', help='YOLOE/EfficientTAM weights directory')
-    parser.add_argument('--worker-python', help='python for model worker processes (default: this one)')
+    parser.add_argument('--models', help='weight root or an existing flat weights directory (default: the setup profile)')
+    parser.add_argument('--worker-python', help='python for model worker processes (default: the setup profile)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'])
     parser.add_argument('--label', help="what to find (default: the recipe's label)")
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
@@ -463,9 +475,12 @@ def main(argv=None):
     show.add_argument('recipe')
     install = actions.add_parser('setup', help="install only the recipe's parts")
     install.add_argument('recipe')
-    install.add_argument('--models', help=f'weights directory (default {demo.DEFAULT_MODELS})')
+    install.add_argument('--models', help='weight root (default GAMST_MODELS or ~/.cache/gamst/models); files go into '
+                                          '<root>/<model>/, an existing flat directory is read in place')
     install.add_argument('--dry-run', action='store_true', help='print the plan, install nothing')
-    install.add_argument('--prefix', help='setup prefix for source checkouts (default ~/.local/share/gamst)')
+    install.add_argument('--prefix', help='environments and source checkouts (default ~/.local/share/gamst)')
+    install.add_argument('--isolation', choices=['venv', 'current'], default='venv',
+                         help='venv: one environment per model (default); current: everything into this python')
     install.add_argument('--profile', help='profile to write (default ~/.config/gamst/profile.json)')
     verify = actions.add_parser('check', help='can this camera run the recipe without aliasing?')
     verify.add_argument('recipe')
@@ -510,7 +525,8 @@ def main(argv=None):
     if args.action == 'show':
         print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
     elif args.action == 'setup':
-        setup(recipe, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile)
+        setup(recipe, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile,
+              isolation=args.isolation)
     elif args.action == 'check':
         verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args), symmetry=args.symmetry,
                         max_reps_s=args.max_reps_s)

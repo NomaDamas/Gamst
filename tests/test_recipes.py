@@ -39,16 +39,20 @@ class RecipeTest(unittest.TestCase):
 
     def test_setup_installs_only_the_pipeline_parts(self):
         steps = recipes.plan(recipes.load('coin-flip'), self.tmp, hardware=HOST)
-        # one crew plan: exactly the recipe's roles, no dependency closure, into this interpreter
+        # one crew plan: exactly the recipe's roles, no dependency closure
         self.assertEqual({role: item['model'] for role, item in steps['roles'].items()},
                          {'input.video': 'opencv', 'vision.detect': 'yoloe.26s', 'vision.rotation': 'gamst.rotation',
-                          'vision.video_segmentation': 'efficienttam.ti_512'})
-        self.assertEqual(steps['isolation'], 'current')
+                          'vision.video_segmentation': 'efficienttam.ti_512', 'view.hud': 'pillow'})
+        self.assertEqual(steps['isolation'], 'venv')
+        environments = {entry['environment']: entry for entry in steps['install']}
+        self.assertEqual(set(environments), {'current', 'yoloe-efficienttam'})
+        self.assertEqual(environments['current']['roles'], ['input.video', 'view.hud', 'vision.rotation'])
+        self.assertEqual(environments['yoloe-efficienttam']['roles'], ['vision.detect', 'vision.video_segmentation'])
         self.assertEqual(set(recipes.weight_files(steps)),
                          {'yoloe-26s-seg.pt', 'mobileclip2_b.ts', 'efficienttam_ti_512x512.pt'})
         packages = [line for entry in steps['install'] for line in entry['packages']]
         self.assertTrue(any(line.startswith('git+https://github.com/ultralytics/CLIP.git@') for line in packages))
-        self.assertFalse(any(line.startswith('gamst-sdk') for line in packages))  # already running
+        self.assertIsNone(environments['current']['gamst'])  # already running
         sources = [item['source']['url'] for item in steps['roles'].values() if item['source']]
         self.assertEqual(sources, ['https://github.com/yformer/EfficientTAM'])
         self.assertEqual(steps['models_dir'], str(self.tmp.absolute()))

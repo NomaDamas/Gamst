@@ -15,6 +15,34 @@ from ..plugins import PerceptionPlugin, InputFrame, _signal, _version
 from ..tracking import create_tracker
 
 
+def _image_size(data):
+    """Image size of the normalized coordinates, so a consumer can undo a non-square image."""
+    shape = getattr(data, "shape", None)
+    return {} if shape is None else dict(image_width=int(shape[1]), image_height=int(shape[0]))
+
+
+def associate(poses, tracker, frame):
+    """Give each pose its stream-local ``track_id`` (geometric continuity only); returns the tracks."""
+    boxes = [p["bbox"] for p in poses if p["bbox"] is not None]
+    tracks = tracker.update(boxes, frame.timestamp_ms, stream_id=frame.subject_id + ":body")
+    for pose in poses:
+        if pose["bbox"] is None:
+            continue
+        # Exact matching uses only this frame's boxes. Duplicate boxes
+        # abstain rather than falsely assigning the same track twice.
+        candidates = [t for t in tracks if t["visible"] and t["bbox"] == pose["bbox"]]
+        unique = sum(p["bbox"] == pose["bbox"] for p in poses) == 1
+        if unique and len(candidates) == 1:
+            track = candidates[0]
+            pose["association_quality"] = track["association_quality"]
+            pose["association_history_uncertain"] = track["association_history_uncertain"]
+            if track["association_quality"] != "uncertain":
+                pose["track_id"] = track["track_id"]
+        else:
+            pose["association_quality"] = "uncertain"
+    return tracks
+
+
 class MediaPipePosePlugin(PerceptionPlugin):
     name = "mediapipe_pose_landmarker"
     modalities = ("video",)
@@ -105,6 +133,7 @@ class MediaPipePosePlugin(PerceptionPlugin):
             if result is None or generation != self._generation or self._closed:
                 return []
             poses = []
+            size = _image_size(frame.data)
             for index, raw in enumerate(result.pose_landmarks[:self.max_poses]):
                 points = self._landmarks(raw)
                 if points is None:
@@ -112,25 +141,8 @@ class MediaPipePosePlugin(PerceptionPlugin):
                 poses.append(dict(frame_pose_index=index, landmarks=points,
                     bbox=self._bbox(points), geometry=self._gestures(points),
                     track_id=None, association_quality="unavailable",
-                    identity_verified=False, speaker_association="unavailable"))
-            boxes = [p["bbox"] for p in poses if p["bbox"] is not None]
-            tracks = self.tracker.update(boxes, frame.timestamp_ms,
-                                         stream_id=frame.subject_id + ":body")
-            for pose in poses:
-                if pose["bbox"] is None:
-                    continue
-                # Exact matching uses only this frame's boxes. Duplicate boxes
-                # abstain rather than falsely assigning the same track twice.
-                candidates = [t for t in tracks if t["visible"] and t["bbox"] == pose["bbox"]]
-                unique = sum(p["bbox"] == pose["bbox"] for p in poses) == 1
-                if unique and len(candidates) == 1:
-                    track = candidates[0]
-                    pose["association_quality"] = track["association_quality"]
-                    pose["association_history_uncertain"] = track["association_history_uncertain"]
-                    if track["association_quality"] != "uncertain":
-                        pose["track_id"] = track["track_id"]
-                else:
-                    pose["association_quality"] = "uncertain"
+                    identity_verified=False, speaker_association="unavailable", **size))
+            tracks = associate(poses, self.tracker, frame)
             version = f"{_version('mediapipe')}:sha256:{self.model_hash}"
             return [_signal(frame, "scene.poses", poses, self.name, version),
                     _signal(frame, "scene.pose_count", len(poses), self.name, version),
@@ -147,3 +159,44 @@ class MediaPipePosePlugin(PerceptionPlugin):
             with self._native_lock:
                 self.detector.close()
         await asyncio.to_thread(close_native)
+
+
+class PoseWorkerPlugin(PerceptionPlugin):
+    """``mediapipe.body.video`` (an isolated worker with ``landmarks=True``) as the ``scene.poses`` plugin.
+
+    Same signals as :class:`MediaPipePosePlugin`, so every consumer of ``scene.poses`` works with
+    either. The worker's keypoints become ``landmarks`` of that signal and nothing else is committed:
+    context and agents keep seeing pose geometry without joint positions.
+    """
+    name = "mediapipe_pose_landmarker"
+    modalities = ("video",)
+
+    def __init__(self, worker, *, tracker='iou', **tracker_options):
+        self.worker, self.version = worker, f"mediapipe:{worker.spec.version}"
+        self.tracker = create_tracker(tracker, **tracker_options)
+        self.tracker_name = tracker
+
+    async def process(self, frame: InputFrame) -> list[dict]:
+        value = await self.worker.process(frame)
+        if value is None:
+            return []
+        size = dict(image_width=value["summary"]["image_width"], image_height=value["summary"]["image_height"])
+        poses = [dict(frame_pose_index=pose["frame_pose_index"],
+                      landmarks=[dict(x=x, y=y, visibility=visibility, presence=presence)
+                                 for x, y, visibility, presence in pose["keypoints"]],
+                      bbox=pose["bbox"],
+                      geometry={key: item for key, item in pose["geometry"].items() if key.endswith("_above_shoulder")},
+                      track_id=None, association_quality="unavailable",
+                      identity_verified=False, speaker_association="unavailable", **size)
+                 for pose in value["poses"]]
+        tracks = associate(poses, self.tracker, frame)
+        return [_signal(frame, "scene.poses", poses, self.name, self.version),
+                _signal(frame, "scene.pose_count", len(poses), self.name, self.version),
+                _signal(frame, "scene.body_tracks", tracks, f"{self.name}:{self.tracker_name}-tracker", "0.1")]
+
+    async def reset(self):
+        self.tracker.reset()
+        await self.worker.reset()
+
+    async def close(self):
+        await self.worker.close()

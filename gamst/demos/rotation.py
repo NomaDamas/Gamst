@@ -14,13 +14,13 @@ from __future__ import annotations
 import asyncio
 import argparse
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
 import time
 
 from ..crew.registry import weight_assets
+from ..crew.setup import model_directory
 from ..providers.rotation import RotationPlugin
 
 
@@ -30,30 +30,45 @@ REFINER = ('vision.video_segmentation', 'efficienttam.ti_512')
 MODEL_ASSETS = weight_assets(*DETECTOR)
 # Take refinement (--refine): promptable video segmenter, Hugging Face revision pinned.
 REFINE_ASSETS = weight_assets(*REFINER)
-DEFAULT_MODELS = Path(os.environ.get('GAMST_MODELS', Path.home() / '.cache' / 'gamst' / 'models')) / 'yoloe'
 
 
-def fetch_models(directory, names=None):
-    """Download the pinned weights (only ``names`` when given); setup's downloader verifies SHA256."""
+def fetch_models(models=None, names=None):
+    """Download the pinned weights (only ``names`` when given) with setup's downloader (SHA256 verified).
+
+    They go where setup puts them: ``<models or the weight root>/<model>/<file>``; an existing flat
+    ``models`` directory that already holds a model's verified files is kept as it is.
+    """
     from ..crew.registry import candidate
-    from ..crew.setup import SetupError, download_weight
-    directory = Path(directory)
+    from ..crew.setup import SetupError, download_weight, weights_directory
     for role, model in (DETECTOR, REFINER):
-        for weight in candidate(role, model).weights:
-            if names is not None and weight.name not in names:
+        weights = [weight.as_dict() for weight in candidate(role, model).weights]
+        directory = weights_directory(model, weights, models)
+        for weight in weights:
+            if names is not None and weight['name'] not in names:
                 continue
             try:
-                download_weight(weight.as_dict(), directory / weight.name)
+                download_weight(weight, directory / weight['name'])
             except SetupError as error:
                 raise SystemExit(str(error)) from error
-            print(f'{weight.name}: sha256 verified')
+            print(f"{weight['name']}: sha256 verified")
+
+
+def detector_directory(models=None):
+    return model_directory(DETECTOR[1], MODEL_ASSETS, models)
+
+
+def refiner_checkpoint(models=None):
+    """The take refiner's weight file and its pinned SHA256."""
+    [(name, (_, digest))] = REFINE_ASSETS.items()
+    return model_directory(REFINER[1], REFINE_ASSETS, models) / name, digest
 
 
 def detector_config(models, labels, device, threshold=.25):
+    models = detector_directory(models)
     missing = [name for name in MODEL_ASSETS if not (models / name).is_file()]
     if missing:
         raise SystemExit(f'missing detector weights {missing} in {models}; run: gamst demo rotation --fetch-models')
-    runtime = models.parent / 'runtime'
+    runtime = (models if models.name == DETECTOR[1] else models.parent) / 'runtime'
     runtime.mkdir(parents=True, exist_ok=True)
     return dict(checkpoint_path=str(models / 'yoloe-26s-seg.pt'),
         checkpoint_sha256=MODEL_ASSETS['yoloe-26s-seg.pt'][1], runtime_root=str(runtime),
@@ -117,14 +132,17 @@ class Panel:
 async def _detector_lane(args, human):
     if args.detector == 'motion' or args.roi is not None:
         return None
-    models = Path(args.models)
+    models = detector_directory(args.models)
     if args.detector == 'auto' and any(not (models / name).is_file() for name in MODEL_ASSETS):
         return None
     from .. import ProcessProvider, SensorStreams
-    _check_worker_dependencies(args.worker_python)
-    config = detector_config(models, args.targets, args.device)
+    from ..profile import role_python
+    # The environment setup made for the detector, unless another interpreter is named.
+    python = args.worker_python or role_python(*DETECTOR) or sys.executable
+    _check_worker_dependencies(python)
+    config = detector_config(args.models, args.targets, args.device)
     spec = ProcessProvider.capability('yoloe.local', config)
-    worker = await ProcessProvider.open(args.worker_python, 'yoloe.local', config)
+    worker = await ProcessProvider.open(python, 'yoloe.local', config)
     streams = SensorStreams(human)
     try:
         streams.register(spec, lambda: worker)
@@ -322,9 +340,11 @@ def main(argv=None):
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
                         help='normalized x,y,width,height; bypasses detector/motion regions')
     parser.add_argument('--device', choices=['cpu', 'mps'], default='cpu')
-    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--models', help='weight root, or an existing flat directory of weights (default: GAMST_MODELS '
+                                         'or ~/.cache/gamst/models)')
     parser.add_argument('--fetch-models', action='store_true', help='download pinned detector weights and exit')
-    parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--worker-python', help='python of the detector worker (default: the environment gamst setup '
+                                                'made for it, else this one)')
     parser.add_argument('--detect-every-ms', type=int, default=100)
     parser.add_argument('--store', default=':memory:')
     parser.add_argument('--headless', action='store_true')
@@ -345,7 +365,7 @@ def main(argv=None):
                         help='stage backup: ANALYZE shows this already counted take (refined.json, refined.mp4) at once')
     args = parser.parse_args(argv)
     if args.fetch_models:
-        fetch_models(Path(args.models))
+        fetch_models(args.models)
         return
     if args.roi is not None and len(args.roi) != 4:
         parser.error('--roi requires x,y,width,height')

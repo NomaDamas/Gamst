@@ -49,6 +49,15 @@ def read_profile(path=None) -> dict:
     return value
 
 
+def role_python(role, model, path=None):
+    """The interpreter setup recorded for ``model`` in ``role``, or None when it is not set up."""
+    try:
+        entry = read_profile(path)['roles'].get(role)
+    except FileNotFoundError:
+        return None
+    return entry.get('python') if entry and entry['model'] == model else None
+
+
 class ProfileRuntime:
     """The profile's roles as one Pipeline fed by the engine's intake; ``close`` stops every worker."""
 
