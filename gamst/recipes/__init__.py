@@ -319,7 +319,7 @@ async def build_pipeline(recipe, args, human, *, source=None, modules=None):
         built = await build(item, context)
         pipeline.add_module(item['name'], built['module'], consumes=item['consumes'], spec=built.get('spec'),
                             every_ms=built.get('every_ms'), emits=tuple(item.get('emits', ())),
-                            enabled=item.get('enabled', True))
+                            enabled=item.get('enabled', True), queue=item.get('queue'))
     return pipeline
 
 
@@ -376,7 +376,7 @@ async def enroll(recipe, args):
     exemplar = next((item for item in recipe['modules'] if item['use'] == 'exemplar'), None)
     if exemplar is None:
         raise SystemExit(f"{recipe['name']} has no exemplar module to enroll for")
-    upstream = [item for item in recipe['modules'] if item['use'] in ('mediapipe-pose', 'pose-channels')]
+    upstream = [item for item in recipe['modules'] if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'pose-channels')]
     mode = args.mode or exemplar.get('mode', 'hold')
     samples = []
     async with Gamst(consent=True) as human:

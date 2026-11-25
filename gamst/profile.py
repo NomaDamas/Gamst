@@ -94,7 +94,8 @@ class ProfileRuntime:
                 self._input(input_id, built['modality'])
                 # A worker runs in its own bounded lane so a slow model never blocks capture.
                 self.pipeline.add_module(role, built['module'], consumes=[input_id], spec=built['spec'],
-                                         queue=None if built['in_process'] else queue_capacity)
+                                         queue=None if built['in_process'] and not built.get('owns_process')
+                                         else queue_capacity)
                 self.status[role] = dict(model=entry['model'], state='running', capability=built['capability'])
         except BaseException:
             await self.close()

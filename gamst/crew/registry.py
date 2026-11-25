@@ -358,6 +358,18 @@ ROLES = {
         "mediapipe.pose_full": _mediapipe("pose_full", "pose_landmarker_full.task", POSE_FULL_URL, "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1", 9398198, "pinned float16/1 bytes (size and SHA256 measured on a downloaded copy); target-host acceptance unmeasured"),
         "mediapipe.pose_heavy": _mediapipe("pose_heavy", "pose_landmarker_heavy.task", POSE_HEAVY_URL, "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b", 30664242, "VERIFY.md: real-video CPU success, 32.3 ms compute, 91.6 ms p95"),
     }, _defaults("mediapipe.pose_lite")),
+    "vision.mediapipe_graph": Role("vision.mediapipe_graph", "MediaPipe Framework C++ graph (pose, hands, face) in its own process", {
+        "graph.holistic_cpu": _candidate(
+            "graph.holistic_cpu", None, ("numpy>=1.24",), ("cpu",), 1024, 0, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build gamst/mediapipe_graph/build.sh (source pin: pin.json), then set config.manifest to its manifest.json (SHA256 of runner, graphs and models)",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+        "graph.holistic_gpu": _candidate(
+            "graph.holistic_gpu", None, ("numpy>=1.24",), ("cuda",), 1024, 1024, 10000, ESTIMATED,
+            "MediaPipe code Apache-2.0; bundled model files: see MediaPipe model cards (not reviewed here)",
+            "not compiled or run yet; build.sh --gpu on Linux with EGL, then set config.manifest to its manifest.json",
+            automatic=False, in_process="gamst.mediapipe_graph:holistic_plugin"),
+    }, _defaults("graph.holistic_cpu")),
     "vision.hand": Role("vision.hand", "Hand landmarks", {
         "mediapipe.hand": _mediapipe("hand", "hand_landmarker.task", HAND_URL, "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1", 8 * MIB, "VERIFY.md: real-video CPU success, 9.8 ms compute, 15.6 ms p95", size_source="estimated"),
     }, _defaults("mediapipe.hand")),
