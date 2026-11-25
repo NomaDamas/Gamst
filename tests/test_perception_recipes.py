@@ -130,7 +130,7 @@ class SpeechRecipeTest(unittest.TestCase):
                       '--out', str(self.tmp / 'style.json'), '--profile', str(self.profile)])
         saved = json.loads((self.tmp / 'style.json').read_text())
         self.assertEqual(saved['mode'], 'sequence')
-        self.assertGreater(len(saved['value']), 4)
+        self.assertGreater(len(saved['positives'][0]['value']), 4)
 
     @unittest.skipUnless(HAS_CV, 'needs opencv')
     def test_a_person_is_enrolled_only_from_frames_that_show_one_person(self):

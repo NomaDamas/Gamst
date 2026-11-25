@@ -1,6 +1,7 @@
 """Score a recipe run against a person's ground truth (``gamst recipe run ... --truth truth.json``).
 
-Truth file (times are seconds from the first frame of the input)::
+Truth file (times are seconds from the first frame of the input; an event that has an interval is compared
+by its start)::
 
     {"capability": "temporal.exemplar_events", "event": "exemplar.matched",
      "count": 7,                                  # what a person counted

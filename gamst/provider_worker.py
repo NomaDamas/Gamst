@@ -23,9 +23,7 @@ def _construct(profile, config):
         provider = ORBSLAMContext.from_local(**config)
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
-        backend = OpenAIStreamingBackend(config['endpoint'], config['model'], config['revision'], config.get('api_key_env'),
-                                         config.get('request_options'), config.get('max_tokens', 256),
-                                         config.get('allow_remote', False))
+        backend = OpenAIStreamingBackend.from_config(config)
         provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext

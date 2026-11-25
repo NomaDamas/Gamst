@@ -505,8 +505,8 @@ class PoseWorker(Temporary):
         saved = json.loads(out.read_text())
         self.assertTrue(saved['channels'].startswith('vision.pose_channels@2.'))
         self.assertEqual(recipes._reference_value(dict(kind='exemplar', name='exemplar'),
-                                                  argparse.Namespace(exemplar=str(out))), (saved['value'], None))
-        self.assertTrue(all(math.isfinite(value) for value in saved['value']['channels']))
+                                                  argparse.Namespace(exemplar=str(out))), (saved, None))
+        self.assertTrue(all(math.isfinite(value) for value in saved['positives'][0]['value']['channels']))
 
 
 if __name__ == '__main__':
