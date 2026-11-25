@@ -121,14 +121,56 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
             slow.release.set()
             await pipeline.drain()
             status = pipeline.status()['modules']
-            self.assertEqual(slow.seen, [now] + [now + index * 33 for index in range(6, 10)])
+            # 10 frames for a lane of 4: five go, but not five in a row, and the first and newest are seen
+            self.assertEqual(len(slow.seen), 5)
+            self.assertEqual((slow.seen[0], slow.seen[-1]), (now, now + 9 * 33))
+            self.assertLessEqual(max(b - a for a, b in zip(slow.seen, slow.seen[1:])), 4 * 33)
             self.assertEqual((status['slow']['dropped'], status['slow']['gap_frames']), (5, 5))
-            self.assertEqual({gap['reason'] for gap in status['slow']['gap_intervals']}, {'backlog'})
+            self.assertEqual({gap['reason'] for gap in status['slow']['gap_intervals']}, {'thinned'})
             # 'count' reads the same lane's input and has the same holes; 'other' has its own lane
             self.assertTrue(status['other']['complete'])
             self.assertEqual(status['slow']['complete_until_ms'], now + 9 * 33)   # processed or declared
             counted = await human.count_events('test.other')
             self.assertTrue(counted['complete'])
+            await pipeline.close()
+
+    async def test_an_overloaded_video_lane_never_gives_up_a_whole_interval(self):
+        async with Gamst(consent=True) as human:
+            for offered, longest in ((1000, 2), (1700, 2), (3000, 4)):
+                pipeline, slow = Pipeline(human, 'live'), Slow()
+                pipeline.add_input('camera')
+                pipeline.add_module('slow', slow, consumes='camera', queue=64)
+                now = timestamp() - 200000
+                capacity = pipeline.modules['slow']['lane']['capacity']
+                share = offered / 900    # the same overload as a 900-frame lane offered ``offered`` frames
+                total = int(capacity * share)
+                for index in range(total):
+                    await pipeline.push('camera', index, timestamp_ms=now + index * 33, modality='video')
+                    await asyncio.sleep(0)
+                slow.release.set()
+                await pipeline.drain()
+                status = pipeline.status()['modules']['slow']
+                self.assertEqual(status['processed'] + status['dropped'], total)
+                self.assertEqual(status['gap_frames'], status['dropped'])
+                # every stretch of the recording is still seen: never more than a few frames missing in a row
+                self.assertLessEqual(max(b - a for a, b in zip(slow.seen, slow.seen[1:])), longest * 33)
+                self.assertFalse(status['complete'])
+                self.assertEqual(slow.seen, sorted(slow.seen))
+                await pipeline.close()
+
+    async def test_audio_is_not_thinned(self):
+        async with Gamst(consent=True) as human:
+            pipeline, slow = Pipeline(human, 'live'), Slow()
+            pipeline.add_input('microphone', modality='audio')
+            pipeline.add_module('slow', slow, consumes='microphone', queue=20)
+            now = timestamp() - 60000
+            for index in range(24):
+                await pipeline.push('microphone', [0.], timestamp_ms=now + index * 100, sample_rate=16000)
+                await asyncio.sleep(0)
+            slow.release.set()
+            await pipeline.drain()
+            reasons = {gap['reason'] for gap in pipeline.status()['modules']['slow']['gap_intervals']}
+            self.assertEqual(reasons, {'backlog'})   # speech with every second 100 ms missing is not speech
             await pipeline.close()
 
     async def test_gaps_reach_events_counts_and_the_export(self):
@@ -157,7 +199,8 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
                 counted = await human.count_events('test.count')
                 self.assertEqual((counted['complete'], counted['lost']['frames']), (False, 3))
                 marked = [item['event'].get('gap_frames') for item in counted['evidence']]
-                self.assertEqual(marked, [None, 1, None])     # the first event after the hole spans its last frame
+                self.assertEqual(marked[0], None)
+                self.assertIn(1, marked)          # an event that spans a thinned frame says so
                 self.assertEqual(pipeline.lost('test.count')['frames'], 3)
                 await pipeline.close()
             from gamst.recipes.movement import export
@@ -168,7 +211,7 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
             rows = [json.loads(line) for line in out.getvalue().splitlines()]
             gaps = [row for row in rows if row['event'] == 'pipeline.gap']
             self.assertEqual(sum(row['lost_frames'] for row in gaps), 3)
-            self.assertEqual([row.get('gap_frames') for row in rows if row['event'] == 'seen'], [None, 1, None])
+            self.assertEqual([row.get('gap_frames') for row in rows if row['event'] == 'seen'], marked)
             summary = json.loads(errors.getvalue())
             self.assertEqual((summary['events'], summary['complete']), (3, False))
 

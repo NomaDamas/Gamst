@@ -34,11 +34,13 @@ Delivery is lossless: every frame reaches every module, once and in capture orde
 not wait, so a module that is slower than its input builds a backlog (``status()``: ``backlog``,
 ``backlog_ms``), bounded in frames and, across all lanes, in bytes (modules reading the same frame share
 its array). When a bound comes near, modules declared ``optional`` (which no other module needs) pause
-until the backlog is clear; when it is exceeded anyway, the oldest frames of that lane are given up as
-one declared *gap*: counted, committed as a ``pipeline.gap`` event, and marked on the events and counts
+until the backlog is clear; when it is exceeded anyway, video is thinned: single frames *between* waiting
+ones are given up, every second one before any two in a row, so no whole interval goes unseen. Audio
+cannot be thinned; its oldest chunks are given up together. Either is a declared *gap*: counted, committed as a ``pipeline.gap`` event, and marked on the events and counts
 downstream. What happens to a frame that does not fit is one decision (:meth:`Pipeline._overflow`). Each
 gap says why: ``input`` and ``capture_paused`` are data that never reached GAMST; ``error`` is a frame a
-module failed on; ``backlog``, ``paused`` and ``disabled`` are captured frames a module did not process.
+module failed on; ``thinned``, ``backlog``, ``paused`` and ``disabled`` are captured frames a
+module did not process (``thinned``: frames between these two times were processed, ``frames`` of them were not).
 ``complete_until_ms`` of a module only advances over capture time that was processed or declared so.
 Audio is never joined across a gap.
 
@@ -96,6 +98,7 @@ class _Item:
     frame: InputFrame
     media: bool          # a frame of an input (not a record): audio media is never joined across a gap
     gap: bool = False    # frames were lost just before this one
+    thinned: int = 0     # how often the frame next to it was given up (2 ** thinned: it stands for that many)
 
 
 @dataclass
@@ -396,9 +399,49 @@ class Pipeline:
         """The one decision about frames that do not fit; ``bound`` is 'frames' (the lane's) or 'bytes' (all lanes').
 
         It must leave fewer waiting frames in ``lane``. Default: a sampled lane skips its older sample (that is
-        its declaration); any other lane declares its oldest tenth not processed (reason ``backlog``).
+        its declaration); video is thinned (reason ``thinned``), so that no interval is given up as a whole;
+        a lane that cannot be thinned declares its oldest tenth not processed (reason ``backlog``).
         """
-        self._give_up(lane, 1 if lane['sampled'] else max(1, len(lane['frames']) // 10))
+        count = max(1, len(lane['frames']) // 10)
+        if lane['sampled']:
+            self._give_up(lane, 1)
+        elif not self._thin(lane, count):
+            video = all(item.frame.modality == 'video' for item in lane['frames'])
+            self._give_up(lane, 1 if video else count)
+
+    def _thin(self, lane, count):
+        """Give up every second of the least thinned waiting video frames, oldest first; how many went.
+
+        Of two neighbours with the same history the earlier one goes and the later one stands for both, so the
+        newest frame stays and the rate halves evenly along the lane before it halves again anywhere.
+        """
+        waiting = list(lane['frames'])
+        pairs = {}
+        index = 0
+        while index + 1 < len(waiting):
+            first, second = waiting[index], waiting[index + 1]
+            if first.thinned == second.thinned and first.frame.modality == second.frame.modality == 'video' \
+                    and first.names == second.names and first.frame.subject_id == second.frame.subject_id:
+                pairs.setdefault(first.thinned, []).append((first, second))
+                index += 2
+            else:
+                index += 1
+        if not pairs:
+            return 0
+        chosen = pairs[min(pairs)][:count]
+        for _, second in chosen:
+            second.thinned += 1
+        gone = [first for first, _ in chosen]
+        ids = {id(item) for item in gone}
+        for item in gone:
+            self._release(item)
+        lane['frames'] = deque(item for item in waiting if id(item) not in ids)
+        lane['dropped'] += len(gone)
+        for name in sorted({name for item in gone for name in item.names}):
+            mine = [item.frame for item in gone if name in item.names]
+            self._gap(lane['name'], [name], mine[0].timestamp_ms, mine[-1].timestamp_ms, len(mine), 'thinned',
+                      subject_id=mine[0].subject_id)
+        return len(gone)
 
     def _start(self, lane):
         if lane['frames'] and (lane['task'] is None or lane['task'].done()) and not self._closed:
