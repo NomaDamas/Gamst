@@ -894,7 +894,9 @@ async def enroll(recipe, args):
         if len(values) > 1:
             raise SystemExit(f'--kind {kind} reads one --{name}')
         setattr(args, name, values[0] if values else None)
-    args.start, args.seconds = args.start or 0., 1.5 if args.seconds is None else args.seconds
+    args.start = args.start or 0.
+    if args.seconds is None:     # a voice needs speech: a whole recording (bounded), or 20 s of a microphone
+        args.seconds = 1.5 if kind != 'voice' else 20. if getattr(args, 'microphone', False) else 300.
     return await _enroll_identity(recipe, args, kind)
 
 
@@ -1012,7 +1014,7 @@ def main(argv=None):
     learn.add_argument('--negative', action='append', default=[], metavar='FILE[@start-end]',
                        help='a clip of something similar that must not count; repeat it')
     learn.add_argument('--start', type=float, help='seconds into the input where the demonstration starts')
-    learn.add_argument('--seconds', type=float, help='length of the demonstration (a file: all of it; live: 1.5)')
+    learn.add_argument('--seconds', type=float, help='length of the demonstration (a file: all of it; live: 1.5; a voice: 20 live, up to 300 of a file)')
     learn.add_argument('--mode', choices=['hold', 'sequence'], help="hold: one pose; sequence: a movement")
     learn.add_argument('--name', help='label of the movement in its records (default: the text)')
     learn.add_argument('--text', help='the movement in words: with --proposals or --rule')

@@ -44,7 +44,7 @@ async def _speaker_verify(options, context):
     from ..providers.speaker_verify import SpeakerVerify
     arguments = {name: options[name] for name in ('hysteresis', 'segment_ms', 'hop_ms', 'min_dbfs',
                                                   'min_utterance_ms', 'ring_seconds', 'segments',
-                                                  'capability_id') if name in options}
+                                                  'capability_id', 'context_ms', 'words') if name in options}
     threshold = context.get('speaker_threshold')
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
@@ -83,6 +83,9 @@ async def _whisper_words(options, context):
     language = context.get('language') or options.get('language')
     if language:
         config['language'] = language
+    if options.get('segmentation', 'window') == 'phrases':     # utterances end where phrases do, not at a window edge
+        config['phrases'] = {key: options[key] for key in ('hop_seconds', 'margin_seconds', 'max_seconds', 'beam_size')
+                             if key in options}
     module = await _open('RemoteWhisper', (config, python, profile))
     return dict(module=module, spec=module.spec)
 
@@ -108,6 +111,20 @@ async def _prosody(options, context):
     from ..providers.prosody import AudioProsody
     module = AudioProsody()
     return dict(module=module, spec=AudioProsody.capability())
+
+
+async def _audio_onsets(options, context):
+    from ..providers.audio_onsets import AudioOnsets
+    module = AudioOnsets(**{key: options[key] for key in ('low_hz', 'high_hz', 'sensitivity', 'min_gap_ms', 'min_dbfs')
+                            if key in options})
+    return dict(module=module, spec=module.spec)
+
+
+async def _coincidence(options, context):
+    from ..providers.coincidence import Coincidence
+    module = Coincidence(options['of'], options['by'], of_event=options['of_event'], by_event=options['by_event'],
+                         before_ms=int(options.get('before_ms', 30)), after_ms=int(options.get('after_ms', 150)))
+    return dict(module=module, spec=module.spec)
 
 
 async def _voice_channels(options, context):
@@ -328,6 +345,8 @@ def parts(Part):
         'qwen-words': Part('module', role='audio.word_alignment', candidate='qwen3.forced_aligner_0_6b',
                            build=_qwen_words, transcribes=True),
         'prosody': Part('module', role='audio.prosody', candidate='dsp', build=_prosody),
+        'audio-onsets': Part('module', build=_audio_onsets),
+        'coincidence': Part('module', build=_coincidence),
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
         'sapiens2-pose': Part('module', role='vision.pose', candidate='sapiens2.1b', build=_sapiens2_pose),

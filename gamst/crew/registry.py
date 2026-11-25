@@ -348,6 +348,14 @@ WHISPER_FILES = {
     "tokenizer.json": (2203239, "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"),
     "vocabulary.txt": (459861, "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"),
 }
+WHISPER_TURBO_REV = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
+WHISPER_TURBO_FILES = {
+    "config.json": (2263, "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e"),
+    "model.bin": (1617884929, "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da"),
+    "preprocessor_config.json": (340, "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"),
+    "tokenizer.json": (2710337, "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd"),
+    "vocabulary.json": (1068114, "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"),
+}
 DIAR_REV = "52a432672732425e4c19765b9fec9b5810e6f4ba"
 
 
@@ -455,6 +463,7 @@ ROLES = {
     }, _defaults("silero.vad")),
     "audio.asr": Role("audio.asr", "Speech transcription", {
         "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", bundle=True, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}, adapter="use the whisper-words part"),
+        "faster_whisper.large_v3_turbo": _candidate("faster_whisper.large_v3_turbo", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 4096, 3072, 1800, ESTIMATED, "MIT code; converted weights: license not checked", "Run on one 54 s Korean clip, 2026-11-26; accuracy not measured", tuple(_weight(name, HF + "/dropbox-dash/faster-whisper-large-v3-turbo/resolve/" + WHISPER_TURBO_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_TURBO_FILES.items()), environment="faster-whisper", bundle=True, automatic=False, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}, adapter="use the whisper-words part"),
         "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("qwen-asr==0.0.6", "vllm==0.14.0", "transformers==4.57.6", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "not run with these pins (VERIFY.md's real-audio result predates them)", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}, adapter="reads exact hops of one channel: use the qwen-words part"),
         "moonshine.tiny": _candidate("moonshine.tiny", "moonshine_voice.native", ("moonshine-voice==0.0.45", "numpy>=1.24"), ("cpu",), 512, 0, 500, ESTIMATED, "MIT", "GAMST adapter implemented; real-weight acceptance pending", (_weight("moonshine-v2-tiny-streaming-en", "https://github.com/moonshine-ai/moonshine-v2/tree/49bc3af5bb0d767d5156fb579fa5f9853b559bf3", None, 200 * MIB),), environment="moonshine", automatic=False, adapter="reads exact hops and has no worker profile: gamst.providers.moonshine_asr"),
     }, _defaults("faster_whisper.small", "qwen3.asr_1_7b"), ("audio.vad",)),

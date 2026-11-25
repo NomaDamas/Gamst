@@ -19,6 +19,7 @@ counter as examples do (:class:`gamst.providers.pose_exemplar.ExemplarEvents`).
                 {"height": [A, B]}                how far A is above B, in shoulder widths
                 {"offset": [A, B]}                how far A is to the image right of B, in shoulder widths
                 {"distance": [A, B]}              in shoulder widths
+                {"rate": MEASURE}                 how fast a measure changes, its unit per second (over 50 ms)
 
 One step is a *hold*: it matches after ``hold_ms`` and ends when its violation exceeds ``margin``. Several
 steps are an *ordered movement*: each later step must be reached ``within_ms`` of the step before it, else
@@ -31,12 +32,14 @@ violation number and its events become records.
 """
 from __future__ import annotations
 
+from collections import deque
 import json
 import math
 
 MAX_STEPS, MAX_NODES, MAX_DEPTH, MAX_BYTES = 8, 64, 6, 16384
 OPS = ('gt', 'gte', 'lt', 'lte')
 RELATIONS = dict(angle=3, height=2, offset=2, distance=2)
+RATE_MS = 50       # a rate is the change over about this long: two frames at 30 fps, three at 60
 STRICT = 1e-9      # a strict comparison is violated at equality
 POSE = 'vision.pose_channels'
 VOICE = 'audio.voice_channels'
@@ -80,6 +83,10 @@ def _measure(value, channels, where):
     if type(value) is not dict or len(value) != 1:
         raise ValueError(f'{where}: exactly one of channel, angle, height, offset or distance')
     [(kind, argument)] = value.items()
+    if kind == 'rate':
+        if type(argument) is dict and 'rate' in argument:
+            raise ValueError(f'{where}: a rate of a rate')
+        return dict(rate=_measure(argument, channels, f'{where}.rate'))
     if kind == 'channel':
         if argument not in channel_names(channels):
             raise ValueError(f'{where}: unknown channel; one of {", ".join(channel_names(channels))}')
@@ -126,7 +133,7 @@ def validate_rule(rule):
         if value['op'] not in OPS:
             raise ValueError(f'{where}.op: one of {OPS}')
         measure = _measure(value['measure'], channels, f'{where}.measure')
-        low, high = (0, 180) if 'angle' in measure else (-100, 100)
+        low, high = (-10000, 10000) if 'rate' in measure else (0, 180) if 'angle' in measure else (-100, 100)
         return dict(measure=measure, op=value['op'], value=_finite(value['value'], f'{where}.value', low, high))
 
     steps = rule['steps']
@@ -156,12 +163,48 @@ class RuleScorer:
         self.steps, self.margin = self.rule['steps'], float(self.rule['margin'])
         self._index = {name: i for i, name in enumerate(channel_names(self.rule['channels']))}
         self.needs_joints = any(self._relations(step['when']) for step in self.steps)
+        self._now = None
+        self._history = {}      # key of a measure -> deque of (ms, value) for its rate
+        for step in self.steps:
+            self._rates(step['when'])
+
+    def _rates(self, condition):
+        for group in ('all', 'any'):
+            for item in condition.get(group, ()):
+                self._rates(item)
+        if 'rate' in condition.get('measure', ()):
+            inner = condition['measure']['rate']
+            self._history[json.dumps(inner, sort_keys=True)] = (inner, deque(maxlen=64))
+
+    def observe(self, timestamp_ms, channels, mask, points=None):
+        """One frame, before its violations are asked: what the rates need to remember."""
+        for inner, history in self._history.values():
+            value = self._observe(inner, channels, mask, points or {})
+            if value is not None:   # unseen frames leave a hole; _rate looks back 3 * RATE_MS at most
+                history.append((timestamp_ms, value))
+            self._now = timestamp_ms
+
+    def reset(self):
+        for _, history in self._history.values():
+            history.clear()
+
+    def _rate(self, inner):
+        """Change per second over the last RATE_MS (one frame longer at most), or None."""
+        history = self._history[json.dumps(inner, sort_keys=True)][1]
+        if len(history) < 2 or self._now != history[-1][0]:
+            return None     # not seen now: no speed now
+        now, value = history[-1]
+        earlier = next((item for item in reversed(list(history)[:-1]) if now - item[0] >= RATE_MS - 5), None)
+        if earlier is None or now - earlier[0] > 3 * RATE_MS:
+            return None
+        return 1000 * (value - earlier[1]) / (now - earlier[0])
 
     def _relations(self, condition):
         for group in ('all', 'any'):
             if group in condition:
                 return any(self._relations(item) for item in condition[group])
-        return 'channel' not in condition['measure']
+        measure = condition['measure']
+        return 'channel' not in measure.get('rate', measure)
 
     def violation(self, step, channels, mask, points=None):
         """0 when satisfied, None when unknown. ``points``: {joint: (x, y)} with square units, y down."""
@@ -184,10 +227,12 @@ class RuleScorer:
         wrong = target - observed if op in ('gt', 'gte') else observed - target
         if wrong < 0 or (wrong == 0 and op in ('gte', 'lte')):
             return 0.
-        return max(wrong, STRICT) / (180. if 'angle' in measure else 1.)
+        return max(wrong, STRICT) / (180. if 'angle' in measure.get('rate', measure) else 1.)
 
     def _observe(self, measure, channels, mask, points):
         [(kind, argument)] = measure.items()
+        if kind == 'rate':
+            return self._rate(argument)
         if kind == 'channel':
             index = self._index[argument]
             return float(channels[index]) if mask[index] else None

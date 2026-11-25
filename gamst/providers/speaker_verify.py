@@ -213,7 +213,13 @@ class SpeakerVerify:
 
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
-                 segments=True, capability_id='audio.speaker_match'):
+                 segments=True, capability_id='audio.speaker_match', context_ms=0, words=False):
+        self.words = bool(words)     # also score each word, with the sound around it: people share a phrase
+        if self.words and not context_ms:
+            raise ValueError('word scores need context_ms')
+        if type(context_ms) is not int or not 0 <= context_ms <= 5000:
+            raise ValueError('context_ms must be integer milliseconds 0..5000')
+        self.context_ms = context_ms     # an utterance shorter than this is scored with the sound around it
         if not 200 <= segment_ms <= 10000 or not 100 <= hop_ms <= segment_ms:
             raise ValueError('require 200 <= segment_ms <= 10000 and 100 <= hop_ms <= segment_ms')
         self.embedder, self.reference_name = embedder, reference
@@ -328,6 +334,24 @@ class SpeakerVerify:
             outputs.append(self.spec.validate(value))
         return outputs or None
 
+    def _around(self, first, last):
+        """At least ``context_ms`` of sound with [first, last] in its middle, as far as it is held."""
+        if last - first >= self.context_ms or self.ring.start_ms is None:
+            return first, last
+        extra = self.context_ms - (last - first)
+        return max(first - extra // 2, int(self.ring.start_ms) + 1), min(last + extra - extra // 2, int(self.ring.end_ms))
+
+    async def _word(self, item):
+        if not isinstance(item, dict) or not isinstance(item.get('start_ms'), int) or not isinstance(item.get('end_ms'), int):
+            return item
+        first, last = self._around(item['start_ms'], item['end_ms'])
+        try:
+            score = await self.score(self.ring.span(first, last)) if self.ring.covers(first, last) else None
+        except ValueError:
+            score = None
+        return dict(item, match=score is not None and score >= self.threshold,
+                    **({} if score is None else {'speaker_score': score}))
+
     async def _utterance(self, frame):
         value = frame.data
         if value.get('status') != 'final' or not value.get('text'):
@@ -347,6 +371,7 @@ class SpeakerVerify:
         if words and max(item['end_ms'] for item in words) - min(item['start_ms'] for item in words) \
                 >= self.min_utterance_ms:
             first, last = min(item['start_ms'] for item in words), max(item['end_ms'] for item in words)
+        first, last = self._around(first, last)
         # Up to 500 ms of the tail may not have reached this module yet; score what is held.
         if last - first >= self.min_utterance_ms and self.ring.covers(first, min(last, (self.ring.end_ms or 0) + 500)
                                                                       - 500):
@@ -365,7 +390,7 @@ class SpeakerVerify:
         if score is not None:
             result['score'] = score
         if isinstance(value.get('words'), list):
-            result['words'] = value['words']
+            result['words'] = value['words'] if not self.words else [await self._word(item) for item in value['words']]
         if isinstance(value.get('language'), str):
             result['language'] = value['language']
         return self.spec.validate(result)

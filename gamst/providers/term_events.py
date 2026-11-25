@@ -95,11 +95,12 @@ def _word_times(words, offset, length):
         position += size
     if not covered:
         return None
-    return covered[0].get('start_ms'), covered[-1].get('end_ms')
+    return covered[0].get('start_ms'), covered[-1].get('end_ms'), covered
 
 
 class TermEvents:
-    def __init__(self, *, reference='terms', terms=None, max_utterances=4096, speaker_bound=True):
+    def __init__(self, *, reference='terms', terms=None, max_utterances=4096, speaker_bound=True, report_others=False):
+        self.report_others = bool(report_others)     # also say (never count) what another voice said
         self.reference_name, self.max_utterances = reference, max_utterances
         self.speaker_bound, self.origin = bool(speaker_bound), dict(method='text', confirmed=True)
         self.terms = {}
@@ -151,7 +152,9 @@ class TermEvents:
             if value.get('status') != 'final' or not value.get('text'):
                 return None
             speaker = value.get('speaker')
-            if isinstance(speaker, dict) and speaker.get('match') is False:
+            whole = isinstance(speaker, dict) and speaker.get('match') is False
+            if whole and not self.report_others and not any(
+                    isinstance(word, dict) and word.get('match') for word in value.get('words') or ()):
                 return None  # re-checked upstream (speaker_verify): not the enrolled person's voice
             key = (value.get('utterance_id'), frame.subject_id)
             if key in self._counted:
@@ -168,14 +171,23 @@ class TermEvents:
                             continue  # a longer spelling already counted these characters
                         taken.append((offset, offset + size))
                         times = _word_times(value['words'], offset, size) if value.get('words') else None
-                        start_ms, end_ms = times if times else (value.get('start_ms'), value.get('end_ms'))
-                        self._counts[term] = self._counts.get(term, 0) + 1
-                        self._total += 1
+                        start_ms, end_ms = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
+                        other, score = whole, speaker.get('score') if isinstance(speaker, dict) else None
+                        checked = [word for word in (times[2] if times else ()) if type(word.get('match')) is bool]
+                        if checked:      # each word's own voice, where people share a phrase
+                            other = not all(word['match'] for word in checked)
+                            score = checked[0].get('speaker_score')
+                        if other and not self.report_others:
+                            continue
+                        if not other:
+                            self._counts[term] = self._counts.get(term, 0) + 1
+                            self._total += 1
                         spoken = normalize(value['text'])[offset:offset + size] if spelling.startswith('re:') \
                             else spelling
-                        events.append(dict(event='term.spoken', term=term, spoken=spoken,
+                        events.append(dict(event='term.other_voice' if other else 'term.spoken', term=term, spoken=spoken,
                                            utterance_id=value.get('utterance_id'), start_ms=start_ms,
                                            end_ms=end_ms, word_timed=times is not None, **self.origin,
+                                           **({} if score is None else {'speaker_score': score}),
                                            **({} if self.speaker_bound else {'speaker': 'not_bound'})))
             if not events:
                 return None

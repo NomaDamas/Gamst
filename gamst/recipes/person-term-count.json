@@ -43,7 +43,7 @@
       "consumes": [
         "microphone"
       ],
-      "optional": "on",
+      "optional": "off",
       "pausable": false,
       "parts": [
         "voice"
@@ -60,7 +60,7 @@
       "emits": [
         "voice"
       ],
-      "optional": "on",
+      "optional": "off",
       "pausable": false,
       "parts": [
         "voice"
@@ -70,7 +70,6 @@
       "name": "asr",
       "use": "whisper-words",
       "language": "ko",
-      "window_seconds": 3.0,
       "consumes": [
         "voice"
       ],
@@ -78,7 +77,11 @@
         "target_voice": [
           "microphone"
         ]
-      }
+      },
+      "segmentation": "phrases",
+      "hop_seconds": 4.0,
+      "margin_seconds": 3.0,
+      "max_seconds": 25.0
     },
     {
       "name": "speaker_check",
@@ -94,7 +97,9 @@
       "pausable": false,
       "parts": [
         "voice"
-      ]
+      ],
+      "context_ms": 1500,
+      "words": true
     },
     {
       "name": "terms",
@@ -107,13 +112,14 @@
         "speaker_check": [
           "asr:speech.transcript_words"
         ]
-      }
+      },
+      "report_others": true
     }
   ],
   "view": "count",
   "records": [
     "speech.term_events"
   ],
-  "limits": "overlapping voices are not separated by the default gate; use a target-speech module (a separation model) in a copy of this recipe; the speaker threshold must be set on your own audio; a word cut by a 3 s ASR window can be missed; --without voice counts every voice and says so (speaker: not_bound)",
-  "measured": "not yet on people"
+  "limits": "overlapping voices are not separated by default (--with target_voice mutes other voices before the words are read; a separation model can replace it in a copy of this recipe); the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound)",
+  "measured": "one 54 s clip of several people in a noisy shop (2026-11-26): see docs/measurements/testbed-2026-11-26.md"
 }

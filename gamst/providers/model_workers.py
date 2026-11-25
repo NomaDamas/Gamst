@@ -212,7 +212,12 @@ def load(profile, config):
         from ..plugins import FasterWhisperPlugin
         from .asr_words import WhisperWords
         config.pop('sha256', None)
-        return _Whisper(WhisperWords(FasterWhisperPlugin(config.pop('model_path'), word_timestamps=True, **config)))
+        phrases = config.pop('phrases', None)
+        plugin = FasterWhisperPlugin(config.pop('model_path'), word_timestamps=True, **config)
+        if phrases is not None:
+            from .whisper_phrases import PhraseWorker, WhisperPhrases
+            return _Whisper(PhraseWorker(WhisperPhrases(plugin, **phrases)))
+        return _Whisper(WhisperWords(plugin))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))

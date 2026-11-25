@@ -136,6 +136,37 @@
       ]
     },
     {
+      "name": "onsets",
+      "use": "audio-onsets",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "impact"
+      ]
+    },
+    {
+      "name": "impact_movement",
+      "use": "coincidence",
+      "of": "exemplar",
+      "by": "onsets",
+      "of_event": "exemplar.matched",
+      "by_event": "audio.onset",
+      "before_ms": 30,
+      "after_ms": 150,
+      "consumes": [
+        "exemplar",
+        "onsets"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "impact"
+      ]
+    },
+    {
       "name": "repetition",
       "use": "repetition",
       "max_reps_s": 2,
@@ -257,7 +288,8 @@
     {
       "id": "speech.term_events",
       "for": "terms"
-    }
+    },
+    {"id": "temporal.coincidence", "for": "impact_movement"}
   ],
   "limits": "the limits of person-action-count and person-term-count apply; a live camera's own latency is unknown, so sound and pictures may be off by it (--offset-ms camera=MS after measuring); the parts have not been run together with real models",
   "measured": "not yet"

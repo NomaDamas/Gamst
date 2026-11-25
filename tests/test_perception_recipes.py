@@ -116,9 +116,10 @@ class SpeechRecipeTest(unittest.TestCase):
         self.assertEqual(report['score']['truth_count'], 6)
         self.assertEqual(report['score']['counted'], report['counts']['speech.term_events']['term.spoken'])
         self.assertLessEqual(abs(report['score']['count_error']), 2)    # gate edges, 1.5 s segments
-        times = [event['start_ms'] - report['start_ms'] for event in report['events']['speech.term_events']]
+        times = [event['start_ms'] - report['start_ms'] for event in report['events']['speech.term_events']
+                 if event['event'] == 'term.spoken']
         self.assertFalse([t for t in times if 3500 < t < 6000], times)  # nothing inside the other voice
-        self.assertTrue(json.loads((self.tmp / 'r.json').read_text())['pipeline']['modules']['target_voice']['enabled'])
+        self.assertTrue(json.loads((self.tmp / 'r.json').read_text())['pipeline']['modules']['speaker_check']['enabled'])
 
     def test_a_way_of_speaking_is_enrolled_and_counted(self):
         def call(seconds=1.):

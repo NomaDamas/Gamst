@@ -279,6 +279,8 @@ class ExemplarEvents:
         self._person, self._saw_joints, self._channel_frames = None, False, 0
         if self.scorer is not None:
             self.scorer.reset()
+        if getattr(self, 'rule', None) is not None:
+            self.rule.reset()
 
     def reset(self):
         with self._lock:
@@ -409,6 +411,7 @@ class ExemplarEvents:
 
     def _rule(self, ts, channels, mask, points, events):
         steps = self.rule.steps
+        self.rule.observe(ts, channels, mask, points)
         if len(steps) == 1:
             current = self.rule.violation(0, channels, mask, points)
             hold_ms = steps[0].get('hold_ms', self.min_hold_ms)

@@ -192,7 +192,7 @@ async def _exemplar(options, context):
 async def _terms(options, context):
     from ..providers.term_events import TermEvents
     from . import speaker_bound
-    module = TermEvents(reference=options.get('reference', 'terms'),
+    module = TermEvents(reference=options.get('reference', 'terms'), report_others=bool(options.get('report_others')),
                         speaker_bound=speaker_bound(context['modules'], options['name']))
     return dict(module=module, spec=module.spec)
 
