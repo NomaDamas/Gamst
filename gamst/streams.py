@@ -287,9 +287,10 @@ This is an additional typed-input path; legacy MediaRouter remains compatible.
         if capture_sequence is None:
             capture_sequence = frame.sensor.sequence
         provider = lane['provider']
+        # A source's own clock is what its timestamps are in; a worker's operation clock must not hide it.
+        clock = provider if frame.sensor.clock_id is None else frame.sensor
         sensor = replace(frame.sensor, sequence=sequence, capture_sequence=capture_sequence,
-            clock_id=getattr(provider, 'clock_id', frame.sensor.clock_id),
-            clock_epoch=getattr(provider, 'clock_epoch', frame.sensor.clock_epoch))
+            clock_id=getattr(clock, 'clock_id', None), clock_epoch=getattr(clock, 'clock_epoch', None))
         try:
             await self.human.push_observation(lane['spec'].id, result, sensor=sensor,
                 subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms)

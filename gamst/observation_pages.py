@@ -12,13 +12,18 @@ def _encode(store, value):
     return base64.urlsafe_b64encode(hmac.digest(store._cursor_key,payload,'sha256')+payload).decode()
 
 
+def _open(store, cursor):
+    """The signed value of a cursor this open store issued; ValueError for anything else."""
+    if type(cursor) is not str or not 1 <= len(cursor) <= 2048: raise ValueError()
+    raw=base64.b64decode(cursor.encode('ascii'),altchars=b'-_',validate=True)
+    signature,payload=raw[:32],raw[32:]
+    if not hmac.compare_digest(signature,hmac.digest(store._cursor_key,payload,'sha256')): raise ValueError()
+    return json.loads(payload)
+
+
 def _decode(store, cursor):
     try:
-        if type(cursor) is not str or not 1 <= len(cursor) <= 2048: raise ValueError()
-        raw=base64.b64decode(cursor.encode('ascii'),altchars=b'-_',validate=True)
-        signature,payload=raw[:32],raw[32:]
-        if not hmac.compare_digest(signature,hmac.digest(store._cursor_key,payload,'sha256')): raise ValueError()
-        value=json.loads(payload)
+        value=_open(store,cursor)
         if (type(value) is not dict or set(value) != {'after','scope','retention_revision'}
                 or type(value['after']) is not int or not 0 <= value['after'] <= 2**63-1
                 or type(value['retention_revision']) is not int or value['retention_revision'] < 0):

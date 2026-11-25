@@ -20,6 +20,8 @@ from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from .watch import WatchManager
+from .revisions import LEVELS, RETRACTION, current, identity, revision_fields
+from .temporal import TemporalAligner
 from dataclasses import asdict
 
 
@@ -96,6 +98,11 @@ class Gamst:
         from .voice_backend import RealtimeVoiceConfig
         self.voice_backend = RealtimeVoiceConfig()
         self.pipeline = None  # the running gamst.pipeline.Pipeline, if any
+        # Clocks of sources that do not use this runtime's capture clock (add_clock_sample), and what the
+        # Pipeline said about its completeness over time: both are read by get_timeline only.
+        from .timeline import History
+        self.clocks = TemporalAligner()
+        self._timeline_history = History()
         # Owner-declared Watches are the only alarm path; there is no hidden trigger.
         self.watches = WatchManager(
             lambda subject, start, end, kind, limit: self.store.query(subject, start, end, kind, limit=limit),
@@ -192,6 +199,7 @@ class Gamst:
             queue.put_nowait(deepcopy(record))
         if stored:
             self.watches.observe(record)
+            self._timeline_history.sample(self.pipeline, self.clocks, self.store.known_now())
         return record
 
     def _record(self, kind, subject, ts, **kwargs):
@@ -301,16 +309,22 @@ class Gamst:
         return record
 
     async def push_observation(self, capability_id, value, *, sensor,
-                               subject_id='local-user', timestamp_ms=None, quality=None):
+                               subject_id='local-user', timestamp_ms=None, quality=None, supersedes=None):
         spec = self.perception_capabilities.get(capability_id)
         return await self.push_signal(spec.output_name, value, spec.modality,
             subject_id=subject_id, timestamp_ms=timestamp_ms, quality=quality,
             model_id=spec.provider, model_version=spec.version,
-            capability_id=capability_id, sensor=sensor)
+            capability_id=capability_id, sensor=sensor, supersedes=supersedes)
 
     async def push_signal(self, name, value, modality, subject_id="local-user", timestamp_ms=None,
                           model_id="external", model_version="unspecified", quality=None,
-                          capability_id=None, sensor=None):
+                          capability_id=None, sensor=None, supersedes=None):
+        """Commit one signal.
+
+        ``quality`` may carry ``level='provisional'`` (reduced processing); a final record of the same
+        capability and capture interval replaces it. ``supersedes`` is the ID of a retained record this one
+        corrects. Both add a revision; no stored record changes (:mod:`gamst.revisions`).
+        """
         self._check()
         contract = None
         if capability_id is not None:
@@ -341,7 +355,10 @@ class Gamst:
         if quality is not None:
             if not isinstance(quality, dict) or quality.get("status") not in ("sufficient", "insufficient", "unavailable"):
                 raise ValueError("quality status must be sufficient, insufficient, or unavailable")
-            quality = {"status": quality["status"], "flags": list(quality.get("flags", []))}
+            if quality.get("level", "final") not in LEVELS:
+                raise ValueError("quality level must be provisional or final")
+            quality = {"status": quality["status"], "flags": list(quality.get("flags", [])),
+                       **({"level": "provisional"} if quality.get("level") == "provisional" else {})}
         observation = {"name": name, "value": value, "modality": modality}
         if contract is not None:
             sensor_data = asdict(sensor)
@@ -351,6 +368,7 @@ class Gamst:
         record = self._record("observation.signal", subject_id, ts,
             observation=observation,
             models=[{"id": model_id, "version": model_version, "backend": "plugin"}], quality=quality)
+        record.update(revision_fields(self.store, record, supersedes))
         self._emit(record)
         if name == "speech.activity" and isinstance(value, bool) and record["quality"]["status"] == "sufficient":
             activity = [r for r in self.store.query(subject_id, end=ts, kind="observation.signal", name=name)
@@ -381,6 +399,35 @@ class Gamst:
                     {"metric": name, **metric, "detection_threshold": .2}, [record["id"]])
         await self._infer(subject_id, ts, trends=trends)
         return record
+
+    async def retract_observation(self, record_id, reason=''):
+        """Record that a retained observation turned out not to be there; nothing stored is changed."""
+        self._check()
+        if not isinstance(reason, str) or len(reason) > 500:
+            raise ValueError('reason must be a string of at most 500 characters')
+        target = next(iter(self.store.get_many([record_id])), None) if isinstance(record_id, str) else None
+        if target is None:
+            raise ValueError('only a retained record can be retracted')
+        observation = target['observation']
+        record = self._record(RETRACTION, target['subject_id'], target['timestamp_ms'], observation=dict(
+            name=observation.get('name'), capability_id=(observation.get('capability') or {}).get('id'), reason=reason),
+            evidence=[{'record_id': record_id}])
+        record.update(revision_fields(self.store, record, record_id))
+        return self._emit(record)
+
+    def add_clock_sample(self, clock_id, source_ms, local_ms, *, clock_epoch=None):
+        """One pair of simultaneous readings: a source's own clock and this runtime's capture clock (ms).
+
+        Not needed when a server echoes the capture time it was sent. A source whose records carry
+        ``SensorMetadata.clock_id`` and has too few samples stays out of the timeline rows and is named there.
+        """
+        from .timeline import clock_key
+        identifier(clock_id, 'clock_id')
+        if clock_epoch is not None:
+            identifier(clock_epoch, 'clock_epoch')
+        self.clocks.add_clock_sample(clock_key(clock_id, clock_epoch), source_ms, local_ms)
+        self._timeline_history.sample(self.pipeline, self.clocks, self.store.known_now(), force=True)
+        return self.clocks.clock_status(clock_key(clock_id, clock_epoch))
 
     async def push_claim(self, key, value, subject_id="local-user", timestamp_ms=None,
                          scope="session", source="user"):
@@ -806,8 +853,13 @@ class Gamst:
         return result
 
     async def count_events(self, capability_id, subject_id='local-user', window='1h', event=None,
-                           where=None, group_by=None, max_evidence=20):
-        """Count events of retained records of one capability, with bounded evidence record IDs."""
+                           where=None, group_by=None, max_evidence=20, as_of_ms=None):
+        """Count events of retained records of one capability, with bounded evidence record IDs.
+
+        Events of a record that a revision, a retraction or a final answer replaced are not counted; ``final``
+        and ``provisional`` split ``count`` by the quality level of the records. ``as_of_ms`` counts what was
+        known at that knowledge time, over the window that ended then.
+        """
         if self.closed:
             raise RuntimeError('runtime is closed')
         identifier(capability_id)
@@ -817,15 +869,66 @@ class Gamst:
             raise ValueError('max_evidence must be 0..100')
         from .counting import MAX_SCAN, count_events
         self._prune()
-        now = timestamp()
+        now = self._as_of(as_of_ms)
         start = max(0, now - _window_ms(window))
         rows = self.store.query(subject_id, start, now, 'observation.signal', limit=MAX_SCAN + 1,
-                                registered_only=True, capability_id=capability_id)
+                                registered_only=True, capability_id=capability_id, known_until=as_of_ms)
         truncated = len(rows) > MAX_SCAN
-        result = count_events(rows[-MAX_SCAN:], event=event, where=where, group_by=group_by,
-                              max_evidence=max_evidence)
+        rows = rows[-MAX_SCAN:]
+        scanned, rows = len(rows), current(rows, self.store.superseded(subject_id, as_of_ms))
+        result = count_events(rows, event=event, where=where, group_by=group_by, max_evidence=max_evidence)
         return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
-                    scanned_records=min(len(rows), MAX_SCAN), scan_truncated=truncated)
+                    scanned_records=scanned, scan_truncated=truncated,
+                    **({} if as_of_ms is None else dict(as_of_ms=as_of_ms, removed_since=bool(
+                        self.store.lost_until_ms is not None and self.store.lost_until_ms >= start))))
+
+    def _as_of(self, as_of_ms):
+        if as_of_ms is None:
+            return timestamp()
+        if type(as_of_ms) is not int or not 0 <= as_of_ms <= self.store.known_now():
+            raise ValueError('as_of_ms must be a knowledge time (ms) that has passed')
+        return as_of_ms
+
+    async def get_timeline(self, subject_id='local-user', window=None, start_ms=None, end_ms=None, step_ms=200,
+                           capabilities=None, settled_only=False, as_of_ms=None, cursor=None, max_bytes=65536):
+        """Retained records as rows of capture time, with an explicit status per capability (:mod:`gamst.timeline`).
+
+        Give ``window`` (default 10 s, ending now) or ``start_ms`` and ``end_ms``. ``as_of_ms``: what was known at
+        that time. ``cursor``: only what changed since the answer it came from, with old and new values.
+        """
+        if self.closed:
+            raise RuntimeError('runtime is closed')
+        from . import timeline
+        if not isinstance(subject_id, str) or not 1 <= len(subject_id) <= 128:
+            raise ValueError('subject_id must be a string of 1..128 characters')
+        if type(step_ms) is not int or not timeline.MIN_STEP_MS <= step_ms <= timeline.MAX_STEP_MS:
+            raise ValueError(f'step_ms must be {timeline.MIN_STEP_MS}..{timeline.MAX_STEP_MS}')
+        if type(settled_only) is not bool:
+            raise ValueError('settled_only must be boolean')
+        if type(max_bytes) is not int or not 4096 <= max_bytes <= 262144:
+            raise ValueError('max_bytes must be 4096..262144')
+        if capabilities is not None:
+            if type(capabilities) not in (list, tuple) or not 1 <= len(capabilities) <= timeline.MAX_COLUMNS:
+                raise ValueError(f'capabilities must be a list of 1..{timeline.MAX_COLUMNS} names')
+            for name in capabilities:
+                identifier(name, 'capability')
+        explicit = start_ms is not None or end_ms is not None
+        if explicit and (window is not None or type(start_ms) is not int or type(end_ms) is not int
+                         or not 0 <= start_ms <= end_ms):
+            raise ValueError('give window, or integer start_ms and end_ms in order')
+        if cursor is not None and as_of_ms is not None:
+            raise ValueError('a cursor already names what was known; give cursor or as_of_ms')
+        self._prune()
+        self._as_of(as_of_ms)
+        known = self.store.read_mark()
+        self._timeline_history.sample(self.pipeline, self.clocks, known, force=True)
+        now = min(timestamp(), known) if as_of_ms is None else as_of_ms
+        if not explicit:
+            start_ms, end_ms = max(0, now - _window_ms('10s' if window is None else window)), now
+        return timeline.read(self.store, self._timeline_history, subject_id=subject_id, start_ms=start_ms,
+                             end_ms=max(start_ms, min(end_ms, now)), known_ms=known, as_of_ms=as_of_ms, now_ms=now,
+                             step_ms=step_ms, capabilities=capabilities, settled_only=settled_only, cursor=cursor,
+                             max_bytes=max_bytes, contracts=self.perception_capabilities._specs)
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
                                    max_bytes=65536, capability_id=None, source_id=None,
@@ -963,7 +1066,7 @@ class Gamst:
         This is additive; ``get_context`` remains the stable legacy snapshot API.
         Records after the query cutoff are never eligible.
         """
-        from .temporal import TemporalAligner, TemporalEvent
+        from .temporal import TemporalEvent
         from .contradictions import detect_contradictions
         self._prune()
         cutoff = timestamp(query_cutoff_ms)
@@ -975,8 +1078,13 @@ class Gamst:
                                                "observation.signal", limit=64)
                    if r.get("timestamp_ms", 0) <= cutoff]
         aligner = TemporalAligner()
-        events = []
+        # A correction is a revision of one event; the event's identity is its first record.
+        retracted = {row[0] for row in self.store.revisions(subject_id) if row[3]}
+        events = {}
         for record in records[:64]:
+            event_id = identity(record)
+            if event_id in retracted:
+                continue
             observation = record.get("observation", {})
             ts = record.get("timestamp_ms")
             if type(ts) is not int or not observation.get("name"):
@@ -985,7 +1093,7 @@ class Gamst:
             models = record.get("models", [])
             model = models[0] if models and isinstance(models[0], dict) else {}
             event = TemporalEvent(
-                event_id=record["id"], stream_id=str(sensor.get("source_id", "runtime")),
+                event_id=event_id, stream_id=str(sensor.get("source_id", "runtime")),
                 subject_id=subject_id, modality=str(observation.get("modality", "unknown")),
                 event_type=str(observation["name"]), source_clock=str(sensor.get("source_clock", "wall_ms")),
                 clock_id=str(sensor.get("clock_id", sensor.get("source_clock", "wall_ms"))),
@@ -999,10 +1107,12 @@ class Gamst:
                 receive_timestamp_ms=record.get("received_timestamp_ms"),
                 processing_start_ms=record.get("processing_start_ms"),
                 processing_end_ms=record.get("processing_end_ms"),
-                gap=bool(record.get("gap", False)), revision=int(record.get("revision", 0)),
-                supersedes=record.get("supersedes"))
+                gap=bool(record.get("gap", False)),
+                revision=int(record.get("revision", 0)) if event_id in events else 0,
+                supersedes=event_id if event_id in events and record.get("revision") else None)
             if aligner.accept(event) is not None:
-                events.append(event)
+                events[event_id] = event
+        events = list(events.values())
         detection = detect_contradictions(events, query_cutoff_ms=cutoff,
                                           now_ms=cutoff, aligner=aligner)
         # A rejected relation is an explicit abstention: it keeps both source

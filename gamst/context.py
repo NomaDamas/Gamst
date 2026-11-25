@@ -34,22 +34,31 @@ def compact_observation(name, value):
     return None
 
 
+def is_context_observation(record):
+    """May this record's value be shown as context? Registered, or a legacy signal whose form is known to be bounded."""
+    observation = record.get('observation', {})
+    name, value = observation.get('name'), observation.get('value')
+    if not name or record.get('type') != 'observation.signal':
+        return False
+    if observation.get('capability'):
+        return True
+    if isinstance(name, str) and name.startswith('classification.'):
+        try:
+            compact_observation(name, value)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return True
+    return type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
+
+
 def observation_packet(records, now):
     # One newest record per name, then prioritize fresh observations. Limits are
     # independent of frame rate and exclude raw media/large landmark arrays.
     latest = {}
     for record in sorted(records, key=lambda r: r['timestamp_ms']):
         name = record.get('observation', {}).get('name')
-        value = record.get('observation', {}).get('value')
         registered = record.get('observation', {}).get('capability')
-        is_classification = not registered and isinstance(name,str) and name.startswith('classification.')
-        if is_classification:
-            try:
-                compact_observation(name,value)
-            except (ValueError,TypeError,KeyError):
-                continue
-        safe = registered or is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
-        if name and safe and record.get('type') == 'observation.signal':
+        if is_context_observation(record):
             sensor = record['observation'].get('sensor', {})
             key = (name, registered['id'], sensor.get('source_id'), sensor.get('sensor_id')) if registered else (name,)
             latest[key] = record
