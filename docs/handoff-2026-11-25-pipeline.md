@@ -178,3 +178,4 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
 - 서버 실행기 1순위 후보는 Ray Serve(문서 확인만, 실행 안 함). Qwen은 vLLM. 구현하지 않고 이슈에 둡니다.
 - 남은 결함: engine이 기록마다 창 전체를 SQL로 다시 집계합니다(`gamst recipe run`만 1000ms로 설정, MCP와 ProfileRuntime은 기본값 0).
 - 남은 일: H(`feat/aligned-timeline`) 합치기 → 디스크 확보 → 설치·다운로드·빌드 → 실모델 측정 → Main 머지(0.7.0) → GamstCrew archive.
+- H(99180bf, `get_timeline`)를 합쳤습니다. 테스트 1457개, 오류는 원래 있던 15개입니다. 저장 지연 결함을 직접 재현했습니다(기본값에서 기록당 2.4 → 6.2 → 8.0ms, 간격 1000ms에서 0.2ms). H가 `feat/engine-realtime`에서 이 결함과 긴 조회가 캡처를 멈추는 문제를 고칩니다.
