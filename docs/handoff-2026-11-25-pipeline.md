@@ -105,3 +105,13 @@ owner 규칙: 한국어로 짧고 쉽게 답하기, 측정한 값만 말하기("
    - coin(이미 있음: `~/Desktop/gamst-takes/take-20261124-140345`)
    - owner에게 샷건 자세 영상과 횟수, 단어 음성과 횟수를 요청합니다.
 4. PR #366 정리 → Main 머지 → GamstCrew archive.
+
+## 7. 진행 갱신 (2026-11-25 저녁)
+
+- A(crew, 5624cb1)와 B(iphone, 1f1019c)는 통합 브랜치에 합쳤습니다. 합친 뒤 전체 테스트 1254개, 오류는 원래 있던 15개뿐입니다.
+- C와 D는 사용량 한도로 중단됐다가 다시 시작했습니다. 중단 시점 파일은 검토 후 각 브랜치에 WIP로 커밋했습니다. **C++는 한 번도 컴파일하지 않았습니다.**
+- 바로잡음:
+  - `~/.cache/gamst/models/yoloe`는 이 Mac에 없습니다. YOLOE/EfficientTAM 가중치는 `~/.cache/gamst/demo/models`, 포즈는 `~/.cache/gamst/models/mediapipe`에 있습니다.
+  - 데모 환경의 OpenCV 중복은 11/25 18:18에 mediapipe를 설치하면서 생겼습니다(mediapipe → opencv-contrib-python 5.1, ultralytics → opencv-python 4.11).
+  - PyPI의 gamst-sdk 최신은 0.6.0이지만, 그 0.6.0에는 이 브랜치의 새 모듈이 없습니다. 머지할 때 버전을 올려야 합니다.
+  - "PyTorch는 MediaPipe 노드로 못 넣는다"는 과장입니다. 기본 제공 노드가 없을 뿐, LibTorch를 쓰는 C++ calculator를 직접 만들면 가능합니다.
