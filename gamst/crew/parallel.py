@@ -1,7 +1,7 @@
 """ParallelCrew: every model at once on one GPU, never one model at a time.
 
 Not exercised by the local test suite (it needs ``nvidia-smi`` and one CUDA GPU); the code is
-GamstCrew's, moved unchanged apart from the worker module path.
+from the former GamstCrew package, unchanged apart from the worker module path.
 
 - One OS process per model (its own Python environment and CUDA context).
 - GPU memory budgets are reserved up front against measured device capacity
