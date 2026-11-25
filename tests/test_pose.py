@@ -42,7 +42,9 @@ class PoseTests(unittest.IsolatedAsyncioTestCase):
         data = {item['name']: item['value'] for item in first}
         pose = data['scene.poses'][0]
         self.assertEqual(data['scene.pose_count'], 1)
-        self.assertEqual(len(pose['landmarks']), 33)
+        self.assertNotIn('landmarks', pose)
+        self.assertEqual(pose['landmark_count'], 33)
+        self.assertEqual(len(plugin.drawing.points('scene.poses', 'camera', 100)[0]), 33)
         self.assertTrue(pose['geometry']['left_wrist_above_shoulder'])
         self.assertFalse(pose['geometry']['right_wrist_above_shoulder'])
         self.assertFalse(pose['identity_verified'])

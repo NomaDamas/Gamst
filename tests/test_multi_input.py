@@ -239,7 +239,7 @@ class Choosing(Recipes):
         self.refused('source for camera.*--camera.*--video.*--without flash', '--microphone')
         self.refused('source for microphone.*--without click', '--camera', 0)
         self.refused('no common capture clock', '--camera', 0, '--audio', 'x.wav')
-        self.refused('2', '--audio', 'x.wav', '--camera', 0, '--without', 'click')     # one input left, one source
+        self.refused('nothing from --audio here: drop it', '--audio', 'x.wav', '--camera', 0, '--without', 'click')     # one input left, one source
         self.refused('reads nothing from --sensor', '--camera', 0, '--microphone', '--sensor', 'x.csv')
         self.refused('no input nobody', '--input', 'nobody=camera:0')
         self.refused('different recordings.*--offset-ms microphone', '--video', 'a.mp4', '--audio', 'b.wav')
@@ -397,7 +397,7 @@ class Runs(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reasons, dict(eye=['input'], ear=['capture_paused']))
             await pipeline.close()
 
-    async def test_one_failing_input_stops_the_run_and_is_named(self):
+    async def test_one_failing_input_stops_the_run_only_when_asked(self):
         base = timestamp() - 20000
         for first, second, failed in ((None, 3, 'microphone'), (2, None, 'camera')):
             with self.subTest(failed):
@@ -405,7 +405,7 @@ class Runs(unittest.IsolatedAsyncioTestCase):
                     pipeline = await self.start(human, Live('video', [base + 40 * i for i in range(5)], fail_at=first, hold=True),
                                                 Live('audio', [base + 100 * i for i in range(1, 5)], fail_at=second, hold=True))
                     with self.assertRaisesRegex(OSError, 'went away'):
-                        await asyncio.wait_for(pipeline.run(), 5)
+                        await asyncio.wait_for(pipeline.run(stop_on_failure=True), 5)
                     inputs = pipeline.status()['inputs']
                     self.assertIn('went away', inputs[failed]['error'])
                     self.assertEqual(sum('error' in value for value in inputs.values()), 1)

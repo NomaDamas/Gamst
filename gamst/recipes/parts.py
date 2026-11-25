@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 @dataclass
 class Part:
-    kind: str                      # 'input' | 'module' | 'view'
+    kind: str                      # 'input' | 'module' | 'view' | 'plugin' (an input or a module)
     role: str | None = None        # registry role whose packages/weights setup installs
     candidate: str | None = None   # default registry candidate of that role
     build: Callable[..., Any] | None = None       # async (options, context) -> dict(module, spec?, every_ms?)
@@ -108,7 +108,8 @@ async def _mediapipe_graph(options, context):
     from ..mediapipe_graph import MediaPipeGraphModule
     config = context['installed'](options)['config']
     return dict(module=MediaPipeGraphModule.from_manifest(
-        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets')))
+        config['manifest'], branches=options.get('branches'), side_packets=options.get('side_packets'),
+        derived={**({'poses': options['joints']} if options.get('joints') else {}), **(options.get('derived') or {})}))
 
 
 def _pose_source(options):
@@ -226,6 +227,22 @@ async def _role(options, context):
     return dict(module=built['module'], spec=built['spec'], every_ms=options.get('every_ms'))
 
 
+async def _plugin(options, context):
+    """A user-made module: an installed ``gamst.plugins`` entry point the owner selected (trusted code in this process)."""
+    from ..extensions import load_plugin
+    from . import input_modality, selected_plugin
+    name = selected_plugin(options, context.get('plugins'))
+    try:
+        module = load_plugin(name, **(options.get('options') or {}))
+    except (ValueError, TypeError, ImportError, RuntimeError) as error:
+        raise SystemExit(f"module {options['name']!r}: {error}") from error
+    inputs = {item['id']: input_modality(item) for item in (context.get('recipe') or {}).get('inputs', ())}
+    wrong = [source for source in options['consumes'] if source in inputs and inputs[source] not in module.modalities]
+    if wrong:
+        raise SystemExit(f"module {options['name']!r}: plugin {name} reads {', '.join(module.modalities)}; {wrong[0]} is {inputs[wrong[0]]}")
+    return dict(module=module, spec=getattr(module, 'spec', None), every_ms=options.get('every_ms'))
+
+
 VIDEO = dict(role='input.video', candidate='opencv')
 ROTATION = dict(role='vision.rotation', candidate='gamst.rotation')
 
@@ -293,6 +310,7 @@ PARTS = {
     'microphone': Part('input', role='input.microphone', candidate='sounddevice'),
     'gamst240': Part('input', **VIDEO),
     'sensor': Part('input'),
+    'plugin': Part('plugin', build=_plugin),
     # perception modules
     'role': Part('module', build=_role),
     'rotation': Part('module', **ROTATION, build=_rotation, sampling=rotation_sampling),

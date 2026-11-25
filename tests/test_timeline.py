@@ -373,7 +373,7 @@ class EvidenceTest(Base):
         big = dict(value=1., label='x' * 3000, events=[dict(event='e', start_ms=start, end_ms=start + 100, n=n)
                                                        for n in range(20)])
         await self.put('big', big, start)
-        await self.human.push_signal('scene.poses', [dict(track_id=1, bbox=[0, 0, 1, 1], landmarks=[[.1, .2]] * 33)],
+        await self.human.push_signal('scene.poses', [dict(track_id=1, bbox=[0, 0, 1, 1], landmark_count=33)],
                                      'video', timestamp_ms=start)
         await self.human.push_signal('custom.points', [[.1, .2]] * 40, 'video', timestamp_ms=start)
         await self.put('nested', dict(window=dict(start_ms=start, end_ms=start + 50, inner=dict(a=[1] * 50))), start)

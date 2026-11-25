@@ -387,12 +387,12 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status['modules']['asr']['gap_intervals'][0]['reason'], 'input')
             await pipeline.close()
 
-    async def test_recorded_input_waits_and_failures_of_needed_modules_stop_the_run(self):
+    async def test_recorded_input_waits_and_a_failing_module_does_not_end_the_others(self):
         class Failing:
             def process(self, frame):
                 raise ValueError('broken')
 
-        async def run(module, **options):
+        async def run(module, stop=False, **options):
             source = Live([(10 * i, i, None) for i in range(20)])
             source.live = False
             async with Gamst(consent=True) as human:
@@ -401,7 +401,7 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
                 pipeline.add_module('slow', slow, consumes='video', queue=1)
                 pipeline.add_module('second', module, consumes='video', queue=1, **options)
                 try:
-                    await pipeline.run()
+                    await pipeline.run(stop_on_failure=stop)
                 finally:
                     status = pipeline.status()['modules']
                     await pipeline.close()
@@ -409,9 +409,10 @@ class Lossless(unittest.IsolatedAsyncioTestCase):
         seen, status = await run(Slow(0))
         self.assertEqual((seen, status['slow']['dropped'], status['slow']['backlog_ms']), (20, 0, None))
         with self.assertRaisesRegex(ValueError, 'broken'):
-            await run(Failing())
-        seen, status = await run(Failing(), optional=True)
-        self.assertEqual((seen, status['second']['errors'], status['second']['complete']), (20, 20, False))
+            await run(Failing(), stop=True)
+        for optional in (False, True):
+            seen, status = await run(Failing(), stop=optional, optional=optional)
+            self.assertEqual((seen, status['second']['errors'], status['second']['complete']), (20, 20, False))
 
     async def test_lane_records_reach_on_frame(self):
         class Counter:
@@ -559,10 +560,11 @@ class Inputs(unittest.IsolatedAsyncioTestCase):
         source, seen = CameraInput(0), []
         source.MAX_WAITING_BYTES = limit
         with patch.dict(sys.modules, cv2=fake):
-            async for frame in source.frames():
-                if not seen:
-                    await asyncio.sleep(pause)
-                seen.append((int(frame.data[0, 0, 0]), source.missed))
+            with self.assertRaisesRegex(RuntimeError, 'camera 0 stopped giving frames'):     # a camera has no end
+                async for frame in source.frames():
+                    if not seen:
+                        await asyncio.sleep(pause)
+                    seen.append((int(frame.data[0, 0, 0]), source.missed))
         return source, seen
 
     async def test_camera_frames_wait_for_a_busy_consumer(self):

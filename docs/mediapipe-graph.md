@@ -47,7 +47,8 @@ operations (Linux only, `holistic_gpu.pbtxt`).
 Your own graph: declare `input_stream: "input_video"`, optional `enable_<branch>` bool inputs, and end with a
 `GamstFrameCalculator` (`FRAME:` the throttled image, `STREAM:<i>:` each output, `BUNDLE:gamst_frame`), wired to the
 FlowLimiter's `FINISHED`. Add its calculators to `runner/BUILD`. Map its streams to records with
-`streams={'stream': 'record.name'}`.
+`streams={'stream': 'record.name'}`. Points are never records: `derived={'poses' | 'hands' | 'face' | stream: input}` puts them (poses
+with `world_landmarks`) on a derived input for other modules ([private payloads](private-payloads.md)). A landmark stream's record is `landmark_counts`.
 
 ## Use
 
@@ -71,9 +72,9 @@ declared, with the same type; text side packets (which may be file paths) are fi
 
 | Record | Value |
 |---|---|
-| `scene.poses`, `scene.pose_count` | the shape of `MediaPipePosePlugin` plus `world_landmarks` (metres); `track_id` is null |
-| `scene.hands`, `scene.hand_count` | `[{handedness, landmarks (21), bbox}]` |
-| `scene.face_landmarks`, `scene.face_count` | `[{frame_face_index, landmarks (468 or 478), bbox}]` |
+| `scene.poses`, `scene.pose_count` | boxes, geometry, `landmark_count`; `track_id` is null |
+| `scene.hands`, `scene.hand_count` | `[{handedness, landmark_count (21), bbox}]` |
+| `scene.face_landmarks`, `scene.face_count` | `[{frame_face_index, landmark_count (468 or 478), bbox}]` |
 | `vision.mediapipe_graph.frame` (capability `vision.mediapipe_graph`) | `processed`, `run`, `dropped`, `latency_ms`, `branches`, `counts` |
 
 Landmark arrays are in the Store for other modules; the context packet carries only compact values. A branch that is

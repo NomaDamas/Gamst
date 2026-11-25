@@ -112,7 +112,7 @@ class PrivatePoses:
 
 
 def poses_of(data):
-    """The pose list of a derived joints frame or a legacy ``scene.poses`` record value, else None."""
+    """The pose list of a derived joints frame, or of a ``scene.poses`` value a host feeds itself, else None."""
     if isinstance(data, PrivatePoses):
         return data.poses
     return data if isinstance(data, list) else None
@@ -120,7 +120,7 @@ def poses_of(data):
 
 def public_pose(pose):
     """A pose without joint positions (what may be committed)."""
-    return {key: value for key, value in pose.items() if key.lower() != 'landmarks' and not is_private_key(key)}
+    return {key: value for key, value in pose.items() if not is_private_key(key)}
 
 
 def landmarks(rows, columns):

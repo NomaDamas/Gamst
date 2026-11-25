@@ -188,7 +188,9 @@ class ExemplarEvents:
     a sequence is over, ``exemplar.ended`` with the same ``index`` and ``start_ms``, its final ``end_ms`` and
     ``best_distance``. Both carry ``reference``, ``reference_id``, ``label``, ``method`` (``examples``,
     ``rule`` or ``text_finder``) and ``confirmed`` (false when an unconfirmed proposal is part of the
-    movement).
+    movement), and the revision of the movement (``reference_revision``): the Pipeline may give another movement
+    while a run goes on (:meth:`prepare`, :meth:`schedule`). It takes over at the first frame captured at or after
+    the stated time; a match in progress ends there (``cut: instruction_changed``) and the count starts at 0.
     """
 
     def __init__(self, *, reference='exemplar', mode=None, enter=.12, exit=.18, min_hold_ms=200,
@@ -207,10 +209,14 @@ class ExemplarEvents:
         self.contract, self.speaker_bound = contract, bool(speaker_bound)
         self.mapping, self.min_visibility = mapping, min_visibility
         self.label, self.scorer, self.rule, self.info = reference, None, None, {}
+        self.identity, self.from_ms, self._methods, self._next = {}, 0, [], []
+        self._defaults = dict(enter=enter, exit=exit)
         self.spec = CapabilitySpec(
             capability_id, 'temporal.exemplar_events', modality, 'gamst.exemplar_events',
-            '2', (OutputField('count', 'integer'), OutputField('status', 'string'),
-                  OutputField('distance', 'number', required=False), OutputField('events', 'array')),
+            '3', (OutputField('count', 'integer'), OutputField('status', 'string'),
+                  OutputField('distance', 'number', required=False), OutputField('events', 'array'),
+                  OutputField('reference_id', 'string', required=False),
+                  OutputField('reference_revision', 'integer', required=False)),
             'native', stateful=True, reset_on_gap=True, freshness_ms=max_gap_ms, interpretation='estimate',
             devices=('cpu',), license='Apache-2.0')
         self._lock = threading.RLock()
@@ -223,8 +229,56 @@ class ExemplarEvents:
         reference = pipeline.references.get(self.reference_name)
         if reference is None or reference['kind'] != 'exemplar':
             raise ValueError(f'exemplar_events needs an exemplar reference named {self.reference_name!r}')
-        self.set_exemplar(reference['value'])
-        self.label = reference['label']
+        self._adopt(self.prepare(reference), reference.get('from_ms', 0))
+
+    # ------------------------------------------------------------------ another movement while a run goes on
+
+    def prepare(self, reference):
+        """A checked movement to run from a stated time on; nothing of the running one changes."""
+        ready = type(self)(reference=self.reference_name, mode=self._wanted_mode, min_hold_ms=self.min_hold_ms,
+                           refractory_ms=self.refractory_ms, max_gap_ms=self.max_gap_ms, modality=self.spec.modality,
+                           capability_id=self.spec.id, fixed_thresholds=self.fixed_thresholds, mapping=self.mapping,
+                           min_visibility=self.min_visibility, contract=self.contract, speaker_bound=self.speaker_bound,
+                           **self._defaults)
+        ready.set_exemplar(reference['value'])
+        ready.label = reference['label']
+        ready.identity = {f'reference_{key}': reference[key] for key in ('id', 'revision') if reference.get(key) is not None}
+        return ready
+
+    def offline(self, reference):
+        """A separate counter for records that were kept (nothing of it is committed)."""
+        ready = self.prepare(reference)
+        if ready.rule is not None and ready.rule.needs_joints:
+            raise ValueError('this rule uses joint relations; joint positions are never kept')
+        return ready
+
+    def schedule(self, ready, from_ms):
+        """``ready`` (None: nothing is looked for) takes over at the first frame captured at or after ``from_ms``."""
+        with self._lock:
+            self._next = [item for item in self._next if item[0] < from_ms] + [(from_ms, ready)]
+
+    def _adopt(self, ready, from_ms):
+        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity'):
+            setattr(self, name, getattr(ready, name) if ready is not None else None if name in ('scorer', 'rule', 'mode') else
+                    getattr(self, name))
+        self.info, self.from_ms = dict(ready.info, removed=False) if ready is not None else dict(self.info, removed=True), from_ms
+        person, joints = self._person, self._saw_joints
+        self._clear()
+        self._person, self._saw_joints = person, joints
+
+    def _value(self, **value):
+        return self.spec.validate(dict(value, count=self._count, **self.identity))
+
+    def _switch(self, ts):
+        """Take over what is due at ``ts``; what the old movement still says about its last match."""
+        said = []
+        while self._next and self._next[0][0] <= ts:
+            from_ms, ready = self._next.pop(0)
+            if self._inside:
+                events = [self._ended(self._last_ms, cut='instruction_changed')]
+                said.append(self._value(status='watching', events=events))
+            self._adopt(ready, from_ms)
+        return said
 
     def set_exemplar(self, value):
         """``{"positives": [...], ...}`` or ``{"rule": {...}}`` as saved by ``gamst recipe enroll``; or one bare
@@ -258,7 +312,8 @@ class ExemplarEvents:
                 self.mode, self.scorer = mode, ExampleScorer(mode, positives, negatives)
                 self._methods = [item.get('method', 'examples') for item in entries['positives']]
             saved = value if isinstance(value, dict) else {}
-            self.info = dict(reference_id=saved.get('id'), confirmed=bool(saved.get('confirmed', True)),
+            self.identity = {'reference_id': saved['id']} if saved.get('id') else {}
+            self.info = dict(confirmed=bool(saved.get('confirmed', True)),
                              threshold_source='caller' if self.fixed_thresholds and self.rule is None else
                              saved.get('threshold_source', 'rule' if self.rule is not None else 'default'),
                              positives=len(self._methods) if self.rule is None else 0,
@@ -266,7 +321,8 @@ class ExemplarEvents:
             self._clear()
 
     def status(self):
-        return dict(self.info, label=self.label, mode=self.mode, enter=self.enter, exit=self.exit, count=self._count,
+        return dict(self.info, **self.identity, from_ms=self.from_ms, scheduled=[item[0] for item in self._next],
+                    label=self.label, mode=self.mode, enter=self.enter, exit=self.exit, count=self._count,
                     methods=sorted(set(self._methods)) if self.scorer or self.rule else [])
 
     # ------------------------------------------------------------------ the counter
@@ -291,8 +347,7 @@ class ExemplarEvents:
                      method=self._method, confirmed=self.info['confirmed'], **values)
         if not self.speaker_bound:
             event['speaker'] = 'not_bound'
-        if self.info['reference_id']:
-            event['reference_id'] = self.info['reference_id']
+        event.update(self.identity)
         if self._person is not None and self._last_ms - self._person['at_ms'] <= self.max_gap_ms:
             event['person'] = dict(self._person)
         return event
@@ -338,11 +393,14 @@ class ExemplarEvents:
 
     def process(self, frame):
         with self._lock:
+            said = self._switch(frame.timestamp_ms)
+            if self.info.get('removed') or frame.timestamp_ms < self.from_ms:
+                return said or None
             if self.scorer is None and self.rule is None:
                 raise RuntimeError('no exemplar: add an exemplar reference before the module')
             found = self._input(frame)
             if found is None:
-                return None
+                return said or None
             channels, mask, points = found
             ts, events = frame.timestamp_ms, []
             if self._last_ms is not None and ts - self._last_ms > self.max_gap_ms:
@@ -357,10 +415,9 @@ class ExemplarEvents:
             else:
                 current, index, start, rival = self.scorer.update(ts, (channels, mask), limit=self.exit)
                 (self._hold if self.mode == 'hold' else self._sequence)(ts, current, index, start, rival, events)
-            result = dict(count=self._count, status='matching' if self._inside else 'watching', events=events)
-            if current is not None:
-                result['distance'] = round(current, 5)
-            return self.spec.validate(result)
+            result = self._value(status='matching' if self._inside else 'watching', events=events,
+                                 **({} if current is None else {'distance': round(current, 5)}))
+            return [*said, result] if said else result
 
     def finish(self):
         """End of input: the match in progress ends at the last frame."""
@@ -368,7 +425,7 @@ class ExemplarEvents:
             if not self._inside:
                 return None
             events = [self._ended(self._last_ms, cut='end_of_input')]
-            return self.spec.validate(dict(count=self._count, status='watching', events=events))
+            return self._value(status='watching', events=events)
 
     def _match(self, ts, start, current, index=None):
         self._count += 1

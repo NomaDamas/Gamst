@@ -20,6 +20,7 @@ from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from .watch import WatchManager
+from .counting import INSTRUCTION_CAPABILITY
 from .revisions import RETRACTION, identity, revision_fields
 from .temporal import TemporalAligner
 from dataclasses import asdict
@@ -83,6 +84,8 @@ class Gamst:
                                             max_bytes=min(max_payload_bytes, 4 * 1024 * 1024))
         self.context_memory_drops = 0
         self._metric_directions = {}
+        self.instructions = None        # of a running recipe (gamst.recipes.instructions)
+        self._instruction_log = None
         self.dropped_records = 0
         self.plugin_errors = []
         if not isinstance(sensor_inference_interval_ms, (int, float)) or not 0 <= sensor_inference_interval_ms <= 5000:
@@ -199,6 +202,10 @@ class Gamst:
                 self.dropped_records += 1
             queue.put_nowait(deepcopy(record))
         if stored:
+            observation = record.get('observation', {})
+            if (observation.get('capability') or {}).get('id') == INSTRUCTION_CAPABILITY and self._instruction_log is not None:
+                self._instruction_log += [(self.store.known_now(), event) for event in observation['value']['events']]
+                del self._instruction_log[:-256]
             self.watches.observe(record)
             self._timeline_history.sample(self.pipeline, self.clocks, self.store.known_now())
         return record
@@ -859,7 +866,8 @@ class Gamst:
 
         ``complete`` is False when the Pipeline lost frames this capability depends on in the window (``lost``
         says how much), or when not every record was scanned: the true count may differ. Events of a record
-        that a revision or retraction replaced are not counted. ``as_of_ms`` counts what was known at that
+        that a revision or retraction replaced are not counted. Counts of an instruction and of the one it replaced are
+        never added up (:func:`gamst.counting.count_events`). ``as_of_ms`` counts what was known at that
         knowledge time, over the window that ended then.
         """
         if self.closed:
@@ -869,7 +877,7 @@ class Gamst:
             raise ValueError('where must be an object of at most 16 path: value pairs')
         if type(max_evidence) is not int or not 0 <= max_evidence <= 100:
             raise ValueError('max_evidence must be 0..100')
-        from .counting import GAP_CAPABILITY, MAX_SCAN, count_events, gaps_of, lost
+        from .counting import GAP_CAPABILITY, MAX_SCAN, count_events, current_instructions, gaps_of, lost
         if self.pipeline is not None and as_of_ms is None:
             await self.pipeline.commit_gaps(force=True)
         self._prune()
@@ -883,12 +891,46 @@ class Gamst:
         rows = rows[-MAX_SCAN:]
         replaced, scanned = self.store.superseded(subject_id, as_of_ms), len(rows)
         rows = [record for record in rows if record['id'] not in replaced]
-        result = count_events(rows, event=event, where=where, group_by=group_by, max_evidence=max_evidence)
+        changes = [change for _, change in self.instruction_changes(as_of_ms) if capability_id in change.get('capabilities', ())]
+        result = count_events(rows, event=event, where=where, group_by=group_by, max_evidence=max_evidence,
+                              current=current_instructions(changes))
+        if changes:     # since when what is counted has been looked for
+            result['counted_from_ms'] = {name: from_ms for name, (_, from_ms) in current_instructions(changes).items()}
         return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
                     scanned_records=scanned, scan_truncated=truncated,
                     complete=not gaps and not truncated, lost=lost(gaps),
                     **({} if as_of_ms is None else dict(as_of_ms=as_of_ms, removed_since=bool(
                         self.store.lost_until_ms is not None and self.store.lost_until_ms >= start))))
+
+    # ------------------------------------------------------------------ instructions of a running recipe
+
+    def instruction_changes(self, known_until=None, subject_id='local-user'):
+        """``[(known_ms, pipeline.instructions event)]`` in the order they were learned; from the Store once, then kept."""
+        if self._instruction_log is None:
+            self._instruction_log = [(known, event) for record, known in self.store.query(
+                subject_id, kind='observation.signal', capability_id=INSTRUCTION_CAPABILITY, registered_only=True, limit=256,
+                with_known=True) for event in record['observation']['value']['events']]
+        return [item for item in self._instruction_log if known_until is None or (item[0] or 0) <= known_until]
+
+    def _instructed(self):
+        if self.instructions is None:
+            raise ValueError('no recipe is running here; instructions belong to a running recipe (gamst recipe run ... --serve)')
+        return self.instructions
+
+    async def list_instructions(self):
+        """What the running recipe looks for now, since when, who set it, and what can be set (:mod:`gamst.recipes.instructions`)."""
+        return await self._instructed().list()
+
+    async def set_instruction(self, kind, **options):
+        """Set or replace the words or the movement the running recipe looks for, without restarting it."""
+        return await self._instructed().set(kind, **options)
+
+    async def remove_instruction(self, reference, actor='user'):
+        return await self._instructed().remove(reference, actor=actor)
+
+    async def search_retained(self, reference, window='1h', max_events=50):
+        """Look for the current words or movement in records retained from before it was set; results are ``retrospective``."""
+        return await self._instructed().search(reference, window=window, max_events=max_events)
 
     def _as_of(self, as_of_ms):
         if as_of_ms is None:
@@ -940,7 +982,7 @@ class Gamst:
                     self.store, self._timeline_history, subject_id=subject_id, start_ms=start_ms,
                     end_ms=max(start_ms, min(end_ms, now)), known_ms=known, as_of_ms=as_of_ms, now_ms=now, step_ms=step_ms,
                     capabilities=capabilities, settled_only=settled_only, cursor=cursor, max_bytes=max_bytes,
-                    contracts=self.perception_capabilities._specs)
+                    contracts=self.perception_capabilities._specs, changes=self.instruction_changes(as_of_ms or known))
             except Exception:
                 if not self.closed:
                     raise
@@ -1273,6 +1315,7 @@ class Gamst:
         for controller in self._call_controllers.values():
             controller.forget_subject(subject_id, now_ms=timestamp())
         deleted = self.store.delete(subject_id)
+        self._instruction_log = None
         self.object_memory.clear(subject_id)
         self.transcript_memory.clear(subject_id)
         self.watches.clear_subject(subject_id)

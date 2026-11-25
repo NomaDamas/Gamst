@@ -41,6 +41,9 @@ edits it (an agent may propose with MCP `propose_movement`, never confirm). Name
 kept; `words.json` holds text. `--no-confirm` saves undecided words; their events say `confirmed: false`. Which spellings a
 recognizer will produce for a word is not predicted: check a recording you counted yourself.
 
+While it runs (`--serve`), an agent may replace the words: MCP `set_instruction {"kind": "terms", "actor": "jev", "terms": [...]}`
+(no `re:` patterns), `search_retained` looks for them in earlier transcripts. See `gamst-scene`.
+
 Pipeline: microphone -> speaker verification (segments) -> speaker gate (other voices silenced) -> ASR with
 word times -> speaker verification again on each utterance's own words -> term events. Records:
 `speech.term_events` (`count_events`, event `term.spoken`), `audio.exemplar_events`, `audio.speaker_match`.

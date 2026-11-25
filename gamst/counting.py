@@ -15,6 +15,8 @@ from .revisions import depends_on
 
 MAX_SCAN = 20000
 GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames that never reached a module
+INSTRUCTION_CAPABILITY = 'pipeline.instructions'    # records of gamst.pipeline: other words or another movement
+IDENTITY = ('reference_id', 'reference_revision')
 
 
 def gaps_of(records, capability=None):
@@ -39,10 +41,54 @@ def _lookup(value, path):
     return True, value
 
 
-def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20):
-    """``rows`` are current stored records (oldest first). Returns the count, groups and bounded evidence."""
+def current_instructions(changes):
+    """``{reference: ((id, revision), from_ms)}`` after ``pipeline.instructions`` events (oldest first); a removed one stays
+    the last."""
+    found = {}
+    for change in changes:
+        if change.get('event') == 'instruction.removed':
+            found.setdefault(change['reference'], ((change.get('previous_id'), change.get('previous_revision')), 0))
+        else:
+            found[change['reference']] = (change.get('reference_id'), change.get('reference_revision')), change.get('start_ms', 0)
+    return found
+
+
+def _about(item):
+    return item.get('reference') if isinstance(item.get('reference'), str) else None, tuple(map(item.get, IDENTITY))
+
+
+def newest_instructions(rows, current=None):
+    """``{reference: (id, revision)}`` that counts now: the last change (``current``), or that of an event after it."""
+    seen = {name: (from_ms, which) for name, (which, from_ms) in (current or {}).items()}
+    for record in rows:
+        value = (record.get('observation') or {}).get('value')
+        for item in (value.get('events') if isinstance(value, dict) else None) or ():
+            if isinstance(item, dict) and any(key in item for key in IDENTITY):
+                name, which = _about(item)
+                at = item.get('start_ms')
+                at = at if type(at) in (int, float) else record.get('timestamp_ms', 0)
+                if name not in seen or at >= seen[name][0]:
+                    seen[name] = at, which
+    return {name: which for name, (_, which) in seen.items()}
+
+
+def is_current(item, newest):
+    """False for an event of an instruction that another one replaced."""
+    name, which = _about(item)
+    return not any(key in item for key in IDENTITY) or newest.get(name, which) == which
+
+
+def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20, current=None):
+    """``rows`` are current stored records (oldest first). Returns the count, groups and bounded evidence.
+
+    Events of different revisions of one instruction (reference) are never counted together: the newest
+    (``current``: :func:`current_instructions`, or that of a newer event) is counted, the others are listed in
+    ``other_instructions``. ``where`` with ``reference_id`` or ``reference_revision`` chooses.
+    """
     where = where or {}
     count, groups, evidence = 0, {}, []
+    others, of = {}, set()
+    newest = {} if {*IDENTITY} & set(where) else newest_instructions(rows, current)
     for record in rows:
         observation = record.get('observation') or {}
         value = observation.get('value')
@@ -57,6 +103,12 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
                 continue
             if any(_lookup(item, path) != (True, expected) for path, expected in where.items()):
                 continue
+            if any(key in item for key in IDENTITY):
+                reference, which = _about(item)
+                if not is_current(item, newest):
+                    others[reference, *which] = others.get((reference, *which), 0) + 1
+                    continue
+                of.add((reference, *which))
             count += 1
             if group_by == '@event':
                 groups[name] = groups.get(name, 0) + 1
@@ -72,12 +124,16 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     result = dict(count=count, evidence=evidence, evidence_truncated=count > len(evidence))
     if group_by is not None:
         result['groups'] = groups
+    for name, found in (('instructions', dict.fromkeys(sorted(of, key=str))), ('other_instructions', others)):
+        if found:
+            result[name] = [dict(zip(('reference', *IDENTITY), key), **({} if number is None else dict(count=number)))
+                            for key, number in list(found.items())[:32]]
     return result
 
 
 # ---------------------------------------------------------------- events as data (JSONL / CSV)
 
-COLUMNS = ('capability', 'event', 'label', 'method', 'confirmed', 'reference', 'reference_id', 'index', 'example',
+COLUMNS = ('capability', 'event', 'label', 'method', 'confirmed', 'reference', 'reference_id', 'reference_revision', 'index', 'example',
            'start_ms', 'end_ms', 'duration_ms', 'gap_frames', 'distance', 'best_distance', 'person', 'timestamp_ms', 'subject_id',
            'source_id', 'sensor_id', 'record_id')
 
@@ -108,7 +164,7 @@ def event_rows(records, *, capability=None, event=None):
             kind = item.get('event', item.get('type'))
             family, _, phase = str(kind).rpartition('.')
             key = (record.get('subject_id'), name, family, item.get('reference'), item.get('reference_id'),
-                   item.get('start_ms'))
+                   item.get('reference_revision'), item.get('start_ms'))
             if phase == 'ended' and key in open_matches:
                 row = open_matches.pop(key)
                 for field in ('end_ms', 'best_distance', 'cut', 'gap_frames'):

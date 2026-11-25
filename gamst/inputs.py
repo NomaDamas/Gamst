@@ -158,8 +158,8 @@ class CameraInput:
 
         def read():
             ok, frame = cap.read()
-            if not ok:
-                return None
+            if not ok:      # a camera has no end: it was unplugged, or the system took it away
+                raise RuntimeError(f'camera {self.index} stopped giving frames')
             stamp = base + round(1000 * (time.monotonic() - start))
             scale = self.max_side / max(frame.shape[:2]) if self.max_side else 1
             if scale < 1:
@@ -179,6 +179,10 @@ class CameraInput:
                     break
         finally:
             self.close()
+
+    def slow_hint(self):
+        return f"{'a smaller ' if self.max_side else ''}--camera-max-side PX shrinks camera frames as they are read" + (
+            f' (now {self.max_side})' if self.max_side else '')
 
     def status(self):
         reader = self._reader
@@ -625,6 +629,12 @@ class IPhone240Input:
             self._listener.close()
             self._listener = None
 
+    def reopen(self):
+        """After a failure: let go of the port, so that ``frames()`` can listen again."""
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            listener.close()
+
     def close(self):
         self.stop()
 
@@ -1003,6 +1013,38 @@ class MicrophoneInput:
         if stream is not None:
             stream.stop()
             stream.close()
+
+
+class PluginInput:
+    """A user-made input (``gamst.inputs`` entry point) as a recipe input: its frames are checked, nothing else is added.
+
+    Its code runs in this process with this process's rights; only the owner selects it (``--plugin NAME``).
+    """
+
+    def __init__(self, name, source, modality):
+        if source.modality != modality:
+            raise ValueError(f'plugin input {name} gives {source.modality}, the recipe declares {modality}')
+        self.name, self.source, self.modality = name, source, modality
+        self.live = bool(getattr(source, 'live', True))
+        for optional in ('reopen', 'status', 'slow_hint'):
+            if callable(getattr(source, optional, None)):
+                setattr(self, optional, getattr(source, optional))
+
+    @property
+    def missed(self):
+        return getattr(self.source, 'missed', 0)
+
+    async def frames(self):
+        async for frame in self.source.frames():
+            if not isinstance(frame, InputFrame) or frame.modality != self.modality or type(frame.timestamp_ms) is not int \
+                    or not 0 <= frame.timestamp_ms <= _now_ms() + 5000:
+                raise ValueError(f'plugin input {self.name}: a frame is an InputFrame of {self.modality} with its capture '
+                                 'time in integer milliseconds, not in the future')
+            yield frame
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        return close() if callable(close) else None
 
 
 def open_source(kind, value=None, **options):

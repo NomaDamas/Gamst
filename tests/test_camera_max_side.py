@@ -26,7 +26,7 @@ class CameraMaxSideTest(unittest.IsolatedAsyncioTestCase):
                 pass
 
         with patch('cv2.VideoCapture', Device):
-            return [frame.data.shape async for frame in CameraInput(0, **options).frames()]
+            return [frame.data.shape async for frame in CameraInput(0, max_frames=3, **options).frames()]
 
     async def test_larger_frames_shrink_and_keep_their_proportions(self):
         self.assertEqual(await self.shapes((1080, 1920, 3), max_side=640), [(360, 640, 3)] * 3)

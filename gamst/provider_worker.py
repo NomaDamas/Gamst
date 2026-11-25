@@ -24,6 +24,8 @@ def _construct(profile, config):
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
         backend = OpenAIStreamingBackend.from_config(config)
+        if backend.remote and config.get('context') and config.get('allow_remote_context') is not True:
+            raise PermissionError('allow_remote sends frames to a hosted endpoint; transcripts and counts need allow_remote_context')
         provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000),
                                             context=config.get('context', False))
     elif profile == 'smolvlm2.500m.local':
@@ -187,7 +189,7 @@ def main():
     output = os.fdopen(os.dup(sys.stdout.fileno()), 'wb', buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     source = sys.stdin.buffer
-    provider = spec = None
+    provider = spec = operation = None
     separation_protocol = None
     separation_config = None
     private = None
@@ -269,10 +271,18 @@ def main():
                 else:
                     raise ValueError('invalid provider operation/state')
                 output.write(envelope(dict(id=number, ok=True, result=result)))
+                if operation == 'start':    # what the owner reads of this process's output ends here
+                    with open(os.devnull, 'wb') as nowhere:
+                        for descriptor in (1, 2):
+                            os.dup2(nowhere.fileno(), descriptor)
             except Exception as exc:
-                # No exception text or native logs are allowed into context:
-                # third-party exceptions may contain raw input or local secrets.
-                output.write(envelope(dict(id=number, ok=False, error_type=type(exc).__name__[:128])))
+                # No exception text or native logs are allowed into context: third-party exceptions may contain raw
+                # input or local secrets. Starting has no input yet; its message is needed to know what to fix.
+                failed = dict(id=number, ok=False, error_type=type(exc).__name__[:128])
+                if operation == 'start':
+                    from .redact import public_error
+                    failed['error'] = public_error(exc)
+                output.write(envelope(failed))
                 return  # Native failures invalidate temporal state; explicit reopen only.
     except (EOFError, BrokenPipeError):
         pass

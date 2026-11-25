@@ -17,7 +17,7 @@ def compact_observation(name, value):
                 for face in value[:4]]
     if name == 'scene.poses' and isinstance(value, list):
         return [{**{k: pose.get(k) for k in ('frame_pose_index', 'track_id', 'bbox', 'geometry', 'association_quality')},
-                 'landmark_count': len(pose.get('landmarks', []))} for pose in value[:4]]
+                 'landmark_count': pose.get('landmark_count', 0)} for pose in value[:4]]
     if name == 'scene.segments' and isinstance(value, list):
         return [{k: item.get(k) for k in ('bbox', 'score', 'prompt', 'track_id')} for item in value[:16]]
     if isinstance(value, str):

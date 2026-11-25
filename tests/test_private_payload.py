@@ -26,7 +26,7 @@ from gamst.schema import timestamp
 
 NAMES = ('keypoints', 'keypoint', 'key_points', 'keyPoints', 'KEY-POINTS', 'keypoints_2d', 'joints', 'joint_positions',
          'skeleton', 'pose_landmarks', 'left_hand_landmarks', 'face_landmarks', 'embedding', 'embeddings', 'voiceprint',
-         'waveform', 'pcm')
+         'waveform', 'pcm', 'landmarks', 'world_landmarks')
 SHA = '0' * 64
 WORKER = '''
 import sys
@@ -56,8 +56,8 @@ main()
 
 
 class GuardTest(unittest.TestCase):
-    def test_joint_identity_and_waveform_names_are_refused_exactly_like_landmarks(self):
-        for name in NAMES + ('landmarks', 'world_landmarks'):
+    def test_joint_identity_and_waveform_names_are_refused(self):
+        for name in NAMES:
             self.assertTrue(is_raw_key(name), name)
             with self.assertRaisesRegex(ValueError, 'raw media'):
                 bounded_json(dict(a=[{name: [1]}]), forbid_raw=True)

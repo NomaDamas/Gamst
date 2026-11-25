@@ -20,8 +20,9 @@ from gamst.crew.registry import ROLES
 from gamst.crew.setup import SetupError, apply_plan, make_plan
 from gamst.mcp import MCPServer
 from gamst.mediapipe_graph import HOLISTIC_CPU, HOLISTIC_GPU, PIN, MediaPipeGraphModule, RunnerFailed, holistic_plugin
-from gamst.pipeline import Pipeline
+from gamst.pipeline import Derived, Pipeline
 from gamst.plugins import InputFrame
+from gamst.private_payload import poses_of
 from gamst.profile import ProfileRuntime
 from gamst.providers.pose_exemplar import ExemplarEvents, PoseChannels, pose_channels
 
@@ -51,7 +52,15 @@ def frame(ms, **options):
 
 
 def named(signals, name):
-    return [signal for signal in signals if signal['name'] == name]
+    return [signal for signal in signals if isinstance(signal, dict) and signal['name'] == name]
+
+
+def private(signals, name):
+    """The items of a derived input: where the points are, outside every record."""
+    return [poses_of(signal.data) for signal in signals if isinstance(signal, Derived) and signal.input == name]
+
+
+DERIVED = dict(poses='joints', hands='hand_points', face='face_points')
 
 
 class ModuleTest(unittest.IsolatedAsyncioTestCase):
@@ -75,25 +84,30 @@ class ModuleTest(unittest.IsolatedAsyncioTestCase):
         return self.log.read_text().splitlines()
 
     async def test_handshake_frames_and_records(self):
-        graph = self.module(side_packets=dict(model_complexity=2))
+        graph = self.module(side_packets=dict(model_complexity=2), derived=DERIVED)
         signals = await graph.process(frame(1000, up=True, right_hand=True))
         self.assertEqual(self.commands(), [
             'SIDE model_complexity int 2', 'SIDE smooth_landmarks bool 1', 'SIDE refine_face_landmarks bool 0',
             'SIDE use_prev_landmarks bool 1', 'SIDE max_in_flight int 1', 'BRANCH pose 1', 'BRANCH hands 1',
             'BRANCH face 1', 'START', 'FRAME 1000000 6 4'])
-        pose, = named(signals, 'scene.poses')[0]['value']
+        public, = named(signals, 'scene.poses')[0]['value']
+        (pose,), = private(signals, 'joints')
+        self.assertEqual(public, {**{key: pose[key] for key in pose if 'landmarks' not in key}, 'landmark_count': 33})
+        self.assertNotIn('"landmarks"', json.dumps([signal for signal in signals if isinstance(signal, dict)], default=str))
         self.assertEqual(len(pose['landmarks']), 33)
         self.assertEqual(set(pose['landmarks'][0]), {'x', 'y', 'z', 'visibility', 'presence'})
         self.assertEqual(len(pose['world_landmarks']), 33)
         self.assertTrue(pose['geometry']['right_wrist_above_shoulder'])
         self.assertIsNotNone(pose['bbox'])
         self.assertEqual([hand['handedness'] for hand in named(signals, 'scene.hands')[0]['value']], ['left', 'right'])
-        self.assertEqual(len(named(signals, 'scene.face_landmarks')[0]['value'][0]['landmarks']), 468)
+        self.assertEqual(named(signals, 'scene.face_landmarks')[0]['value'][0]['landmark_count'], 468)
+        self.assertEqual(len(private(signals, 'face_points')[0][0]['landmarks']), 468)
         stats = named(signals, 'vision.mediapipe_graph.frame')[0]
         graph.spec.validate(stats['value'])
         self.assertEqual(stats['value']['counts'], dict(poses=1, hands=2, faces=1))
         self.assertTrue(stats['value']['processed'])
-        self.assertTrue(all(signal['timestamp_ms'] == 1000 for signal in signals))
+        self.assertTrue(all((signal['timestamp_ms'] if isinstance(signal, dict) else signal.timestamp_ms) == 1000 for signal in signals))
+        self.assertEqual([len(item['landmarks']) for item in private(signals, 'hand_points')[0]], [21, 21])
         self.assertIn('unverified-build', graph.spec.version)  # a bare runner proves no revision
 
     async def test_bgr_bytes_are_sent_unchanged_even_from_a_view(self):
@@ -139,7 +153,7 @@ class ModuleTest(unittest.IsolatedAsyncioTestCase):
         status = await graph.configure(dict(side_packets=dict(refine_face_landmarks=True)))
         self.assertEqual((status['run'], status['side_packets']['refine_face_landmarks']), (2, True))
         signals = await graph.process(frame(2))
-        self.assertEqual(len(named(signals, 'scene.face_landmarks')[0]['value'][0]['landmarks']), 478)
+        self.assertEqual(named(signals, 'scene.face_landmarks')[0]['value'][0]['landmark_count'], 478)
 
     async def test_configure_is_limited_to_what_the_owner_declared(self):
         graph = self.module(side_packets=dict(max_in_flight=1))
@@ -267,7 +281,10 @@ class ModuleTest(unittest.IsolatedAsyncioTestCase):
             pose_landmarks=('landmarks', [[None, .2, .3, 1, 1]] * 33)))
         self.assertEqual(named(signals, 'custom.hits')[0]['value'], 3)
         self.assertEqual(named(signals, 'custom.picture'), [])
-        self.assertEqual(named(signals, 'custom.marks')[0]['value'], [dict(x=.1, y=.2, z=.3)])
+        self.assertEqual(named(signals, 'custom.marks')[0]['value'], dict(landmark_counts=[1]))     # how many, never where
+        graph.derived = dict(marks='mark_points')
+        signals = graph._records(entry, dict(marks=('landmarks', [[.1, .2, .3, None, None]])))
+        self.assertEqual(private(signals, 'mark_points'), [[dict(landmarks=[dict(x=.1, y=.2, z=.3)])]])
         self.assertEqual(named(signals, 'scene.poses')[0]['value'], [])  # non-finite: not invented
 
 
@@ -307,15 +324,15 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
     async def test_pose_records_drive_the_exemplar_count_with_frames_in_flight(self):
         async with Gamst(consent=True) as human:
             pipeline = Pipeline(human, 'pose')
-            graph = module(branches=dict(hands=False, face=False), side_packets=dict(max_in_flight=3))
+            graph = module(branches=dict(hands=False, face=False), side_packets=dict(max_in_flight=3), derived=dict(poses='joints'))
             signals = await graph.process(frame(1, angle=30, up=True)) + await graph.finish()
-            values, mask = pose_channels(named(signals, 'scene.poses')[0]['value'][0]['landmarks'])
+            values, mask = pose_channels(private(signals, 'joints')[0][0]['landmarks'])
             await graph.reset()
             pipeline.add_input('camera', modality='video')
             pipeline.add_reference('shotgun', 'exemplar', dict(channels=values, mask=mask))
-            pipeline.add_module('graph', graph, consumes='camera', queue=8)
+            pipeline.add_module('graph', graph, consumes='camera', queue=8, emits=['joints'])
             channels = PoseChannels()
-            pipeline.add_module('channels', channels, consumes='graph:scene.poses', spec=channels.spec)
+            pipeline.add_module('channels', channels, consumes='joints', spec=channels.spec)
             matcher = ExemplarEvents(reference='shotgun', mode='hold', min_hold_ms=60)
             pipeline.add_module('exemplar', matcher, consumes='channels', spec=matcher.spec)
             start = now() - 2000
@@ -332,6 +349,8 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
             stats = human.store.query('local-user', kind='observation.signal', name='vision.mediapipe_graph.frame')
             self.assertEqual([r['timestamp_ms'] - start for r in stats], [33 * i for i in range(len(poses))])
             self.assertEqual(stats[0]['observation']['capability']['id'], 'vision.mediapipe_graph')
+            for answer in (await human.get_state(), await human.inspect_interval(0, now())):
+                self.assertNotIn('"landmarks"', json.dumps(answer))
             context = json.dumps(await human.get_context())
             self.assertIn('vision.mediapipe_graph', context)
             self.assertNotIn('"landmarks"', context)

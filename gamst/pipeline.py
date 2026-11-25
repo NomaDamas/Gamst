@@ -38,8 +38,8 @@ until the backlog is clear; when it is exceeded anyway, video is thinned: single
 ones are given up, every second one before any two in a row, so no whole interval goes unseen. Audio
 cannot be thinned; its oldest chunks are given up together. Either is a declared *gap*: counted, committed as a ``pipeline.gap`` event, and marked on the events and counts
 downstream. What happens to a frame that does not fit is one decision (:meth:`Pipeline._overflow`). Each
-gap says why: ``input`` and ``capture_paused`` are data that never reached GAMST; ``error`` is a frame a
-module failed on; ``thinned``, ``backlog``, ``paused`` and ``disabled`` are captured frames a
+gap says why: ``input``, ``input_failed`` and ``capture_paused`` are data that never reached GAMST; ``error`` is a
+frame a module failed on; ``thinned``, ``backlog``, ``paused`` and ``disabled`` are captured frames a
 module did not process (``thinned``: frames between these two times were processed, ``frames`` of them were not).
 ``complete_until_ms`` of a module only advances over capture time that was processed or declared so.
 Audio is never joined across a gap.
@@ -58,8 +58,16 @@ input's ``offset_ms`` is the owner's measured correction, added to its capture t
 ``push_audio``, MCP ``start_capture``, the dashboard), which is how ``ProfileRuntime`` runs the
 roles chosen by setup as one Pipeline.
 
+Failures. In a run, one input or module that fails does not end the others: what it did not deliver is a declared
+gap, ``status()['failures']`` names it, and the run is incomplete. A live input is opened again with growing waits
+(``REOPEN_S``, bounded) and says when it resumed; a module that fails ``FAILURES`` times in a row is given up until it is
+switched on again; the run ends when nothing is left. ``run(stop_on_failure=True)`` ends it at the first failure.
+
 User-defined reference inputs (a voice sample, photos, a demonstrated pose, a list of words) are
-given with ``add_reference``. Modules read them in ``bind(pipeline)``; the pipeline keeps only what
+given with ``add_reference``. Words (``terms``) and movements (``exemplar``) may be replaced or removed while a run goes
+on (:meth:`Pipeline.set_reference`, :meth:`Pipeline.remove_reference`): from a stated capture time on, with a revision
+that every event and count carries. References to a person are set by the owner before the run only.
+Modules read references in ``bind(pipeline)``; the pipeline keeps only what
 the module returns from ``bind`` (an embedding, a feature template), never the raw sample, unless
 the module keeps it itself.
 """
@@ -70,18 +78,29 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 import inspect
 import time
+import hashlib
+import json
 from typing import Any
 
 from .capabilities import CapabilitySpec, OutputField, SensorMetadata, identifier
 from .plugins import InputFrame
+from .redact import public_error, public_text
 
 GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipeline', '1',
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+INSTRUCTIONS = CapabilitySpec('pipeline.instructions', 'pipeline.instructions', 'events', 'gamst.pipeline', '1',
+                              (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+INSTRUCTABLE = ('terms', 'exemplar')     # reference kinds that may change while a run goes on; the others identify a person
 BACKLOG = 900                            # frames a lane holds (30 s of 30 fps video) ...
 BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline hold together
 MAX_OFFSET_MS = 600_000                  # an input's declared clock correction
 LOG = 512                                # gap intervals and timings kept per module
 GAP_RECORD_S = 1.                        # at most one gap record per place and second; merged in between
+FAILED_RECORD_S = 30.                    # ... and per half minute for a module that was given up
+FAILURES = 25                            # failures in a row after which a run gives a module up
+REOPEN_S = (.5, 1., 2., 4., 8., 16.)     # waits before a failed live input is opened again; then it is given up
+REOPENED_S = 10.                         # an input that delivered this long after that starts over with the waits
+SLOW_FRAMES = 30                         # frames measured before a lane is called slower than its input
 
 
 @dataclass(frozen=True)
@@ -124,6 +143,13 @@ def _percentiles(values):
                 samples=len(ordered))
 
 
+def reference_id(value):
+    """Which words or which movement this is: the file's own ID, else a hash of the content."""
+    if isinstance(value, dict) and isinstance(value.get('id'), str):
+        return value['id'][:64]
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def _now_ms():
     return time.time_ns() // 1_000_000
 
@@ -150,6 +176,9 @@ class Pipeline:
         self._recorded = False               # capture times are not now: ages and lags would mean nothing
         self._collected = None               # records committed by lanes, until the next on_frame
         self._running, self._failure = False, None
+        self._stop, self._stop_on_failure = None, False
+        self.reopen_s = REOPEN_S
+        self.notify = None                   # the application's hook: what failed or came back, as a line of text
         self._gaps: dict[str, dict] = {}     # not yet committed, by place
         self._gap_at: dict[str, float] = {}
         self._gap_sequence = 0
@@ -173,7 +202,8 @@ class Pipeline:
             raise ValueError(f'offset_ms must be an integer of at most {MAX_OFFSET_MS} ms')
         self.inputs[input_id] = dict(source=source, modality=modality or getattr(source, 'modality', None),
                                      derived_from=derived_from, frames=0, first_ms=None, last_ms=None, done_ms=None, missed=0, gaps=0, off=None,
-                                     offset_ms=offset_ms, ended=False, error=None)
+                                     offset_ms=offset_ms, ended=False, error=None, down=None, retries=0, opened=None,
+                                     outages=deque(maxlen=16), intervals=deque(maxlen=64), size=None)
         return self
 
     def add_reference(self, name, kind, value, *, label=None, consent=None):
@@ -184,7 +214,127 @@ class Pipeline:
         if kind in ('voice', 'person', 'face', 'body') and not consent:
             raise ValueError('a reference to a person needs a consent record')
         self.references[name] = dict(kind=kind, value=value, label=label or name, consent=consent)
+        if kind in INSTRUCTABLE:
+            self.references[name].update(id=reference_id(value), revision=1, from_ms=0, set_by='owner', source='start',
+                                         set_at_ms=_now_ms())
         return self
+
+    # ------------------------------------------------------------------ instructions while a run goes on
+
+    def change_ms(self, inputs):
+        """The first capture time of these inputs that has not been taken in yet: where a change takes effect."""
+        return 1 + max((self.inputs[key]['last_ms'] for key in inputs if self.inputs[key]['last_ms'] is not None), default=-1)
+
+    def _reading(self, name):
+        return {key: entry for key, entry in self.modules.items()
+                if getattr(entry['module'], 'reference_name', None) == name and callable(getattr(entry['module'], 'schedule', None))}
+
+    async def set_reference(self, name, kind, value, *, label=None, set_by='user', source='value', add=()):
+        """Give the modules that read ``name`` other words or another movement, without restarting anything.
+
+        Frames captured before ``effective_from_ms`` (the answer's) are still measured by the old one, later ones by the
+        new one only: nothing before it was looked for. ``add``: ``(name, module, add_module options)`` of modules to
+        connect with it. Raises before anything is changed.
+        """
+        identifier(name, 'reference name')
+        if kind not in INSTRUCTABLE:
+            raise PermissionError(f'a {kind} reference identifies a person: the owner sets it, with consent, before the run')
+        before = self.references.get(name)
+        if before is not None and before['kind'] != kind:
+            raise ValueError(f"{name!r} is a {before['kind']} reference")
+        readers, added = self._reading(name), [item[0] for item in add]
+        if bool(readers) == bool(add):
+            raise ValueError(f'{name!r} is read already; nothing to add' if add else f'no module of this run reads a reference {name!r}')
+        self._instructable()
+        reference = dict(kind=kind, value=value, label=label or name, consent=None, id=reference_id(value),
+                         revision=before['revision'] + 1 if before is not None else 1, from_ms=0, set_by=set_by, source=source,
+                         set_at_ms=_now_ms())
+        ready = {key: entry['module'].prepare(reference) for key, entry in readers.items()}    # refuses what it cannot use
+        for module in (item[1] for item in add):
+            if getattr(module, 'reference_name', None) == name and callable(getattr(module, 'prepare', None)):
+                module.prepare(reference)
+        roots = {root for key in readers for root in self._roots(key)}
+        for source in (source for _, _, options in add for source in options['consumes']):
+            owner = self.inputs[source]['derived_from'] if source in self.inputs else source.split(':', 1)[0]
+            roots |= {source} if owner is None else self._roots(owner)
+        # Several changes before a new frame: the last one takes the place of the others.
+        reference['from_ms'] = self.change_ms(roots)
+        for key, entry in readers.items():
+            entry['module'].schedule(ready[key], reference['from_ms'])
+            self._asked(entry, reference)
+        self.references[name] = reference
+        try:
+            for key, module, options in add:
+                self.add_module(key, module, **options)
+                self.modules[key]['from_ms'] = self.change_ms(self._roots(key))     # of its own inputs
+        except BaseException:
+            for key in added:
+                self._discard(key)
+            if before is None:
+                del self.references[name]
+            else:
+                self.references[name] = before
+            raise
+        return await self._instructed('instruction.set', name, reference, before)
+
+    async def remove_reference(self, name, *, set_by='user'):
+        """Stop looking for what ``name`` describes; what was counted stays, under its own revision."""
+        before = self.references.get(name)
+        if before is None:
+            raise ValueError(f'no reference {name!r} is set')
+        if before['kind'] not in INSTRUCTABLE:
+            raise PermissionError(f"a {before['kind']} reference is the owner's; it is not removed while the run goes on")
+        if before.get('removed'):
+            raise ValueError(f'{name!r} is removed already')
+        readers = self._reading(name)
+        self._instructable()
+        reference = dict(before, removed=True, value=None, revision=before['revision'] + 1, set_by=set_by, source='removed',
+                         set_at_ms=_now_ms(), from_ms=self.change_ms({root for key in readers for root in self._roots(key)}))
+        for entry in readers.values():
+            entry['module'].schedule(None, reference['from_ms'])
+            self._asked(entry, reference)
+        self.references[name] = reference
+        return await self._instructed('instruction.removed', name, reference, before)
+
+    def _instructable(self):
+        if self._closed or self.human.closed:
+            raise RuntimeError('the run is over')
+        if self.human.paused or not self.human.consent:
+            raise PermissionError('capture is paused; resume it first')
+
+    @staticmethod
+    def _asked(entry, reference):
+        """The capture intervals in which this module was asked for something (``[from, until)``; older ones are merged)."""
+        asked, at = entry['asked'], reference['from_ms']
+        if asked and asked[-1][1] is None:
+            asked[-1][1] = at
+        if not reference.get('removed'):
+            asked.append([at, None])
+        asked[:] = [item for item in asked if item[1] is None or item[1] > item[0]]
+        if len(asked) > 16:
+            asked[:2] = [[asked[0][0], asked[1][1]]]
+
+    def _discard(self, name):
+        entry = self.modules.pop(name, None)
+        if entry is not None:
+            self._lanes = [lane for lane in self._lanes if lane['name'] != name]
+            self._pausable.clear()
+            for derived in entry['emits']:
+                self.inputs.pop(derived, None)
+
+    async def _instructed(self, event, name, reference, before):
+        capabilities = sorted(filter(None, (self._capability(entry) for entry in self._reading(name).values())))
+        change = dict(event=event, reference=name, kind=reference['kind'], label=str(reference['label'])[:100],
+                      reference_id=reference['id'], reference_revision=reference['revision'], start_ms=reference['from_ms'],
+                      end_ms=reference['from_ms'], set_by=reference['set_by'], source=reference['source'], capabilities=capabilities)
+        if before is not None:
+            change.update(previous_id=before['id'], previous_revision=before['revision'])
+        self.human.register_capability(INSTRUCTIONS)
+        self._gap_sequence += 1
+        record = await self.human.push_observation(
+            INSTRUCTIONS.id, dict(events=[change]), timestamp_ms=reference['from_ms'] or _now_ms(),
+            sensor=SensorMetadata(source_id=self.name, sensor_id='instructions', sequence=self._gap_sequence))
+        return dict(change, record_id=record['id'], effective_from_ms=reference['from_ms'])
 
     def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=(), queue=None,
                    optional=False):
@@ -217,6 +367,7 @@ class Pipeline:
         bind = getattr(module, 'bind', None)
         if callable(bind):
             bind(self)
+        reference = self.references.get(getattr(module, 'reference_name', None), {})
         if queue == 'auto' or queue is None and width > 1:
             queue = None if width == 1 and not getattr(module, 'owns_process', False) else 1 if every_ms else BACKLOG
         if queue is not None:
@@ -229,8 +380,9 @@ class Pipeline:
         self.modules[name] = dict(module=module, consumes=consumes, links=links, spec=spec, enabled=bool(enabled),
                                   every_ms=every_ms, last_run_ms=None, processed=0, errors=0,
                                   last_error=None, last_latency_ms=None, needs_reset=False, emits=tuple(emits),
+                                  asked=[[reference['from_ms'], None]] if 'from_ms' in reference else [],
                                   last_admit_ms=None, lane=lane, optional=bool(optional), paused=False, pauses=0,
-                                  off=None, skipped=0, gaps=0, gap_frames=0, gap_out=False, gap_log=deque(maxlen=LOG),
+                                  off=None, failing=0, failed=None, skipped=0, gaps=0, gap_frames=0, gap_out=False, gap_log=deque(maxlen=LOG),
                                   from_ms=1 + max((value['last_ms'] for value in self.inputs.values()
                                                    if value['last_ms'] is not None), default=-1),
                                   newest_ms=None, until=None, latency=deque(maxlen=LOG), lag=deque(maxlen=LOG))
@@ -245,7 +397,7 @@ class Pipeline:
         return None
 
     def enable(self, name):
-        self._module(name)['enabled'] = True
+        self._module(name).update(enabled=True, failing=0, failed=None)
         return self.status()['modules'][name]
 
     def disable(self, name):
@@ -270,6 +422,7 @@ class Pipeline:
         if not callable(configure):
             raise ValueError(f'module {name!r} has no options to configure')
         await _call(configure, dict(options))
+        entry.update(failing=0, failed=None)
         return self.status()['modules'][name]
 
     async def reset(self):
@@ -277,6 +430,9 @@ class Pipeline:
         tasks = []
         for entry in self.modules.values():
             entry['needs_reset'] = True
+            drawing = getattr(entry['module'], 'drawing', None)     # what a screen draws is discarded at once
+            if callable(getattr(drawing, 'clear', None)):
+                drawing.clear()
         for lane in self._lanes:
             if lane['task'] is not None and not lane['task'].done():
                 lane['task'].cancel()
@@ -337,7 +493,9 @@ class Pipeline:
         if media:
             entry = self.inputs[source]
             entry['frames'] += 1
-            entry['last_ms'] = frame.timestamp_ms
+            if entry['last_ms'] is not None:
+                entry['intervals'].append(frame.timestamp_ms - entry['last_ms'])
+            entry['last_ms'], entry['size'] = frame.timestamp_ms, getattr(frame.data, 'shape', (None, None))[:2]
             if entry['first_ms'] is None:
                 entry['first_ms'] = frame.timestamp_ms
             if entry['off'] is not None:
@@ -346,8 +504,12 @@ class Pipeline:
                 self._gap(source, [source], off['start_ms'], off['end_ms'], off['frames'], off['reason'],
                           subject_id=off['subject_id'])
         records, queued = [], []
-        for name, entry in self.modules.items():
+        for name, entry in list(self.modules.items()):
             if not any(src == source and wanted in (None, output) for src, wanted in entry['links']):
+                continue
+            if entry['failed']:
+                self._gap(name, [name], frame.timestamp_ms, frame.timestamp_ms, 1, 'error', subject_id=frame.subject_id,
+                          extend=True)
                 continue
             if not entry['enabled'] or entry['paused']:
                 self._miss(entry, frame)
@@ -548,6 +710,10 @@ class Pipeline:
             if not entry['enabled'] or self.human.paused or self.human.closed:
                 self._miss(entry, item.frame)
                 continue
+            if entry['failed']:
+                ms = item.frame.timestamp_ms
+                self._gap(name, [name], ms, ms, 1, 'error', subject_id=item.frame.subject_id, extend=True)
+                continue
             records = await self._run_module(name, entry, item.frame, context, media=item.media, gap=item.gap,
                                              task=task if name == lane['name'] else None)
             if self._collected is not None:
@@ -557,7 +723,7 @@ class Pipeline:
             if isinstance(errors, list):
                 errors.append(dict(plugin=f'{self.name}:{name}', error=str(exc), timestamp_ms=item.frame.timestamp_ms))
                 del errors[:-100]
-            if self._running and not lane['sampled'] and not self._is_pausable(name):
+            if self._running and self._stop_on_failure and not lane['sampled'] and not self._is_pausable(name):
                 self._failure = self._failure or exc   # as inline: a run does not go on counting nothing
 
     # ------------------------------------------------------------------ gaps and completeness
@@ -599,11 +765,20 @@ class Pipeline:
             self._gap(name, [name], off['start_ms'], off['end_ms'], off['frames'], off['reason'],
                       subject_id=off['subject_id'])
 
-    def _gap(self, place, origins, start_ms, end_ms, frames, reason, *, subject_id='local-user', record=True):
-        """``frames`` captured in [start_ms, end_ms] never reached ``origins`` (inputs or modules)."""
+    def _gap(self, place, origins, start_ms, end_ms, frames, reason, *, subject_id='local-user', record=True, log=True,
+             extend=False):
+        """``frames`` captured in [start_ms, end_ms] never reached ``origins`` (inputs or modules).
+
+        ``extend``: it goes on from the last gap of the same place and reason, and is not another one.
+        """
         affected = self._affected(origins)
-        for name in affected:
+        for name in affected if log else ():
             entry = self.modules[name]
+            last = entry['gap_log'][-1] if entry['gap_log'] else None
+            if extend and last is not None and (last['source'], last['reason']) == (place, reason):
+                last.update(end_ms=max(last['end_ms'], end_ms), frames=last['frames'] + frames)
+                entry['gap_frames'] += frames
+                continue
             entry['gaps'] += 1
             entry['gap_frames'] += frames
             entry['gap_log'].append(dict(start_ms=start_ms, end_ms=end_ms, frames=frames, reason=reason, source=place))
@@ -620,9 +795,12 @@ class Pipeline:
     async def commit_gaps(self, *, force=False):
         """Commit what was lost as ``pipeline.gaps`` records (one per place and second, merged in between)."""
         records = []
+        for input_id in self.inputs:
+            self._outage(input_id, record=force)
         for place in list(self._gaps):
             last = self._gap_at.get(place)
-            if place not in self._gaps or not force and last is not None and time.monotonic() - last < GAP_RECORD_S:
+            wait = FAILED_RECORD_S if self.modules.get(place, {}).get('failed') else GAP_RECORD_S
+            if place not in self._gaps or not force and last is not None and time.monotonic() - last < wait:
                 continue
             if self._closed or self.human.paused or self.human.closed or not self.human.consent:
                 break
@@ -650,6 +828,127 @@ class Pipeline:
         gaps, frames = max(found, default=(0, 0))
         return dict(gaps=gaps, frames=frames)
 
+    # ------------------------------------------------------------------ failures
+
+    def _down(self, input_id, error, *, gone):
+        """An input failed: nothing it would have delivered from here on is known. ``gone``: it is not opened again."""
+        entry = self.inputs[input_id]
+        entry['error'] = public_error(error)
+        if gone:
+            entry['ended'] = True
+        if entry['down'] is None:
+            start = entry['last_ms'] + 1 if entry['last_ms'] is not None else None if self._recorded else _now_ms()
+            entry['down'] = dict(logged=start, recorded=start, since=start)
+            entry['outages'].append(dict(from_ms=start, error=entry['error']))
+        self._say(f"{input_id} failed: {entry['error']}; " + (
+            'not opened again' if gone else f"trying again ({entry['retries'] + 1} of {len(self.reopen_s)})"))
+        self._outage(input_id, record=True)
+        self._check_left()
+
+    def _say(self, text):
+        if callable(self.notify):
+            self.notify(text)
+
+    def _outage(self, input_id, *, record=False, end=None):
+        """What a failed input has not delivered up to now (a recording: up to what the others reached) is a gap."""
+        entry = self.inputs[input_id]
+        down = entry['down']
+        if down is None:
+            return
+        others = [value for key, value in self.inputs.items() if key != input_id and value['last_ms'] is not None]
+        if end is None:
+            end = _now_ms() if not self._recorded else max((value['last_ms'] for value in others), default=None)
+        if down['since'] is None and others:     # a recording that never gave a frame: it is missing from the start
+            down.update(dict.fromkeys(('logged', 'recorded', 'since'), min(value['first_ms'] for value in others)))
+            entry['outages'][-1]['from_ms'] = down['since']
+        if end is None or down['since'] is None:
+            return
+        # How many frames it would have had is unknown: one is the least.
+        if end >= down['logged']:
+            self._gap(input_id, [input_id], down['logged'], end, int(down['logged'] == down['since']), 'input_failed',
+                      record=False, extend=down['logged'] != down['since'])
+            down['logged'] = end + 1
+        if record and end >= down['recorded']:
+            self._gap(input_id, [input_id], down['recorded'], end, int(down['recorded'] == down['since']), 'input_failed',
+                      log=False)
+            down['recorded'] = end + 1
+
+    def _resumed(self, input_id, stamp):
+        """The first frame after a failure."""
+        entry = self.inputs[input_id]
+        self._outage(input_id, record=True, end=stamp - 1)
+        for name in self._affected([input_id]):     # someone may have asked just before this frame arrived
+            for gap in self.modules[name]['gap_log']:
+                if (gap['source'], gap['reason']) == (input_id, 'input_failed') and gap['start_ms'] < stamp <= gap['end_ms']:
+                    gap['end_ms'] = stamp - 1
+        entry.update(down=None, error=None, opened=time.monotonic())
+        entry['outages'][-1]['resumed_ms'] = stamp
+        self._say(f'{input_id} is back')
+
+    def _check_left(self):
+        """End a run in which nothing is left that could still report something."""
+        if self._stop is None or not self.modules:
+            return
+        dead = {key for key, entry in self.inputs.items() if entry['error'] and entry['ended']} | {
+            key for key, entry in self.modules.items() if entry['failed']}
+        while True:
+            more = {key for key, entry in self.modules.items() if key not in dead and all(
+                src in dead or self.inputs.get(src, {}).get('derived_from') in dead for src, _ in entry['links'])}
+            if not more:
+                break
+            dead |= more
+        if all(name in dead for name in self.modules):
+            self._stop.set()
+
+    def failures(self):
+        """Inputs and modules that failed in this run: what, why, and since when (or that it resumed)."""
+        found = [dict(input=key, **outage, given_up=entry['ended'] and 'resumed_ms' not in outage)
+                 for key, entry in self.inputs.items() for outage in entry['outages']]
+        return found + [dict(module=key, error=entry['failed'], given_up=True)
+                        for key, entry in self.modules.items() if entry['failed']]
+
+    def _roots(self, name):
+        """The inputs a module gets its frames from, directly or through other modules."""
+        found, wanted = set(), [name]
+        while wanted:
+            entry = self.modules.get(wanted.pop())
+            for source, _ in entry['links'] if entry is not None else ():
+                owner = self.inputs[source]['derived_from'] if source in self.inputs else source
+                if owner is None:
+                    found.add(source)
+                elif owner not in found:
+                    wanted.append(owner)
+        return found
+
+    def warnings(self):
+        """Lanes that need longer per frame than their live video input takes to give one: they fall behind."""
+        if self._recorded:
+            return []
+        groups, found = {}, []
+        for name, entry in self.modules.items():
+            if not entry['every_ms'] and entry['enabled'] and not entry['failed']:
+                groups.setdefault(entry['lane']['name'] if entry['lane'] is not None else None, []).append((name, entry))
+        for lane, members in groups.items():
+            frames = max(len(entry['latency']) for _, entry in members)
+            rates = [(sorted(value['intervals'])[len(value['intervals']) // 2], key) for key, value in self.inputs.items()
+                     if value['modality'] == 'video' and value['source'] is not None and len(value['intervals']) >= SLOW_FRAMES
+                     and any(key in self._roots(name) for name, _ in members)]
+            if frames < SLOW_FRAMES or not rates:
+                continue
+            interval, key = min(rates)
+            width = members[0][1]['lane']['width'] if lane is not None else 1
+            cost = sum(sum(entry['latency']) for _, entry in members) / frames / width
+            if cost > interval > 0:
+                source, size = self.inputs[key]['source'], self.inputs[key]['size']
+                hint = getattr(source, 'slow_hint', None)
+                where = f'lane {lane}' if lane is not None else 'the modules on the input itself'
+                found.append(dict(kind='slower_than_input', lane=lane, input=key, ms_per_frame=round(cost, 1),
+                                  frame_interval_ms=interval, frame_size=[size[1], size[0]] if size and size[0] else None,
+                                  text=f"{where} needs {cost:.0f} ms per frame, {key} gives one every {interval:g} ms"
+                                       f"{f' ({size[1]}x{size[0]})' if size and size[0] else ''}: it falls behind"
+                                       f"{'; ' + hint() if callable(hint) else ''}"))
+        return found
+
     def _mark(self, entry, value, timestamp_ms):
         """Events that span a known gap say so (``gap_frames``): their times and count may miss something."""
         events = value.get('events') if isinstance(value, dict) else None
@@ -671,6 +970,8 @@ class Pipeline:
         """Capture time up to which everything for ``name`` was processed or declared a gap, or None."""
         if name in self.inputs:
             entry = self.inputs[name]
+            if entry['down'] is not None:
+                return None if entry['down']['logged'] is None else entry['down']['logged'] - 1
             if entry['ended'] and entry['error'] is None and entry['done_ms'] is not None:
                 # Nothing was captured here after its end: that holds nobody back while other inputs go on.
                 return max(value['done_ms'] for value in self.inputs.values() if value['done_ms'] is not None)
@@ -721,13 +1022,20 @@ class Pipeline:
             entry['needs_reset'] = entry['gap_out'] = True   # never join audio across a lost interval
         try:
             output = await (self._process(entry, frame) if task is None else task)
-            return await self._commit(name, entry, frame, output, context)
+            records = await self._commit(name, entry, frame, output, context)
+            entry['failing'] = 0
+            return records
         except Exception as exc:
             entry['errors'] += 1
             entry['last_error'] = f'{type(exc).__name__}: {exc}'[:300]
             entry['needs_reset'] = True
             self._gap(name, [name], frame.timestamp_ms, frame.timestamp_ms, 1, 'error', subject_id=frame.subject_id)
             context.failures.append((name, exc))
+            entry['failing'] += 1
+            if self._stop is not None and not self._stop_on_failure and entry['failing'] >= FAILURES:
+                entry['failed'] = public_text(entry['last_error'])
+                self._say(f"{name} failed {FAILURES} times in a row and is given up: {entry['failed']}")
+                self._check_left()
             return []
 
     async def _process(self, entry, frame):
@@ -817,15 +1125,17 @@ class Pipeline:
                                            timestamp_ms=signal['timestamp_ms'])
         return records
 
-    async def run(self, *, stop=None, on_frame=None):
+    async def run(self, *, stop=None, on_frame=None, stop_on_failure=False):
         """Pump every source-backed input until all end (or ``stop`` is set); then finish modules.
 
         ``on_frame(input_id, frame, records)`` is the application's hook (a view, a report); returning
         False stops the run. ``records`` are those committed since the last call: modules in lanes answer
         while later frames are already captured, so a record's time is its own, not the frame's.
         A recorded input (``live = False``) waits for the lanes, frame by frame; a live one never waits.
+        One input or module that fails does not end the others (see the module docstring) unless ``stop_on_failure``.
         """
         stop = stop or asyncio.Event()
+        self._stop, self._stop_on_failure = stop, bool(stop_on_failure)
         sources = [entry['source'] for entry in self.inputs.values() if entry['source'] is not None]
         live = [bool(getattr(source, 'live', True)) for source in sources]
         if any(live) and not all(live):
@@ -853,7 +1163,13 @@ class Pipeline:
             frame = self._frame(input_id, frame.data, frame.modality, stamp,
                                 subject_id=frame.subject_id, sample_rate=frame.sample_rate,
                                 sensor=frame.sensor)
-            records = await self.feed(input_id, frame, gap=bool(lost))
+            context = _Context()
+            if entry['down'] is not None:
+                self._resumed(input_id, stamp)
+                lost = lost or 1
+            records = await self.feed(input_id, frame, gap=bool(lost), context=context)
+            if self._stop_on_failure and context.failures:
+                raise context.failures[0][1]
             if self._paced:
                 await self.drain()
             check()
@@ -872,30 +1188,67 @@ class Pipeline:
                 self.inputs[input_id]['ended'] = True
                 return None
             except Exception as exc:
-                self.inputs[input_id].update(ended=True, error=f'{type(exc).__name__}: {exc}'[:300])
+                self.inputs[input_id].update(ended=True, error=public_error(exc))
                 raise
 
         async def pump(input_id, source):
-            missed, frames = getattr(source, 'missed', 0), source.frames().__aiter__()
+            """Route what a source gives; a live one that fails is opened again, a bounded number of times."""
+            entry, missed = self.inputs[input_id], getattr(source, 'missed', 0)
             while not stop.is_set():
-                waiting = asyncio.ensure_future(following(input_id, frames))
-                if len(sources) > 1:    # another input may end the run while this one has nothing to say
-                    await asyncio.wait({waiting, stopping}, return_when=asyncio.FIRST_COMPLETED)
-                    if not waiting.done():
-                        waiting.cancel()
-                        await asyncio.gather(waiting, return_exceptions=True)
+                frames, failure = source.frames().__aiter__(), None
+                while not stop.is_set():
+                    waiting = asyncio.ensure_future(following(input_id, frames))
+                    if len(sources) > 1:    # another input may end the run while this one has nothing to say
+                        await asyncio.wait({waiting, stopping}, return_when=asyncio.FIRST_COMPLETED)
+                        if not waiting.done():
+                            waiting.cancel()
+                            await asyncio.gather(waiting, return_exceptions=True)
+                            return
+                    try:
+                        frame = await waiting
+                    except Exception as exc:
+                        if self._stop_on_failure:
+                            raise
+                        failure = exc
+                        break
+                    if frame is None or stop.is_set():
                         return
-                frame = await waiting
-                if frame is None or stop.is_set():
+                    if entry['opened'] is not None and time.monotonic() - entry['opened'] > REOPENED_S:
+                        entry.update(retries=0, opened=None)
+                    missed = await take(input_id, source, frame, missed)
+                if failure is None:
                     return
-                missed = await take(input_id, source, frame, missed)
+                again = getattr(source, 'live', True) and entry['retries'] < len(self.reopen_s)
+                entry['ended'] = not again
+                self._down(input_id, failure, gone=not again)
+                if not again:
+                    return
+                wait = self.reopen_s[entry['retries']]
+                entry['retries'] += 1
+                reopen = getattr(source, 'reopen', None) or getattr(source, 'close', None)
+                try:
+                    if callable(reopen):
+                        await _call(reopen)
+                except Exception as exc:    # the next attempt says whether it matters
+                    entry['error'] = public_error(exc)
+                await asyncio.wait({stopping}, timeout=wait)
 
         async def merge():
             """Recorded inputs in capture order: the earliest of the one waiting frame of each."""
             missed = {key: getattr(self.inputs[key]['source'], 'missed', 0) for key in recorded}
             frames = {key: self.inputs[key]['source'].frames().__aiter__() for key in recorded}
+
+            async def after(key):
+                try:
+                    return await following(key, frames[key])
+                except Exception as exc:
+                    if self._stop_on_failure:
+                        raise
+                    self._down(key, exc, gone=True)
+                    return None
+
             try:
-                waiting = {key: await following(key, frames[key]) for key in recorded}
+                waiting = {key: await after(key) for key in recorded}
                 while not stop.is_set():
                     ready = [(frame.timestamp_ms + self.inputs[key]['offset_ms'], order, key)
                              for order, (key, frame) in enumerate(waiting.items()) if frame is not None]
@@ -903,7 +1256,7 @@ class Pipeline:
                         return
                     key = min(ready)[2]
                     missed[key] = await take(key, self.inputs[key]['source'], waiting[key], missed[key])
-                    waiting[key] = None if stop.is_set() else await following(key, frames[key])
+                    waiting[key] = None if stop.is_set() else await after(key)
             finally:
                 for iterator in frames.values():
                     close = getattr(iterator, 'aclose', None)
@@ -912,7 +1265,8 @@ class Pipeline:
 
         recorded = [key for key, entry in self.inputs.items() if entry['source'] is not None] if self._paced else []
         for entry in self.inputs.values():
-            entry.update(ended=False, error=None)
+            entry.update(ended=False, error=None, down=None, retries=0, opened=None)
+            entry['outages'].clear()
         stopping = asyncio.create_task(stop.wait())
         tasks = [asyncio.create_task(merge())] if len(recorded) > 1 else [
             asyncio.create_task(pump(input_id, entry['source']))
@@ -929,7 +1283,10 @@ class Pipeline:
                 task.cancel()
             await asyncio.gather(*tasks, stopping, return_exceptions=True)
             self._running = self._paced = False
-        records = await self.finish()
+        try:
+            records = await self.finish()
+        finally:
+            self._stop = None
         collected, self._collected = self._collected or [], None
         return collected + records
 
@@ -939,18 +1296,27 @@ class Pipeline:
         records = []
         try:
             self._resume(force=True)
-            for name, entry in self.modules.items():
+            for name, entry in list(self.modules.items()):
                 await self.drain()     # what the modules before it still gave it
                 finish = getattr(entry['module'], 'finish', None)
-                if not entry['enabled'] or not callable(finish):
+                if not entry['enabled'] or entry['failed'] or not callable(finish):
                     continue
-                output = await _call(finish)
                 last = entry['last_run_ms']
+                try:
+                    output = await _call(finish)
+                except Exception as exc:
+                    if self._stop is None or self._stop_on_failure:
+                        raise
+                    entry['errors'] += 1
+                    entry['last_error'] = f'{type(exc).__name__}: {exc}'[:300]
+                    if last is not None:    # what it still held is not reported
+                        self._gap(name, [name], self._holding_from(entry) or last, last, 1, 'error')
+                    continue
                 if output is None or last is None or (entry['spec'] is None and not isinstance(output, list)):
                     continue  # a plugin that commits its own records returns its final value only
                 context = _Context()
                 records += await self._commit(name, entry, self._frame(name, None, 'record', last), output, context)
-                if context.failures:
+                if context.failures and (self._stop is None or self._stop_on_failure):
                     raise context.failures[0][1]
             await self.drain()
             records += await self.commit_gaps(force=True)
@@ -964,11 +1330,11 @@ class Pipeline:
         for task in lanes:
             task.cancel()
         await asyncio.gather(*lanes, return_exceptions=True)
-        for entry in self.inputs.values():
+        for entry in list(self.inputs.values()):
             close = getattr(entry['source'], 'close', None)
             if callable(close):
                 await _call(close)
-        for entry in self.modules.values():
+        for entry in list(self.modules.values()):
             close = getattr(entry['module'], 'close', None)
             if callable(close):
                 await _call(close)
@@ -993,18 +1359,26 @@ class Pipeline:
         from then on (a module's ``pending_since_ms``, already counted in ``complete_until_ms``); a module that answers about a window may still add results for that window.
         """
         now = _now_ms()
+        for key in self.inputs:
+            self._outage(key)
         return dict(
-            name=self.name, complete=not any(value['gaps'] for value in self.modules.values()),
+            name=self.name, complete=not any(value['gaps'] for value in self.modules.values()) and not self.failures(),
+            failures=self.failures(), warnings=self.warnings(),
             backlog_bytes=self._held_bytes, max_backlog_bytes=self.max_backlog_bytes,
             inputs={key: dict(modality=value['modality'], frames=value['frames'], last_ms=value['last_ms'],
                               derived_from=value['derived_from'], host_fed=value['source'] is None,
                               missed=value['missed'], gaps=value['gaps'],
                               offset_ms=value['offset_ms'], ended=value['ended'],
                               **({'error': value['error']} if value['error'] else {}),
+                              **({'down_since_ms': value['down']['since']} if value['down'] is not None else {}),
+                              **({'outages': [dict(item) for item in value['outages']]} if value['outages'] else {}),
                               **({'state': value['source'].status()}
                                  if callable(getattr(value['source'], 'status', None)) else {}))
                     for key, value in self.inputs.items()},
-            references={key: dict(kind=value['kind'], label=value['label']) for key, value in self.references.items()},
+            references={key: dict(kind=value['kind'], label=value['label'], **(dict(
+                reference_id=value['id'], reference_revision=value['revision'], effective_from_ms=value['from_ms'],
+                set_by=value['set_by'], removed=bool(value.get('removed'))) if 'revision' in value else {}))
+                        for key, value in self.references.items()},
             modules={key: dict(enabled=value['enabled'], consumes=value['consumes'], emits=list(value['emits']),
                                capability=value['spec'].id if value['spec'] is not None else None,
                                every_ms=value['every_ms'], processed=value['processed'], errors=value['errors'],
@@ -1013,9 +1387,12 @@ class Pipeline:
                                newest_result_age_ms=None if value['newest_ms'] is None or self._recorded
                                else max(0, now - value['newest_ms']),
                                gaps=value['gaps'], gap_frames=value['gap_frames'], complete=not value['gaps'] and value['off'] is None,
-                               gap_intervals=list(value['gap_log'])[-64:],
+                               gap_intervals=[dict(item) for item in list(value['gap_log'])[-64:]],
+                               **({'failed': value['failed']} if value['failed'] else {}),
                                complete_until_ms=self._complete_until(key), complete_from_ms=self._complete_from(key),
                                holding_from_ms=self._holding_from(value),
+                               **({'asked': [list(item) for item in value['asked']]}
+                                  if value['asked'] not in ([], [[0, None]]) else {}),
                                replicas=int(getattr(value['module'], 'replicas', 1)),
                                optional=value['optional'], paused=value['paused'], pauses=value['pauses'],
                                **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'])}
