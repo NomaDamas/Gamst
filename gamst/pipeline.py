@@ -640,8 +640,13 @@ class Pipeline:
 
     def lost(self, capability=None):
         """``{gaps, frames}`` lost under ``capability`` (default: under any module); gaps 0: nothing was."""
-        found = [(entry['gaps'], entry['gap_frames']) for entry in self.modules.values()
-                 if capability in (None, self._capability(entry))]
+        still_off = {}      # switched off and not on again yet: not declared as a gap so far, but lost all the same
+        for name, entry in self.modules.items():
+            if entry['off'] is not None:
+                for affected in self._affected([name]):
+                    still_off[affected] = max(still_off.get(affected, 0), entry['off']['frames'])
+        found = [(entry['gaps'] + (name in still_off), entry['gap_frames'] + still_off.get(name, 0))
+                 for name, entry in self.modules.items() if capability in (None, self._capability(entry))]
         gaps, frames = max(found, default=(0, 0))
         return dict(gaps=gaps, frames=frames)
 
@@ -1007,7 +1012,7 @@ class Pipeline:
                                latency_ms=_percentiles(value['latency']), capture_to_result_ms=_percentiles(value['lag']),
                                newest_result_age_ms=None if value['newest_ms'] is None or self._recorded
                                else max(0, now - value['newest_ms']),
-                               gaps=value['gaps'], gap_frames=value['gap_frames'], complete=not value['gaps'],
+                               gaps=value['gaps'], gap_frames=value['gap_frames'], complete=not value['gaps'] and value['off'] is None,
                                gap_intervals=list(value['gap_log'])[-64:],
                                complete_until_ms=self._complete_until(key), complete_from_ms=self._complete_from(key),
                                holding_from_ms=self._holding_from(value),

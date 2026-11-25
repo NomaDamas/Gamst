@@ -743,6 +743,38 @@ def speaker_bound(modules, name=None):
     return any(item['use'] in VOICE_PARTS for item in (modules if name is None else upstream(modules, name)))
 
 
+class _LiveMCP:
+    """The run's own session on the loopback server (token required), which ``gamst-mcp-live`` bridges to MCP.
+
+    An agent reads the same records, timeline and counts, and switches modules, while the recipe runs. It cannot
+    open another camera or microphone on this session: the recipe owns its inputs.
+    """
+
+    def __init__(self, human, port, proposals=None):
+        from ..mcp import MCPServer
+        self.port, self.server, self.task = port, MCPServer(human, movement_proposals=proposals), None
+        for tool in ('start_capture', 'stop_capture', 'pause_capture', 'resume_capture'):
+            self.server.tools.pop(tool, None)
+
+    async def start(self):
+        from ..server import serve_websocket
+        self.task = asyncio.create_task(serve_websocket(self.server, self.port))
+        await asyncio.sleep(.2)
+        if self.task.done():
+            try:
+                self.task.result()
+            except (OSError, RuntimeError) as error:
+                raise SystemExit(f'--serve {self.port}: {error}') from error
+        print(json.dumps(dict(serving=f'ws://127.0.0.1:{self.port}',
+                              mcp=f'gamst-mcp-live --url ws://127.0.0.1:{self.port}')), flush=True)
+
+    async def close(self):
+        if self.task is not None:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+        await self.server.close()
+
+
 async def run_pipeline(recipe, args):
     from .. import Gamst
     from ..counting import MAX_SCAN, count_events
@@ -773,11 +805,16 @@ async def run_pipeline(recipe, args):
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
         pipeline = await build_pipeline(recipe, args, human)
-        view, idle = None, None
+        view, idle, live = None, None, None
         try:
+            if getattr(args, 'serve', None):
+                live = _LiveMCP(human, args.serve, getattr(args, 'proposals', None))
+                await live.start()
             view = _view_class(recipe['view'])(pipeline, headless=args.headless,
                                                capabilities=recipe.get('records', ()))
         except BaseException:
+            if live is not None:
+                await live.close()
             await pipeline.close()
             raise
 
@@ -829,6 +866,8 @@ async def run_pipeline(recipe, args):
             if idle is not None:
                 idle.cancel()
             view.close()
+            if live is not None:
+                await live.close()
             await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'input_frames', 'speaker', 'counts', 'complete', 'lost', 'errors', 'score')
                       if key in report and (key not in ('lost', 'errors') or key == 'lost' and not report['complete']
@@ -996,6 +1035,9 @@ def main(argv=None):
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
     _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
+    start.add_argument('--serve', nargs='?', type=int, const=8765, metavar='PORT',
+                       help='let an agent read and switch this run over MCP: gamst-mcp-live --url ws://127.0.0.1:PORT '
+                            '(this computer only, token required; default port 8765)')
     start.add_argument('--report', help='write frames, counts and pipeline status as JSON')
     search = actions.add_parser('find', help='list where a movement occurs in recordings (the same counter, offline)')
     search.add_argument('recipe')

@@ -75,3 +75,4 @@ owner가 확정한 구조와 요구입니다(2026-11-25). 구현 상태는 따�
 | 단어: 예시 영상·음성 | 구현됨(`feat/multi-input`). 가짜 전사로만 확인 |
 | 단어: 인물을 정하지 않고 세기 | 구현됨(`--without voice`, 결과에 `speaker: not_bound`). 가짜 전사로만 확인 |
 | 물리 센서를 레시피 입력으로 | 숫자 표본(IMU 등 CSV/JSONL, 실시간은 host push)만 구현됨. 레이더·CSI 같은 원시 바이트 센서와 하드웨어 드라이버는 없음 |
+| 실행 중인 레시피를 LLM이 MCP로 읽고 켜고 끄기 | 구현됨(`gamst recipe run --serve`, `gamst-mcp-live`). 이 컴퓨터에서만, 토큰 필수. 다른 프로세스의 MCP 다리로 확인 |
