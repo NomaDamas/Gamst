@@ -1,4 +1,4 @@
-"""Evidence-bound call recommendations; no execution, queue or budget mutation."""
+"""Evidence-bound call recommendations; no execution or queue mutation."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -25,8 +25,8 @@ def _canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'
 class CallPolicy:
     """Pure policy: caller owns verified lifecycle state and applies recommendations.
 
-    A recommendation is NOT dispatch/success, budget approval, sensor control or
-    evidence that a blindspot was inspected. See the required controller follow-up.
+    A recommendation is NOT dispatch/success, sensor control or evidence that a
+    blindspot was inspected. The application owns the controller lifecycle.
     """
     mode: str = 'context_only'
     semantic_interval_ms: int = 5000
@@ -126,7 +126,7 @@ class CallPolicy:
             proposed_change_active=active,change_entered=entered,
             semantic_audit_due=unresolved_visual,unknown_candidate_unresolved=unknown_candidate,
             validated_rule=conflict_rule,quality_preservation_proven=False,
-            executes_model=False,changes_sensor_cadence=False,budget_authorized=False,
+            executes_model=False,changes_sensor_cadence=False,
             dispatch_recorded=False,semantic_success_recorded=False,
             evaluated_ms=now,age_ms=age,policy=policy)
         decision['decision_sha256']=hashlib.sha256(_canonical(decision)).hexdigest()

@@ -1,4 +1,4 @@
-"""Gamst: local, evidence-grounded human interaction intelligence."""
+"""Gamst: local multimodal perception and bounded temporal context for AI consumers."""
 from .engine import Gamst, PerceptionPlugin
 from .schema import SCHEMA_VERSION, validate_output
 from .feedback import CalibrationArtifact, LabeledOutcome, fit_calibration
@@ -7,7 +7,7 @@ from .streams import SensorStreams
 from .process_provider import ProcessProvider
 
 Observer = Gamst
-__version__ = "0.3.1"
+__version__ = "0.6.0"
 __all__ = ["Gamst", "Observer", "PerceptionPlugin", "SCHEMA_VERSION", "validate_output", "CalibrationArtifact", "LabeledOutcome", "fit_calibration"]
 __all__ += ['CapabilitySpec', 'CapabilityRegistry', 'OutputField', 'SensorMetadata']
 __all__ += ['SensorStreams']
@@ -39,9 +39,6 @@ __all__ += ['OpenEBProcess']
 from .smolvlm_call import SmolVLMCalls, smolvlm_frame_sha256
 __all__ += ['SmolVLMCalls', 'smolvlm_frame_sha256']
 
-from .frame_sentinel import FreshFrameSentinel
-__all__ += ['FreshFrameSentinel']
-
 from .text_context_call import TextContextCalls
 __all__ += ['TextContextCalls']
 
@@ -50,18 +47,6 @@ __all__ += ['VisualContextCalls']
 
 from .orbslam_process import ORBSLAMProcess
 __all__ += ['ORBSLAMProcess']
-
-from .fill_conflict import FillConflictRuntime
-__all__ += ['FillConflictRuntime']
-
-from .evaluation_snapshot import (SourceContextView, EvaluationSnapshotPublisher,
-                                 evaluation_snapshot_implementation_sha256)
-__all__ += ['SourceContextView', 'EvaluationSnapshotPublisher', 'evaluation_snapshot_implementation_sha256']
-
-from .openai_responses import OpenAIResponsesClient
-from .responses_evidence import ResponsesEvidenceSession
-from .responses_evidence_reader import read_responses_evidence
-__all__ += ['OpenAIResponsesClient', 'ResponsesEvidenceSession', 'read_responses_evidence']
 
 from .temporal_context import TemporalContextEngine
 from .context_memory import (CheckpointStore, ContextMemory, ContextMemoryEngine,

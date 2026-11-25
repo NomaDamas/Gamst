@@ -77,4 +77,4 @@ latency and deployment license review remain required in
 [#186](https://github.com/NomaDamas/Gamst/issues/186). This does not close family6.
 The provider implementation slice is [#193](https://github.com/NomaDamas/Gamst/issues/193).
 
-For a hash-pinned recorded input run, use the [replay CLI](orbslam-replay.md).
+The former hash-pinned replay CLI is described in the [benchmark archive](archive/benchmarks-and-evaluation.md).

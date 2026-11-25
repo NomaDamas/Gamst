@@ -66,14 +66,47 @@ async def demo():
                           "context": await human.get_context()}, ensure_ascii=False, indent=2))
 
 
+def _dispatch_setup(extra):
+    import importlib.util
+    try:
+        available = importlib.util.find_spec("gamstcrew.setup") is not None
+    except ModuleNotFoundError:
+        available = False
+    if not available:
+        print("GamstCrew is required for role-based setup. Install it with: python -m pip install gamstcrew")
+        raise SystemExit(1)
+    result = subprocess.run([sys.executable, "-m", "gamstcrew.setup", *extra], check=False)
+    if result.returncode:
+        raise SystemExit(result.returncode)
+    return 0
+
+
 def main():
+    from .star import ask
+    if sys.argv[1:3] == ["demo", "rotation"]:  # own parser, including --help
+        ask()
+        from .demos.rotation import main as rotation
+        rotation(sys.argv[3:])
+        return
+    if sys.argv[1:2] == ["recipe"]:  # own parser with subcommands, including --help
+        from .recipes import main as recipe
+        recipe(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description="gamst real-time sensory context SDK")
-    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run"])
+    parser.add_argument("command", choices=["demo", "mcp", "dashboard", "websocket", "install", "run", "setup", "star",
+                                            "recipe"])
     args, extra = parser.parse_known_args()
+    if args.command == "star":
+        ask(force=True)
+        return
+    if args.command in ("demo", "install", "run"):  # never on stdio/server commands
+        ask()
     if args.command == "demo":
         if extra:
-            parser.error("demo accepts no extra arguments")
+            parser.error("demo accepts no extra arguments; for rotation use: gamst demo rotation [options]")
         asyncio.run(demo())
+    elif args.command == "setup":
+        _dispatch_setup(extra)
     elif args.command in _LOCAL_COMMANDS:
         _dispatch_local_command(args.command, extra)
     else:

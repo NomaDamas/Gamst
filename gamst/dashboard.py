@@ -18,7 +18,6 @@ class Dashboard:
         # State-stream snapshots can be queued before a start/stop request.
         # Clients use this monotonic operation revision to reject stale data.
         self.capture_revision = 0
-        self.companion = None
         self._lock = asyncio.Lock()
         self._capture_lock = asyncio.Lock()
         self._vlm_test_lock = asyncio.Lock()
@@ -144,7 +143,6 @@ class Dashboard:
                     "context": await self.human.get_context(),
                     "guide_test_available": self.fixture_image is not None, "capture": self.capture,
                     "capture_revision": self.capture_revision, "adapter_errors": self.errors,
-                    "companion_available": self.companion is not None and self.companion.backend is not None,
                     "analysis_available": self.human.analysis_backend is not None,
                     "plugins": [p.name for p in self.human.plugins],
                     "workers": [p.status() for p in self.human.plugins if callable(getattr(p, 'status', None))],
@@ -171,12 +169,8 @@ class Dashboard:
             return {"deleted": True}
         if not self.capture:
             raise ValueError("Start with consent before submitting observations")
-        if op in ("chat", "text", "claim") and not getattr(self.human, "text_companion_enabled", True):
-            raise ValueError("Text and Companion are disabled in settings")
-        if op == "chat":
-            if self.companion is None:
-                raise ValueError("No companion backend configured")
-            return await self.companion.reply(body["text"])
+        if op in ("text", "claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text input is disabled in settings")
         if op == "analyze":
             return await self.human.analyze()
         if op == "feedback":
@@ -232,9 +226,11 @@ def handler_for(app):
                 "/app.js": "application/javascript",
                 "/playground.js": "application/javascript",
                 "/observability.js": "application/javascript",
+                "/moments.js": "application/javascript",
                 "/i18n.js": "application/javascript",
                 "/local-config.js": "application/javascript",
                 "/style.css": "text/css",
+                "/moments.css": "text/css",
                 "/icon.svg": "image/svg+xml",
             }
             if self.allowed_host() and self.path in static_types:
@@ -244,9 +240,9 @@ def handler_for(app):
                 if not asset.is_file():
                     return self.respond(404, {"error": "Not found"})
                 return self.respond(200, asset.read_text(), static_types[self.path])
-            if not self.allowed_host() or self.path != "/":
+            if not self.allowed_host() or self.path not in {"/", "/moments"}:
                 return self.respond(404, {"error": "Not found"})
-            page = Path(__file__).with_name("dashboard.html").read_text()
+            page = Path(__file__).with_name("dashboard.html").read_text() if self.path == "/" else (Path(__file__).parent.parent / "site" / "moments.html").read_text()
             self.respond(200, page.replace("__SESSION_TOKEN__", app.token), "text/html")
 
         def do_POST(self):
@@ -285,7 +281,7 @@ def handler_for(app):
                             future.cancel()
                     return
                 future = asyncio.run_coroutine_threadsafe(app.dispatch(body), app.loop)
-                self.respond(200, future.result(timeout=90 if body.get("op") in ("chat", "analyze", "test_vlm", "test_guides") else 30))
+                self.respond(200, future.result(timeout=90 if body.get("op") in ("analyze", "test_vlm", "test_guides") else 30))
             except Exception as exc:
                 if future is not None and not future.done():
                     future.cancel()
@@ -293,7 +289,7 @@ def handler_for(app):
     return Handler
 
 
-async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None):
+async def serve(port, store, face_model=None, asr_model=None, vad_model=None, scene_url=None, scene_model=None, websocket_port=None, asr_language=None, plugins_config=None, pose_model=None, sam3_config=None, profile=None):
     from . import Gamst
     from .plugins import AudioLevelPlugin, OpenCVPersonPlugin
     async with Gamst(consent=True, store=store, retention_hours=1/6, sensor_inference_interval_ms=250) as human:
@@ -305,8 +301,6 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
         fixture = Path.cwd() / '.local-run/qa/pose.jpg'
         if fixture.is_file():
             app.fixture_image = fixture
-        from .companion import Companion, companion_backend_from_env
-        app.companion = Companion(human, companion_backend_from_env())
         for factory in (AudioLevelPlugin, OpenCVPersonPlugin):
             try:
                 human.register(factory())
@@ -332,12 +326,16 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
             register_config(human, json.loads(Path(plugins_config).read_text()))
         if scene_url:
             human.register(QueuedPlugin(human, LocalScenePlugin(scene_url, scene_model, human=human), capacity=1))
+        runtime = None
+        if profile is not None:
+            from .profile import ProfileRuntime
+            runtime = await ProfileRuntime.open(human, profile or None)
+            print(f"gamst profile roles: {json.dumps(runtime.status)}", flush=True)
         websocket_task = None
         if websocket_port:
             from .server import serve_websocket
             from .mcp import MCPServer
             adapter = MCPServer(human)
-            adapter.companion = app.companion
             websocket_task = asyncio.create_task(serve_websocket(adapter, websocket_port))
         await human.pause()
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_for(app))
@@ -353,6 +351,8 @@ async def serve(port, store, face_model=None, asr_model=None, vad_model=None, sc
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+            if runtime is not None:
+                await runtime.close()
 
 
 def main():
@@ -369,9 +369,11 @@ def main():
     parser.add_argument('--asr-language', help='Whisper language code, e.g. ko or en; omit for automatic detection')
     parser.add_argument("--plugins-config", help="Explicit JSON list of installed plugin factories and local model options")
     parser.add_argument("--sam3-config", help="Installed local SAM3 ready.json")
+    parser.add_argument("--profile", nargs="?", const="", default=None,
+                        help="run the roles in a gamst setup profile (default ~/.config/gamst/profile.json)")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model, args.sam3_config))
+        asyncio.run(serve(args.port, args.store, args.face_model, args.asr_model, args.vad_model, args.scene_url, args.scene_model, args.websocket_port, args.asr_language, args.plugins_config, args.pose_model, args.sam3_config, args.profile))
     except KeyboardInterrupt:
         pass
     except PermissionError as exc:

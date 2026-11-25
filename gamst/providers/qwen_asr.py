@@ -40,11 +40,20 @@ class QwenStreamingASR:
         self.reset()
 
     @classmethod
-    def from_local(cls, path, files):
-        """Load a verified fixed-profile bundle in an already offline runtime."""
+    def from_local(cls, path, files, *, gpu_memory_utilization=0.5, language=None, max_model_len=None):
+        """Load a verified fixed-profile bundle in an already offline runtime.
+
+        ``gpu_memory_utilization`` is the vLLM share of the whole GPU; lower it when
+        other model processes share the device (ParallelCrew budgets). ``max_model_len``
+        bounds the KV cache (a 30 s streaming segment needs far less than the 64k default).
+        """
         import os
         import importlib.metadata
         from ..qwen_artifact import verify_bundle
+        if type(gpu_memory_utilization) is not float or not 0.02 <= gpu_memory_utilization <= 0.95:
+            raise ValueError('gpu_memory_utilization must be a float in 0.02..0.95')
+        if max_model_len is not None and (type(max_model_len) is not int or not 2048 <= max_model_len <= 65536):
+            raise ValueError('max_model_len must be 2048..65536')
         root, version = verify_bundle(path, files)
         if any(os.environ.get(key) != '1' for key in ('HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE')):
             raise RuntimeError('start the selected ASR runtime with HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1 before imports')
@@ -58,11 +67,12 @@ class QwenStreamingASR:
             if installed != expected:
                 raise RuntimeError(f'this source-audited profile requires {package}=={expected}')
         from qwen_asr import Qwen3ASRModel
+        options = {} if max_model_len is None else {'max_model_len': max_model_len}
         engine = Qwen3ASRModel.LLM(model=root, tokenizer=root, trust_remote_code=False,
             load_format='safetensors', max_inference_batch_size=1, max_new_tokens=128,
-            gpu_memory_utilization=0.5, max_num_seqs=1, enforce_eager=True,
-            tensor_parallel_size=1, pipeline_parallel_size=1, distributed_executor_backend='uni')
-        return cls(engine, model_version=version)
+            gpu_memory_utilization=gpu_memory_utilization, max_num_seqs=1, enforce_eager=True,
+            tensor_parallel_size=1, pipeline_parallel_size=1, distributed_executor_backend='uni', **options)
+        return cls(engine, model_version=version, language=language)
 
     @staticmethod
     def capability(model_version, *, chunk_ms=2000):

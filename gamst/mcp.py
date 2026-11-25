@@ -29,6 +29,16 @@ WINDOW = {"type": "string", "default": "1h"}
 MODEL_PATH = {"type": "string", "minLength": 1,
               "description": "Explicit existing local model path; never downloaded"}
 
+WATCH_ACTOR = {"type": "string", "enum": ["user", "jev"]}
+WATCH_REASON = {"type": "string", "maxLength": 2000}
+WATCH_VERSION = {"type": "string", "minLength": 64, "maxLength": 64}
+WATCH_RULE = {"type": "object", "description": (
+    "{subject_id?, conditions:[{capability_id|signal, path?, op: gt|gte|lt|lte|eq|ne|exists|contains, "
+    "value?, weight?, within_ms?}], threshold? (weighted fraction, default 1), cooldown_ms?, "
+    "max_per_minute?, context_window_ms?, recipient?, enabled?}")}
+WATCH_TOOLS = {"create_watch", "update_watch", "delete_watch", "list_watches",
+               "propose_watch_change", "get_watch_alarms"}
+MAX_PENDING_NOTIFICATIONS = 256
 
 def tool_definitions() -> list[dict]:
     identifier_field = {"type": "string", "minLength": 1, "maxLength": 128}
@@ -39,10 +49,8 @@ def tool_definitions() -> list[dict]:
         ("list_decision_modules", "Internal multimodal perception decision modules. Discovery registers only a dependency-free contract; it never starts sensors or loads model weights.", {}, ()),
         ("decide_multimodal", "Run an internal multimodal perception decision over already retained registered observations. The decision is published as decision.multimodal into Context and observation memory; no raw media is accepted or returned.", {"subject_id": SUBJECT, "window": WINDOW, "requested_capabilities": {"type": "array", "maxItems": 16, "items": identifier_field}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "timestamp_ms": TIME}, ()),
         ("get_multimodal_decisions", "Read retained decision.multimodal observations produced by the internal perception module. No inference is run and no sensors are activated.", dict(query_bounds, window=WINDOW), ()),
-        ("get_call_status", "Read-only bounded call-controller diagnostics. No model calls or cadence changes. Financial totals cover whole controller, not a selected subject. No raw observations, prompts or responses.",
+        ("get_call_status", "Read-only bounded call-controller timing and lifecycle diagnostics. No model calls or cadence changes. No raw observations, prompts or responses.",
          {"controller_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
-        ("get_sentinel_status", "Read-only bounded fresh-frame scheduler diagnostics. Inspected capture points and unobserved gaps are not continuous scene coverage. Polling never starts capture or inference. No raw media.",
-         {"sentinel_id": identifier_field, "limit": query_bounds["limit"], "max_bytes": query_bounds["max_bytes"]}, ()),
         ("get_sensor_status", "Typed sensor managers, registered factories and active lane queue/drop/reset/error/latency metrics.", {}, ()),
         ("finish_sensor_stream", "Drain and finalize one existing typed sensor stream, then close it. Does not stop its application-owned producer or open devices. Use IDs from get_sensor_status. No raw media returned.",
          {"manager_id": identifier_field, "source_id": identifier_field, "sensor_id": identifier_field},
@@ -67,13 +75,22 @@ def tool_definitions() -> list[dict]:
         ("get_features", "Runtime model switches shared with dashboard settings.", {}, ()),
         ("list_plugins", "Installed runtime plugin capabilities and model provenance.", {}, ()),
         ("get_vlm_status", "Local temporal VLM configuration and buffer status.", {}, ()),
-        ("configure_vlm", "Set temporal VLM sampling. Returns effective FPS after frame budget cap. Does not start capture.", {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60}, "window_seconds": {"type": "number", "minimum": 1, "maximum": 30}, "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
+        ("configure_vlm", "Update the installed local temporal VLM settings shared with the dashboard. Does not load a model or start capture.",
+         {"enabled": {"type": "boolean"}, "interval": {"type": "number", "minimum": 1, "maximum": 60},
+          "window_seconds": {"type": "number", "minimum": 1, "maximum": 30},
+          "sample_fps": {"type": "number", "minimum": .2, "maximum": 4}}, ()),
+        ("get_semantic_state", "Read bounded short-term semantic state updates. This is read-only and never triggers a model call.", {"subject_id": SUBJECT, "window": WINDOW, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}, ()),
+        ("get_voice_backend_status", "Read optional realtime voice backend configuration. Disabled by default; reading status never opens a network connection or microphone.", {}, ()),
+        ("configure_voice_backend", "Enable or disable an explicitly configured realtime voice consumer. This only stores validated provider metadata; it never starts full-duplex capture or spends API credits.",
+         {"enabled": {"type": "boolean"}, "provider": {"type": "string", "enum": ["none", "openai", "gemini", "custom"]},
+          "endpoint": {"type": "string", "minLength": 1, "maxLength": 2048}, "model": {"type": "string", "minLength": 1, "maxLength": 256},
+          "api_key_env": {"type": "string", "minLength": 1, "maxLength": 128}, "context_only": {"type": "boolean"}},
+         ("enabled", "provider", "context_only")),
         ("get_state", "Current measured state, with unavailable modalities explicit.", {"subject_id": SUBJECT}, ()),
         ("get_events", "Recent changes and their evidence for one subject.", {"subject_id": SUBJECT, "hours": {"type": "number", "minimum": 0, "default": 24}, "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}, "start_ms": TIME, "end_ms": TIME}, ()),
         ("get_context", "Evidence-based summary; does not infer hidden emotions or intent.", {"subject_id": SUBJECT, "window": WINDOW, "include": {"type": "array", "items": {"type": "string"}}}, ()),
         ("get_trends", "Measured changes relative to a subject's available baseline.", {"subject_id": SUBJECT, "window": WINDOW}, ()),
         ("inspect_interval", "Inspect stored evidence for a subject and time interval.", {"subject_id": SUBJECT, "start_ms": TIME, "end_ms": TIME}, ("start_ms", "end_ms")),
-        ("chat", "Generate a context-aware companion reply using the configured backend. Generated text is unverified model output.", {"subject_id": SUBJECT, "text": {"type": "string", "minLength": 1}}, ("text",)),
         ("analyze", "Run configured reasoning backend over retained evidence; unavailable without explicit backend setup.", {"subject_id": SUBJECT, "window": WINDOW}, ()),
         ("record_feedback", "Record an explicit observed outcome for a retained inference; never silently recalibrates models.", {"subject_id": SUBJECT, "inference_id": {"type": "string", "minLength": 1}, "outcome": {"type": "boolean"}, "prediction": {"type": "string", "minLength": 1}}, ("inference_id", "outcome")),
         ("push_text", "Supply a conversation turn; no camera or microphone needed.", {"subject_id": SUBJECT, "text": {"type": "string", "minLength": 1}, "timestamp_ms": TIME, "role": {"type": "string", "enum": ["user", "assistant"]}}, ("text",)),
@@ -84,6 +101,23 @@ def tool_definitions() -> list[dict]:
         ("pause_capture", "Pause collection without discarding history.", {}, ()),
         ("resume_capture", "Resume a previously consented capture session.", {}, ()),
         ("delete_data", "Delete stored and derived data. Omit subject_id to delete all subjects.", {"subject_id": SUBJECT}, ()),
+        ("create_watch", "Register an owner-declared Watch: a structured, deterministic rule over registered observations (capability_id) or signals. Owner is 'user' (rule from the user's natural-language request) or 'jev' (application decision model). On fire Gamst sends notifications/gamst/watch_alarm with per-evidence contributions and a time-window context. Gamst has no other trigger.",
+         {"owner": WATCH_ACTOR, "description": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "rule": WATCH_RULE, "reason": WATCH_REASON}, ("owner", "description", "rule")),
+        ("update_watch", "Explicitly change a Watch. Only its owner may update, and expected_version must equal the current rule sha256. Every update is logged; applying a jev proposal requires naming its proposal_id.",
+         {"watch_id": identifier_field, "actor": WATCH_ACTOR, "expected_version": WATCH_VERSION,
+          "changes": {"type": "object"}, "reason": WATCH_REASON, "proposal_id": identifier_field},
+         ("watch_id", "actor", "expected_version", "changes")),
+        ("delete_watch", "Delete a Watch. Only its owner may delete; the deletion is logged.",
+         {"watch_id": identifier_field, "actor": WATCH_ACTOR, "reason": WATCH_REASON}, ("watch_id", "actor")),
+        ("list_watches", "List Watches with rule versions, fire/suppression counts and open proposals; optionally the audit log.",
+         {"owner": WATCH_ACTOR, "include_audit": {"type": "boolean"},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 2000}}, ()),
+        ("propose_watch_change", "Record a proposed rule change (e.g. jev after a false alarm). Never applied automatically: the owner must call update_watch.",
+         {"watch_id": identifier_field, "proposer": WATCH_ACTOR, "changes": {"type": "object"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 2000}}, ("watch_id", "proposer", "changes", "reason")),
+        ("get_watch_alarms", "Read retained Watch alarms (newest first) with contributions and context; the same payload pushed as notifications.",
+         {"watch_id": identifier_field, "since_ms": TIME, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, ()),
     ]
     return [{"name": name, "description": desc, "inputSchema": _schema(props, required)}
             for name, desc, props, required in specs]
@@ -130,17 +164,44 @@ class MCPServer:
     def __init__(self, human: Any):
         self.human = human
         self.capture = None
-        self.companion = None
         self.tools = {t["name"]: t for t in tool_definitions()}
         self._capture_plugins: dict[str, tuple[tuple, Any]] = {}
         self._tool_lock = asyncio.Lock()
+        self.notifications: asyncio.Queue = asyncio.Queue(MAX_PENDING_NOTIFICATIONS)
+        self.dropped_notifications = 0
+        if getattr(human, "watches", None) is not None:
+            human.watches.add_sink(self._queue_alarm)
+
+    def _queue_alarm(self, alarm: dict) -> None:
+        message = {"jsonrpc": "2.0", "method": "notifications/gamst/watch_alarm",
+                   "params": {"recipient": alarm["recipient"], "alarm": alarm}}
+        if self.notifications.full():
+            self.notifications.get_nowait()
+            self.dropped_notifications += 1
+        self.notifications.put_nowait(message)
+
+    async def _watch_tool(self, name: str, args: dict) -> Any:
+        watches = self.human.watches
+        if name == "create_watch":
+            return watches.create(**args)
+        if name == "update_watch":
+            return watches.update(**args)
+        if name == "delete_watch":
+            return watches.delete(**args)
+        if name == "propose_watch_change":
+            return watches.propose(**args)
+        if name == "get_watch_alarms":
+            result = watches.get_alarms(**args)
+            result["dropped_notifications"] = self.dropped_notifications
+            return result
+        return watches.list(**args)
 
     async def call_tool(self, name: str, arguments: dict | None = None) -> Any:
         # WebSocket clients share the runtime; serialize capture lifecycle and
         # deletion so two concurrent clients cannot open duplicate devices.
         # Finalization owns its manager's lifecycle lock. Do not hold the global
         # tool lock while draining: deletion must invalidate a pending final.
-        if name in ("chat", "analyze", "finish_sensor_stream", "endpoint_sensor_stream"):
+        if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)
@@ -152,9 +213,22 @@ class MCPServer:
         _validate(args, self.tools[name]["inputSchema"])
         if "start_ms" in args and "end_ms" in args and args["start_ms"] > args["end_ms"]:
             raise ValueError("start_ms must not exceed end_ms")
+        if name in WATCH_TOOLS:
+            return await self._watch_tool(name, args)
+        if name in ("get_voice_backend_status", "configure_voice_backend"):
+            from .voice_backend import RealtimeVoiceConfig
+            if name == "get_voice_backend_status":
+                return self.human.voice_backend.status()
+            config = RealtimeVoiceConfig(**args)
+            self.human.voice_backend = config
+            return config.status()
         if name == "get_stream_status":
             from .media import media_router
             return media_router(self.human).status()
+        if name == "list_decision_modules":
+            return await self.human.list_decision_modules()
+        if name == "get_semantic_state":
+            return await self.human.get_semantic_state(**args)
         if name == "list_decision_modules":
             return await self.human.list_decision_modules()
         if name == "decide_multimodal":
@@ -172,12 +246,8 @@ class MCPServer:
         if name in ("get_vlm_status", "configure_vlm"):
             from .realtime import scene_status, configure_scene
             return scene_status(self.human) if name == "get_vlm_status" else await configure_scene(self.human, args)
-        if name in ("chat", "push_text", "push_claim") and not getattr(self.human, "text_companion_enabled", True):
-            raise ValueError("Text and Companion are disabled in settings")
-        if name == "chat":
-            if self.companion is None:
-                raise ValueError("No companion backend configured")
-            return await self.companion.reply(**args)
+        if name in ("push_text", "push_claim") and not getattr(self.human, "text_companion_enabled", True):
+            raise ValueError("Text input is disabled in settings")
         if name == "get_events":
             return await self.human.get_history(type="observation.event", **args)
         if name == "get_capture_status":
@@ -337,6 +407,8 @@ class MCPServer:
         return {"jsonrpc": "2.0", "id": ident, "error": {"code": code, "message": message}}
 
     async def close(self) -> None:
+        if getattr(self.human, "watches", None) is not None:
+            self.human.watches.remove_sink(self._queue_alarm)
         async with self._tool_lock:
             if self.capture:
                 await self.capture.stop()
@@ -347,6 +419,12 @@ async def serve_stdio(server: MCPServer) -> None:
     reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
     protocol = asyncio.StreamReaderProtocol(reader)
     transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+    async def write_notifications():
+        while True:
+            message = await server.notifications.get()
+            print(json.dumps(message, ensure_ascii=False, allow_nan=False), flush=True)
+
+    writer = asyncio.create_task(write_notifications())
     try:
         while True:
             try:
@@ -370,6 +448,7 @@ async def serve_stdio(server: MCPServer) -> None:
             if response is not None:
                 print(json.dumps(response, ensure_ascii=False, allow_nan=False), flush=True)
     finally:
+        writer.cancel()
         transport.close()
         await server.close()
 
@@ -382,15 +461,24 @@ async def _main(args: argparse.Namespace) -> None:
         if backend is not None:
             human.set_analysis_backend(backend)
         adapter = MCPServer(human)
-        from .companion import Companion, companion_backend_from_env
-        adapter.companion = Companion(human, companion_backend_from_env())
-        await serve_stdio(adapter)
+        runtime = None
+        if args.profile is not None:
+            from .profile import ProfileRuntime
+            runtime = await ProfileRuntime.open(human, args.profile or None)
+            logging.warning("gamst profile roles: %s", json.dumps(runtime.status))
+        try:
+            await serve_stdio(adapter)
+        finally:
+            if runtime is not None:
+                await runtime.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gamst MCP stdio server (devices off by default)")
     parser.add_argument("--store", default=":memory:", help="SQLite path; default stores only in memory")
     parser.add_argument("--retention-hours", type=float, default=24)
+    parser.add_argument("--profile", nargs="?", const="", default=None,
+                        help="run the roles in a gamst setup profile (default ~/.config/gamst/profile.json)")
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     try:

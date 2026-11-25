@@ -10,50 +10,13 @@ defers actual experiments, model installation and model/sensor validation until
 after this software phase. The [candidate matrix](candidate-execution-matrix.md)
 separately inventories selected implementations and unsupported alternatives.
 
-## Merged recording and transport evidence software
+## Archived recording and transport evidence software
 
-The following software milestones were merged on 2026-11-14. They do not
-replace the 24-family sensory acceptance map or establish measured savings.
-
-- [PR #279](https://github.com/NomaDamas/Gamst/pull/279): explicit
-  [Responses transport](openai-responses-evidence.md) connects actual SDK
-  callback entry to the physical request and separately retained original
-  response evidence. Cancellation and missing billing remain unknown costs.
-- [PR #280](https://github.com/NomaDamas/Gamst/pull/280): original collector
-  native3 records are joined to transport evidence and
-  [original account aggregates](original-billing-aggregates.md). Aggregate
-  amounts are not allocated into invented per-request invoices.
-- [PR #281](https://github.com/NomaDamas/Gamst/pull/281):
-  [recording-wide native4 operations](recording-native-scopes.md) retain
-  immutable task/source/provider ownership, actual SDK entry and worker
-  lifecycle evidence, bounded journals and verifiable failed prefixes.
-- [PR #282](https://github.com/NomaDamas/Gamst/pull/282): the
-  [native4 structural crosscheck](transport-native-crosscheck.md) includes
-  the whole selected lane, separate dispatch/entry/send counters, immutable
-  output and an offline CLI. Output inside original evidence roots is refused.
-
-Each PR passed independent exact-head review, its final full suite and CI.
-The software prerequisites #269, #275 and #276 are closed. The persistent
-A/B/C execution composition [#270](https://github.com/NomaDamas/Gamst/issues/270)
-and full-lifetime matched-source evaluation
-[#274](https://github.com/NomaDamas/Gamst/issues/274) now have integrated software
-in the continuation branch: owned persistent child execution, retained success
-and failed-prefix evidence, frozen source/task windows, original response joins,
-and bounded full-lifetime financial reconciliation. The 20-recording A/B/C
-regression exercises 60 actual fixture child executions and finalizes their
-synthetic financial originals. It is software evidence, not an actual-model
-experiment. Final CI, independent review and merge evidence are recorded in the
-integration PR; no merge is inferred from this document.
-These six work items are one implementation batch, not a denominator for overall
-project completion.
-
-Original request-receipt financial integration
-[#257](https://github.com/NomaDamas/Gamst/issues/257) and its source-acceptance
-contract [#277](https://github.com/NomaDamas/Gamst/issues/277) remain open.
-#257 was reopened after the acceptance audit found that its remaining receipt
-requirements were not satisfied. Synthetic original-byte/HTTP fixtures prove
-software behavior; they do not prove vendor authenticity, account isolation,
-invoice completeness, model quality, whole-system savings or latency improvement.
+The recording, transport and financial evaluation implementation formerly
+referenced here is no longer part of the SDK. Its contracts and any recorded
+results are retained in the [benchmark and evaluation archive](archive/benchmarks-and-evaluation.md).
+Those historical fixtures did not establish model quality, vendor authenticity,
+whole-system savings or deployment latency.
 
 ## Implemented paths with remaining model or device acceptance
 

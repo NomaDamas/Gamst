@@ -3,7 +3,6 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -40,6 +39,16 @@ class Backend:
     def close(self): self.closed = True
 
 
+class BatchBackend(Backend):
+    def __init__(self):
+        super().__init__()
+        self.batches = []
+
+    def predict_batch(self,images):
+        self.batches.append(images)
+        return [self.predict(image) for image in images]
+
+
 def frame(i=0,h=33,w=47):
     return InputFrame(np.zeros((h,w,3),dtype=np.uint8),'video',1000+i*50,
         sensor=SensorMetadata('camera1','video',i,coordinate_frame='image1',stream_epoch='e1'))
@@ -56,7 +65,10 @@ class Labels(unittest.TestCase):
         a,_,_ = configuration(NATIVE)
         b,_,_ = configuration(dict(NATIVE,encoder_sha256='c'*64))
         self.assertNotEqual(a['prompt_sha256'],b['prompt_sha256'])
-        for change in ({'imgsz':True},{'device':'mps'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
+        args,device,_ = configuration(dict(NATIVE,device='mps'))
+        self.assertEqual(device,'mps')
+        self.assertIn('mps',YOLOEContext.capability(**args).devices)
+        for change in ({'imgsz':True},{'device':'auto'},{'threshold':float('nan')},{'encoder_family':'clip:other'}):
             with self.assertRaises(ValueError): configuration(dict(NATIVE,**change))
         code = 'import sys;from gamst import ProcessProvider;ProcessProvider.capability("yoloe.local",'+repr(NATIVE)+');assert not {"numpy","torch","ultralytics","clip"}&sys.modules.keys()'
         result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
@@ -116,9 +128,10 @@ class Context(unittest.TestCase):
             def __init__(self): self.calls=[]
             def predict(self,**kw):
                 self.calls.append(kw)
-                h,w=kw['source'].shape[:2]
-                return [SimpleNamespace(orig_shape=(h,w),boxes=SimpleNamespace(data=Tensor(
-                    np.array([[0,0,w,h,.5,0]],np.float32))),masks=SimpleNamespace(data=Tensor(np.ones((1,h,w),np.uint8))))]
+                images = kw['source'] if isinstance(kw['source'],list) else [kw['source']]
+                return [SimpleNamespace(orig_shape=image.shape[:2],boxes=SimpleNamespace(data=Tensor(
+                    np.array([[0,0,image.shape[1],image.shape[0],.5,0]],np.float32))),
+                    masks=SimpleNamespace(data=Tensor(np.ones((1,*image.shape[:2]),np.uint8)))) for image in images]
         model=Model(); ref=np.zeros((32,32,3),np.uint8)
         native=NativeYOLOE(model,device='cpu',imgsz=320,threshold=.25,max_objects=16,
             reference=ref,prompts={'bboxes':np.array([[0,0,16,16]],np.float32),'cls':np.array([0])})
@@ -128,6 +141,12 @@ class Context(unittest.TestCase):
         self.assertIn('refer_image',model.calls[0]); self.assertNotIn('refer_image',model.calls[1])
         self.assertTrue(model.calls[0]['retina_masks']); self.assertFalse(model.calls[0]['save'])
         self.assertEqual(model.calls[0]['max_det'],16)
+        calls = len(model.calls)
+        output = native.predict_batch([ref,ref])
+        self.assertEqual(len(output),2)
+        self.assertEqual(len(model.calls),calls+1)
+        self.assertIsInstance(model.calls[-1]['source'],list)
+        self.assertEqual(model.calls[-1]['batch'],2)
         # Shape must be bounded before a GPU/host transfer or copy is attempted.
         model.predict = lambda **kw:[SimpleNamespace(orig_shape=(32,32),
             boxes=SimpleNamespace(data=SimpleNamespace(shape=(17,6))),masks=None)]
@@ -179,6 +198,21 @@ class Context(unittest.TestCase):
         p.reset(); p.process(frame())
         p.close(); p.reset(); self.assertTrue(backend.closed)
         with self.assertRaises(RuntimeError): p.process(frame(1))
+
+    def test_process_batch_schema_parity_and_capture_sequence(self):
+        serial = YOLOEContext(Backend(),**CONFIG)
+        backend = BatchBackend()
+        batched = YOLOEContext(backend,**CONFIG)
+        frames = [frame(),frame(1)]
+        expected = [serial.process(item) for item in frames]
+        self.assertEqual(batched.process_batch([]),[])
+        self.assertEqual(batched.process_batch(frames),expected)
+        self.assertEqual(len(backend.batches),1)
+        self.assertTrue(all(not item.data.any() for item in frames))
+        with self.assertRaises(ValueError): batched.process_batch([frame(2),frame(2)])
+        self.assertEqual(len(backend.batches),1)
+        # A failed batch resets the capture guard, just like a failed single process call.
+        self.assertEqual(batched.process_batch([frame()])[0]['summary']['capture_timestamp_ms'],1000)
 
     def test_empty_bad_native_output_and_metadata(self):
         backend = Backend(); p = YOLOEContext(backend,**CONFIG)

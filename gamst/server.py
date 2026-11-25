@@ -200,8 +200,6 @@ async def _main(args):
             backend = backend_from_env()
             if backend is not None:
                 human.set_analysis_backend(backend)
-            from .companion import Companion, companion_backend_from_env
-            adapter.companion = Companion(human, companion_backend_from_env())
             await serve_websocket(adapter, args.port, args.origin)
         finally:
             await adapter.close()

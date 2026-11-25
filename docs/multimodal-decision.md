@@ -135,3 +135,18 @@ weights. They cover schema validation, host-owned evidence IDs, fixed-choice
 enforcement, raw-media exclusion, timeout/low-confidence/stale abstention, the
 rules default, and unavailable-runtime construction errors. They do not
 establish trained-model accuracy, calibration, latency, or device acceptance.
+
+## GAMST scope boundary
+
+The runtime's high-frequency perception plugins and semantic state chain are the
+continuous layer. `decision.multimodal` is one optional perception plugin that
+structures retained observations; it does not trigger a strong LLM/VLM. Heavy
+model calls, prompt construction and application triggers remain outside GAMST,
+usually behind an MCP context request. The chain stores state updates, events,
+evidence IDs, source modalities and model provenance; it never stores raw media.
+
+The current implementation provides the bounded state-chain and read-only MCP
+`get_semantic_state` contract. It does not yet ship a validated high-frequency
+semantic streaming checkpoint or claim SOTA quality. Plugin assets, cadence,
+state-update quality and multimodal alignment must be validated by a dedicated
+campaign before publishing a GAMST-specific superiority result.
