@@ -10,6 +10,86 @@ import time
 from pathlib import Path
 
 
+def _live_schema():
+    """Connection-local index of retained signals, kept by SQLite itself inside each transaction.
+
+    Two questions are asked on every committed record: the newest signal of each series in a window, and the
+    averages of numeric signals. Answered from ``records`` they decode the JSON of the whole window; here they
+    are index lookups and a scan of plain numbers. Nothing is written to the file (``temp_store`` is memory).
+    """
+    def keys(row, *paths):
+        return ','.join(f"json_extract({row}.payload,'$.{path}')" for path in paths)
+
+    series = ('observation.name', 'observation.capability.id', 'observation.sensor.source_id', 'observation.sensor.sensor_id')
+    metric = ('observation.name', 'observation.modality', 'models[0].id', 'models[0].version')
+    signal = "{0}.kind='observation.signal'"
+    number = (signal + " AND json_type({0}.payload,'$.observation.value') IN ('integer','real')"
+              " AND json_extract({0}.payload,'$.quality.status')='sufficient'"
+              " AND json_extract({0}.payload,'$.observation.name')!='statement.claim'"
+              " AND json_extract({0}.payload,'$.observation.name') NOT LIKE '%model_score'")
+
+    def same(table, columns, row, paths):
+        pairs = zip(columns, paths)
+        return f"{table}.subject={row}.subject AND " + ' AND '.join(
+            f"{table}.{column} IS json_extract({row}.payload,'$.{path}')" for column, path in pairs)
+
+    series_columns, metric_columns = ('name', 'capability', 'source', 'sensor'), ('name', 'modality', 'model', 'version')
+    tables = """
+        CREATE TEMP TABLE live_series(id INTEGER PRIMARY KEY, subject TEXT, name, capability, source, sensor);
+        CREATE INDEX temp.live_series_key ON live_series(subject,name,capability,source,sensor);
+        CREATE TEMP TABLE live_signals(rid INTEGER PRIMARY KEY, series INTEGER, ts INTEGER);
+        CREATE INDEX temp.live_signal_time ON live_signals(series,ts,rid);
+        CREATE TEMP TABLE live_metrics(id INTEGER PRIMARY KEY, subject TEXT, name, modality, model, version);
+        CREATE INDEX temp.live_metric_key ON live_metrics(subject,name,modality,model,version);
+        CREATE TEMP TABLE live_numbers(rid INTEGER PRIMARY KEY, metric INTEGER, ts INTEGER, value);
+        CREATE INDEX temp.live_number_time ON live_numbers(metric,ts,rid,value);
+        CREATE TEMP TABLE live_clocked(rid INTEGER PRIMARY KEY, subject TEXT);
+    """
+    clocked = ("json_type({0}.payload,'$.observation.sensor.clock_id')='text'"
+               " AND json_extract({0}.payload,'$.observation.sensor.clock_id') NOT LIKE 'provider:%'")
+    parts = (
+        ('signal', signal, lambda row: (
+            f"INSERT INTO live_series(subject,name,capability,source,sensor) SELECT {row}.subject,{keys(row, *series)}"
+            f" WHERE NOT EXISTS(SELECT 1 FROM live_series WHERE {same('live_series', series_columns, row, series)})",
+            f"INSERT INTO live_signals VALUES({row}.rowid,(SELECT id FROM live_series WHERE"
+            f" {same('live_series', series_columns, row, series)}),{row}.ts)")),
+        ('number', number, lambda row: (
+            f"INSERT INTO live_metrics(subject,name,modality,model,version) SELECT {row}.subject,{keys(row, *metric)}"
+            f" WHERE NOT EXISTS(SELECT 1 FROM live_metrics WHERE {same('live_metrics', metric_columns, row, metric)})",
+            f"INSERT INTO live_numbers VALUES({row}.rowid,(SELECT id FROM live_metrics WHERE"
+            f" {same('live_metrics', metric_columns, row, metric)}),{row}.ts,"
+            f"json_extract({row}.payload,'$.observation.value'))")),
+        ('clocked', signal + ' AND ' + clocked, lambda row: (
+            f"INSERT INTO live_clocked VALUES({row}.rowid,{row}.subject)",)))
+    triggers = ''.join(
+        f"CREATE TEMP TRIGGER live_{name}_added AFTER INSERT ON main.records WHEN {when.format('NEW')}"
+        f" BEGIN {'; '.join(statements('NEW'))}; END;" for name, when, statements in parts)
+    triggers += """
+        CREATE TEMP TRIGGER live_removed AFTER DELETE ON main.records WHEN OLD.kind='observation.signal' BEGIN
+          DELETE FROM live_signals WHERE rid=OLD.rowid; DELETE FROM live_numbers WHERE rid=OLD.rowid;
+          DELETE FROM live_clocked WHERE rid=OLD.rowid; END;
+        CREATE TEMP TRIGGER live_series_done AFTER DELETE ON live_signals BEGIN DELETE FROM live_series
+          WHERE id=OLD.series AND NOT EXISTS(SELECT 1 FROM live_signals WHERE series=OLD.series); END;
+        CREATE TEMP TRIGGER live_metric_done AFTER DELETE ON live_numbers BEGIN DELETE FROM live_metrics
+          WHERE id=OLD.metric AND NOT EXISTS(SELECT 1 FROM live_numbers WHERE metric=OLD.metric); END;
+    """
+    fill = (
+        f"INSERT INTO live_series(subject,name,capability,source,sensor) SELECT DISTINCT r.subject,{keys('r', *series)}"
+        f" FROM main.records r WHERE {signal.format('r')}",
+        f"INSERT INTO live_signals SELECT r.rowid,l.id,r.ts FROM main.records r JOIN live_series l ON"
+        f" {same('l', series_columns, 'r', series)} WHERE {signal.format('r')}",
+        f"INSERT INTO live_metrics(subject,name,modality,model,version) SELECT DISTINCT r.subject,{keys('r', *metric)}"
+        f" FROM main.records r WHERE {number.format('r')}",
+        f"INSERT INTO live_numbers SELECT r.rowid,l.id,r.ts,json_extract(r.payload,'$.observation.value')"
+        f" FROM main.records r JOIN live_metrics l ON {same('l', metric_columns, 'r', metric)} WHERE {number.format('r')}",
+        f"INSERT INTO live_clocked SELECT r.rowid,r.subject FROM main.records r"
+        f" WHERE {signal.format('r')} AND {clocked.format('r')}")
+    return tables + triggers, fill
+
+
+_LIVE_TABLES = ('live_signals', 'live_numbers', 'live_series', 'live_metrics', 'live_clocked')
+
+
 class Store:
     _KNOWN = "COALESCE(known_ms,?)<=?"
 
@@ -23,6 +103,7 @@ class Store:
         self.retention_revision = 0
         # What removal (eviction, pruning, deletion) took away: newest capture time, newest knowledge time.
         self.lost_until_ms = self.lost_known_ms = None
+        self._live_version = None       # of the connection-local index; None: not built
         self._known_floor = 0
         self._opened_ms = time.time_ns() // 1_000_000   # records without a known_ms were known by then
         self._cursor_key = secrets.token_bytes(32)
@@ -102,6 +183,24 @@ class Store:
         known = self.known_now()
         self._known_floor = known + 1
         return known
+
+    def _live(self):
+        """The connection-local index, rebuilt when another connection wrote the file (or VACUUM moved rows)."""
+        version = self.connection.execute("PRAGMA main.data_version").fetchone()[0]
+        if version == self._live_version:
+            return
+        schema, fill = _live_schema()
+        if not self.connection.execute("SELECT 1 FROM temp.sqlite_master WHERE name='live_signals'").fetchone():
+            if self.connection.in_transaction:
+                raise RuntimeError("the live index cannot be created inside a transaction")
+            self.connection.execute("PRAGMA temp_store=MEMORY")
+            self.connection.executescript(schema)
+        with self.connection:
+            for table in _LIVE_TABLES:
+                self.connection.execute(f"DELETE FROM {table}")
+            for statement in fill:
+                self.connection.execute(statement)
+        self._live_version = version
 
     def _lost(self, where, args):
         capture, known = self.connection.execute(
@@ -220,13 +319,13 @@ class Store:
 
     def source_clocks(self, subject, known_until=None):
         """Sources whose records are in a clock of their own (a local worker's operation clock is not one)."""
+        self._live()
         sql = ("SELECT json_extract(payload,'$.observation.sensor.clock_id'),"
                "json_extract(payload,'$.observation.sensor.clock_epoch'),json_extract(payload,'$.observation.capability.id'),"
                "json_extract(payload,'$.observation.name'),json_extract(payload,'$.observation.sensor.source_id'),"
                "json_extract(payload,'$.observation.sensor.sensor_id'),COUNT(*),MAX(ts)"
-               " FROM records JOIN record_offsets ON record_id=id"
-               " WHERE subject=? AND kind='observation.signal' AND json_type(payload,'$.observation.sensor.clock_id')='text'"
-               " AND json_extract(payload,'$.observation.sensor.clock_id') NOT LIKE 'provider:%'")
+               " FROM live_clocked JOIN records ON records.rowid=rid JOIN record_offsets ON record_id=id"
+               " WHERE live_clocked.subject=?")
         args = [subject]
         if known_until is not None:
             sql, args = sql + " AND " + self._KNOWN, [*args, self._opened_ms, known_until]
@@ -282,9 +381,39 @@ class Store:
 
     def latest_signals(self, subject, start, end, *, _exclude_capability=None, known_until=None):
         """Latest current legacy name or registered capability/source/sensor identity."""
+        if _exclude_capability is not None:
+            return self._latest_signals_scan(subject, start, end, _exclude_capability=_exclude_capability,
+                                             known_until=known_until)
+        self._live()
+        known, bounds = ("", ()) if known_until is None else (" AND " + self._KNOWN, (self._opened_ms, known_until))
+        clause, args = "", ()
+        if known:
+            clause += (" AND EXISTS(SELECT 1 FROM records JOIN record_offsets ON record_id=id WHERE records.rowid=rid" +
+                       known + ")")
+            args += bounds
+        if self._any_revision():
+            clause += (" AND NOT EXISTS(SELECT 1 FROM records AS old JOIN records AS newer JOIN record_offsets ON"
+                       " record_id=newer.id WHERE old.rowid=rid AND json_type(newer.payload,'$.supersedes')='text' AND"
+                       " json_extract(newer.payload,'$.supersedes')=COALESCE(json_extract(old.payload,'$.supersedes'),old.id)"
+                       " AND json_extract(newer.payload,'$.revision')>COALESCE(json_extract(old.payload,'$.revision'),0)" +
+                       known + ")")
+            args += bounds
+        rows = self.connection.execute(
+            "SELECT payload FROM (SELECT name,capability,source,sensor,(SELECT rid FROM live_signals"
+            " WHERE series=live_series.id AND ts>=? AND ts<=?" + clause + " ORDER BY ts DESC,rid DESC LIMIT 1) AS found"
+            " FROM live_series WHERE subject=?) JOIN records ON records.rowid=found ORDER BY name,capability,source,sensor",
+            (start, end, *args, subject)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def _any_revision(self):
+        return self.connection.execute(
+            "SELECT EXISTS(SELECT 1 FROM records WHERE json_type(payload,'$.supersedes')='text')").fetchone()[0]
+
+    def _latest_signals_scan(self, subject, start, end, *, _exclude_capability=None, known_until=None):
+        """The same answer from the records themselves: what :meth:`latest_signals` must equal."""
         clause, args = self._context_exclusion(_exclude_capability)
         known, bounds = ("", ()) if known_until is None else (self._KNOWN, (self._opened_ms, known_until))
-        if self.connection.execute("SELECT EXISTS(SELECT 1 FROM records WHERE json_type(payload,'$.supersedes')='text')").fetchone()[0]:
+        if self._any_revision():
             clause += (" AND NOT EXISTS (SELECT 1 FROM records AS newer JOIN record_offsets ON record_id=newer.id"
                        " WHERE json_type(newer.payload,'$.supersedes')='text' AND json_extract(newer.payload,'$.supersedes')"
                        "=COALESCE(json_extract(records.payload,'$.supersedes'),records.id)"
@@ -309,12 +438,12 @@ class Store:
     def event_summary(self, subject, start, end, *, per_kind=8, _exclude_capability=None):
         clause, args = self._context_exclusion(_exclude_capability)
         counts = dict(self.connection.execute("""SELECT json_extract(payload,'$.event'), COUNT(*)
-            FROM records WHERE subject=? AND kind='observation.event' AND ts>=? AND ts<=?
+            FROM records INDEXED BY subject_kind_time WHERE subject=? AND kind='observation.event' AND ts>=? AND ts<=?
             """ + clause + " GROUP BY json_extract(payload,'$.event')", (subject, start, end, *args)).fetchall())
         rows = self.connection.execute("""SELECT payload FROM (
             SELECT payload, ts, rowid AS ordering, ROW_NUMBER() OVER (
               PARTITION BY json_extract(payload,'$.event') ORDER BY ts DESC,rowid DESC) AS rank
-            FROM records WHERE subject=? AND kind='observation.event' AND ts>=? AND ts<=?
+            FROM records INDEXED BY subject_kind_time WHERE subject=? AND kind='observation.event' AND ts>=? AND ts<=?
             """ + clause + ") WHERE rank<=? ORDER BY ts,ordering", (subject, start, end, *args, per_kind)).fetchall()
         return counts, [json.loads(row[0]) for row in rows]
 
@@ -334,6 +463,22 @@ class Store:
 
     def numeric_summary(self, subject, start, end, *, _exclude_capability=None):
         """Aggregate retained values in SQLite without decoding all stored JSON."""
+        if _exclude_capability is not None:
+            return self._numeric_summary_scan(subject, start, end, _exclude_capability=_exclude_capability)
+        self._live()
+        return self.connection.execute("""
+          SELECT name, modality, model, version,
+            SUM(CASE WHEN ts>=? THEN 1 ELSE 0 END), AVG(CASE WHEN ts>=? THEN value END),
+            SUM(CASE WHEN ts<? THEN 1 ELSE 0 END), AVG(CASE WHEN ts<? THEN value END),
+            MIN(CASE WHEN ts<? THEN ts END), MAX(CASE WHEN ts<? THEN ts END)
+          FROM live_metrics JOIN live_numbers ON metric=live_metrics.id
+          WHERE subject=? AND ts<=? AND EXISTS(SELECT 1 FROM live_numbers AS recent
+            WHERE recent.metric=live_metrics.id AND recent.ts>=? AND recent.ts<=?)
+          GROUP BY name, modality, model, version
+        """, (start, start, start, start, start, start, subject, end, start, end)).fetchall()
+
+    def _numeric_summary_scan(self, subject, start, end, *, _exclude_capability=None):
+        """The same answer from the records themselves: what :meth:`numeric_summary` must equal."""
         clause, args = self._context_exclusion(_exclude_capability)
         rows = self.connection.execute("""
           SELECT json_extract(payload, '$.observation.name') AS metric,
@@ -383,6 +528,7 @@ class Store:
             else:
                 result = self.connection.execute("DELETE FROM records WHERE subject=?", (subject,))
         self.connection.execute("VACUUM")
+        self._live_version = None       # VACUUM may renumber rows
         return result.rowcount
 
     def close(self):
