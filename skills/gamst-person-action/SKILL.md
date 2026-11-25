@@ -25,12 +25,23 @@ gamst recipe enroll person-action-count --camera 0 --start 3 --seconds 1.5 --mod
 
 `hold` takes the median pose of the window; `sequence` keeps the movement as up to 30 frames.
 
+## Enroll the person (needs their consent)
+
+```bash
+gamst recipe enroll person-action-count --kind person --video me.mp4 --seconds 10 \
+    --consent "who agreed, to what, when" --out me.json
+```
+
+Only frames that show exactly one person are used; only face embeddings are saved (file mode 0600).
+`--without target_person` counts the most visible person instead and needs no person file.
+`--with semantic` adds the 1 fps scene description lane (an OpenAI-compatible endpoint you host).
+
 ## Run and read the count
 
 ```bash
 gamst recipe check person-action-count --fps 30 --max-reps-s 2
-gamst recipe run person-action-count --camera 0 --exemplar pose.json
-gamst recipe run person-action-count --video clip.mp4 --exemplar pose.json --headless --report out.json
+gamst recipe run person-action-count --camera 0 --exemplar pose.json --person me.json
+gamst recipe run person-action-count --video clip.mp4 --exemplar pose.json --person me.json --truth truth.json --headless --report out.json
 ```
 
 Over MCP (`gamst mcp`), an agent reads the same records:
@@ -41,8 +52,8 @@ Over MCP (`gamst mcp`), an agent reads the same records:
 
 ## Limits
 
-- One person: the most visible pose. Binding the count to one enrolled person (face and body
-  matching) is the next module.
+- The face must be seen to confirm identity; the track is then held for up to 10 s without it. Identity
+  thresholds (face 0.35, release 0.15) have not been measured on people.
 - `--enter` / `--exit` are mean joint-angle differences (units of pi radians); defaults 0.12 / 0.18.
 - No human-counted take has been measured yet. Measure a take you counted yourself before quoting
   a number.

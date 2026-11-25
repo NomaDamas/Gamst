@@ -1,0 +1,88 @@
+{
+  "name": "person-term-count",
+  "summary": "Count how often one enrolled person says chosen words; other voices are not counted.",
+  "skill": "skills/gamst-person-terms/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "microphone": "16 kHz mono",
+    "compute": "CPU (CAM++ speaker embedding, faster-whisper small)"
+  },
+  "inputs": [
+    {
+      "id": "microphone",
+      "use": "microphone",
+      "sources": [
+        "microphone",
+        "audio"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "name": "voice",
+      "kind": "voice",
+      "label": "the enrolled voice"
+    },
+    {
+      "name": "terms",
+      "kind": "terms",
+      "label": "the words to count"
+    }
+  ],
+  "modules": [
+    {
+      "name": "speaker",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ]
+    },
+    {
+      "name": "target_voice",
+      "use": "speaker-gate",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "speaker"
+      ],
+      "emits": [
+        "voice"
+      ]
+    },
+    {
+      "name": "asr",
+      "use": "whisper-words",
+      "language": "ko",
+      "window_seconds": 3.0,
+      "consumes": [
+        "voice"
+      ]
+    },
+    {
+      "name": "speaker_check",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "segments": false,
+      "capability_id": "speech.speaker_check",
+      "consumes": [
+        "microphone",
+        "asr:speech.transcript_words"
+      ]
+    },
+    {
+      "name": "terms",
+      "use": "terms",
+      "reference": "terms",
+      "consumes": [
+        "speaker_check"
+      ]
+    }
+  ],
+  "view": "count",
+  "records": [
+    "speech.term_events"
+  ],
+  "limits": "overlapping voices are not separated by the default gate; use a target-speech module (a separation model) in a copy of this recipe; the speaker threshold must be set on your own audio; a word cut by a 3 s ASR window can be missed",
+  "measured": "not yet on people"
+}

@@ -63,7 +63,7 @@ class RecipeTest(unittest.TestCase):
 
     def test_a_pipeline_the_runtime_cannot_run_is_rejected(self):
         recipe = json.loads((recipes.RECIPES / 'coin-flip.json').read_text())
-        recipe['modules'][2]['use'] = 'optical-flow'
+        recipe['modules'][2]['use'] = 'no-such-part'
         path = self.tmp / 'bad.json'
         path.write_text(json.dumps(recipe))
         with self.assertRaisesRegex(ValueError, 'unknown part'):
@@ -145,7 +145,10 @@ class RecipeTest(unittest.TestCase):
         steps = recipes.plan(recipe, hardware=HOST)
         self.assertEqual(steps['roles']['vision.pose']['model'], 'mediapipe.pose_full')
         self.assertTrue(any(line.startswith('mediapipe==') for entry in steps['install'] for line in entry['packages']))
-        self.assertEqual(recipes.weight_files(steps), ['pose_landmarker_full.task'])
+        self.assertEqual(set(recipes.weight_files(steps)), {'pose_landmarker_full.task', 'LVFace-B_Glint360K.onnx'})
+        anyone = recipes.load('person-action-count', exclude=['target_person'])   # the most visible person
+        self.assertEqual(recipes.weight_files(recipes.plan(anyone, hardware=HOST)), ['pose_landmarker_full.task'])
+        self.assertEqual(recipes.roles(recipe).get('vision.semantic_scene'), None)   # off unless --with semantic
         with self.assertRaisesRegex(SystemExit, 'gamst recipe enroll'):
             recipes.main(['run', 'person-action-count', '--video', str(self.tmp / 'x.mp4'), '--headless'])
 

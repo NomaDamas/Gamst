@@ -11,22 +11,28 @@ import importlib
 import sys
 
 
-def _config(options, context):
-    value = options.get('config')
-    return dict(value) if isinstance(value, dict) else dict(context['installed'](options)['config'])
+def _entry(options, context, profile):
+    """(config, python, profile): the item's own ``"config"``, else what setup installed for its role."""
+    if isinstance(options.get('config'), dict):
+        entry = dict(config=options['config'], python=options.get('python'))
+    else:
+        entry = context['installed'](options)
+    return dict(entry['config']), context.get('worker_python') or entry.get('python') or sys.executable, profile
 
 
-def speaker_embedder(options, context):
-    """The embedding model of a ``speaker-verify`` item; one instance per model and recipe run."""
-    from ..providers.speaker_verify import load_embedder
-    config = _config(options, context)
+async def _open(client, entry):
+    from ..providers import model_workers
+    config, python, profile = entry
+    return await getattr(model_workers, client).open(python, profile, config)
+
+
+async def speaker_embedder(options, context):
+    """The embedding model of a ``speaker-verify`` item in its own environment; one per recipe run."""
+    entry = _entry(options, context, 'speaker.embedding')
     cache = context.setdefault('speaker_embedders', {})
-    key = (config['backend'], config['path'])
+    key = (entry[0].get('backend'), entry[0].get('path'))
     if key not in cache:
-        arguments = {name: config[name] for name in ('sha256', 'device', 'num_threads') if name in config}
-        if config['backend'] == 'sherpa-onnx':
-            arguments.pop('device', None)
-        cache[key] = load_embedder(config['backend'], config['path'], **arguments)
+        cache[key] = await _open('RemoteEmbedder', entry)
     return cache[key]
 
 
@@ -36,7 +42,7 @@ async def _speaker_verify(options, context):
                                                   'min_utterance_ms', 'ring_seconds', 'segments',
                                                   'capability_id') if name in options}
     threshold = context.get('speaker_threshold')
-    module = SpeakerVerify(speaker_embedder(options, context), reference=options.get('reference', 'voice'),
+    module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
                            **arguments)
     return dict(module=module, spec=module.spec)
@@ -56,38 +62,39 @@ async def _speaker_gate(options, context):
 
 
 async def _target_speech(options, context):
-    from ..providers.target_speech import EXTRACTORS, SAMSpanSpeech, TargetSpeech
-    config = _config(options, context)
-    backend = config.pop('backend')
+    from ..providers.target_speech import SAMSpanSpeech, TargetSpeech
+    entry = _entry(options, context, 'target_speech.local')
     arguments = dict(reference=options.get('reference', 'voice'), emits=_emits(options))
-    if backend == 'sam-span':
-        return dict(module=SAMSpanSpeech.from_local(config, **arguments))
-    for name in ('block_ms', 'context_ms'):
-        if name in options:
-            arguments[name] = int(options[name])
-    return dict(module=TargetSpeech(EXTRACTORS[backend].from_local(**config), **arguments))
+    remote = await _open('RemoteExtractor', entry)
+    if entry[0].get('backend') == 'sam-span':
+        return dict(module=SAMSpanSpeech(remote, **arguments))
+    arguments.update({name: int(options[name]) for name in ('block_ms', 'context_ms') if name in options})
+    return dict(module=TargetSpeech(remote, **arguments))
 
 
 async def _whisper_words(options, context):
-    from ..plugins import FasterWhisperPlugin
-    from ..providers.asr_words import WhisperWords
-    config = _config(options, context)
-    return dict(module=WhisperWords(FasterWhisperPlugin(
-        config['model_path'], window_seconds=float(options.get('window_seconds', 3.)),
-        language=context.get('language') or options.get('language'), device=config.get('device', 'cpu'),
-        word_timestamps=True)))
+    config, python, profile = _entry(options, context, 'faster_whisper.words')
+    config = dict(model_path=config['model_path'], device=config.get('device', 'cpu'),
+                  window_seconds=float(options.get('window_seconds', 3.)))
+    language = context.get('language') or options.get('language')
+    if language:
+        config['language'] = language
+    module = await _open('RemoteWhisper', (config, python, profile))
+    return dict(module=module, spec=module.spec)
 
 
 async def _qwen_words(options, context):
-    """Qwen3-ASR (existing worker profile) + Qwen3-ForcedAligner; both from explicit local configs."""
+    """Qwen3-ASR (existing worker profile) + Qwen3-ForcedAligner, each in its own environment."""
     from ..process_provider import ProcessProvider
-    from ..providers.asr_words import AlignedASR, QwenForcedAligner
-    config = _config(options, context)
+    from ..providers.asr_words import AlignedASR
+    config, python, _ = _entry(options, context, None)
     if 'asr' not in config or 'aligner' not in config:
-        raise SystemExit('qwen-words needs config.asr (a qwen3.asr.endpoint worker config) and config.aligner')
-    aligner = QwenForcedAligner.from_local(**config['aligner'])
-    worker = await ProcessProvider.open(context.get('worker_python') or config.get('python') or sys.executable,
-                                        config.get('profile', 'qwen3.asr.endpoint'), config['asr'])
+        raise SystemExit('qwen-words needs config.asr and config.aligner ({"python", "config"} each)')
+    asr, aligned = config['asr'], config['aligner']
+    aligner = await _open('RemoteAligner', (aligned['config'], aligned.get('python') or python,
+                                            'qwen3.forced_aligner'))
+    worker = await ProcessProvider.open(asr.get('python') or python, asr.get('profile', 'qwen3.asr.endpoint'),
+                                        asr['config'], startup_timeout=600, inference_timeout=120)
     module = AlignedASR(worker, aligner, language=context.get('language') or options.get('language'),
                         hop_ms=int(options.get('hop_ms', 20)))
     return dict(module=module, spec=module.spec)
@@ -105,17 +112,15 @@ async def _voice_channels(options, context):
     return dict(module=module, spec=module.spec)
 
 
-def face_embedder(options, context):
-    from ..providers.person_match import LVFaceEmbedder
-    config = _config(options, context)
-    return LVFaceEmbedder.from_local(config['path'], sha256=config.get('sha256'),
-                                     providers=config.get('providers'))
+async def face_embedder(options, context):
+    return await _open('RemoteEmbedder', _entry(options, context, 'face.embedding'))
 
 
-def body_embedder(options, context):
-    """Optional: ``"body": {"source", "checkpoint", ...}`` of a SOLIDER-REID checkout and checkpoint."""
-    from ..providers.person_match import SOLIDERBodyEmbedder
-    return SOLIDERBodyEmbedder.from_local(**options['body']) if options.get('body') else None
+async def body_embedder(options, context):
+    """Optional: ``"body": {"python", "config"}`` of a SOLIDER-REID environment and checkpoint."""
+    body = options.get('body')
+    return None if not body else await _open('RemoteEmbedder', (
+        dict(body['config']), body.get('python') or sys.executable, 'body.embedding'))
 
 
 async def _target_person(options, context):
@@ -123,24 +128,25 @@ async def _target_person(options, context):
     arguments = {name: options[name] for name in ('face_threshold', 'face_reject', 'body_threshold',
                                                   'face_every_ms', 'body_every_ms', 'hold_ms') if name in options}
     emits = options.get('emits') or ()
-    return dict(module=TargetPerson(face_embedder(options, context), body_embedder(options, context),
+    return dict(module=TargetPerson(await face_embedder(options, context), await body_embedder(options, context),
                                     reference=options.get('reference', 'person'),
                                     emits=emits[0] if emits else None, **arguments))
 
 
 async def _sapiens2_pose(options, context):
     from ..providers.sapiens2_pose import Sapiens2PosePlugin
-    return dict(module=Sapiens2PosePlugin.from_local(**_config(options, context)))
+    entry = _entry(options, context, 'sapiens2.pose')
+    remote = await _open('RemotePose', entry)
+    return dict(module=Sapiens2PosePlugin(None, None, None, None, device=None, version=remote.model_id, remote=remote,
+                                          tracker=options.get('tracker', 'ocsort')))
 
 
 async def _semantic_scene(options, context):
     """The existing streaming VLM client, isolated in its worker so a slow reply never blocks capture."""
     from ..crew.modules import open_worker
-    config = _config(options, context)
+    config, python, profile = _entry(options, context, 'streamingvlm.local')
     config.setdefault('window_frames', 1)
-    entry = {} if isinstance(options.get('config'), dict) else context['installed'](options)
-    module = await open_worker(context.get('worker_python') or entry.get('python') or sys.executable,
-                               'streamingvlm.local', config, inference_timeout=90)
+    module = await open_worker(python, profile, config, inference_timeout=90)
     return dict(module=module, spec=module.spec, every_ms=int(options.get('every_ms', 1000)), queue=1)
 
 
@@ -149,7 +155,10 @@ def _math(path):
     async def build(options, context):
         module_name, name = path.split(':')
         module = getattr(importlib.import_module(f'gamst.providers.{module_name}'), name)(**(options.get('config') or {}))
-        return dict(module=module, spec=module.spec)
+        spec = getattr(module, 'spec', None)
+        if spec is None:   # OpenCVFlow declares its contract per method
+            spec = type(module).capability((options.get('config') or {}).get('method', 'lucas_kanade'))
+        return dict(module=module, spec=spec)
     return build
 
 

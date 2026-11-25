@@ -93,12 +93,17 @@ async def _mediapipe_pose(options, context):
     from ..providers.pose import MediaPipePosePlugin
     config = context['installed'](options)['config']
     path = verified_file(config['path'], config['sha256'])
-    return dict(module=MediaPipePosePlugin(str(path), max_poses=int(options.get('max_poses', 1))))
+    return dict(module=MediaPipePosePlugin(str(path), max_poses=int(options.get('max_poses', 1)),
+                                           tracker=options.get('tracker', 'iou')))
 
 
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
-    module = PoseChannels(source=options.get('source', 'mediapipe_pose'))
+    arguments = {}
+    if options.get('source') == 'sapiens2':
+        from ..providers.sapiens2_pose import GOLIATH_BODY
+        arguments = dict(mapping=GOLIATH_BODY, min_visibility=.3)   # the official demo's --kpt-thr
+    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **arguments)
     return dict(module=module, spec=module.spec)
 
 
@@ -136,7 +141,9 @@ async def _exemplar(options, context):
     module = ExemplarEvents(reference=options.get('reference', 'exemplar'), mode=options.get('mode', 'hold'),
                             enter=float(context.get('enter') or options.get('enter', .12)),
                             exit=float(context.get('exit') or options.get('exit', .18)),
-                            min_hold_ms=int(options.get('min_hold_ms', 200)))
+                            min_hold_ms=int(options.get('min_hold_ms', 200)),
+                            modality=options.get('modality', 'video'),
+                            capability_id=options.get('capability_id', 'temporal.exemplar_events'))
     return dict(module=module, spec=module.spec)
 
 
@@ -206,3 +213,7 @@ PARTS = {
     'rotation-view': Part('view'),
     'halo-coin': Part('view'),
 }
+
+from .perception_parts import parts as _perception_parts  # noqa: E402  (needs Part)
+
+PARTS.update(_perception_parts(Part))
