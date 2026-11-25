@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/google-ai-edge/mediapipe",
+  "tag": "v0.10.35",
+  "commit": "f8ef212d5c962c0e853db7e59d217056b187084b",
+  "commit_date": "2026-04-23T00:36:33Z",
+  "bazel": "7.4.1",
+  "why": "same release as the measured Python runtime (mediapipe==0.10.35), so the C++ graph runs the same calculators and .tflite models GAMST already measured"
+}

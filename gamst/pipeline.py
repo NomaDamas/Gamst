@@ -122,6 +122,15 @@ class Pipeline:
         entry['needs_reset'] = True  # what it saw before the gap must not join what it sees after
         return self.status()['modules'][name]
 
+    async def configure(self, name, options):
+        """Pass module options (for example a MediaPipe graph's branches or side packets) to ``configure``."""
+        entry = self._module(name)
+        configure = getattr(entry['module'], 'configure', None)
+        if not callable(configure):
+            raise ValueError(f'module {name!r} has no options to configure')
+        await _call(configure, dict(options))
+        return self.status()['modules'][name]
+
     def _module(self, name):
         if name not in self.modules:
             raise KeyError(f'unknown module {name!r}; modules: {sorted(self.modules)}')
@@ -212,8 +221,11 @@ class Pipeline:
                             await self._ingest(signals, frame, entry['module'], name) if record]
         for record in list(records):
             observation = record.get('observation') or {}
+            # A record keeps its own capture time: a module running in parallel (its own process)
+            # commits earlier frames' records while later frames are already flowing.
             link = self._frame(name, observation.get('value'), observation.get('modality') or frame.modality,
-                               frame.timestamp_ms, subject_id=frame.subject_id, sensor=frame.sensor)
+                               record.get('timestamp_ms', frame.timestamp_ms), subject_id=frame.subject_id,
+                               sensor=frame.sensor)
             records += await self.feed(name, link, output=observation.get('name'))
         for item in derived:
             if item.input not in entry['emits']:
@@ -310,5 +322,7 @@ class Pipeline:
             modules={key: dict(enabled=value['enabled'], consumes=value['consumes'], emits=list(value['emits']),
                                capability=value['spec'].id if value['spec'] is not None else None,
                                every_ms=value['every_ms'], processed=value['processed'], errors=value['errors'],
-                               last_error=value['last_error'], last_latency_ms=value['last_latency_ms'])
+                               last_error=value['last_error'], last_latency_ms=value['last_latency_ms'],
+                               **({'state': value['module'].status()}
+                                  if callable(getattr(value['module'], 'status', None)) else {}))
                      for key, value in self.modules.items()})

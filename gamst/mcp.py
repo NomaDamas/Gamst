@@ -125,8 +125,8 @@ def tool_definitions() -> list[dict]:
           "group_by": {"type": "string", "maxLength": 128},
           "max_evidence": {"type": "integer", "minimum": 0, "maximum": 100}}, ("capability_id",)),
         ("get_pipeline", "The running Pipeline: inputs (including user-defined and derived inputs), modules, what each consumes, whether it is on, and its processed/error/latency counters. No raw media.", {}, ()),
-        ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap.",
-         {"name": identifier_field, "enabled": {"type": "boolean"}}, ("name", "enabled")),
+        ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap. Optional options go to the module itself, e.g. a MediaPipe graph module: {\"branches\": {\"face\": false}} or {\"side_packets\": {\"model_complexity\": 2}}.",
+         {"name": identifier_field, "enabled": {"type": "boolean"}, "options": {"type": "object"}}, ("name", "enabled")),
     ]
     return [{"name": name, "description": desc, "inputSchema": _schema(props, required)}
             for name, desc, props, required in specs]
@@ -232,6 +232,8 @@ class MCPServer:
                 raise ValueError("no Pipeline is running; start one with a recipe (gamst recipe run …)")
             if name == "get_pipeline":
                 return pipeline.status()
+            if args.get("options"):
+                await pipeline.configure(args["name"], args["options"])
             return pipeline.enable(args["name"]) if args["enabled"] else pipeline.disable(args["name"])
         if name in ("get_voice_backend_status", "configure_voice_backend"):
             from .voice_backend import RealtimeVoiceConfig

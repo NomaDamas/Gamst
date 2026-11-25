@@ -1,0 +1,23 @@
+# MediaPipe pin for a Bazel WORKSPACE (same revision as pin.json).
+#
+# GAMST's default is build.sh: it fetches this commit and builds the runner as
+# //mediapipe/gamst inside MediaPipe's own workspace, so MediaPipe's WORKSPACE
+# (TensorFlow, XNNPACK, protobuf, OpenCV, model files) is used unchanged.
+#
+# To build the runner from your own workspace instead, pin MediaPipe like this
+# and copy the repository rules from MediaPipe's WORKSPACE at the same commit
+# (MediaPipe does not export them as a macro), then reference targets as
+# @mediapipe//mediapipe/... in runner/BUILD.
+
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "mediapipe",
+    remote = "https://github.com/google-ai-edge/mediapipe.git",
+    commit = "f8ef212d5c962c0e853db7e59d217056b187084b",  # v0.10.35, 2026-04-23
+    shallow_since = "1776904593 +0000",
+)
+
+# Bazel: 7.4.1 (MediaPipe's .bazelversion at this commit).
+# CPU build: --define MEDIAPIPE_DISABLE_GPU=1
+# GPU build (Linux): --copt -DMESA_EGL_NO_X11_HEADERS --copt -DEGL_NO_X11
