@@ -18,8 +18,8 @@ Full design and the dedupe table: [docs/crew.md](crew.md). This file is the stat
 - Dropped: `gamst/crew_bridge.py` + test; Crew's `TemporalAligner` (helpers moved onto `gamst.temporal`),
   `CoreProviderRuntime`, duplicate checksum code, standalone Crew MCP server; recipes' own pip/fetch/checkout,
   `POSE_ASSETS`; the demo's own downloader.
-- Crew tests ported: `tests/test_crew_*.py` (13 files, 78 tests), plus `test_crew_modules.py` (worker as a
-  Pipeline module, lanes, intake). `test_recipes.py` / `test_profile_runtime.py` adjusted to the new plan
+- Crew tests ported: 12 `tests/test_crew_*.py` files, plus new `test_crew_modules.py` (worker as a Pipeline
+  module, lanes, intake); 78 tests in the 13 files. `test_recipes.py` / `test_profile_runtime.py` adjusted to the new plan
   shape (same semantics: coin-flip = rotation + yoloe + efficienttam, rotation = no weights, person-action-count
   = MediaPipe pose).
 - Docs: `docs/crew.md`, `docs/crew/*.md` (Crew's docs, paths updated), README setup section, notes on history
