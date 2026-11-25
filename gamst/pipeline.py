@@ -51,7 +51,9 @@ A module that computes without a process and reads a module in a lane joins that
 the whole chain (pose -> person -> channels -> count) in capture order, also where such a module reads
 the input itself. A module with ``replicas`` (stateless workers of one spec) works on several frames of
 its lane at once; results are still committed in capture order. Recorded inputs (``live = False``) wait
-for the lanes, so nothing builds up and nothing is given up.
+for the lanes, so nothing builds up and nothing is given up; several recorded inputs are read in capture order
+(one frame of each is held), and live and recorded inputs cannot run together, having no common clock. An
+input's ``offset_ms`` is the owner's measured correction, added to its capture times.
 ``PipelineIntake`` feeds a host-fed input from the engine's own intake (``push_video`` /
 ``push_audio``, MCP ``start_capture``, the dashboard), which is how ``ProfileRuntime`` runs the
 roles chosen by setup as one Pipeline.
@@ -77,6 +79,7 @@ GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipelin
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
 BACKLOG = 900                            # frames a lane holds (30 s of 30 fps video) ...
 BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline hold together
+MAX_OFFSET_MS = 600_000                  # an input's declared clock correction
 LOG = 512                                # gap intervals and timings kept per module
 GAP_RECORD_S = 1.                        # at most one gap record per place and second; merged in between
 
@@ -155,15 +158,22 @@ class Pipeline:
 
     # ------------------------------------------------------------------ composition
 
-    def add_input(self, input_id, source=None, *, modality=None, derived_from=None):
-        """``source`` has ``frames()`` (an async iterator of InputFrame); None means the host feeds it."""
+    def add_input(self, input_id, source=None, *, modality=None, derived_from=None, offset_ms=0):
+        """``source`` has ``frames()`` (an async iterator of InputFrame); None means the host feeds it.
+
+        ``offset_ms`` is added to its capture times: how much later than stamped this input really happened
+        (negative for a camera whose frames arrive late). Set by the owner from a measurement, never estimated here.
+        """
         identifier(input_id, 'input id')
         if input_id in self.inputs or input_id in self.modules:
             raise ValueError(f'{input_id!r} is already an input or module')
         if source is not None and not callable(getattr(source, 'frames', None)):
             raise TypeError('an input source needs frames()')
+        if type(offset_ms) is not int or abs(offset_ms) > MAX_OFFSET_MS:
+            raise ValueError(f'offset_ms must be an integer of at most {MAX_OFFSET_MS} ms')
         self.inputs[input_id] = dict(source=source, modality=modality or getattr(source, 'modality', None),
-                                     derived_from=derived_from, frames=0, first_ms=None, last_ms=None, done_ms=None, missed=0, gaps=0, off=None)
+                                     derived_from=derived_from, frames=0, first_ms=None, last_ms=None, done_ms=None, missed=0, gaps=0, off=None,
+                                     offset_ms=offset_ms, ended=False, error=None)
         return self
 
     def add_reference(self, name, kind, value, *, label=None, consent=None):
@@ -293,7 +303,8 @@ class Pipeline:
         if sensor is None:
             # Detectors and trackers require the frame to say its boxes are in image coordinates.
             sensor = SensorMetadata(source_id=self.name, sensor_id=input_id, sequence=sequence,
-                                    coordinate_frame='image' if modality == 'video' else None)
+                                    coordinate_frame='image' if modality == 'video' else None,
+                                    channels=('mono',) if modality == 'audio' and getattr(data, 'ndim', None) == 1 else ())
         else:
             capture = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
             sensor = replace(sensor, sensor_id=input_id, sequence=sequence, capture_sequence=capture)
@@ -306,7 +317,7 @@ class Pipeline:
         entry = self.inputs.get(input_id)
         if entry is None:
             raise KeyError(f'unknown input {input_id!r}')
-        frame = self._frame(input_id, data, modality or entry['modality'], int(timestamp_ms),
+        frame = self._frame(input_id, data, modality or entry['modality'], int(timestamp_ms) + entry['offset_ms'],
                             subject_id=subject_id, sample_rate=sample_rate)
         return await self.feed(input_id, frame)
 
@@ -655,6 +666,9 @@ class Pipeline:
         """Capture time up to which everything for ``name`` was processed or declared a gap, or None."""
         if name in self.inputs:
             entry = self.inputs[name]
+            if entry['ended'] and entry['error'] is None and entry['done_ms'] is not None:
+                # Nothing was captured here after its end: that holds nobody back while other inputs go on.
+                return max(value['done_ms'] for value in self.inputs.values() if value['done_ms'] is not None)
             return entry['done_ms'] if entry['derived_from'] is None else self._complete_until(entry['derived_from'])
         entry = self.modules[name]
         sources = [self._complete_until(src) for src, _ in entry['links'] if src in self.inputs or src in self.modules]
@@ -808,7 +822,10 @@ class Pipeline:
         """
         stop = stop or asyncio.Event()
         sources = [entry['source'] for entry in self.inputs.values() if entry['source'] is not None]
-        self._paced = self._recorded = bool(sources) and not any(getattr(source, 'live', True) for source in sources)
+        live = [bool(getattr(source, 'live', True)) for source in sources]
+        if any(live) and not all(live):
+            raise ValueError('live and recorded inputs have no common capture clock; run them separately')
+        self._paced = self._recorded = bool(sources) and not any(live)
         self._collected = None if on_frame is None else []
         self._running, self._failure = True, None
 
@@ -816,35 +833,85 @@ class Pipeline:
             if self._failure is not None:
                 raise self._failure
 
-        async def pump(input_id, source):
-            entry, missed = self.inputs[input_id], getattr(source, 'missed', 0)
-            async for frame in source.frames():
-                if stop.is_set():
-                    break
-                lost = getattr(source, 'missed', 0) - missed
-                missed += lost
-                entry['missed'] += lost
-                if lost:
-                    entry['gaps'] += 1
-                    last = entry['last_ms']
-                    first = frame.timestamp_ms - 1 if last is None else min(last + 1, frame.timestamp_ms - 1)
-                    self._gap(input_id, [input_id], first, frame.timestamp_ms - 1, lost, 'input',
-                              subject_id=frame.subject_id)
-                frame = self._frame(input_id, frame.data, frame.modality, frame.timestamp_ms,
-                                    subject_id=frame.subject_id, sample_rate=frame.sample_rate,
-                                    sensor=frame.sensor)
-                records = await self.feed(input_id, frame, gap=bool(lost))
-                if self._paced:
-                    await self.drain()
-                check()
-                if self._collected:
-                    records, self._collected = self._collected + records, []
-                if on_frame is not None and await _call(on_frame, input_id, frame, records) is False:
-                    stop.set()
-                await asyncio.sleep(0)
+        async def take(input_id, source, frame, missed):
+            """Route one frame of a source; returns how many it had missed by then."""
+            entry = self.inputs[input_id]
+            lost = getattr(source, 'missed', 0) - missed
+            missed += lost
+            entry['missed'] += lost
+            stamp = frame.timestamp_ms + entry['offset_ms']
+            if lost:
+                entry['gaps'] += 1
+                last = entry['last_ms']
+                first = stamp - 1 if last is None else min(last + 1, stamp - 1)
+                self._gap(input_id, [input_id], first, stamp - 1, lost, 'input', subject_id=frame.subject_id)
+            frame = self._frame(input_id, frame.data, frame.modality, stamp,
+                                subject_id=frame.subject_id, sample_rate=frame.sample_rate,
+                                sensor=frame.sensor)
+            records = await self.feed(input_id, frame, gap=bool(lost))
+            if self._paced:
+                await self.drain()
+            check()
+            if self._collected:
+                records, self._collected = self._collected + records, []
+            if on_frame is not None and await _call(on_frame, input_id, frame, records) is False:
+                stop.set()
+            await asyncio.sleep(0)
+            return missed
 
-        tasks = [asyncio.create_task(pump(input_id, entry['source']))
-                 for input_id, entry in self.inputs.items() if entry['source'] is not None]
+        async def following(input_id, frames):
+            """The next frame of a source, or None at its end; a failure is kept on the input."""
+            try:
+                return await frames.__anext__()
+            except StopAsyncIteration:
+                self.inputs[input_id]['ended'] = True
+                return None
+            except Exception as exc:
+                self.inputs[input_id].update(ended=True, error=f'{type(exc).__name__}: {exc}'[:300])
+                raise
+
+        async def pump(input_id, source):
+            missed, frames = getattr(source, 'missed', 0), source.frames().__aiter__()
+            while not stop.is_set():
+                waiting = asyncio.ensure_future(following(input_id, frames))
+                if len(sources) > 1:    # another input may end the run while this one has nothing to say
+                    await asyncio.wait({waiting, stopping}, return_when=asyncio.FIRST_COMPLETED)
+                    if not waiting.done():
+                        waiting.cancel()
+                        await asyncio.gather(waiting, return_exceptions=True)
+                        return
+                frame = await waiting
+                if frame is None or stop.is_set():
+                    return
+                missed = await take(input_id, source, frame, missed)
+
+        async def merge():
+            """Recorded inputs in capture order: the earliest of the one waiting frame of each."""
+            missed = {key: getattr(self.inputs[key]['source'], 'missed', 0) for key in recorded}
+            frames = {key: self.inputs[key]['source'].frames().__aiter__() for key in recorded}
+            try:
+                waiting = {key: await following(key, frames[key]) for key in recorded}
+                while not stop.is_set():
+                    ready = [(frame.timestamp_ms + self.inputs[key]['offset_ms'], order, key)
+                             for order, (key, frame) in enumerate(waiting.items()) if frame is not None]
+                    if not ready:
+                        return
+                    key = min(ready)[2]
+                    missed[key] = await take(key, self.inputs[key]['source'], waiting[key], missed[key])
+                    waiting[key] = None if stop.is_set() else await following(key, frames[key])
+            finally:
+                for iterator in frames.values():
+                    close = getattr(iterator, 'aclose', None)
+                    if callable(close):
+                        await close()
+
+        recorded = [key for key, entry in self.inputs.items() if entry['source'] is not None] if self._paced else []
+        for entry in self.inputs.values():
+            entry.update(ended=False, error=None)
+        stopping = asyncio.create_task(stop.wait())
+        tasks = [asyncio.create_task(merge())] if len(recorded) > 1 else [
+            asyncio.create_task(pump(input_id, entry['source']))
+            for input_id, entry in self.inputs.items() if entry['source'] is not None]
         try:
             if tasks:
                 await asyncio.gather(*tasks)
@@ -853,9 +920,9 @@ class Pipeline:
             await self.drain()
             check()
         finally:
-            for task in tasks:
+            for task in (*tasks, stopping):
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, stopping, return_exceptions=True)
             self._running = self._paced = False
         records = await self.finish()
         collected, self._collected = self._collected or [], None
@@ -927,6 +994,8 @@ class Pipeline:
             inputs={key: dict(modality=value['modality'], frames=value['frames'], last_ms=value['last_ms'],
                               derived_from=value['derived_from'], host_fed=value['source'] is None,
                               missed=value['missed'], gaps=value['gaps'],
+                              offset_ms=value['offset_ms'], ended=value['ended'],
+                              **({'error': value['error']} if value['error'] else {}),
                               **({'state': value['source'].status()}
                                  if callable(getattr(value['source'], 'status', None)) else {}))
                     for key, value in self.inputs.items()},

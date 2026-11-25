@@ -15,6 +15,10 @@ derived input (one enrolled person's separated voice) to count what that person 
 that carries ``speaker: {"match": false}`` (re-checked by ``gamst.providers.speaker_verify``) is not
 counted.
 
+Each event says how its term was given (``method``: ``text``, or ``examples`` of ``gamst recipe enroll --kind
+terms``, with ``confirmed``) and, when nothing upstream ties the sound to an enrolled voice, ``speaker:
+"not_bound"``.
+
 Text-pattern styles of speaking (a filler, a sentence ending) are terms too: a term written as
 ``re:<pattern>`` is a regular expression over the normalized text (lower case, no spaces or
 punctuation), e.g. ``re:(거든요|잖아요)$``.
@@ -89,8 +93,9 @@ def _word_times(words, offset, length):
 
 
 class TermEvents:
-    def __init__(self, *, reference='terms', terms=None, max_utterances=4096):
+    def __init__(self, *, reference='terms', terms=None, max_utterances=4096, speaker_bound=True):
         self.reference_name, self.max_utterances = reference, max_utterances
+        self.speaker_bound, self.origin = bool(speaker_bound), dict(method='text', confirmed=True)
         self.terms = {}
         if terms is not None:
             self.set_terms(terms)
@@ -111,7 +116,10 @@ class TermEvents:
         self.set_terms(reference['value'])
 
     def set_terms(self, value):
-        """A list of terms, or {term: [spellings ...]} so variants count as the same term."""
+        """A list of terms, or {term: [spellings ...]} so variants count as the same term, or a saved terms file."""
+        if isinstance(value, dict) and value.get('kind') == 'terms' and isinstance(value.get('terms'), dict):
+            self.origin = dict(method=str(value.get('method', 'examples')), confirmed=value.get('confirmed') is True)
+            value = value['terms']
         mapping = {str(term): [str(term)] for term in value} if isinstance(value, (list, tuple)) else \
             {str(term): [str(item) for item in (spellings or [term])] for term, spellings in dict(value).items()}
         if not mapping or any(not _valid(item) for spellings in mapping.values() for item in spellings):
@@ -161,7 +169,8 @@ class TermEvents:
                             else spelling
                         events.append(dict(event='term.spoken', term=term, spoken=spoken,
                                            utterance_id=value.get('utterance_id'), start_ms=start_ms,
-                                           end_ms=end_ms, word_timed=times is not None))
+                                           end_ms=end_ms, word_timed=times is not None, **self.origin,
+                                           **({} if self.speaker_bound else {'speaker': 'not_bound'})))
             if not events:
                 return None
             return self.spec.validate(dict(count=self._total, counts=dict(self._counts), events=events))

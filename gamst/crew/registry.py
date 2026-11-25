@@ -176,6 +176,8 @@ class RoleCandidate:
     in_process: str | None = None
     # The loader reads (and hashes) its whole directory, so it must hold this model's files only.
     bundle: bool = False
+    # Why its worker cannot read plain camera frames or microphone chunks, and what adapts them; None: it can.
+    adapter: str | None = None
 
     def as_dict(self):
         return {
@@ -214,6 +216,11 @@ class Role:
     # Pipeline process itself; it runs no model.
     kind: str = "module"
 
+    @property
+    def modality(self):
+        """What a model role reads; the worker's own capability is checked against it when it opens."""
+        return "audio" if self.id.startswith("audio.") else "video"
+
 
 def _weight(name, url, sha=None, size=0, source="estimated"):
     return Weight(name, url, sha, size, source)
@@ -246,6 +253,7 @@ RF_NANO_SHA = "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d"
 RF_LARGE_SHA = "0f4e20e19a99c0f8a62b5685f57f6c8b5c371c59081feda6752a0561a79ccf38"
 MOBILECLIP_SHA = "35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f"
 HF = "https://huggingface.co"
+VLM_ADAPTER = "a VLM interprets sampled segments, not every frame: use the semantic-scene part"
 
 
 def _rfdetr(variant, sha, url, verification, vram=0, source=ESTIMATED):
@@ -267,7 +275,7 @@ def _mediapipe(kind, filename, url, sha, size, verification, ram=768, size_sourc
         "mediapipe." + kind, "mediapipe." + ("body" if kind.startswith("pose") else kind) + ".video",
         MEDIAPIPE, ("cpu",), ram, 0, 300, CPU_MEASURED, "Apache-2.0",
         verification, (_weight(filename, url, sha, size, size_source),),
-        environment="mediapipe",
+        environment="mediapipe", config={"allow_skips": True},   # a skipped frame must not rebuild the detector
     )
 
 
@@ -376,7 +384,7 @@ def _sapiens2(size, revision, sha, count):
 def _vlm_endpoint(name, model, revision, license_name, verification, *, automatic=True, **config):
     return _candidate(
         name, "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, license_name, verification,
-        environment="semantic-endpoint", automatic=automatic,
+        environment="semantic-endpoint", automatic=automatic, adapter=VLM_ADAPTER,
         config={"endpoint": "http://127.0.0.1:8000/v1", "model": model, "revision": revision, "window_frames": 1, **config})
 
 
@@ -389,7 +397,7 @@ ROLES = {
         "gamst.rotation": _candidate("gamst.rotation", "vision.rotation", OPENCV, ("cpu",), 256, 0, 150, ESTIMATED, "Apache-2.0;OpenCV:Apache-2.0", "GAMST per-frame tracker + spin/angular counters; no learned model; count accuracy unvalidated", environment="opencv", in_process="gamst.providers.rotation:RotationPlugin"),
     }, _defaults("gamst.rotation"), ("vision.detect",), 160),
     "vision.video_segmentation": Role("vision.video_segmentation", "Promptable video object segmentation and tracking", {
-        "efficienttam.ti_512": _candidate("efficienttam.ti_512", "efficienttam.tiny512", ("torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"), ("cpu", "mps", "cuda"), 2048, 0, 1500, ESTIMATED, "Apache-2.0 upstream code; checkpoint license requires review", "GAMST efficienttam.tiny512 loader; coin-flip refine 6 of 7 tosses within one flip of a human count (docs/halo-coin.md); trained-checkpoint quality otherwise unverified", (_weight("efficienttam_ti_512x512.pt", EFFICIENTTAM_URL, "7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b", 71620052, "pinned source bytes"),), environment=REFINE_ENVIRONMENT, source=EFFICIENTTAM_SOURCE, config={"device": "cpu"}),
+        "efficienttam.ti_512": _candidate("efficienttam.ti_512", "efficienttam.tiny512", ("torch==2.8.0", "torchvision==0.23.0", "hydra-core==1.3.2", "omegaconf==2.3.0", "numpy>=1.24", "Pillow>=10", "tqdm>=4.66"), ("cpu", "mps", "cuda"), 2048, 0, 1500, ESTIMATED, "Apache-2.0 upstream code; checkpoint license requires review", "GAMST efficienttam.tiny512 loader; coin-flip refine 6 of 7 tosses within one flip of a human count (docs/halo-coin.md); trained-checkpoint quality otherwise unverified", (_weight("efficienttam_ti_512x512.pt", EFFICIENTTAM_URL, "7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b", 71620052, "pinned source bytes"),), environment=REFINE_ENVIRONMENT, source=EFFICIENTTAM_SOURCE, config={"device": "cpu"}, adapter="needs a seed box of the exact capture: a stage of the flip part, or gamst.mask_tracking"),
     }, _defaults("efficienttam.ti_512"), ("vision.detect",)),
     "input.video": Role("input.video", "Camera, video file and recorded-take decoding (no model)", {
         "opencv": _candidate("opencv", None, OPENCV, ("cpu",), 128, 0, 150, ESTIMATED, "Apache-2.0", "decoder only; no model", environment="opencv"),
@@ -430,9 +438,9 @@ ROLES = {
         "video_depth.large": _candidate("video_depth.large", "video_depth_anything.large", ("torch==2.8.0", "torchvision==0.23.0", "numpy==1.24.0", "einops==0.4.1", "opencv-python"), ("cuda",), 8192, 7858, 5000, {"ram": "estimated", "vram": "VERIFY.md measured 7858 MiB", "disk": "estimated"}, "CC-BY-NC-4.0 (research/non-commercial)", "VERIFY.md: run completed with 53.5% drop; not full-rate real time", (_weight("video_depth_anything_vitl.pth", HF + "/depth-anything/Video-Depth-Anything-Large/resolve/7aafbcb5c6af0bac741aad2b6471894fb4761afa/video_depth_anything_vitl.pth", "43df27c6b396042ba34ff7b798ab279f64d204d2e86d7a373968f8fa36d0e6fa", 1500 * MIB),), environment="video-depth", min_vram_bytes=12 * GIB, source={"url": "https://github.com/DepthAnything/Video-Depth-Anything.git", "revision": "4f5ae23172ba60fd7bc11ef671cca678842c7072"}),
     }, _defaults("depth_anything_v2.small", "depth_anything_v2.small")),
     "vision.semantic_scene": Role("vision.semantic_scene", "Low-fps semantic scene state", {
-        "smolvlm.500m": _candidate("smolvlm.500m", None, ("torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6", "huggingface-hub==0.36.0", "safetensors==0.7.0", "num2words==0.5.14", "numpy>=1.24", "Pillow>=10"), ("cpu",), 4096, 0, 4000, ESTIMATED, "Apache-2.0", "GAMST direct SmolVLM adapter; real trained acceptance pending; no ProcessProvider profile", (_weight("SmolVLM2-500M-Video-Instruct", HF + "/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/4cde9d208e19519c36917aa170fffc7e381aa0ad", None, 1500 * MIB, "estimated bundle; per-file SHA256 unpinned"),), environment="smolvlm", config={"adapter": "gamst.providers.smolvlm_context.SmolVLMContext"}),
-        "qwen3.5.9b": _candidate("qwen3.5.9b", "streamingvlm.local", ("vllm==0.34.0",), ("cuda",), 24576, 18432, 30000, {"ram": "estimated", "vram": "PLAN.md reports about 18 GB; not a VERIFY.md process measurement", "disk": "estimated"}, "Qwen model license requires review", "VERIFY.md: JSON output success; 412 ms/frame compute and 4.86 s p95; endpoint server required", (_weight("Qwen3.5-9B", HF + "/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a", None, 18000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen35-vllm", python="3.12", min_vram_bytes=24 * GIB, automatic=False, config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a", "device": "cuda"}),
-        "qwen3.5.endpoint": _candidate("qwen3.5.endpoint", "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, "endpoint operator must verify model license", "Remote serving is explicit; endpoint/model acceptance is not inferred", environment="semantic-endpoint", config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"}),
+        "smolvlm.500m": _candidate("smolvlm.500m", None, ("torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6", "huggingface-hub==0.36.0", "safetensors==0.7.0", "num2words==0.5.14", "numpy>=1.24", "Pillow>=10"), ("cpu",), 4096, 0, 4000, ESTIMATED, "Apache-2.0", "GAMST direct SmolVLM adapter; real trained acceptance pending; no ProcessProvider profile", (_weight("SmolVLM2-500M-Video-Instruct", HF + "/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/4cde9d208e19519c36917aa170fffc7e381aa0ad", None, 1500 * MIB, "estimated bundle; per-file SHA256 unpinned"),), environment="smolvlm", config={"adapter": "gamst.providers.smolvlm_context.SmolVLMContext"}, adapter="runs in the caller's process (gamst.providers.smolvlm_context); it has no worker"),
+        "qwen3.5.9b": _candidate("qwen3.5.9b", "streamingvlm.local", ("vllm==0.34.0",), ("cuda",), 24576, 18432, 30000, {"ram": "estimated", "vram": "PLAN.md reports about 18 GB; not a VERIFY.md process measurement", "disk": "estimated"}, "Qwen model license requires review", "VERIFY.md: JSON output success; 412 ms/frame compute and 4.86 s p95; endpoint server required", (_weight("Qwen3.5-9B", HF + "/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a", None, 18000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen35-vllm", python="3.12", min_vram_bytes=24 * GIB, automatic=False, config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a", "device": "cuda"}, adapter=VLM_ADAPTER),
+        "qwen3.5.endpoint": _candidate("qwen3.5.endpoint", "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, "endpoint operator must verify model license", "Remote serving is explicit; endpoint/model acceptance is not inferred", environment="semantic-endpoint", config={"endpoint": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"}, adapter=VLM_ADAPTER),
         "qwen3.8-flash.hosted": _vlm_endpoint("qwen3.8-flash.hosted", "qwen3.8-flash", "hosted-unversioned", "Alibaba Model Studio terms", "Not run. Frames leave the machine and it costs money: quote first. The endpoint and key are regional", automatic=False, endpoint="https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1", api_key_env="DASHSCOPE_API_KEY", allow_remote=True, request_options={"enable_thinking": False, "response_format": {"type": "json_object"}}),
         "qwen3.8-flash-next.endpoint": _vlm_endpoint("qwen3.8-flash-next.endpoint", "Qwen/Qwen3.8-Flash-Next", "812d96e10a0dd82b69d749e68693698cf6c36daa", "qwen-community-1.0 (gated); operator must accept", "Not run. Operator hosts it (360.0 GB BF16 safetensors, 185.5 GB FP8); quote the hosting cost first"),
         "qwen3.6-35b-a3b.endpoint": _vlm_endpoint("qwen3.6-35b-a3b.endpoint", "Qwen/Qwen3.6-35B-A3B", "345d467b117d1fd5eda9b879a5988de9ae5f47a7", "Apache-2.0", "Not run. Operator hosts it (71.90 GB BF16 safetensors)"),
@@ -440,15 +448,15 @@ ROLES = {
         "qwen3.5-2b.endpoint": _vlm_endpoint("qwen3.5-2b.endpoint", "Qwen/Qwen3.5-2B", "15852e8c16360a2fea060d615a32b45270f8a8fc", "Apache-2.0", "Not run. Operator hosts it (4.55 GB BF16 safetensors)"),
     }, _defaults("smolvlm.500m", "qwen3.5.9b")),
     "vision.physical_concepts": Role("vision.physical_concepts", "PG-InstructBLIP physical property estimates", {
-        "pg.instructblip": _candidate("pg.instructblip", "pg.physical.local", ("transformers==4.33.2", "timm==0.4.12", "fairscale==0.4.4", "torch==2.8.0", "torchvision==0.23.0", "omegaconf==2.3.0", "sentencepiece", "accelerate", "safetensors==0.7.0", "numpy>=1.24", "Pillow>=10"), ("cuda",), 49152, 40960, 60000, ESTIMATED, "PG/assets/canonical export: operator must verify", "GAMST adapter implemented; real canonical export/reference parity pending", (_weight("PG-InstructBLIP", HF + "/bidiptas/PG-InstructBLIP/resolve/7caa1683fbc3f6889868accf25c2074aee83324c", "6b3923683eb83405ca12d81e10a564e7523efe72a1bdf6efa9b493545984bd1e", 24999831084, "GAMST pg_sources.py pinned aggregate"),), environment="pg-instructblip", python="3.11", min_vram_bytes=40 * GIB, automatic=False, config={"device": "cuda"}),
+        "pg.instructblip": _candidate("pg.instructblip", "pg.physical.local", ("transformers==4.33.2", "timm==0.4.12", "fairscale==0.4.4", "torch==2.8.0", "torchvision==0.23.0", "omegaconf==2.3.0", "sentencepiece", "accelerate", "safetensors==0.7.0", "numpy>=1.24", "Pillow>=10"), ("cuda",), 49152, 40960, 60000, ESTIMATED, "PG/assets/canonical export: operator must verify", "GAMST adapter implemented; real canonical export/reference parity pending", (_weight("PG-InstructBLIP", HF + "/bidiptas/PG-InstructBLIP/resolve/7caa1683fbc3f6889868accf25c2074aee83324c", "6b3923683eb83405ca12d81e10a564e7523efe72a1bdf6efa9b493545984bd1e", 24999831084, "GAMST pg_sources.py pinned aggregate"),), environment="pg-instructblip", python="3.11", min_vram_bytes=40 * GIB, automatic=False, config={"device": "cuda"}, adapter="reads one RGB object crop and a named concept per request (docs/pg-physical-context.md), not camera frames"),
     }, _defaults("pg.instructblip"), ("vision.detect",)),
     "audio.vad": Role("audio.vad", "Speech activity detection", {
         "silero.vad": _candidate("silero.vad", "silero.activity", ("torch>=2.2,<3",), ("cpu",), 512, 0, 1200, ESTIMATED, "MIT", "scripts/local_models.py pinned; target-host real-audio acceptance unmeasured", (_weight("silero_vad.jit", SILERO_URL, "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720", 2272526, "pinned source bytes"),), environment="silero-vad"),
     }, _defaults("silero.vad")),
     "audio.asr": Role("audio.asr", "Speech transcription", {
-        "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", bundle=True, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}),
-        "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("qwen-asr==0.0.6", "vllm==0.14.0", "transformers==4.57.6", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "not run with these pins (VERIFY.md's real-audio result predates them)", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}),
-        "moonshine.tiny": _candidate("moonshine.tiny", "moonshine_voice.native", ("moonshine-voice==0.0.45", "numpy>=1.24"), ("cpu",), 512, 0, 500, ESTIMATED, "MIT", "GAMST adapter implemented; real-weight acceptance pending", (_weight("moonshine-v2-tiny-streaming-en", "https://github.com/moonshine-ai/moonshine-v2/tree/49bc3af5bb0d767d5156fb579fa5f9853b559bf3", None, 200 * MIB),), environment="moonshine", automatic=False),
+        "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", bundle=True, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}, adapter="use the whisper-words part"),
+        "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("qwen-asr==0.0.6", "vllm==0.14.0", "transformers==4.57.6", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "not run with these pins (VERIFY.md's real-audio result predates them)", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}, adapter="reads exact hops of one channel: use the qwen-words part"),
+        "moonshine.tiny": _candidate("moonshine.tiny", "moonshine_voice.native", ("moonshine-voice==0.0.45", "numpy>=1.24"), ("cpu",), 512, 0, 500, ESTIMATED, "MIT", "GAMST adapter implemented; real-weight acceptance pending", (_weight("moonshine-v2-tiny-streaming-en", "https://github.com/moonshine-ai/moonshine-v2/tree/49bc3af5bb0d767d5156fb579fa5f9853b559bf3", None, 200 * MIB),), environment="moonshine", automatic=False, adapter="reads exact hops and has no worker profile: gamst.providers.moonshine_asr"),
     }, _defaults("faster_whisper.small", "qwen3.asr_1_7b"), ("audio.vad",)),
     "audio.events": Role("audio.events", "Environmental audio events", {
         "yamnet": _candidate("yamnet", "yamnet.events", MEDIAPIPE, ("cpu",), 512, 0, 300, ESTIMATED, "Apache-2.0", "GAMST pinned adapter; target real-audio acceptance unmeasured", (_weight("yamnet.tflite", "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite", "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf", 4 * MIB),), environment="mediapipe"),

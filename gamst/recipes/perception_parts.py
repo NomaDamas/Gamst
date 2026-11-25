@@ -12,6 +12,8 @@ import sys
 
 from ..crew.modules import WorkerModule
 
+VOICE_PARTS = ('speaker-verify', 'speaker-gate', 'target-speech')    # what ties sound to an enrolled voice
+
 
 def _entry(options, context, profile):
     """(config, python, profile): the item's own ``"config"``, else what setup installed for its role."""
@@ -198,8 +200,39 @@ def _math(path):
     return build
 
 
+async def _rhythm(options, context):
+    """The rhythm of one value: a record's ``value``, or one named channel of a sensor input (``"channel"``)."""
+    from ..providers.rhythm import RhythmEstimator
+    from .parts import _sensor
+    sensor, config = _sensor(options, context), dict(options.get('config') or {})
+    if sensor is None:
+        module = RhythmEstimator(**config)
+        return dict(module=module, spec=module.spec)
+    names = [item['name'] for item in sensor.columns]
+    if options.get('channel') not in names:
+        raise SystemExit(f"module {options['name']!r} names one \"channel\" of the sensor: {', '.join(names)}")
+    module = RhythmEstimator(**{**config, 'modality': sensor.modality})
+    return dict(module=_Value(module, names.index(options['channel'])), spec=module.spec)
+
+
+class _Value:
+    """One channel of a sensor sample as the single value a rhythm module reads; a missing one is no sample."""
+
+    def __init__(self, module, index):
+        self.module, self.index, self.spec = module, index, module.spec
+
+    def process(self, frame):
+        from dataclasses import replace
+        if not frame.data['mask'][self.index]:
+            return None
+        return self.module.process(replace(frame, data=dict(value=frame.data['channels'][self.index])))
+
+    def reset(self):
+        self.module.reset()
+
+
 MATH = {'kinematics': 'kinematics:MetricKinematics', 'image-trajectories': 'trajectories:ImageTrajectories',
-        'physical-state': 'physical_state:PhysicalState', 'rhythm': 'rhythm:RhythmEstimator',
+        'physical-state': 'physical_state:PhysicalState', 
         'angular-motion': 'angular_motion:AngularMotionCounter', 'object-spin': 'object_spin:ObjectSpinCounter',
         'optical-flow': 'motion:OpenCVFlow'}
 
@@ -211,9 +244,10 @@ def parts(Part):
         'speaker-gate': Part('module', build=_speaker_gate),
         'target-speech': Part('module', role='audio.target_speech', candidate='wesep.bsrnn_ecapa',
                               build=_target_speech),
-        'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words),
+        'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
+                              transcribes=True),
         'qwen-words': Part('module', role='audio.word_alignment', candidate='qwen3.forced_aligner_0_6b',
-                           build=_qwen_words),
+                           build=_qwen_words, transcribes=True),
         'prosody': Part('module', role='audio.prosody', candidate='dsp', build=_prosody),
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
@@ -221,5 +255,6 @@ def parts(Part):
         'semantic-scene': Part('module', role='vision.semantic_scene', candidate='qwen3.5.endpoint',
                                build=_semantic_scene),
     }
+    result['rhythm'] = Part('module', build=_rhythm)
     result.update({name: Part('module', build=_math(path)) for name, path in MATH.items()})
     return result

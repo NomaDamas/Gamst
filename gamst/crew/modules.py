@@ -26,6 +26,9 @@ from ..private_payload import PRIVATE_ONLY
 from .registry import ROLES
 
 
+PRIVATE_REASON = 'answers one recipe module (enrolled reference and consent needed); its embeddings or audio are never context'
+
+
 class RoleUnavailable(RuntimeError):
     """A profile role that cannot become a module; the reason is reported, never dropped."""
 
@@ -114,6 +117,42 @@ def candidate_for(role, model):
     return None if entry is None else entry.candidates.get(model)
 
 
+def refusal(role, model):
+    """Why this registry candidate cannot be a generic Pipeline module, or None. Known without installing anything."""
+    from ..providers.model_workers import PROFILES as MODEL_PROFILES
+    entry, chosen = ROLES[role], candidate_for(role, model)
+    if entry.kind != 'module':
+        return f'{entry.kind} role: its packages serve the Pipeline process; it runs no model'
+    if chosen is None:
+        return None
+    if chosen.adapter:
+        return chosen.adapter
+    if chosen.in_process:
+        return None
+    if chosen.provider_profile in MODEL_PROFILES | PRIVATE_ONLY:
+        return PRIVATE_REASON
+    return None if chosen.provider_profile else 'no isolated worker'
+
+
+def role_report():
+    """One row per registry candidate: ``usable`` | ``manual`` (prepared by hand) | ``refused`` and why.
+
+    ``usable`` says that the worker can run as a module once set up; ``verified`` is the registry's own statement
+    of what has been run, which for most candidates is nothing on this machine.
+    """
+    rows = []
+    for role in ROLES.values():
+        for chosen in role.candidates.values():
+            reason = refusal(role.id, chosen.id)
+            unpinned = any(weight.url is None or weight.sha256 is None for weight in chosen.weights)
+            by_hand = 'apply installs no unpinned or licence-bound files: prepare them and give "config" in a recipe item'
+            state = 'refused' if reason else 'manual' if not chosen.automatic or unpinned else 'usable'
+            rows.append(dict(role=role.id, candidate=chosen.id, state=state, modality=role.modality,
+                             reason=reason or (by_hand if state == 'manual' else None), devices=list(chosen.devices),
+                             verified=chosen.verification))
+    return rows
+
+
 def _import(path):
     module, _, name = path.partition(':')
     return getattr(importlib.import_module(module), name)
@@ -166,8 +205,7 @@ async def role_module(human, role, entry, *, config=None, python=None, startup_t
                     owns_process=bool(getattr(plugin, 'owns_process', False)))
     from ..providers.model_workers import PROFILES as MODEL_PROFILES
     if entry.get('provider_profile') in MODEL_PROFILES | PRIVATE_ONLY:
-        raise RoleUnavailable('answers one recipe module (enrolled reference and consent needed); '
-                              'its embeddings or audio are never context')
+        raise RoleUnavailable(PRIVATE_REASON)
     python = python or entry.get('python')
     if not python or not entry.get('provider_profile'):
         raise RoleUnavailable('no isolated worker in profile; register its in-process adapter explicitly')

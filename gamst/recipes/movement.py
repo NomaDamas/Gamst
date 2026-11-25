@@ -21,6 +21,7 @@ import sys
 
 MAX_CLIP_S = 30.
 MAX_SEQUENCE_ITEMS = 30
+SOURCES = ('camera', 'video', 'take', 'audio', 'microphone', 'iphone', 'sensor')
 PROPOSALS = 'gamst-movement-proposals.json'
 FEATURES = ('vision.pose_channels', 'audio.voice_channels')
 FEATURE_PARTS = ('mediapipe-pose', 'mediapipe-graph', 'sapiens2-pose', 'pose-channels', 'prosody', 'voice-channels')
@@ -69,10 +70,23 @@ def feature_modules(recipe):
 
     The demonstration itself is the only person or voice in it, so identity modules are not used here.
     """
-    from . import choose
-    plain = choose(recipe, exclude=[item['name'] for item in recipe['modules'] if item.get('optional')])
-    return [dict(item, consumes=[recipe['inputs'][0]['id']]) if item['use'] == 'prosody' else item
-            for item in plain['modules'] if item['use'] in FEATURE_PARTS]
+    from . import choose, inputs_of, upstream
+    wanted = _exemplar_item(recipe)['name']
+    chain = upstream(recipe['modules'], wanted)
+    features = {item['name'] for item in chain if item['use'] in FEATURE_PARTS}
+    plain = choose(dict(recipe, modules=chain), exclude=[
+        item['name'] for item in chain if item.get('optional') and item['name'] not in features | {wanted}])
+    sound = next((item['id'] for item in inputs_of(recipe, chain) if item['use'] == 'microphone'), None)
+    return [dict(item, consumes=[sound]) if item['use'] == 'prosody' else item
+            for item in plain['modules'] if item['name'] in features]
+
+
+def exemplar_input(recipe):
+    """The input the recipe's exemplar module matches on, through the modules between them."""
+    from . import inputs_of, upstream
+    item = _exemplar_item(recipe)
+    direct = [entry for entry in inputs_of(recipe, [item]) if entry['use'] == 'sensor']
+    return (direct or inputs_of(recipe, feature_modules(recipe)) or inputs_of(recipe, upstream(recipe['modules'], item['name'])))[0]
 
 
 async def demonstration(recipe, args, clip):
@@ -80,32 +94,43 @@ async def demonstration(recipe, args, clip):
     from .. import Gamst
     from ..inputs import open_source
     from . import build_pipeline
-    samples, seen = [], {}
+    samples, seen, place, modules = [], {}, exemplar_input(recipe), feature_modules(recipe)
     options = {}
     if clip.kind == 'video':
         if getattr(args, 'capture_fps', None):
             options['capture_fps'] = args.capture_fps
         if clip.start is not None:
             options.update(start_s=max(0., clip.start - 1), end_s=clip.end)  # a second for the tracker to settle
-    source = open_source(clip.kind, clip.path if clip.path is not True else None, **options)
-    run = argparse.Namespace(**dict(vars(args), camera=None, video=None, take=None, audio=None, microphone=None,
-                                    iphone=None))
+    if clip.kind == 'sensor':
+        options = {key: place[key] for key in ('columns', 'time', 'modality') if key in place}
+    sound = clip.kind == 'video' and place['use'] == 'microphone'
+    source = open_source('sound' if sound else clip.kind, clip.path if clip.path is not True else None, **options)
+    run = argparse.Namespace(**dict(vars(args), offset_ms=None, input=None, **{name: None for name in SOURCES}))
     setattr(run, clip.kind, clip.path)
     start, end = clip.start or 0., clip.end
     async with Gamst(consent=True) as human:
-        pipeline = await build_pipeline(dict(recipe, references=[]), run, human, source=source,
-                                        modules=feature_modules(recipe), lanes=False)
+        if place['use'] == 'sensor':    # its samples are the channels: no module between
+            from ..pipeline import Pipeline
+            pipeline = Pipeline(human, 'demonstration').add_input(place['id'], source)
+        else:
+            pipeline = await build_pipeline(dict(recipe, references=[]), run, human, sources={place['id']: source},
+                                            modules=modules, lanes=False)
 
         async def on_frame(input_id, frame, records):
             origin = getattr(source, 'origin_ms', None)
             seen.setdefault('ms', frame.timestamp_ms if origin is None else origin)
-            seconds = (frame.timestamp_ms - seen['ms']) / 1000
+            # A block of sound begins before its time, which is that of its last sample.
+            block = 1000 * len(frame.data) / frame.sample_rate if frame.sample_rate and origin is not None else 0
+            seconds = (frame.timestamp_ms - block - seen['ms']) / 1000
             if end is not None and seconds > end:
                 return False
             if end is None and seconds > MAX_CLIP_S:
                 seen['too_long'] = True
                 return False
-            if seconds >= start:
+            if seconds >= start and place['use'] == 'sensor':
+                samples.append((frame.timestamp_ms, frame.data['channels'], frame.data['mask']))
+                seen['channels'] = source.contract
+            elif seconds >= start:
                 for record in records:
                     capability = (record['observation'].get('capability') or {}).get('id')
                     if capability in FEATURES:
@@ -122,7 +147,7 @@ async def demonstration(recipe, args, clip):
         raise SystemExit(f'{clip.name()} is longer than {MAX_CLIP_S:g} s: one movement per clip; trim it or name the '
                          'part, FILE@start-end')
     if not samples:
-        raise SystemExit(f'nothing to learn in {clip.name()} (no visible person, or no audio)')
+        raise SystemExit(f'nothing to learn in {clip.name()} (no visible person, no audio, or no samples)')
     return samples, seen['channels']
 
 
@@ -160,14 +185,13 @@ def _refuse_repeats(positives, negatives):
 
 def _positives(recipe, args):
     """Clips of the command line: files with optional intervals, or the one live source."""
-    from . import _source
-    if not any(getattr(args, name, None) is not None and getattr(args, name) is not False
-               for name in ('camera', 'video', 'take', 'audio', 'microphone')):
+    from . import _given, _source
+    if not any(name != 'iphone' for name in _given(args)):
         return []
-    _, kind = _source(recipe, args)
+    _, kind = _source(recipe, args, [exemplar_input(recipe)])
     values = getattr(args, kind, None)
     values = values if isinstance(values, list) else [values]
-    clips = [parse_clip(kind, value) if kind in ('video', 'audio') else Clip(kind, value) for value in values]
+    clips = [parse_clip(kind, value) if kind in ('video', 'audio', 'sensor') else Clip(kind, value) for value in values]
     window = args.start is not None or args.seconds is not None
     for clip in clips:
         if clip.start is None and (window or kind in ('camera', 'microphone', 'take')):
@@ -282,7 +306,7 @@ async def enroll(recipe, args):
                          '--proposals; or give a --rule')
     if not positives:
         raise SystemExit('give example clips: --video FILE[@start-end] (repeat it), --camera, --audio or --microphone')
-    kind = 'audio' if recipe['inputs'][0]['use'] == 'microphone' else 'video'
+    kind = {'microphone': 'audio', 'sensor': 'sensor'}.get(exemplar_input(recipe)['use'], 'video')
     negatives = negatives + [parse_clip(kind, value) for value in args.negative]
     if len(positives) > MAX_EXAMPLES or len(negatives) > MAX_EXAMPLES:
         raise SystemExit(f'at most {MAX_EXAMPLES} positive and {MAX_EXAMPLES} negative examples')
@@ -347,7 +371,7 @@ async def propose(recipe, args, *, backend=None):
     from ..movement_finder import MAX_WINDOWS, check_windows, find, movement_text
     from ..movement_proposals import Proposals, checked_interval, video_identity
     _exemplar_item(recipe)
-    if recipe['inputs'][0]['use'] == 'microphone':
+    if exemplar_input(recipe)['use'] in ('microphone', 'sensor'):
         raise SystemExit('a VLM looks at video frames; give example clips for a way of speaking')
     if not args.video:
         raise SystemExit('propose needs --video FILE')
@@ -426,19 +450,8 @@ def proposals(args):
 
 def counting_modules(recipe):
     """The exemplar module and everything it reads, directly or through other modules or derived inputs."""
-    wanted, needed = [_exemplar_item(recipe)['name']], set()
-    provider = {name: item['name'] for item in recipe['modules'] for name in (item['name'], *item.get('emits', ()))}
-    while wanted:
-        name = wanted.pop()
-        if name in needed:
-            continue
-        needed.add(name)
-        item = next(item for item in recipe['modules'] if item['name'] == name)
-        for source in item['consumes']:
-            owner = provider.get(source) or provider.get(source.split(':', 1)[0])
-            if owner is not None:
-                wanted.append(owner)
-    return [item for item in recipe['modules'] if item['name'] in needed]
+    from . import upstream
+    return upstream(recipe['modules'], _exemplar_item(recipe)['name'])
 
 
 async def find_in(recipe, args, kind, path):
@@ -447,8 +460,10 @@ async def find_in(recipe, args, kind, path):
     from ..counting import event_rows
     from . import build_pipeline, store_options
     item = _exemplar_item(recipe)
+    modules = counting_modules(recipe)
+    place = exemplar_input(recipe)['id']
     capability = item.get('capability_id', 'temporal.exemplar_events')
-    run = argparse.Namespace(**dict(vars(args), video=None, audio=None, camera=None, take=None, microphone=None))
+    run = argparse.Namespace(**dict(vars(args), **{name: None for name in SOURCES}))
     setattr(run, kind, path)
     records, seen = [], dict(frames=0)
 
@@ -457,10 +472,10 @@ async def find_in(recipe, args, kind, path):
                        .get('id') == capability and record['observation']['value'].get('events'))
 
     async with Gamst(consent=True, **store_options(args)) as human:
-        pipeline = await build_pipeline(recipe, run, human, modules=counting_modules(recipe))
+        pipeline = await build_pipeline(recipe, run, human, modules=modules)
 
         async def on_frame(input_id, frame, found):
-            seen['frames'] += 1
+            seen['frames'] += input_id == place
             seen.setdefault('start_ms', frame.timestamp_ms - (
                 round(1000 * len(frame.data) / frame.sample_rate) if frame.sample_rate else 0))
             keep(found)
@@ -485,7 +500,8 @@ async def find_in(recipe, args, kind, path):
 async def find(recipe, args):
     from ..counting import write_rows
     from . import check, source_fps
-    kind = 'audio' if recipe['inputs'][0]['use'] == 'microphone' else 'video'
+    place = exemplar_input(recipe)['use']
+    kind = {'microphone': 'audio', 'sensor': 'sensor'}.get(place, 'video')
     paths = getattr(args, kind) or []
     if not paths:
         raise SystemExit(f'find needs --{kind} FILE (repeat it for more recordings)')

@@ -23,6 +23,7 @@ class Part:
     candidate: str | None = None   # default registry candidate of that role
     build: Callable[..., Any] | None = None       # async (options, context) -> dict(module, spec?, every_ms?)
     sampling: Callable[..., Any] | None = None    # (options, fps) -> dict(required_fps, ...) or None
+    transcribes: bool = False                     # commits utterances with text and times
 
 
 # ---------------------------------------------------------------- sampling rules (physics, no tuning)
@@ -124,8 +125,20 @@ async def _pose_channels(options, context):
     return dict(module=module, spec=module.spec)
 
 
+def _sensor(options, context):
+    """The sensor input a module reads directly, or None."""
+    from ..inputs import SensorFileInput
+    recipe = context.get('recipe') or {}
+    item = next((item for item in recipe.get('inputs', ()) if item['use'] == 'sensor' and item['id'] in options['consumes']), None)
+    return None if item is None else SensorFileInput('', **{key: item[key] for key in ('columns', 'time', 'modality')
+                                                            if key in item})
+
+
 class _Channels:
-    """Strip a pose-channel value to {"channels": [...]}, the RepetitionCounter input contract."""
+    """Strip a channel value to {"channels": [...]}, the RepetitionCounter input contract.
+
+    A sensor sample with a missing channel is not a sample of the movement; a pose's hidden joints are part of it.
+    """
 
     def __init__(self, counter):
         self.counter, self.spec = counter, counter.spec
@@ -133,7 +146,7 @@ class _Channels:
     def process(self, frame):
         from dataclasses import replace
         value = frame.data if isinstance(frame.data, dict) else {}
-        if not isinstance(value.get('channels'), list):
+        if not isinstance(value.get('channels'), list) or self.spec.modality != 'video' and not all(value.get('mask') or ()):
             return None
         return self.counter.process(replace(frame, data=dict(channels=value['channels'])))
 
@@ -148,7 +161,11 @@ async def _repetition(options, context):
     from ..providers.pose_exemplar import CHANNELS
     from ..providers.repetition import RepetitionCounter
     rate = float(context.get('max_reps_s') or options.get('max_reps_s', 2))
-    counter = RepetitionCounter(channels=len(CHANNELS), min_period_s=max(.05, 1 / (2 * rate)),
+    sensor = _sensor(options, context)
+    if sensor is not None and sensor.modality != 'imu':
+        raise SystemExit('the repetition counter reads imu samples')
+    counter = RepetitionCounter(channels=len(CHANNELS if sensor is None else sensor.columns),
+                                modality='video' if sensor is None else 'imu', min_period_s=max(.05, 1 / (2 * rate)),
                                 max_period_s=float(options.get('max_period_s', 6.7)))
     return dict(module=_Channels(counter), spec=counter.spec)
 
@@ -156,13 +173,17 @@ async def _repetition(options, context):
 async def _exemplar(options, context):
     from ..providers.pose_exemplar import ExemplarEvents
     given = [context.get('enter'), context.get('exit')]     # the command line wins over the movement file
+    from . import speaker_bound
+    sensor = _sensor(options, context)
+    modality = options.get('modality', 'video') if sensor is None else sensor.modality
     enter = float(given[0] or options.get('enter', .12))
     exit_ = float(given[1] or max(enter, options.get('exit', .18)))
     # hold, sequence or rule comes from the movement file; the item's "mode" is only enroll's default.
     module = ExemplarEvents(reference=options.get('reference', 'exemplar'), enter=enter, exit=exit_,
                             min_hold_ms=int(options.get('min_hold_ms', 200)),
                             fixed_thresholds=any(value is not None for value in given),
-                            modality=options.get('modality', 'video'),
+                            modality=modality, contract=None if sensor is None else sensor.contract,
+                            speaker_bound=modality != 'audio' or speaker_bound(context['modules'], options['name']),
                             capability_id=options.get('capability_id', 'temporal.exemplar_events'),
                             **_pose_source(options))
     return dict(module=module, spec=module.spec)
@@ -170,8 +191,36 @@ async def _exemplar(options, context):
 
 async def _terms(options, context):
     from ..providers.term_events import TermEvents
-    module = TermEvents(reference=options.get('reference', 'terms'))
+    from . import speaker_bound
+    module = TermEvents(reference=options.get('reference', 'terms'),
+                        speaker_bound=speaker_bound(context['modules'], options['name']))
     return dict(module=module, spec=module.spec)
+
+
+async def _role(options, context):
+    """Any role of the registry, exactly as ``ProfileRuntime`` runs it (:func:`gamst.crew.modules.role_module`)."""
+    from ..crew.modules import RoleUnavailable, role_module
+    from ..crew.registry import ROLES, candidate
+    role = ROLES[options['role']]
+    if isinstance(options.get('config'), dict):    # prepared by hand: the item says where
+        if not options.get('candidate'):
+            raise SystemExit(f"module {options['name']!r} with its own config names its candidate")
+        chosen = candidate(role.id, options['candidate'])
+        entry = dict(model=chosen.id, provider_profile=chosen.provider_profile, config=options['config'],
+                     python=options.get('python') or sys.executable)
+    else:
+        entry = context['installed'](options)
+    try:
+        built = await role_module(context['human'], role.id, entry, python=context.get('worker_python'))
+    except RoleUnavailable as error:
+        raise SystemExit(f"{role.id} {entry['model']}: {error}") from error
+    if built['modality'] != role.modality:
+        close = getattr(built['module'], 'close', None)
+        value = close() if callable(close) else None
+        if hasattr(value, '__await__'):
+            await value
+        raise SystemExit(f"{role.id} {entry['model']} reads {built['modality']}, not {role.modality}")
+    return dict(module=built['module'], spec=built['spec'], every_ms=options.get('every_ms'))
 
 
 VIDEO = dict(role='input.video', candidate='opencv')
@@ -240,7 +289,9 @@ PARTS = {
     'audio': Part('input'),
     'microphone': Part('input', role='input.microphone', candidate='sounddevice'),
     'gamst240': Part('input', **VIDEO),
+    'sensor': Part('input'),
     # perception modules
+    'role': Part('module', build=_role),
     'rotation': Part('module', **ROTATION, build=_rotation, sampling=rotation_sampling),
     'take-recorder': Part('module', **VIDEO, build=_take_recorder),
     'flip': Part('module', **ROTATION, build=_flip, sampling=rotation_sampling),

@@ -193,7 +193,9 @@ class ExemplarEvents:
 
     def __init__(self, *, reference='exemplar', mode=None, enter=.12, exit=.18, min_hold_ms=200,
                  refractory_ms=None, max_gap_ms=1000, modality='video', capability_id='temporal.exemplar_events',
-                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5):
+                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5, contract=None, speaker_bound=True):
+        """``contract``: what a sensor's channels are; a movement learned from others is refused.
+        ``speaker_bound=False``: the sound is not tied to an enrolled voice; every event says so."""
         if mode not in (None, 'hold', 'sequence'):
             raise ValueError("mode must be 'hold' or 'sequence'")
         if not 0 < enter <= exit:
@@ -202,6 +204,7 @@ class ExemplarEvents:
         self.enter, self.exit, self.min_hold_ms = enter, exit, min_hold_ms
         self.fixed_thresholds = fixed_thresholds     # the caller's enter / exit win over the reference's
         self.refractory_ms, self.max_gap_ms = refractory_ms, max_gap_ms
+        self.contract, self.speaker_bound = contract, bool(speaker_bound)
         self.mapping, self.min_visibility = mapping, min_visibility
         self.label, self.scorer, self.rule, self.info = reference, None, None, {}
         self.spec = CapabilitySpec(
@@ -228,6 +231,9 @@ class ExemplarEvents:
         example, ``{"channels", "mask"}`` (hold) or a list of them (sequence), as files before format 2 hold."""
         with self._lock:
             self.scorer = self.rule = None
+            learned = value.get('channels') if isinstance(value, dict) and 'mask' not in value else None
+            if isinstance(learned, str) and learned != self.contract and (self.contract or learned.startswith('sensor.')):
+                raise ValueError(f'the movement was specified on {learned}; this module reads {self.contract or "other channels"}')
             if isinstance(value, dict) and 'rule' in value:
                 self.mode, self.rule = 'rule', RuleScorer(value['rule'])
                 self.enter, self.exit = 0., self.rule.margin
@@ -281,6 +287,8 @@ class ExemplarEvents:
     def _event(self, name, **values):
         event = dict(event=name, index=self._count, reference=self.reference_name, label=self.label,
                      method=self._method, confirmed=self.info['confirmed'], **values)
+        if not self.speaker_bound:
+            event['speaker'] = 'not_bound'
         if self.info['reference_id']:
             event['reference_id'] = self.info['reference_id']
         if self._person is not None and self._last_ms - self._person['at_ms'] <= self.max_gap_ms:

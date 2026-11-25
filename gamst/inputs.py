@@ -13,7 +13,13 @@ before the next frame) and ``status()``.
 frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
 
 Recorded inputs are re-timed onto the wall clock so the newest frame is not in the future (the
-runtime rejects capture times more than 5 s ahead), keeping the recording's own spacing.
+runtime rejects capture times more than 5 s ahead), keeping the recording's own spacing. Several recordings
+of one run share a :class:`RecordedClock`; a video file and its own sound (:func:`media_streams`,
+:class:`SoundTrackInput`) are placed on it by the start times the container gives both streams.
+
+Live inputs use the host's clock: a camera frame the moment it was read (the camera's own latency is unknown
+and not subtracted), microphone samples their capture time as far as the device reports its latency. A
+measured difference is the owner's ``offset_ms`` of an input (:meth:`gamst.pipeline.Pipeline.add_input`).
 """
 from __future__ import annotations
 
@@ -23,8 +29,10 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import queue
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +44,28 @@ from .plugins import InputFrame
 
 def _now_ms():
     return time.time_ns() // 1_000_000
+
+
+class RecordedClock:
+    """The one capture clock of the recordings of a run; position 0 is the same moment for all of them.
+
+    Every recording says how far it reaches (``add``) before the first one is read; the clock then starts so
+    that the last of them ends one second before now.
+    """
+
+    def __init__(self):
+        self._end_s, self._base = 0., None
+
+    def add(self, end_s):
+        if self._base is not None:
+            raise RuntimeError('the recordings already started')
+        self._end_s = max(self._end_s, float(end_s))
+
+    @property
+    def base_ms(self):
+        if self._base is None:
+            self._base = _now_ms() - round(1000 * self._end_s) - 1000
+        return self._base
 
 
 class _DeviceReader:
@@ -163,9 +193,11 @@ class VideoFileInput:
     modality = 'video'
     live = False
 
-    def __init__(self, path, *, capture_fps=None, max_frames=None, start_s=0., end_s=None):
+    def __init__(self, path, *, capture_fps=None, max_frames=None, start_s=0., end_s=None, clock=None, at_s=0.):
+        """``at_s``: where the first frame is on ``clock`` (a :class:`RecordedClock` other recordings share)."""
         self.path, self.capture_fps, self.max_frames = str(path), capture_fps, max_frames
         self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
         self._cap = None
 
     def fps(self):
@@ -195,7 +227,8 @@ class VideoFileInput:
             raise RuntimeError(f'cannot open video {self.path}')
         fps = self.capture_fps or self._cap.get(cv2.CAP_PROP_FPS) or 30.
         total = self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-        base = self.origin_ms = _now_ms() - round(1000 * total / fps) - 1000
+        base = self.origin_ms = _now_ms() - round(1000 * total / fps) - 1000 if self.clock is None else \
+            self.clock.base_ms + round(1000 * self.at_s)
         position = first = round(self.start_s * fps)
         if first and not (self._cap.set(cv2.CAP_PROP_POS_FRAMES, first)
                           and round(self._cap.get(cv2.CAP_PROP_POS_FRAMES)) == first):
@@ -587,13 +620,30 @@ class IPhone240Input:
         self.stop()
 
 
+def _part(start_s, end_s, done, samples, rate):
+    """The samples of a block (which starts ``done`` samples into the stream) inside [start_s, end_s], and where they start."""
+    first = min(len(samples), max(0, round(start_s * rate) - done))
+    last = len(samples) if end_s is None else max(first, min(len(samples), round(end_s * rate) - done))
+    return samples[first:last], done + first
+
+
 class AudioFileInput:
-    """A PCM WAV file as mono float32 chunks at its own sample rate (16 kHz expected by speech modules)."""
+    """A PCM WAV file as mono float32 chunks at its own sample rate (16 kHz expected by speech modules).
+
+    ``start_s`` / ``end_s`` read only that part; ``origin_ms`` is the capture time of the file's start.
+    """
     modality = 'audio'
     live = False
 
-    def __init__(self, path, *, chunk_ms=100):
+    def __init__(self, path, *, chunk_ms=100, start_s=0., end_s=None, clock=None, at_s=0.):
         self.path, self.chunk_ms = str(path), int(chunk_ms)
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
+
+    def duration_s(self):
+        import wave
+        with wave.open(self.path, 'rb') as source:
+            return source.getnframes() / source.getframerate()
 
     async def frames(self):
         import wave
@@ -604,7 +654,8 @@ class AudioFileInput:
             if width not in (2, 4):
                 raise ValueError('16- or 32-bit PCM WAV required')
             chunk = max(1, rate * self.chunk_ms // 1000)
-            base = _now_ms() - round(1000 * total / rate) - 1000
+            base = self.origin_ms = _now_ms() - round(1000 * total / rate) - 1000 if self.clock is None else \
+                self.clock.base_ms + round(1000 * self.at_s)
             done = 0
             while True:
                 raw = source.readframes(chunk)
@@ -614,10 +665,243 @@ class AudioFileInput:
                 samples /= 32768. if width == 2 else 2147483648.
                 if channels > 1:
                     samples = samples.reshape(-1, channels).mean(axis=1)
+                kept, begin = _part(self.start_s, self.end_s, done, samples, rate)
                 done += len(samples)
-                # The frame's time is the capture time of its last sample, like push_audio.
-                yield InputFrame(samples, 'audio', base + round(1000 * done / rate), sample_rate=rate)
+                if len(kept):
+                    # The frame's time is the capture time of its last sample, like push_audio.
+                    yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
                 await asyncio.sleep(0)
+
+
+def _media_tool(name):
+    found = shutil.which(name)
+    if found is None:
+        raise RuntimeError(f'reading the sound of a video file needs {name}, which is not on PATH (install ffmpeg, e.g. '
+                           'brew install ffmpeg), or give the sound as a PCM WAV file')
+    return found
+
+
+def _media_url(path):
+    """A local file only: never an address ffmpeg would open over the network."""
+    return 'file:' + str(Path(path).expanduser().resolve())
+
+
+def media_streams(path):
+    """``{'video': start_s or None, 'audio': start_s or None, 'duration_s'}`` of a media file (ffprobe)."""
+    if not Path(path).expanduser().is_file():
+        raise RuntimeError(f'cannot open {path}')
+    command = [_media_tool('ffprobe'), '-v', 'error', '-protocol_whitelist', 'file', '-show_entries',
+               'stream=codec_type,start_time:stream_disposition=attached_pic:format=duration', '-of', 'json', _media_url(path)]
+    try:
+        found = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f'{path}: ffprobe did not answer') from error
+    if found.returncode:
+        raise RuntimeError(f"{path}: {found.stderr.decode(errors='replace').strip()[-300:] or 'not a media file'}")
+
+    def number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    value = json.loads(found.stdout)
+    result = dict(video=None, audio=None, duration_s=number((value.get('format') or {}).get('duration')) or 0.)
+    for stream in value.get('streams', ()):
+        kind = stream.get('codec_type')
+        if kind in ('video', 'audio') and result[kind] is None and not (stream.get('disposition') or {}).get('attached_pic'):
+            result[kind] = number(stream.get('start_time')) or 0.
+    return result
+
+
+class SoundTrackInput:
+    """The first sound track of a media file as mono float32 chunks, streamed from an ffmpeg process.
+
+    Nothing is written to disk; at most what the process's pipe and one chunk hold is in memory. Samples keep
+    their place: a stretch the container has no sound for is silence, not a shift. ``at_s`` is where the
+    track's first sample is on ``clock``. Positions (``start_s``, ``end_s``) are from the track's first sample.
+    """
+    modality = 'audio'
+    live = False
+
+    def __init__(self, path, *, sample_rate=16000, chunk_ms=100, start_s=0., end_s=None, clock=None, at_s=0.):
+        self.path, self.sample_rate, self.chunk_ms = str(path), int(sample_rate), int(chunk_ms)
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s, self._process = clock, float(at_s), None
+
+    def command(self):
+        return [_media_tool('ffmpeg'), '-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-i', _media_url(self.path),
+                '-map', '0:a:0', '-af', 'aresample=async=1', '-ac', '1', '-ar', str(self.sample_rate),
+                '-f', 'f32le', 'pipe:1']
+
+    async def frames(self):
+        import numpy as np
+        rate, size = self.sample_rate, self.sample_rate * self.chunk_ms // 1000
+        clock = self.clock
+        if clock is None:
+            info = media_streams(self.path)
+            if info['audio'] is None:
+                raise RuntimeError(f'{self.path} has no sound track')
+            clock = RecordedClock()
+            clock.add(info['duration_s'])
+        process = self._process = await asyncio.create_subprocess_exec(
+            *self.command(), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, limit=8 * size, close_fds=True)
+        problems = bytearray()
+
+        async def drain():
+            while block := await process.stderr.read(4096):
+                problems.extend(block)
+                del problems[:-2000]
+
+        errors = asyncio.create_task(drain())
+        try:
+            base = self.origin_ms = clock.base_ms + round(1000 * self.at_s)
+            done, more = 0, True
+            while more:
+                try:
+                    raw = await process.stdout.readexactly(4 * size)
+                except asyncio.IncompleteReadError as end:
+                    raw, more = end.partial, False
+                    raw = raw[:len(raw) // 64 * 64]     # the last, shorter chunk: whole milliseconds at 16 kHz
+                samples = np.clip(np.frombuffer(raw, '<f4'), -1., 1.).astype(np.float32)
+                kept, begin = _part(self.start_s, self.end_s, done, samples, rate)
+                done += len(samples)
+                if len(kept):
+                    yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
+                if self.end_s is not None and done >= self.end_s * rate:
+                    return
+            if await process.wait():
+                await errors
+                raise RuntimeError(f"{self.path}: {problems.decode(errors='replace').strip()[-300:] or 'ffmpeg failed'}")
+        finally:
+            self._process = None
+            from .process_provider import stop_child
+            await stop_child(process)
+            errors.cancel()
+
+    def close(self):
+        process = self._process
+        if process is not None and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+
+
+class SensorFileInput:
+    """Time-stamped numeric samples of a physical sensor (an IMU and similar) from a CSV or JSONL file.
+
+    Declared by the caller, never guessed: ``columns`` (``[{"name", "unit"}]``, in channel order; an optional
+    ``"scale"`` divides the channel, as distances are compared across channels) and ``time``
+    (``{"column", "unit": "s" | "ms" | "us" | "ns"}``, the sensor's own time, strictly increasing; its first
+    sample is the recording's position 0, at ``at_s`` on ``clock``). A CSV has a header row; a JSONL line is one
+    object. A missing value is a channel with ``mask`` false, never a number. Frames carry
+    ``{"channels": [...], "mask": [...]}``, what exemplar, repetition and rhythm modules read.
+    """
+    live = False
+    UNITS = dict(s=1000., ms=1., us=.001, ns=.000001)
+    MAX_CHANNELS, MAX_LINE = 128, 65536
+
+    def __init__(self, path, *, columns, time, modality='imu', start_s=0., end_s=None, clock=None, at_s=0.):
+        from .capabilities import MODALITIES
+        if modality not in MODALITIES - {'video', 'audio', 'text'}:
+            raise ValueError(f'a sensor input is not {modality!r}')
+        columns = [dict(item) for item in columns]
+        names = [item.get('name') for item in columns]
+        if not 1 <= len(columns) <= self.MAX_CHANNELS or len(set(names)) != len(names) or any(
+                set(item) - {'scale'} != {'name', 'unit'} or not all(isinstance(item[key], str) and item[key] for key in ('name', 'unit'))
+                or type(item.get('scale', 1)) not in (int, float) or not 0 < item.get('scale', 1) < 1e12 for item in columns):
+            raise ValueError('sensor columns are [{"name", "unit", "scale"?}, ...] with distinct names')
+        if not isinstance(time, dict) or set(time) != {'column', 'unit'} or time['unit'] not in self.UNITS \
+                or not isinstance(time['column'], str) or time['column'] in names:
+            raise ValueError('a sensor\'s time is {"column", "unit"}, unit ' + ', '.join(self.UNITS))
+        self.path, self.columns, self.time, self.modality = Path(path), columns, dict(time), modality
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
+
+    @property
+    def contract(self):
+        """What the channels are, so that a movement learned from other columns or units is refused."""
+        return f'sensor.{self.modality}:' + ','.join(
+            f"{item['name']}[{item['unit']}]" + (f"/{item['scale']:g}" if 'scale' in item else '') for item in self.columns)
+
+    def _rows(self):
+        """(time in ms since the first sample, channels, mask) of every line."""
+        import csv
+        names, wanted = [item['name'] for item in self.columns], self.time['column']
+        scale, first, last = self.UNITS[self.time['unit']], None, None
+        with open(self.path, newline='', encoding='utf-8') as source:
+            def lines():
+                while line := source.readline(self.MAX_LINE):
+                    if len(line) >= self.MAX_LINE:
+                        raise ValueError(f'{self.path}: a line is too long')
+                    yield line
+
+            if self.path.suffix.lower() in ('.jsonl', '.ndjson'):
+                rows = (json.loads(line) for line in lines() if line.strip())
+            else:
+                rows = csv.DictReader(lines())
+                missing = [name for name in (wanted, *names) if name not in (rows.fieldnames or ())]
+                if missing:
+                    raise ValueError(f"{self.path} has no column {', '.join(missing)}")
+            for number, row in enumerate(rows, 1):
+                if not isinstance(row, dict):
+                    raise ValueError(f'{self.path}: sample {number} is not an object')
+                stamp = self._number(row.get(wanted))
+                if stamp is None:
+                    raise ValueError(f'{self.path}: sample {number} has no time')
+                stamp *= scale
+                if last is not None and stamp <= last:
+                    raise ValueError(f'{self.path}: sample {number} is not later than the one before it')
+                first, last = stamp if first is None else first, stamp
+                values = [self._number(row.get(name)) for name in names]
+                yield stamp - first, [0. if value is None else value / item.get('scale', 1) for value, item in
+                                      zip(values, self.columns)], [value is not None for value in values]
+
+    @staticmethod
+    def _number(value):
+        if type(value) not in (int, float, str):
+            return None
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+        return value if abs(value) <= 1e100 else None     # also refuses nan and inf
+
+    def duration_s(self):
+        end = 0.
+        for end, _, _ in self._rows():
+            pass
+        return end / 1000
+
+    async def frames(self):
+        clock = self.clock
+        if clock is None:
+            clock = RecordedClock()
+            clock.add(self.duration_s())
+        base, last = None, None
+        for number, (offset, channels, mask) in enumerate(self._rows()):
+            if base is None:
+                base = self.origin_ms = clock.base_ms + round(1000 * self.at_s)
+            if offset < 1000 * self.start_s:
+                continue
+            if self.end_s is not None and offset > 1000 * self.end_s:
+                return
+            stamp = base + round(offset)
+            if last is not None and stamp <= last:
+                stamp = last + 1
+                if stamp - base - offset > 2:
+                    raise ValueError(f'{self.path}: capture times are milliseconds; at most 1000 samples per second')
+            last = stamp
+            yield InputFrame(dict(channels=channels, mask=mask), self.modality, stamp)
+            await asyncio.sleep(0)
+
+    def status(self):
+        return dict(columns=self.columns, time=self.time)
+
+    def close(self):
+        pass
 
 
 class MicrophoneInput:
@@ -713,7 +997,7 @@ class MicrophoneInput:
 
 
 def open_source(kind, value=None, **options):
-    """The input module for a recipe source name."""
+    """The input module for a recipe source name (``sound``: the sound track of a media file)."""
     if kind == 'camera':
         return CameraInput(int(value or 0), **options)
     if kind == 'video':
@@ -726,6 +1010,10 @@ def open_source(kind, value=None, **options):
         return IPhone240Input(replay=value, **options)
     if kind == 'audio':
         return AudioFileInput(value, **options)
+    if kind == 'sound':
+        return SoundTrackInput(value, **options)
+    if kind == 'sensor':
+        return SensorFileInput(value, **options)
     if kind == 'microphone':
         return MicrophoneInput(**options)
     raise ValueError(f'unknown input source {kind!r}')
