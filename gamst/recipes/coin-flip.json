@@ -9,9 +9,10 @@
   },
   "inputs": [{"id": "camera", "use": "gamst240", "sources": ["iphone", "take"]}],
   "modules": [
-    {"name": "find", "use": "yoloe", "label": "metal coin", "consumes": ["camera"]},
-    {"name": "follow", "use": "efficienttam", "consumes": ["camera"]},
-    {"name": "count", "use": "flip", "max_rev_s": 40, "on": "analyze", "consumes": ["camera"]}
+    {"name": "record", "use": "take-recorder", "consumes": ["camera"], "emits": ["take"]},
+    {"name": "find", "use": "yoloe", "label": "metal coin", "in": "count"},
+    {"name": "follow", "use": "efficienttam", "in": "count"},
+    {"name": "count", "use": "flip", "max_rev_s": 40, "on": "analyze", "fast": true, "consumes": ["take"]}
   ],
   "view": "halo-coin",
   "records": ["vision.rotation.refined"],

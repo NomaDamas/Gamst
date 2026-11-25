@@ -139,7 +139,7 @@ class _TakeCapture:
     """A GAMST 240 take read like a video file; positions are the phone's capture times."""
 
     def __init__(self, path):
-        from .rotation_live import read_recording
+        from ..inputs import read_recording
         path = Path(path)
         self.frames = read_recording(path / 'raw.gmst' if path.is_dir() else path)
         self.index, self.position_ms = 0, 0.
@@ -148,7 +148,7 @@ class _TakeCapture:
         return bool(self.frames)
 
     def read(self):
-        from .rotation_live import decode
+        from ..inputs import decode
         while self.index < len(self.frames):
             info, _, payload = self.frames[self.index]
             self.index += 1

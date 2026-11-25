@@ -70,31 +70,23 @@ class RecipeTest(unittest.TestCase):
             recipes.load(str(path))
 
     def test_run_refuses_a_take_too_slow_for_the_recipe(self):
-        with patch.object(recipes.demo, 'main') as start, \
+        with patch.object(recipes, 'run_pipeline') as start, \
                 self.assertRaisesRegex(SystemExit, '60 fps counts at most 15.0'):
             recipes.main(['run', 'coin-flip', '--take', self.take(60.0)])
         start.assert_not_called()
 
-    def profile(self):
-        path = self.tmp / 'profile.json'
-        path.write_text(json.dumps({'version': 1, 'hardware': {}, 'roles': {
-            'vision.detect': {'model': 'yoloe.26s', 'provider_profile': 'yoloe.local', 'python': None,
-                              'config': {'checkpoint_path': str(self.tmp / 'models' / 'yoloe-26s-seg.pt')}},
-            'vision.video_segmentation': {'model': 'efficienttam.ti_512', 'provider_profile': 'efficienttam.tiny512',
-                                          'python': None, 'config': {'source_dir': str(self.tmp / 'EfficientTAM')}}}}))
-        return str(path)
-
-    def test_run_passes_the_pipeline_and_lets_extra_options_win(self):
+    def test_coin_flip_runs_on_the_pipeline(self):
+        # the Pipeline itself is tested in tests/test_gamst240.py (input, recorder, counter, HUD)
         take = self.take(239.6)
-        with patch.object(recipes.demo, 'main') as start:
-            recipes.main(['run', 'coin-flip', '--take', take, '--label', 'gold coin', '--device', 'cpu',
-                          '--profile', self.profile()])
-        argv = start.call_args.args[0]
-        self.assertEqual(argv[argv.index('--iphone-replay') + 1], str(Path(take) / 'raw.gmst'))
-        self.assertEqual(argv[argv.index('--refine') + 1], 'gold coin')
-        self.assertEqual(argv[argv.index('--models') + 1], str(self.tmp / 'models'))
-        self.assertEqual(argv[argv.index('--efficienttam-source') + 1], str(self.tmp / 'EfficientTAM'))
-        self.assertEqual(argv[-2:], ['--device', 'cpu'])
+        with patch.object(recipes, 'run_pipeline') as start:
+            recipes.main(['run', 'coin-flip', '--take', take, '--label', 'gold coin', '--all-throws'])
+        recipe, args = start.call_args.args
+        self.assertEqual((recipe['view'], args.take, args.label, args.fast), ('halo-coin', take, 'gold coin', False))
+        self.assertEqual([item['name'] for item in recipe['modules'] if not item.get('in')], ['record', 'count'])
+
+    def test_unknown_options_are_refused(self):
+        with self.assertRaises(SystemExit):
+            recipes.main(['run', 'coin-flip', '--take', self.take(239.6), '--no-such-option'])
 
     def test_run_without_setup_names_the_setup_command(self):
         empty = self.tmp / 'none.json'
