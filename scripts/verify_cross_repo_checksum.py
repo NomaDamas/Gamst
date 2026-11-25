@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Verify the canonical temporal packet checksum across the three worktrees.
+"""Verify the canonical temporal packet checksum across GAMST and Gamst-bench.
 
 This is a contract probe, not a model or host acceptance run.  It deliberately
 uses one bounded EventPacket-shaped mapping so GAMST computes the envelope,
-GamstCrew parses and verifies it, and Gamst-bench verifies the same canonical
-UTF-8 bytes.  The output records exact repository heads and the shared digest.
+gamst.crew (formerly the GamstCrew repository) parses and verifies it, and
+Gamst-bench verifies the same canonical UTF-8 bytes.  The output records exact
+repository heads and the shared digest.
 """
 from __future__ import annotations
 
@@ -24,18 +25,16 @@ def _head(root: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--crew-root", type=Path, required=True)
     parser.add_argument("--bench-root", type=Path, required=True)
     args = parser.parse_args()
     repo_root = Path(__file__).resolve().parents[1]
-    for root in (repo_root, args.crew_root, args.bench_root):
+    for root in (repo_root, args.bench_root):
         if not root.is_dir():
             raise SystemExit(f"repository root does not exist: {root}")
 
     sys.path.insert(0, str(repo_root))
     gamst_temporal = importlib.import_module("gamst.temporal")
-    sys.path.insert(0, str(args.crew_root))
-    crew_packet = importlib.import_module("gamstcrew.packet")
+    crew_packet = importlib.import_module("gamst.crew.packet")
     sys.path.insert(0, str(args.bench_root))
     bench_contracts = importlib.import_module("gamst_bench.contracts")
 
@@ -82,7 +81,6 @@ def main() -> int:
 
     print(json.dumps({
         "core_head": _head(repo_root),
-        "crew_head": _head(args.crew_root),
         "bench_head": _head(args.bench_root),
         "algorithm": body["checksum"]["algorithm"],
         "version": body["checksum"]["version"],

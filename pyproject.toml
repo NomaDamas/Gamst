@@ -83,4 +83,4 @@ Repository = "https://github.com/NomaDamas/Gamst"
 include = ["gamst*"]
 
 [tool.setuptools.package-data]
-gamst = ["dashboard.html", "observability.js", "i18n.js", "demos/assets/*.png", "recipes/*.json"]
+gamst = ["dashboard.html", "observability.js", "i18n.js", "demos/assets/*.png", "recipes/*.json", "crew/profiles/*.json", "crew/profiles/locks/*.txt"]

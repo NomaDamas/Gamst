@@ -38,7 +38,7 @@ runs: a turn above the limit is then reported `undersampled`, with no count.
 ## Setup and run
 
 ```bash
-gamst recipe setup rotation        # only the rotation extra: OpenCV, NumPy, Pillow; no model weights
+gamst recipe setup rotation        # only OpenCV and NumPy (roles input.video, vision.rotation); no model weights
 gamst recipe run rotation --camera 0 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 gamst recipe run rotation --video fan.mp4 --capture-fps 240 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 gamst recipe run rotation --take gamst-takes/take-20261125-101500 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500

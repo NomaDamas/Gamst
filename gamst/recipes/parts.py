@@ -1,60 +1,28 @@
 """The parts a recipe can name: input modules, perception modules and views.
 
-Each perception part declares what ``setup`` installs (extras, pinned weights, pinned source
-checkouts), how to build its Pipeline module, and its sampling rule (what frame rate the input
-needs so the count is not an alias). Adding a part here is how a new capability becomes usable
-from recipes; the Pipeline, the records and the MCP context stay the same.
+Each part declares how to build its Pipeline module, its sampling rule (what frame rate the input
+needs so the count is not an alias) and the setup role it needs: ``role`` and ``candidate`` name an
+entry of the one GAMST role registry (:mod:`gamst.crew.registry`), which owns the packages, the
+pinned weight URLs and their SHA256. ``gamst recipe setup`` plans exactly those roles and runs the
+same :func:`gamst.crew.setup.apply_plan` as ``gamst setup``; a module item may pick another
+candidate of its part's role with ``"candidate"``. Adding a part here is how a new capability
+becomes usable from recipes; the Pipeline, the records and the MCP context stay the same.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import hashlib
-import os
+from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any, Callable
-
-MODELS_ROOT = Path(os.environ.get('GAMST_MODELS', Path.home() / '.cache' / 'gamst' / 'models'))
-
-# Pinned MediaPipe Pose Landmarker task files (Google's versioned model bucket, float16 v1).
-POSE_ASSETS = {
-    'pose_landmarker_full.task': (
-        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/'
-        'pose_landmarker_full.task', '5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1'),
-    'pose_landmarker_heavy.task': (
-        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/'
-        'pose_landmarker_heavy.task', '64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b'),
-}
 
 
 @dataclass
 class Part:
     kind: str                      # 'input' | 'module' | 'view'
-    extras: tuple = ()
-    pip: tuple = ()
-    models: dict = field(default_factory=dict)   # file name -> (url, sha256), fetched into models/<group>
-    group: str = ''
-    sources: tuple = ()
-    build: Callable[..., Any] | None = None       # async (options, context) -> dict(module, spec?, emits?)
+    role: str | None = None        # registry role whose packages/weights setup installs
+    candidate: str | None = None   # default registry candidate of that role
+    build: Callable[..., Any] | None = None       # async (options, context) -> dict(module, spec?, every_ms?)
     sampling: Callable[..., Any] | None = None    # (options, fps) -> dict(required_fps, ...) or None
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as source:
-        for block in iter(lambda: source.read(1 << 20), b''):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def model_path(part, name, models=None):
-    directory = Path(models or MODELS_ROOT) / part.group
-    path = directory / name
-    if not path.is_file():
-        raise SystemExit(f'missing {path}; run: gamst recipe setup <recipe>')
-    expected = part.models[name][1]
-    if sha256(path) != expected:
-        raise SystemExit(f'{path} does not match its pinned sha256 {expected}')
-    return path
 
 
 # ---------------------------------------------------------------- sampling rules (physics, no tuning)
@@ -106,40 +74,25 @@ async def _rotation(options, context):
     return dict(module=RotationPlugin(context['human'], **config))
 
 
-class _Detector:
-    """YOLOE open-vocabulary detector worker as a provider module (its own process, pinned weights)."""
-
-    def __init__(self, worker, spec):
-        self.worker, self.spec = worker, spec
-
-    async def process(self, frame):
-        from ..demos.rotation import _detector_image
-        from ..plugins import InputFrame
-        result = self.worker.process(InputFrame(_detector_image(frame.data), 'video', frame.timestamp_ms,
-                                                subject_id=frame.subject_id, sensor=frame.sensor))
-        return await result if hasattr(result, '__await__') else result
-
-    async def close(self):
-        await self.worker.close()
-
-
 async def _yoloe(options, context):
-    from .. import ProcessProvider
-    from ..demos.rotation import DEFAULT_MODELS, _check_worker_dependencies, detector_config
-    python = context.get('worker_python')
+    from ..crew.modules import open_worker
+    from ..demos.rotation import _check_worker_dependencies, detector_config
+    entry = context['installed'](options)
+    python = context.get('worker_python') or entry.get('python') or sys.executable
     _check_worker_dependencies(python)
     labels = context.get('labels') or [options['label']]
-    config = detector_config(Path(context.get('models') or DEFAULT_MODELS), labels, context.get('device', 'cpu'))
-    spec = ProcessProvider.capability('yoloe.local', config)
-    worker = await ProcessProvider.open(python, 'yoloe.local', config)
+    models = Path(context.get('models') or Path(entry['config']['checkpoint_path']).parent)
+    module = await open_worker(python, entry['provider_profile'], detector_config(models, labels,
+                                                                                  context.get('device', 'cpu')))
     context['detector'] = True
-    return dict(module=_Detector(worker, spec), spec=spec, every_ms=int(options.get('every_ms', 100)))
+    return dict(module=module, spec=module.spec, every_ms=int(options.get('every_ms', 100)))
 
 
 async def _mediapipe_pose(options, context):
+    from ..crew.setup import verified_file
     from ..providers.pose import MediaPipePosePlugin
-    name = options.get('model', 'pose_landmarker_full.task')
-    path = model_path(PARTS['mediapipe-pose'], name, context.get('models_root'))
+    config = context['installed'](options)['config']
+    path = verified_file(config['path'], config['sha256'])
     return dict(module=MediaPipePosePlugin(str(path), max_poses=int(options.get('max_poses', 1))))
 
 
@@ -193,27 +146,29 @@ async def _terms(options, context):
     return dict(module=module, spec=module.spec)
 
 
+VIDEO = dict(role='input.video', candidate='opencv')
+ROTATION = dict(role='vision.rotation', candidate='gamst.rotation')
+
 PARTS = {
     # inputs
-    'camera': Part('input', extras=('rotation',)),
-    'video': Part('input', extras=('rotation',)),
-    'take': Part('input', extras=('rotation',)),
+    'camera': Part('input', **VIDEO),
+    'video': Part('input', **VIDEO),
+    'take': Part('input', **VIDEO),
     'audio': Part('input'),
-    'microphone': Part('input', pip=('sounddevice',)),
-    'gamst240': Part('input', extras=('rotation',)),
+    'microphone': Part('input', role='input.microphone', candidate='sounddevice'),
+    'gamst240': Part('input', **VIDEO),
     # perception modules
-    'rotation': Part('module', extras=('rotation',), build=_rotation, sampling=rotation_sampling),
-    'flip': Part('module', extras=('rotation',), sampling=rotation_sampling),
-    'yoloe': Part('module', extras=('yoloe',), pip=('clip',), models='yoloe', build=_yoloe),
-    'efficienttam': Part('module', extras=('efficienttam',), models='efficienttam', sources=('EfficientTAM',)),
-    'mediapipe-pose': Part('module', extras=('mediapipe',), models=POSE_ASSETS, group='mediapipe',
-                           build=_mediapipe_pose),
+    'rotation': Part('module', **ROTATION, build=_rotation, sampling=rotation_sampling),
+    'flip': Part('module', **ROTATION, sampling=rotation_sampling),
+    'yoloe': Part('module', role='vision.detect', candidate='yoloe.26s', build=_yoloe),
+    'efficienttam': Part('module', role='vision.video_segmentation', candidate='efficienttam.ti_512'),
+    'mediapipe-pose': Part('module', role='vision.pose', candidate='mediapipe.pose_full', build=_mediapipe_pose),
     'pose-channels': Part('module', build=_pose_channels),
     'repetition': Part('module', build=_repetition, sampling=movement_sampling),
     'exemplar': Part('module', build=_exemplar, sampling=movement_sampling),
     'terms': Part('module', build=_terms),
     # views
     'count': Part('view'),
-    'rotation-view': Part('view', extras=('rotation',)),
-    'halo-coin': Part('view', extras=('rotation',)),
+    'rotation-view': Part('view'),
+    'halo-coin': Part('view'),
 }

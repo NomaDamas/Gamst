@@ -1,5 +1,7 @@
 # GAMST approved implementation plan
 
+> Note (2026-11-25): GamstCrew was absorbed into GAMST as `gamst.crew` (docs/crew.md). References below to GamstCrew commits, PRs and issues are history.
+
 Status: approved by project owner on 2026-11-16.
 
 ## Product identity

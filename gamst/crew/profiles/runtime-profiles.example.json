@@ -1,0 +1,44 @@
+[
+  {
+    "name": "mac-lightweight",
+    "runtime": "darwin",
+    "python": "3.11",
+    "accelerator": "mps",
+    "provider": "gamst-lightweight",
+    "model_revision": "manifest-pending",
+    "license": "mixed-explicit-provider-licenses",
+    "lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "streamingvlm-linux-cuda",
+    "runtime": "linux",
+    "python": "3.11",
+    "accelerator": "cuda",
+    "provider": "streamingvlm.local",
+    "model_revision": "mit-han-lab/StreamingVLM@7ac1cef46d20432053a9814838760318cb26b348",
+    "license": "MIT-model;runtime-dependencies-verify",
+    "lockfile": "locks/streamingvlm-infer-linux-cuda12-py311.txt",
+    "lock_sha256": "32f4f50df75fe4dac655d3d6fdb700c4d42698bee739fb3162f23ce2aafe29b6"
+  },
+  {
+    "name": "vllm-linux-cuda",
+    "runtime": "linux",
+    "python": "3.12",
+    "accelerator": "cuda",
+    "provider": "openai-compatible.local",
+    "model_revision": "vllm==0.11.0;transformers==4.57.1;models-pinned-per-launch",
+    "license": "Apache-2.0-runtime;model-licenses-per-launch",
+    "lockfile": "locks/vllm-0.11.0-linux-cuda12-py312.txt",
+    "lock_sha256": "98cc57fd50ce3a22fd1b585a973688d49fd5e9c1e4598d3609208f1612eb791f"
+  },
+  {
+    "name": "linux-cuda",
+    "runtime": "linux",
+    "python": "3.11",
+    "accelerator": "cuda",
+    "provider": "gamst-cuda-sota",
+    "model_revision": "manifest-pending",
+    "license": "mixed-explicit-provider-licenses",
+    "lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+]
