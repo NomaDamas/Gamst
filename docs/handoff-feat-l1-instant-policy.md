@@ -91,7 +91,7 @@ v1 (owner's first look, coordinator's figure): 뽀또 8 counted / 6 right.
 | v5 m1 | main speaker (mixed) | 4/9 | 7/12 | 0 | 5 | 0 | 2 |
 | v6 | combined (equal weight) | 8/15 | 7/13 | 1 | 6 | 0 | 1 |
 | v6r | replaced by the other recording | 7/14 | 6/7 | 0 | 1 | 1 (19.74) | 2 |
-v6r: the other man's 49.86 / 50.4 / 52.2 and 20.72 / 24.16 revoked (L1 scores 0.19-0.30 against the other recording);
+v6r: the other man's 49.86 / 50.4 / 52.2 and 20.72 / 24.16 revoked (their L1 scores 0.19-0.36 against the other recording);
 only 27.42 stays (diarized with the person). -> default `replace` (the coordinator's order: owner sample, then another
 provided reference, then both combined). `combined` stays an option (`--voice-fallback-mode combined`): it is the
 safer one when the other recording's microphone differs (offline: 몇기야 / 시발 would lose their words on `replace`),
