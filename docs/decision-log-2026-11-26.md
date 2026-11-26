@@ -37,6 +37,8 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 25 | Counting words uses sound only: no face, lip or other visual evidence (owner). The `--with lips` part stays in the code, off, and is not used for word counting. |
 | 26 | The HUD shows the live (L1) count at once; corrections from L2/L3/L4 appear later on the HUD, at the moment they are decided (visible correction), never retroactively. Realtime must be visible (promotion). |
 | 27 | L1 uses a voice sample of the person from the same recording right away (owner-marked range; automatic "main speaker" as an option when none is marked). |
+| 28 | Voice sample UX, because microphones and sound quality differ: realtime → a short sample recording on the same input before counting starts (countdown, level meter, consent, re-record); recordings → a sample file or a time range of the same recording; otherwise an automatic same-recording "main speaker" reference. The owner does not label voice ranges for the test clips. |
+| 29 | Fix the attribution bottlenecks found on the owner labels (docs/measurements/attribution-bottleneck-2026-11-26.md): same-recording reference; relative comparison with the other speakers present (automatic negatives); several references (owner sample + words confirmed final); diarization context anchored to each word; validation leave-one-clip-out. |
 
 ## 2. Technical decisions and their evidence
 
