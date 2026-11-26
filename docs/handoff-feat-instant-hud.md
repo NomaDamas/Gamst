@@ -141,8 +141,13 @@ default; it stays opt-in (`--speaker-decision`). The remaining errors are other 
 and that Precision-3 puts into the person's speaker; neither a margin nor negatives separate them on these clips.
 
 ## Left
-- Wait for the rebuilt 뽀또 study cache and rerun `qa_speaker_decision_v2.py evaluate` (24.16 now other).
 - Full suite through guard (queued as hud-suite; log in the session scratchpad: rerun if lost) -> must be the 15 known
   errors.
 - Not built: MCP/HUD hook for the voice-recording step; a running "main speaker so far" for live input without a
   sample.
+
+## v2 offline study with the final labels (37 words; 뽀또 cache rebuilt 22:27)
+Same-clip "current" rule: final person→other 2, other→person 7 (뽀또 6 of 7 other-voice words, 몇기야 1 of 1); L1 3 / 7.
+v2 leave-one-clip-out: folds chose the same parameters as the live v2 runs (뽀또 fold: max, margin 0.1, L1 floor 0.3
+margin 0.1; other folds: grow, centroid, margin 0, L1 floor 0.4, L1 margin 0.05 (몇기야) or 0); held-out final
+person→other 7, other→person 7; L1 5 / 7. Only 시발 improved (7/7 offline).
