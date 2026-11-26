@@ -34,6 +34,7 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 22 | Three recognisers may vote (live Scribe v3, gpt-live, Speechmatics): a word counts as said when at least two heard it; measured before it becomes the default. |
 | 23 | The recogniser defaults (live and verification) are chosen on the four owner clips, not on one: Speechmatics is the measured candidate for live (no invented word in 6 runs, ~1.2 s to final), Scribe v3 Live is today's default. |
 | 24 | Uncertain words keep the event `term.spoken` in state `uncertain` (shown, not counted, settled later by TSE or verification). |
+| 25 | Counting words uses sound only: no face, lip or other visual evidence (owner). The `--with lips` part stays in the code, off, and is not used for word counting. |
 
 ## 2. Technical decisions and their evidence
 
