@@ -49,6 +49,10 @@ EN_PHRASES = [
     ('감스트 목소리로 정정', "corrected to Gamst's voice"), ('불확실에서 확정', 'uncertain → final'), ('검증 결정', 'verified'),
     ('검증 통과', 'verified'), ('부분 인식', 'partial'), ('실시간', 'live'), ('목소리 점수', 'voice score'),
     ('+1 들림', '+1 heard'), ('+1 추가', '+1 added'), ('-1 취소', '-1 revoked'), ('-1 보류', '-1 held'),
+    ('찾기 모드', 'search mode'), ('인식기끼리 다름', 'recognisers disagree'), ('목소리 점수 낮음', 'low voice score'),
+    ('인식 신뢰도 낮음', 'low recogniser confidence'), ('세지 않았을 말', 'would not have counted'), ('후보', 'candidate'),
+    ('목소리 겹침', 'voices overlap'), ('말소리 없음', 'no speech'), ('다시 들어도 없음', 'not heard again'),
+    ('화자 없음', 'no speaker'), ('화자 불명', 'unknown speaker'), ('인식기 하나만 들음', 'heard by one recogniser'),
     ('확정', 'Final'), ('잠정', 'Provisional'), ('들림', 'Heard'), ('취소', 'Revoked'), ('불확실', 'Uncertain'), ('제외', 'Excluded'),
 ]
 
@@ -133,7 +137,8 @@ STATE_WORD = {'heard': '들림', 'provisional': '잠정', 'final': '확정', 're
 REASON_WORD = {'other_speaker': '다른 사람 목소리', 'another_voice': '다른 사람 목소리', 'heard_by_one': '인식기 하나만 들음',
                'no_speech': '말소리 없음', 'not_heard': '다시 들어도 없음', 'uncertain_overlap': '목소리 겹침',
                'no_speaker': '화자 없음', 'speaker_unidentified': '화자 불명', 'late': '늦게 도착',
-               'partial_withdrawn': '부분 인식 철회', 'other_voice': '다른 사람 목소리'}
+               'partial_withdrawn': '부분 인식 철회', 'other_voice': '다른 사람 목소리', 'contested': '인식기끼리 다름',
+               'below_threshold': '목소리 점수 낮음', 'vetoed': '인식 신뢰도 낮음', 'not_counted': '세지 않았을 말'}
 FLAG_WORD = {'may_be_number': '숫자일 수 있음'}
 
 
@@ -240,13 +245,21 @@ def item_state(item, t):
 
 
 def change_line(kind, item):
-    """(headline, why) of one correction in Korean (an ASCII minus: the Korean font has no U+2212), e.g. ``("-1 취소 #9", "다른 사람 목소리")``."""
-    reason = None
+    """(headline, why) of one correction in Korean (an ASCII minus: the Korean font has no U+2212), e.g. ``("-1 취소 #9", "다른 사람 목소리")``.
+
+    Search mode (gamst.counting): a word counted only because it was searched for says so, "확정 #4 후보" with the reason
+    it would not have counted."""
+    reason, candidate = None, None
     for _, state, step in item['steps']:
         if state in ('revoked', 'uncertain') and step.get('reason'):
             reason = step['reason']
+        if step.get('candidate'):
+            candidate = step.get('reason') or 'not_counted'
     reason = REASON_WORD.get(reason, reason)
     number = f" #{item['number']}" if item.get('number') else ''
+    if candidate is not None and kind in ('final', 'added', 'live'):
+        return (f"확정{number} 후보" if kind == 'final' else f"+1 후보{number}"), \
+            '찾기 모드: ' + REASON_WORD.get(candidate, candidate)
     if kind == 'revoked':
         return f"-1 취소{number}", reason or ''
     if kind == 'uncertain':
@@ -502,8 +515,11 @@ def _draw_plain(canvas, text, counted, others, marks, t, x0, y0, view, count_lab
 
 def count_detail(event, state=None, step=None):
     if state is not None:
+        candidate = state in COUNTED_STATES and ((step or {}).get('candidate') or event.get('candidate'))
         reason = (step or {}).get('reason') or (event.get('revised_by') or {}).get('reason') or event.get('reason') \
-            if state in ('revoked', 'uncertain') else None
+            if state in ('revoked', 'uncertain') or candidate else None
+        if candidate:      # search mode: counted, with the reason it would not have counted
+            reason = '후보: ' + REASON_WORD.get(reason or 'not_counted', reason or 'not_counted')
         score = f"슬롯 {event.get('slot')} 점수 {event['slot_score']:.2f}" if event.get('slot_score') is not None else ''
         spoken = f"“{event['spoken']}”" if event.get('spoken') and event.get('spoken') != event.get('term') else ''
         flags = [FLAG_WORD.get(flag, flag) for flag in event.get('flags') or ()]

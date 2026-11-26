@@ -218,7 +218,7 @@ class FakeRecogniser:
 @unittest.skipIf(np is None, 'numpy is needed')
 class VerificationTest(unittest.TestCase):
     @staticmethod
-    def run_lane(rule, votes=(), logprob=None):
+    def run_lane(rule, votes=(), logprob=None, **lane):
         """First hearing: 'bbo' at frames 4 (person, heard twice too), 6 (person, heard once), 24 (another voice, heard
         twice), 26 (another voice, heard once, counted at once by mistake), 35 (silence: invented). The second hearing
         also writes 0, 8, 12 (person) and 20, 28 (another voice). ``votes``: frames a third recogniser wrote."""
@@ -231,7 +231,8 @@ class VerificationTest(unittest.TestCase):
                 pipeline.add_reference('voice', 'voice', dict(model='fake', embeddings=[[1., 0.]]), consent='test')
                 pipeline.add_reference('terms', 'terms', ['bbo'])
                 verify = WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder(), audio='microphone',
-                                          rule=dict(rule, near_ms=150), windows=dict(step_ms=1000, before_ms=500, after_ms=200))
+                                          rule=dict(rule, near_ms=150), windows=dict(step_ms=1000, before_ms=500, after_ms=200),
+                                          **lane)
                 pipeline.add_module('verification', verify, consumes=['microphone', 'first', 'third'], spec=verify.spec,
                                     queue=500)
                 terms = TermEvents(report_others=True)
@@ -353,6 +354,51 @@ class VerificationTest(unittest.TestCase):
                 WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder(), rule=dict(rule, decide='primary'))
 
 
+@unittest.skipIf(np is None, 'numpy is needed')
+class SearchModeTest(unittest.TestCase):
+    """Owner decision 33: in search mode verification only adds; it revokes only a voice clearly another person's."""
+    run_lane = staticmethod(VerificationTest.run_lane)
+
+    def test_search_counts_what_count_mode_revokes_and_says_why(self):
+        counted, verdicts, stats = self.run_lane({}, mode='search')
+        self.assertEqual((verdicts['u35#0']['match'], verdicts['u35#0']['candidate'], verdicts['u35#0']['reason']),
+                         (True, True, 'no_speech'))         # nobody spoke there: no voice evidence against the person
+        for word in ('u24#0', 'u26#0'):      # another speaker, scored 0 against the person: clearly another's (<= 0.5 - 0.3)
+            self.assertFalse(verdicts[word]['match'])
+            self.assertNotIn('candidate', verdicts[word])
+        self.assertTrue(verdicts['u4#0']['match'] and 'candidate' not in verdicts['u4#0'])
+        self.assertEqual(counted['count'], 5 + 1)
+        self.assertEqual(counted['states'], dict(provisional=0, final=6, revoked=1))   # 26; 24 was never counted
+        self.assertEqual(stats['candidates'], 1)
+
+    def test_the_revoke_margin_is_a_parameter(self):
+        counted, verdicts, _ = self.run_lane({}, mode='search', search=dict(revoke_margin=.6))   # nothing is that far
+        self.assertEqual({word: verdicts[word]['reason'] for word in ('u24#0', 'u26#0', 'u35#0')},
+                         {'u24#0': 'other_speaker', 'u26#0': 'not_heard', 'u35#0': 'no_speech'})
+        self.assertTrue(all(verdicts[word]['candidate'] for word in ('u24#0', 'u26#0', 'u35#0')))
+        self.assertEqual(counted['states'].get('revoked', 0), 0)
+        with self.assertRaises(ValueError):
+            WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder(), mode='search', search=dict(margin=.1))
+
+    def test_a_contested_word_is_a_candidate_not_uncertain(self):
+        rule = dict(vote=True, decide='primary', contest_by='any', contested='uncertain')
+        counted, verdicts, _ = self.run_lane(rule, votes=(12,), mode='search')
+        verdict = verdicts['u6#0']
+        self.assertEqual((verdict['match'], verdict['candidate'], verdict['reason']), (True, True, 'contested'))
+        self.assertNotIn('uncertain', verdict)
+        self.assertEqual(counted['states'].get('uncertain', 0), 0)
+
+    def test_count_mode_is_unchanged_and_the_mode_switches_while_running(self):
+        lane = WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder())
+        self.assertEqual((lane.mode, lane.rule['add']), ('count', 'agreed'))
+        lane.set_mode('search')
+        self.assertEqual((lane.mode, lane.rule['add'], lane.status()['mode']), ('search', 'any', 'search'))
+        lane.set_mode('count')
+        self.assertEqual((lane.mode, lane.rule['add'], lane.search), ('count', 'agreed', None))
+        with self.assertRaises(ValueError):
+            lane.set_mode('find')
+
+
 class RegionTest(unittest.TestCase):
     @staticmethod
     def lane(spans):
@@ -415,6 +461,23 @@ class UncertainTest(unittest.TestCase):
                                             timestamp_ms=3000, subject_id='s'))
         self.assertEqual((out['events'][0]['revises'], out['events'][0]['state'], out['count']),
                          (doubt['event_id'], 'final', 1))
+
+    def test_a_candidate_verdict_is_final_and_says_it_is_a_candidate(self):
+        from types import SimpleNamespace
+        from gamst.counting import revisions, with_state
+        terms = TermEvents(terms=['bbo'], report_others=True)
+        word = dict(text='bbo', start_ms=900, end_ms=1000, word_id='u#0', state='provisional', match=True)
+        first = terms.process(SimpleNamespace(data=dict(utterance_id='u', status='final', text='bbo', start_ms=900,
+                                                        end_ms=1000, words=[word]), timestamp_ms=1000, subject_id='s'))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(
+            word_id='u#0', match=True, candidate=True, reason='uncertain_overlap')]), timestamp_ms=2000, subject_id='s'))
+        revision = out['events'][0]
+        self.assertEqual((revision['state'], revision['candidate'], revision['reason'], out['count']),
+                         ('final', True, 'uncertain_overlap', 1))
+        rows = [dict(id=f'r{index}', timestamp_ms=at, observation=dict(value=value))
+                for index, (at, value) in enumerate(((1000, first), (2000, out)))]
+        now = with_state(first['events'][0], revisions(rows))
+        self.assertEqual((now['state'], now['candidate'], now['revised_by']['reason']), ('final', True, 'uncertain_overlap'))
 
     def test_a_word_added_uncertain_is_not_counted_until_settled(self):
         from types import SimpleNamespace

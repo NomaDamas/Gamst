@@ -16,6 +16,9 @@ Math here (no model): 5-point similarity alignment (Umeyama), crop geometry, cen
 track lock with hysteresis: a face score >= ``face_threshold`` locks the track; the lock holds while
 the track is visible, its face does not contradict (score < ``face_reject``) and the face confirmed
 it within ``hold_ms`` (or the body still matches); without a lock, a body score >= ``body_threshold`` selects a track tentatively (``state="body"``).
+Search mode (``mode="search"``, owner decision 33, :data:`gamst.counting.SEARCH`): never lose the person: a face that does
+not contradict (score >= ``face_reject``) locks the track, and a body score >= the lower of ``body_threshold`` and the
+search ``body_threshold`` selects one; :meth:`set_mode` switches it while the run goes on.
 
 Output (plugin signals, so downstream modules link by name):
 
@@ -299,13 +302,15 @@ class TargetPerson:
 
     def __init__(self, face=None, body=None, *, reference='person', face_threshold=.35, face_reject=.15,
                  body_threshold=.6, face_every_ms=200, body_every_ms=500, hold_ms=10000, emits=None, joints=None, crop_pad=.15,
-                 face_indices=MEDIAPIPE_FACE_POINTS):
+                 face_indices=MEDIAPIPE_FACE_POINTS, mode='count', search=None):
         if face is None and body is None:
             raise ValueError('target_person needs a face or a body embedder')
         if not face_reject <= face_threshold:
             raise ValueError('require face_reject <= face_threshold')
         self.face, self.body, self.reference_name = face, body, reference
         self.face_threshold, self.face_reject, self.body_threshold = face_threshold, face_reject, body_threshold
+        self._count_thresholds = (face_threshold, body_threshold)
+        self.set_mode(mode, search)
         self.face_every_ms, self.body_every_ms, self.hold_ms = int(face_every_ms), int(body_every_ms), int(hold_ms)
         self.joints = joints   # derived input that receives the matched person's joints (never a record)
         self.emits, self.crop_pad, self.face_indices = emits, crop_pad, tuple(face_indices)
@@ -332,6 +337,16 @@ class TargetPerson:
         if not face and not body:
             raise ValueError('the person reference has no embeddings this module can use')
         self.gallery = PersonGallery(face=face, body=body)
+
+    def set_mode(self, mode, search=None):
+        """``count`` or ``search`` (module doc) from the next frame on; ``search``: :data:`gamst.counting.SEARCH`."""
+        from ..counting import MODES, search_settings
+        if mode not in MODES:
+            raise ValueError(f"mode is one of {', '.join(MODES)}")
+        face, body = self._count_thresholds
+        if mode == 'search':
+            face, body = self.face_reject, min(body, float(search_settings(search)['body_threshold']))
+        self.mode, self.face_threshold, self.body_threshold = mode, face, body
 
     def reset(self):
         self._poses = {}

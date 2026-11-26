@@ -189,6 +189,7 @@ class Pipeline:
         self._stop, self._stop_on_failure = None, False
         self.reopen_s = REOPEN_S
         self.notify = None                   # the application's hook: what failed or came back, as a line of text
+        self.mode, self.search, self.mode_changes = 'count', None, []    # counting mode (gamst.counting, set_mode)
         self._gaps: dict[str, dict] = {}     # not yet committed, by place
         self._gap_at: dict[str, float] = {}
         self._gap_sequence = 0
@@ -670,6 +671,26 @@ class Pipeline:
         await _call(configure, dict(options))
         entry.update(failing=0, failed=None)
         return self.status()['modules'][name]
+
+    def set_mode(self, mode, *, actor='user'):
+        """The run's counting mode from now on (``count`` or ``search``, :mod:`gamst.counting`): every module that has a
+        ``set_mode`` switches for what it decides next; what was decided stays. ``actor`` is what the caller says of itself."""
+        from .counting import MODES, search_settings
+        if mode not in MODES:
+            raise ValueError(f"mode is one of {', '.join(MODES)}")
+        search = search_settings(self.search) if mode == 'search' else None
+        switched = []
+        for name, entry in self.modules.items():
+            setter = getattr(entry['module'], 'set_mode', None)
+            if callable(setter):
+                setter(mode, search)
+                switched.append(name)
+        self.mode = mode
+        self.search = search or self.search
+        change = dict(mode=mode, actor=str(actor)[:32], at_ms=_now_ms(), modules=switched)
+        self.mode_changes.append(change)
+        del self.mode_changes[:-32]
+        return dict(change, **({'search': search} if search else {}))
 
     async def reset(self):
         """Discard queued frames and reset every module before its next frame (a capture gap)."""
@@ -1671,7 +1692,9 @@ class Pipeline:
             self._outage(key)
         return dict(
             name=self.name, complete=not any(value['gaps'] for value in self.modules.values()) and not self.failures(),
-            failures=self.failures(), warnings=self.warnings(),
+            failures=self.failures(), warnings=self.warnings(), mode=self.mode,
+            **({'search': dict(self.search)} if self.mode == 'search' and self.search else {}),
+            **({'mode_changes': [dict(item) for item in self.mode_changes]} if self.mode_changes else {}),
             backlog_bytes=self._held_bytes, max_backlog_bytes=self.max_backlog_bytes,
             **({'audio_memory': {key: memory.status() for key, memory in self.memories.items()}} if self.memories else {}),
             inputs={key: dict(modality=value['modality'], frames=value['frames'], last_ms=value['last_ms'],

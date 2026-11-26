@@ -48,6 +48,12 @@ never change a word after it was settled. For each stretch it has:
   the state ``uncertain`` (not counted, not revoked), and a later lane may still settle it with a verdict of its own. With no speaker active, or an unidentified one, the per-word score
   decides.
 
+Search mode (``mode="search"``, owner decision 33, :data:`gamst.counting.SEARCH`): the lane only adds. A word it would
+leave uncertain or revoke counts instead (``match: true``, ``candidate: true``, ``reason``: what it would have been), unless
+its voice is clearly another person's by a large margin: it has a voice score and every one it has (the diarized
+speaker's, the word's own) is at most ``threshold - revoke_margin``. Words any one other recogniser wrote are added
+(``add: "any"``). :meth:`set_mode` switches it while the run goes on (later verdicts only).
+
 Outputs (capability ``speech.word_verdicts``): ``kind: "verdicts"`` (``[{word_id, match, provisional, changed, basis,
 reason?, heard, speaker, speaker_score, word_score}]`` for every provisional word), ``kind: "utterance"`` (an
 occurrence only the second recogniser heard: a final utterance of that word, ``decided_by: "verification"``) and
@@ -135,7 +141,8 @@ class WordVerification:
     owns_process = True
 
     def __init__(self, recogniser, diarizer, embedder, *, reference='voice', terms='terms', audio='microphone',
-                 rule=None, voice=None, windows=None, feed_speed=1.25, capability_id='speech.word_verdicts', bank=None):
+                 rule=None, voice=None, windows=None, feed_speed=1.25, capability_id='speech.word_verdicts', bank=None,
+                 mode='count', search=None):
         self.recogniser, self.diarizer, self.embedder = recogniser, diarizer, embedder
         self.reference_name, self.terms_name, self.audio = reference, terms, audio
         self.rule, self.voice = _settings(RULE, rule, 'rule'), _settings(VOICE, voice, 'voice')
@@ -150,6 +157,8 @@ class WordVerification:
         if low is not None and not (type(low) in (int, float) and 0 < low < 1):
             raise ValueError('rule low_confidence is None (no veto) or a probability between 0 and 1')
         self.windows = _settings(WINDOWS, windows, 'window')
+        self._count_add, self.mode, self.search = self.rule['add'], 'count', None
+        self.set_mode(mode, search)
         # speaker decision v2 (voice ``decision: "relative"``, gamst/providers/voice_bank.py): the person's speaker in a
         # window is the one closest to the references by ``margin`` (at least ``floor``); the window's other speakers
         # become negatives; a word with no clear speaker counts when it is ``word_margin`` closer to the references than
@@ -186,6 +195,29 @@ class WordVerification:
         self._name = None
         self._task = None
         self.reset()
+
+    def set_mode(self, mode, search=None):
+        """``count`` or ``search`` (module doc) for the verdicts from now on; ``search``: :data:`gamst.counting.SEARCH`."""
+        from ..counting import MODES, search_settings
+        if mode not in MODES:
+            raise ValueError(f"mode is one of {', '.join(MODES)}")
+        self.mode = mode
+        self.search = search_settings(search) if mode == 'search' else None
+        self.rule['add'] = self.search['add'] if self.search else self._count_add
+        if self.rule['add'] not in ADD:
+            raise ValueError(f"search add is one of {', '.join(ADD)}")
+
+    def _clearly_other(self, *scores):
+        """Search mode: every voice score there is (at least one) is ``revoke_margin`` under the threshold."""
+        found = [value for value in scores if type(value) in (int, float)]
+        return bool(found) and max(found) <= self.voice['threshold'] - self.search['revoke_margin']
+
+    def _searched(self, match, reason, *scores):
+        """(match, candidate fields) of a decision: in search mode a word that would not count is a candidate."""
+        if self.search is None or match or self._clearly_other(*scores):
+            return match, {}
+        self.stats['candidates'] = self.stats.get('candidates', 0) + 1
+        return True, dict(candidate=True, reason=reason or 'not_counted')
 
     # ------------------------------------------------------------------ binding and state
 
@@ -250,7 +282,8 @@ class WordVerification:
                     regions=[dict(item, end_ms=None if item['end_ms'] == float('inf') else item['end_ms'],
                                   length_ms=None if item['end_ms'] == float('inf') else item['end_ms'] - item['start_ms'])
                              for item in self._regions[-64:]], straddling=self._straddling(),
-                    diarize_jobs=self.stats.get('diarize_jobs', 0),
+                    diarize_jobs=self.stats.get('diarize_jobs', 0), mode=self.mode,
+                    **({'search': dict(self.search)} if self.search else {}),
                     **({'voice_bank': self.bank.status()} if self.bank is not None else {}))
 
     # ------------------------------------------------------------------ frames
@@ -812,10 +845,12 @@ class WordVerification:
                 continue
             match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, item['start_ms'], item['end_ms'])
             self.stats['added'] += 1
-            uncertain = reason == 'uncertain_overlap'
+            match, candidate = self._searched(match, reason, speaker_score, score)
+            uncertain = reason == 'uncertain_overlap' and not candidate
             word = dict(text=item['spoken'], start_ms=item['start_ms'], end_ms=max(item['end_ms'], item['start_ms'] + 1),
                         match=match, decided_by='verification', basis='heard_once_by_verification+' + basis,
-                        **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}),
+                        **({'reason': reason} if reason and not candidate else {}),
+                        **({'speaker_score': score} if score is not None else {}), **candidate,
                         # a later lane may settle an uncertain word: it has an ID and says so
                         **({'state': 'uncertain', 'word_id': f"verification:{item['key']}#0"} if uncertain else {}))
             self._outbox.append(self.spec.validate(dict(
@@ -927,7 +962,7 @@ class WordVerification:
                 if not match and reason != 'uncertain_overlap':
                     self.stats['dropped'] = self.stats.get('dropped', 0) + 1
                     continue       # one recogniser only, not kept: nothing is added
-            self._add(item, match, basis, reason, score)
+            self._add(item, match, basis, reason, score, speaker_score)
 
     @staticmethod
     def _confidence(item):
@@ -964,12 +999,14 @@ class WordVerification:
             return match, f'{tag}+{basis}', reason, speaker, speaker_score, score
         return False, f'{tag}+{basis}', 'contested', speaker, speaker_score, score
 
-    def _add(self, item, match, basis, reason, score):
+    def _add(self, item, match, basis, reason, score, speaker_score=None):
         self.stats['added'] += 1
-        uncertain = reason == 'uncertain_overlap'
+        match, candidate = self._searched(match, reason, speaker_score, score)
+        uncertain = reason == 'uncertain_overlap' and not candidate
         word = dict(text=item['spoken'], start_ms=item['start_ms'], end_ms=max(item['end_ms'], item['start_ms'] + 1),
                     match=match, decided_by='verification', basis=basis,
-                    **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}),
+                    **({'reason': reason} if reason and not candidate else {}),
+                    **({'speaker_score': score} if score is not None else {}), **candidate,
                     **({'state': 'uncertain', 'word_id': f"verification:{item['key']}#0"} if uncertain else {}))
         self._outbox.append(self.spec.validate(dict(
             kind='utterance', reference=self.reference_name, utterance_id=f"verification:{item['key']}",
@@ -1011,6 +1048,7 @@ class WordVerification:
     def _verdict(self, word_id, match, basis, reason, speaker, speaker_score, score, *, heard, extra=None):
         word = self._open.pop(word_id)
         provisional = bool(word.get('match'))
+        match, candidate = self._searched(match, reason, speaker_score, score)
         verdict = dict(word_id=word_id, utterance_id=word.get('utterance_id'), start_ms=word['start_ms'],
                        end_ms=word['end_ms'], match=bool(match), provisional=provisional, changed=bool(match) != provisional,
                        settled_by='verification', basis=basis)
@@ -1018,7 +1056,7 @@ class WordVerification:
             verdict['reason'] = reason
             if reason in UNCERTAIN:
                 verdict['uncertain'] = True        # neither surely the person's nor another's: a later lane may settle it
-        verdict.update(extra or {})
+        verdict.update(candidate, **(extra or {}))
         for key, value in (('heard', heard), ('speaker', speaker), ('speaker_score', speaker_score), ('word_score', score)):
             if value is not None:
                 verdict[key] = value
