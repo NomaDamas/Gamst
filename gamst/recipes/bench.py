@@ -164,7 +164,7 @@ def error_types(truth, report, capability='speech.term_events'):
     start = report['start_ms']
     stated = (report.get('event_states') or {}).get(capability) or []
     replaced = {event['replaces']: event for event in stated if event.get('replaces')}
-    words = [event for event in stated if not event.get('replaces')]
+    words = [event for event in stated if not event.get('replaces') and not withdrawn(event)]
     now = lambda event: replaced.get(event.get('event_id'), event)
     points, _ = _labels(truth)
     person = {index for index, point in enumerate(points) if point[1] == 'person' and not point[2]}
@@ -185,11 +185,41 @@ def error_types(truth, report, capability='speech.term_events'):
     return result
 
 
+def l1_state(event):
+    """The state L1 gave an event when it committed the word: a heard word's (gamst/providers/partial_terms.py) is that
+    of its revision by the final hearing (``by: "l1"``; None if that never came)."""
+    if event.get('committed_state') != 'heard':
+        return event.get('committed_state', 'provisional')
+    return next((step['state'] for step in event.get('history') or () if step.get('by') == 'l1'), None)
+
+
 def live_events(report, capability='speech.term_events'):
-    """What L1 counted the moment it committed each word (the HUD's instant count before any correction)."""
+    """What L1 counted the moment it committed each word (the HUD's instant count before any correction other than
+    the final hearing's own: a heard word it withdrew is not in it)."""
     stated = (report.get('event_states') or {}).get(capability) or []
     return [event for event in stated if event.get('event') == EVENT and 'replaces' not in event
-            and event.get('decided_by') is None and event.get('committed_state', 'provisional') in ('provisional', 'final')]
+            and event.get('decided_by') is None and l1_state(event) in ('provisional', 'final')]
+
+
+def heard_events(report, capability='speech.term_events'):
+    """What entered the count first, at once: heard words (partials) and the words L1 committed that were not heard."""
+    stated = (report.get('event_states') or {}).get(capability) or []
+    return [event for event in stated if event.get('event') == EVENT and 'replaces' not in event
+            and event.get('decided_by') is None and event.get('committed_state', 'provisional') in ('heard', 'provisional',
+                                                                                                    'final')]
+
+
+def withdrawn(event):
+    """A heard word the final hearing did not hold: no hearing of it is left."""
+    return event.get('state') == 'revoked' and (event.get('revised_by') or {}).get('reason') == 'partial_withdrawn'
+
+
+def first_count_ms(event, start_ms=0):
+    """When the HUD first counted an event (its first counted step's decided time on the capture clock)."""
+    for step in event.get('history') or ():
+        if step.get('state') in ('heard', 'provisional', 'final'):
+            return step.get('decided_ms', step.get('capture_ms'))
+    return None
 
 
 def _percentiles(values):

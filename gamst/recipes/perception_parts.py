@@ -56,6 +56,20 @@ def _verified(name, modules):
     return False
 
 
+def heard_settings(options, context):
+    """The item's ``partials`` (``true`` or PartialSpotter settings) with the command line's (``--partials``,
+    ``--partial-revisions``, ``--partial-ms``); None when off."""
+    given, line = options.get('partials'), context.get('partials')
+    if line is False or given in (None, False) and line is None:
+        return None
+    return dict(given if isinstance(given, dict) else {}, **(line or {}))
+
+
+def partials_wanted(options, context):
+    """A recogniser emits partial records when its item says so and the command line does not turn them off."""
+    return bool(options.get('partials')) and context.get('partials') is not False
+
+
 async def _speaker_verify(options, context):
     from ..providers.speaker_verify import SpeakerVerify
     arguments = {name: options[name] for name in ('hysteresis', 'segment_ms', 'hop_ms', 'min_dbfs',
@@ -79,6 +93,9 @@ async def _speaker_verify(options, context):
             l1 = dict(options.get('l1') or {}, **(context.get('l1') or {}))
             if l1:
                 arguments['l1'] = l1
+    partials = heard_settings(options, context)
+    if partials is not None and arguments.get('words'):     # counted words in the partial hypotheses, at once
+        arguments['partials'] = partials
     decision = context.get('speaker_decision') or {}
     if decision.get('l1') is not None and arguments.get('words') and not arguments.get('sources') \
             and not arguments.get('turns'):     # speaker decision v2 at the live lane (per-word scores only)
@@ -518,13 +535,13 @@ async def _stream_words(options, context):
         endpointer = None
         if chosen.manual_commit:
             endpointer = Endpointer(**{key: float(options[key]) for key in ENDPOINT_KEYS if key in options})
-        module = StreamingWords(chosen, aligner=aligner, language=language, partials=bool(options.get('partials')),
+        module = StreamingWords(chosen, aligner=aligner, language=language, partials=partials_wanted(options, context),
                                 endpointer=endpointer,
                                 # a second recogniser of the run (a voter) commits under a capability of its own
                                 **({'capability_id': options['capability_id']} if options.get('capability_id') else {}))
         return dict(module=module, spec=module.spec)
     config, python, profile = _entry(options, context, 'streaming.asr.words')
-    config = dict(config, language=language, partials=bool(options.get('partials')))
+    config = dict(config, language=language, partials=partials_wanted(options, context))
     settings = {'voxtral-mlx': ('delay_ms', 'pause_seconds', 'max_seconds'),
                 'sherpa-zipformer': ('num_threads', 'decoding_method')}.get(config.get('backend'), ())
     config.update({key: options[key] for key in settings if key in options})

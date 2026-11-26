@@ -71,6 +71,7 @@ from .audio_ring import AudioRing, mono_float, rms_dbfs
 SAMPLE_RATE = 16000
 L1 = dict(policy='threshold', clear_other=.1, clear_margin=None)
 L1_POLICIES = ('threshold', 'instant')
+HEARD_TAIL_MS = 300     # a heard word's voice window ends this much after its estimated end
 
 
 # ---------------------------------------------------------------- math
@@ -244,7 +245,15 @@ class SpeakerVerify:
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
                  segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
                  source_gate_db=None, turns=False, provisional=False, audio_memory=None, relative=None, bank=None,
-                 l1=None):
+                 l1=None, partials=None):
+        # counted words in the recogniser's partial hypotheses, at once (``heard``; gamst/providers/partial_terms.py)
+        self.partials, self.spotter = None if partials is None else dict(partials), None
+        if self.partials is not None:
+            from .partial_terms import DEFAULTS
+            if set(self.partials) - {'terms', *DEFAULTS}:
+                raise ValueError(f"partials is {{terms, {', '.join(DEFAULTS)}}}")
+            if not words:
+                raise ValueError('heard words are scored per word: set words')
         # speaker decision v2 (gamst/providers/voice_bank.py): each word against the person's references AND the
         # voices known not to be the person, as the bank holds them when the word is committed
         self.relative = None if relative is None else dict(dict(floor=float(threshold), margin=0.), **relative)
@@ -307,6 +316,21 @@ class SpeakerVerify:
             self.bank = shared(pipeline, self.reference_name, reference['value']['embeddings'], self.bank_settings)
         if self.audio_memory is not None:
             self._memory = pipeline.keep_audio(self.audio_memory)
+        if self.partials is not None:
+            from .partial_terms import PartialSpotter
+            from .term_events import parse_terms
+            name = self.partials.get('terms', 'terms')
+            terms = pipeline.references.get(name)
+            if terms is None or terms['kind'] != 'terms':
+                raise ValueError(f'partials need a terms reference named {name!r}')
+            self.spotter = PartialSpotter(parse_terms(terms['value'])[0],
+                                          **{key: value for key, value in self.partials.items() if key != 'terms'})
+
+    def status(self):
+        """What the partial spotter saw (counts only, never text), when partials are read."""
+        if self.spotter is None:
+            return {}
+        return dict(partials=self.spotter.stats(), partial_trace=self.spotter.trace())
 
     def _covers(self, first, last):
         return self.ring.covers(first, last) or self._memory is not None and self._memory.covers(first, last)
@@ -560,10 +584,44 @@ class SpeakerVerify:
             self._turns = [turn for turn in self._turns if turn['end_ms'] > oldest]
         return outputs or None
 
+    async def _heard(self, value):
+        """A partial hypothesis: the counted words that just became stable in it, each with its voice on the audio so
+        far (``state: "heard"``; the final of the same turn confirms or withdraws them downstream). Only those words
+        leave this module, never the partial's other text."""
+        found = self.spotter.update(value)
+        if not found:
+            return None
+        words = []
+        for item in found:
+            end = item['end_ms']
+            if self.ring.end_ms is not None:
+                end = min(end, int(self.ring.end_ms))
+            start = min(item['start_ms'], end - 1)
+            heard_id = f"heard:{item['utterance_id']}:{item['term']}:{item['index']}"
+            # the sound so far: ``context_ms`` ending a little after the estimated end (where the word is not past it)
+            last = int(end + HEARD_TAIL_MS if self.ring.end_ms is None else min(end + HEARD_TAIL_MS, self.ring.end_ms))
+            word = await self._word(dict(text=item['spoken'], start_ms=min(int(start), last - self.context_ms),
+                                         end_ms=last))
+            if isinstance(word, tuple):       # sources / turns would decide it later: decide on the sound so far
+                word = await self._decide(word[0], *word[1])
+            words.append(dict(word, start_ms=int(start), end_ms=int(end), state='heard', word_id=heard_id, term=item['term'], index=item['index'],
+                              heard_to_ms=item['heard_to_ms'], word_timed=item['timed'], revisions=item['revisions'],
+                              **({'flags': item['flags']} if item['flags'] else {}),
+                              **({'part': item['part']} if item['part'] else {})))
+        start, end = min(word['start_ms'] for word in words), max(word['end_ms'] for word in words)
+        return self.spec.validate(dict(
+            kind='utterance', reference=self.reference_name, start_ms=start, end_ms=max(end, start + 1),
+            match=any(word.get('match') for word in words), state='heard', utterance_id=str(value.get('utterance_id')),
+            status='partial', text=' '.join(word['text'] for word in words), words=words, model=self._model()))
+
     async def _utterance(self, frame):
         value = frame.data
+        if value.get('status') == 'partial' and self.spotter is not None and value.get('text'):
+            return await self._heard(value)
         if value.get('status') != 'final' or not value.get('text'):
             return None
+        if self.spotter is not None:
+            self.spotter.final(value.get('utterance_id'))
         start, end = value.get('start_ms'), value.get('end_ms')
         if not isinstance(start, int) or not isinstance(end, int) or end <= start:
             return None

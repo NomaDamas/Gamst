@@ -11,7 +11,10 @@ after the video until every word has settled: the verification lane decides the 
 Revision states (a report with ``event_states``, e.g. ``--with verification``; owner decision 26). At video time t the
 HUD shows exactly what was known at t: each event's ``history`` says when every step was decided on the capture clock
 (a run ``--as-live``: when it was known live; otherwise the capture time of its record). The big number is the count
-as it stood then: a word the live recogniser (L1) counted enters it the moment L1 committed it (orange, provisional);
+as it stood then: a word the live recogniser's partial hypothesis held steadily enters it the moment that was known
+(``heard``: pale, dashed "+1 들림"; gamst/providers/partial_terms.py); a word the live recogniser (L1) counted enters
+it the moment L1 committed it (orange, provisional), and a heard word turns provisional then (same word, no second +1)
+or leaves the count ("−1 취소 #n 부분 인식 철회");
 a later lane's decision (catch-up, TSE, verification) changes it only at the moment it was decided, with a visible
 correction in Korean: "+1 추가 #12" (a word given to the person later: another voice's at first, or heard again),
 "−1 취소 #9" with the reason (red, struck out), "−1 보류" (violet, uncertain: shown, not counted), "확정" (green).
@@ -93,11 +96,13 @@ def state_at(event, t):
 
 
 UNCERTAIN = (230, 130, 190)     # violet (BGR): neither counted nor revoked
-STATE_COLOR = {'provisional': WARN, 'final': GOOD, 'revoked': REC, 'uncertain': UNCERTAIN}
-STATE_WORD = {'provisional': '잠정', 'final': '확정', 'revoked': '취소', 'uncertain': '불확실'}
+HEARD = (200, 222, 236)         # pale (BGR): heard in a partial hypothesis, counted, not yet committed by L1
+STATE_COLOR = {'heard': HEARD, 'provisional': WARN, 'final': GOOD, 'revoked': REC, 'uncertain': UNCERTAIN}
+STATE_WORD = {'heard': '들림', 'provisional': '잠정', 'final': '확정', 'revoked': '취소', 'uncertain': '불확실'}
 REASON_WORD = {'other_speaker': '다른 사람 목소리', 'another_voice': '다른 사람 목소리', 'heard_by_one': '인식기 하나만 들음',
                'no_speech': '말소리 없음', 'not_heard': '다시 들어도 없음', 'uncertain_overlap': '목소리 겹침',
-               'no_speaker': '화자 없음', 'speaker_unidentified': '화자 불명', 'late': '늦게 도착'}
+               'no_speaker': '화자 없음', 'speaker_unidentified': '화자 불명', 'late': '늦게 도착',
+               'partial_withdrawn': '부분 인식 철회', 'other_voice': '다른 사람 목소리'}
 FLAG_WORD = {'may_be_number': '숫자일 수 있음'}
 
 
@@ -151,7 +156,7 @@ def hud_timeline(report, count, other=None):
                 if event['event_id'] in replaced and len(steps):
                     continue      # what replaced it carries on
                 state = 'other'
-            steps.append((max(at, t), state, step))
+            steps.append((at if state == 'heard' else max(at, t), state, step))
         later = replaced.get(event['event_id'])
         if later is not None:
             steps += [(max(at, t), state, step) for at, state, step in _steps(later, start, known)]
@@ -174,17 +179,18 @@ def hud_timeline(report, count, other=None):
             item['number'] = number
         if index == 0:
             if now:
-                changes.append((at, 1, 'live' if state == 'provisional' and step.get('by') in L1_BY else 'added', item))
+                changes.append((at, 1, 'heard' if state == 'heard' else 'live' if state == 'provisional'
+                                and step.get('by') in L1_BY else 'added', item))
             continue
-        if state == before:
-            continue
+        if state == before or before == 'heard' and state == 'provisional':
+            continue      # a heard word L1 committed: the same word, already counted
         kind = 'added' if now and not was else 'final' if state == 'final' else state if was else None
         if kind is not None:
             changes.append((at, int(now) - int(was), kind, item))
     return dict(items=items, changes=changes)
 
 
-COUNTED_STATES = ('provisional', 'final')
+COUNTED_STATES = ('heard', 'provisional', 'final')
 
 
 def item_state(item, t):
@@ -215,10 +221,12 @@ def change_line(kind, item):
             if first == 'other' else '불확실에서 확정' if first == 'uncertain' else '검증 결정'
     if kind == 'final':
         return f"확정{number}", '검증 통과'
+    if kind == 'heard':
+        return f"+1 들림{number}", '부분 인식'
     return f"+1{number}", '실시간'
 
 
-CHANGE_COLOR = {'revoked': REC, 'uncertain': UNCERTAIN, 'added': GOOD, 'final': GOOD, 'live': GOOD}
+CHANGE_COLOR = {'revoked': REC, 'uncertain': UNCERTAIN, 'added': GOOD, 'final': GOOD, 'live': GOOD, 'heard': HEARD}
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
@@ -317,27 +325,45 @@ def _flash_border(canvas, x0, y0, view, color, since, span=HOLD_S):
                   max(2, round(14 * (1 - since / span))))
 
 
+def _dashed_border(canvas, x0, y0, view, color, since, span=HOLD_S):
+    """A dashed frame: a word heard in a partial hypothesis (counted, not yet committed)."""
+    import cv2
+    thick, right, bottom = max(2, round(10 * (1 - since / span))), x0 + view.shape[1] - 1, y0 + view.shape[0] - 1
+    for x in range(x0, right, 36):
+        cv2.line(canvas, (x, y0), (min(x + 20, right), y0), color, thick)
+        cv2.line(canvas, (x, bottom), (min(x + 20, right), bottom), color, thick)
+    for y in range(y0, bottom, 36):
+        cv2.line(canvas, (x0, y), (x0, min(y + 20, bottom)), color, thick)
+        cv2.line(canvas, (right, y), (right, min(y + 20, bottom)), color, thick)
+
+
 def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, place, bar_y, start, end):
     """The count as it was known at ``t``: L1's words at once, every later correction at the moment it was decided."""
     import cv2
     states = [(item, item_state(item, t)) for item in hud['items']]
     now = sum(state in COUNTED_STATES for _, state in states)
     recent = [change for change in hud['changes'] if 0 <= t - change[0] < CHANGE_S]
-    live = [change for change in recent if change[2] == 'live' and t - change[0] < HOLD_S]
-    corrections = [change for change in recent if change[2] != 'live']
+    live = [change for change in recent if change[2] in ('live', 'heard') and t - change[0] < HOLD_S]
+    corrections = [change for change in recent if change[2] not in ('live', 'heard')]
     if live:
-        since = t - max(change[0] for change in live)
-        _flash_border(canvas, x0, y0, view, GOOD, since)
+        newest = max(live, key=lambda change: change[0])
+        since, color = t - newest[0], GOOD if newest[2] == 'live' else HEARD
+        if newest[2] == 'heard':
+            _dashed_border(canvas, x0, y0, view, color, since)
+        else:
+            _flash_border(canvas, x0, y0, view, color, since)
         grow = round(60 * max(0, 1 - since / .2))
-        text.put(canvas, f'{now}', x0 + view.shape[1] - 40, y0 + 24, 150 + grow, GOOD, 'bold', anchor='right')
+        text.put(canvas, f'{now}', x0 + view.shape[1] - 40, y0 + 24, 150 + grow, color, 'bold', anchor='right')
+        if newest[2] == 'heard':
+            text.put(canvas, '+1 들림', x0 + view.shape[1] - 40, y0 + 210, 40, color, 'bold', anchor='right')
     elif corrections:
         newest = max(corrections, key=lambda change: change[0])
         since = t - newest[0]
         if since < HOLD_S * 1.5:
             _flash_border(canvas, x0, y0, view, CHANGE_COLOR[newest[2]], since, HOLD_S * 1.5)
     text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
-    text.put(canvas, '실시간(L1) 즉시 · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
-    big = GOOD if live else WHITE
+    text.put(canvas, '들리는 즉시(들림) · L1 확인(잠정) · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
+    big = (GOOD if newest[2] == 'live' else HEARD) if live else WHITE
     dropping = [change for change in corrections if change[1] < 0 and t - change[0] < .8]
     if dropping:      # the number that was there, struck out, for a moment: then the corrected one
         before = now - sum(change[1] for change in dropping)
@@ -350,8 +376,8 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
     text.put(canvas, count_label, SIDE + 32, 404, 26, GOOD, 'bold')
     tally = {name: sum(state == name for _, state in states) for name in STATE_WORD}
     x = SIDE + 32
-    for name in ('final', 'provisional', 'revoked', 'uncertain'):
-        if name == 'uncertain' and not tally['uncertain']:
+    for name in ('final', 'provisional', 'heard', 'revoked', 'uncertain'):
+        if name in ('uncertain', 'heard') and not tally[name]:
             continue
         x += text.put(canvas, f"{STATE_WORD[name]} {tally[name]}", x, 438, 22, STATE_COLOR[name], 'bold') + 22
     y = 474
@@ -380,7 +406,10 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
             text.put(canvas, other_label, SIDE + 232, top + 3, 20, DIM)
             continue
         color = STATE_COLOR[state]
-        text.put(canvas, STATE_WORD[state], SIDE + 32, top, 24, color, 'bold')
+        width = text.put(canvas, STATE_WORD[state], SIDE + 32, top, 24, color, 'bold')
+        if state == 'heard':        # dotted underline: not committed yet
+            for dot in range(SIDE + 32, SIDE + 32 + width, 8):
+                cv2.line(canvas, (dot, top + 32), (dot + 3, top + 32), color, 2)
         text.put(canvas, f"{item['t']:.2f}초", SIDE + 112, top, 24, WHITE if state != 'revoked' else DIM)
         if state == 'revoked':
             cv2.line(canvas, (SIDE + 110, top + 14), (SIDE + 206, top + 14), REC, 3, cv2.LINE_AA)
@@ -393,6 +422,10 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
             continue
         kind = state != 'other'
         color = DIM if state == 'other' else STATE_COLOR[state]
+        if state == 'heard':        # dashed tick: heard, not committed yet
+            for y in range(bar_y - 30, bar_y + 30, 12):
+                cv2.line(canvas, (place(item['t']), y), (place(item['t']), y + 6), color, 5, cv2.LINE_AA)
+            continue
         cv2.line(canvas, (place(item['t']), bar_y - (30 if kind else 14)), (place(item['t']), bar_y + (30 if kind else 14)),
                  color, 5 if kind else 3, cv2.LINE_AA)
 
