@@ -9,8 +9,10 @@ Only events of the report are drawn, each at the capture time it happened; no mo
 
 Revision states (a report with ``event_states``, e.g. ``--with tracks``): a counted word appears when it was committed
 (a run ``--as-live``: when it was known; otherwise the capture time of its record), orange while it is provisional,
-green once final, red and struck out once revoked (it leaves the count then). The panel says how many are final,
-provisional and revoked at that moment.
+green once final, red and struck out once revoked (it leaves the count then), violet while uncertain (shown, not
+counted). The panel says how many are final, provisional, revoked and uncertain at that moment, each in its colour; a
+word shows its spelling where the term has several, why it was revoked or is uncertain, and its flags (a numeral
+that may be the number).
 """
 from __future__ import annotations
 
@@ -83,8 +85,13 @@ def state_at(event, t):
     return event['state'] if event['settled'] is not None and t >= event['settled'] else event['first']
 
 
-STATE_COLOR = {'provisional': WARN, 'final': GOOD, 'revoked': REC, 'uncertain': WARN}
+UNCERTAIN = (230, 130, 190)     # violet (BGR): neither counted nor revoked
+STATE_COLOR = {'provisional': WARN, 'final': GOOD, 'revoked': REC, 'uncertain': UNCERTAIN}
 STATE_WORD = {'provisional': '잠정', 'final': '확정', 'revoked': '취소', 'uncertain': '불확실'}
+REASON_WORD = {'other_speaker': '다른 사람 목소리', 'another_voice': '다른 사람 목소리', 'heard_by_one': '인식기 하나만 들음',
+               'no_speech': '말소리 없음', 'not_heard': '다시 들어도 없음', 'uncertain_overlap': '목소리 겹침',
+               'no_speaker': '화자 없음', 'speaker_unidentified': '화자 불명', 'late': '늦게 도착'}
+FLAG_WORD = {'may_be_number': '숫자일 수 있음'}
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
@@ -163,9 +170,12 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         text.put(canvas, str(len(now)), SIDE + 32, 180, 230, GOOD if flash else WHITE, 'bold')
         text.put(canvas, count_label, SIDE + 32, 420, 28, GOOD, 'bold')
         if stated is not None:
-            text.put(canvas, f"확정 {tally['final']}  ·  잠정 {tally['provisional']}  ·  취소 {tally['revoked']}"
-                     + (f"  ·  불확실 {tally['uncertain']}" if tally['uncertain'] else ''),
-                     SIDE + 32, 452, 22, MUTED)
+            x = SIDE + 32
+            for name in ('final', 'provisional', 'revoked', 'uncertain'):
+                if name == 'uncertain' and not tally['uncertain']:
+                    continue
+                label = f"{STATE_WORD[name]} {tally[name]}"
+                x += text.put(canvas, label, x, 452, 22, STATE_COLOR[name], 'bold') + 22
         text.put(canvas, f'{t:5.2f}초', WIDTH - 64, 136, 28, MUTED, anchor='right')
         appeared = (lambda event: event['seen']) if stated is not None else (lambda event: event['t'])
         feed = sorted(((event, kind) for event, kind in marks if (appeared(event) if kind else event['t']) <= t),
@@ -207,9 +217,12 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
 
 def count_detail(event, state=None):
     if state is not None:
-        reason = (event.get('revised_by') or {}).get('reason') if state == 'revoked' else None
+        reason = (event.get('revised_by') or {}).get('reason') or event.get('reason') \
+            if state in ('revoked', 'uncertain') else None
         score = f"슬롯 {event.get('slot')} 점수 {event['slot_score']:.2f}" if event.get('slot_score') is not None else ''
-        return '  '.join(item for item in (score, reason) if item)
+        spoken = f"“{event['spoken']}”" if event.get('spoken') and event.get('spoken') != event.get('term') else ''
+        flags = [FLAG_WORD.get(flag, flag) for flag in event.get('flags') or ()]
+        return '  '.join(item for item in (spoken, score, REASON_WORD.get(reason, reason), *flags) if item)
     near = event.get('support')
     if near is not None:
         return f"쿵 소리 +{near['delay_ms']}ms" if 'delay_ms' in near else '소리 없음, 동작으로 판정'
