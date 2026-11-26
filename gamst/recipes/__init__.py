@@ -951,8 +951,6 @@ async def run_pipeline(recipe, args):
         report['voice_sample'] = {key: value for key, value in args.voice_sample.items() if key != 'segments_s'}
         report['voice_sample']['excluded_s'] = args.voice_sample.get('segments_s') or (
             [[args.voice_sample['from_s'], args.voice_sample['to_s']]] if 'from_s' in args.voice_sample else [])
-    if getattr(args, 'voice_quality', None):    # how self-consistent the voice reference is (gamst/voice_quality.py)
-        report['voice_quality'] = args.voice_quality
     inputs, first = recipe['inputs'], recipe['inputs'][0]['id']    # several: "frames" are those of the first input
     if len(inputs) > 1:
         report['input_frames'] = {item['id']: 0 for item in inputs}
@@ -1074,6 +1072,8 @@ async def run_pipeline(recipe, args):
                                                         start_ms=report.get('start_ms', 0))
             if any(PARTS[item['use']].transcribes or item['use'] == 'prosody' for item in recipe['modules']):
                 report['speaker'] = 'enrolled' if speaker_bound(recipe['modules']) else 'not_bound'
+                if getattr(args, 'voice_quality', None):    # how self-consistent the voice reference is
+                    report['voice_quality'] = args.voice_quality      # (gamst/voice_quality.py)
             report['pipeline'] = pipeline.status()
             report['errors'] = {name: item['last_error'] for name, item in report['pipeline']['modules'].items()
                                 if item['errors']}
