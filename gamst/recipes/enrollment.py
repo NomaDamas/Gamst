@@ -105,6 +105,10 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
             begin, seconds = seconds, seconds + len(samples) / frame.sample_rate
             if begin >= args.start + args.seconds:
                 break
+            meter = getattr(args, 'meter', None)
+            if callable(meter) and seconds > args.start:      # a live recording step shows its level
+                from ..providers.audio_ring import rms_dbfs
+                meter(min(seconds, args.start + args.seconds) - args.start, rms_dbfs(samples))
             if seconds > args.start:
                 low = max(0, int((args.start - begin) * frame.sample_rate))
                 high = min(len(samples), int((args.start + args.seconds - begin) * frame.sample_rate))
