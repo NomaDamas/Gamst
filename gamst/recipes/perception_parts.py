@@ -52,9 +52,62 @@ async def _speaker_verify(options, context):
     if options.get('turns') and any(item.split(':', 1)[0] == options['turns'] for item in consumes):
         arguments['turns'] = True
     threshold = context.get('speaker_threshold')
+    if any(item.get('use') == 'word-verify' and options.get('name') in [source.split(':', 1)[0] for source in
+                                                                        item.get('consumes', ())]
+           for item in context.get('modules') or ()):
+        # A verification lane settles these words later: each is counted at once as provisional, and the late words
+        # of a catch-up worker are scored on the input's kept audio.
+        arguments['provisional'] = True
+        audio = [source for source in consumes if source in (context.get('inputs') or {})]
+        if audio:
+            arguments['audio_memory'] = audio[0]
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
                            **arguments)
+    return dict(module=module, spec=module.spec)
+
+
+VERIFY_RECOGNISER, VERIFY_DIARIZER = 'openai.gpt_live_transcribe.hosted', 'pyannoteai.precision3.offline'
+
+
+async def _word_verify(options, context):
+    """The verification lane (:mod:`gamst.providers.word_verification`): a second recogniser, diarization of windows
+    and the few-shot voice settle the words counted at once. Hosted by default (OpenAI gpt-live-transcribe with the
+    counted words as keywords + Qwen3-ForcedAligner here; pyannoteAI Precision-3): ``--allow-remote-asr`` is the
+    owner's opt-in for both, and each says its price first."""
+    from ..providers.pyannoteai import PyannoteAI
+    from ..providers.slot_sources import HostedBatch
+    from ..providers.word_verification import WordVerification
+    consumes = options.get('consumes') or ()
+    audio = next((source for source in consumes if source in (context.get('inputs') or {})), None)
+    if audio is None:
+        raise SystemExit(f"{options.get('name')}: verification reads the audio input (as ticks) and the words it settles")
+    hearing = dict(name=f"{options.get('name')}.recogniser", candidate=options.get('recogniser', VERIFY_RECOGNISER),
+                   bias=options.get('bias', 'terms'),
+                   **{key: options[key] for key in ('aligner', 'aligner_config', 'aligner_python', 'config', *ENDPOINT_KEYS)
+                      if key in options})
+    recogniser = (await _stream_words(hearing, context))['module']
+    diarization = dict(_registry_config('audio.diarization', options.get('diarizer', VERIFY_DIARIZER)) or {},
+                       **(options.get('diarizer_config') or {}))
+    if context.get('allow_remote_asr'):
+        diarization['allow_remote'] = True
+    diarization.pop('exclusive', None)
+    try:
+        client = PyannoteAI(**diarization)
+    except PermissionError:
+        await recogniser.close()
+        raise SystemExit(f"{options.get('name')}: {options.get('diarizer', VERIFY_DIARIZER)} sends the sound to "
+                         'pyannoteAI (it leaves this device and is billed per job, 20 s minimum): add --allow-remote-asr '
+                         'to consent') from None
+    print(f"note: verification diarization: windows of the sound go to pyannoteAI ({client.model}) as they become "
+          f"complete; list price {client.eur_per_hour} EUR per hour of audio, 20 s minimum per job", file=sys.stderr)
+    diarizer = HostedBatch(client)
+    diarizer.name = f'pyannoteai:{client.model}'
+    module = WordVerification(recogniser, diarizer, await speaker_embedder(options, context),
+                              reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
+                              audio=audio, rule=options.get('rule'), voice=dict(
+                                  {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
+                                  is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'))
     return dict(module=module, spec=module.spec)
 
 
@@ -689,6 +742,8 @@ def parts(Part):
         'speaker-slots': Part('module', role='audio.diarization', candidate='nemotron3', build=_speaker_slots),
         'speaker-tracks': Part('module', **speech, build=_speaker_tracks),
         'track-verify': Part('module', build=_track_verify),
+        'word-verify': Part('module', **speech, build=_word_verify,
+                            extra_roles=(('aligner', 'audio.word_alignment', 'qwen3.forced_aligner_0_6b'),)),
         'transcript-replay': Part('module', build=_transcript_replay, transcribes=True),
         'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
                               transcribes=True, serves=(None,)),

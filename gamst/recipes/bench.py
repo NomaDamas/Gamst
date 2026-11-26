@@ -163,12 +163,13 @@ def score_run(truth, report, *, finished_ms, duration_s, capability='speech.term
         stated = [dict(event, state='final') for event in report['events'].get(capability, ()) if event.get('event') == EVENT]
     spoken = [event for event in stated if event.get('event') == EVENT]
     final = [event for event in spoken if event['state'] != 'revoked']
-    first = [event for event in spoken if 'replaces' not in event]
+    first = [event for event in spoken if 'replaces' not in event and event.get('decided_by') != 'verification']
     excluded = {id(event) for event, label, _ in match(truth, spoken, start) if label == 'excluded'}
     timed = [event for event in stated if id(event) not in excluded and event.get('committed_ms') is not None]
     settle = [event['settled_ms'] - event['committed_ms'] for event in timed if event.get('settled_ms') is not None
               and 'replaces' not in event]
-    at_once = [event['committed_ms'] - event['end_ms'] for event in timed if 'replaces' not in event]
+    at_once = [event['committed_ms'] - event['end_ms'] for event in timed if 'replaces' not in event
+               and event.get('decided_by') != 'verification']
     return dict(final=view(truth, final, start), at_once=view(truth, first, start),
                 revoked=sum(event['state'] == 'revoked' for event in spoken),
                 settle_ms=_percentiles(settle), provisional_ms=_percentiles(at_once),
@@ -189,11 +190,17 @@ def words_of(truth, report, capability='speech.term_events'):
         later = promoted.get(event.get('event_id'))
         final = 'counted' if (later is not None or event['event'] == EVENT and event['state'] != 'revoked') else 'not counted'
         settled = (later or event).get('settled_ms') if later is None else later.get('committed_ms')
+        added = event.get('decided_by') == 'verification'
+        revised = event.get('revised_by') or {}
         rows.append(dict(end_s=round((event['end_ms'] - start) / 1000, 2), truth=label, slot=event.get('slot'),
                          slot_score=event.get('slot_score'), final_slot_score=(later or event).get('settled_slot_score', (
                              later or {}).get('slot_score')),
-                         provisional='counted' if event['event'] == EVENT else 'not counted',
-                         final=final, latency_ms=None if settled is None or event.get('committed_ms') is None
+                         speaker_score=event.get('speaker_score'),
+                         provisional='not heard at once' if added else 'counted' if event['event'] == EVENT
+                         else 'not counted', final=final,
+                         reason=revised.get('reason') or ((later or {}).get('revised_by') or {}).get('reason'),
+                         basis=revised.get('basis') or event.get('basis'),
+                         latency_ms=None if settled is None or event.get('committed_ms') is None or added
                          else settled - event['committed_ms']))
     for index, point in enumerate(points):
         if index not in seen:

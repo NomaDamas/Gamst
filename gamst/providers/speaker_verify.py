@@ -230,7 +230,11 @@ class SpeakerVerify:
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
                  segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
-                 source_gate_db=None, turns=False):
+                 source_gate_db=None, turns=False, provisional=False, audio_memory=None):
+        self.provisional = bool(provisional)    # a later module settles each word: give it an ID and say so
+        self.audio_memory, self._memory = audio_memory, None   # an input whose kept audio covers what the ring lost
+        if self.provisional and not words:
+            raise ValueError('provisional words need word scores: set words')
         self.words = bool(words)     # also score each word, with the sound around it: people share a phrase
         if self.words and not context_ms:
             raise ValueError('word scores need context_ms')
@@ -271,6 +275,26 @@ class SpeakerVerify:
         if reference is None or reference['kind'] != 'voice':
             raise ValueError(f'speaker_verify needs a voice reference named {self.reference_name!r}')
         self.set_reference(reference['value'])
+        if self.audio_memory is not None:
+            self._memory = pipeline.keep_audio(self.audio_memory)
+
+    def _covers(self, first, last):
+        return self.ring.covers(first, last) or self._memory is not None and self._memory.covers(first, last)
+
+    def _span(self, first, last):
+        """Samples of [first, last): the ring's, else the input's kept audio (words a catch-up worker gave late)."""
+        if self.ring.covers(first, last) or self._memory is None or not self._memory.covers(first, last):
+            return self.ring.span(first, last)
+        return self._memory.span(first, last, SAMPLE_RATE)
+
+    def _settled_later(self, result):
+        """Each word gets an ID and ``state: provisional``: a verification module gives its verdict later."""
+        if not self.provisional or not isinstance(result.get('words'), list):
+            return result
+        words = [dict(word, word_id=f"{result['utterance_id']}#{index}", state='provisional')
+                 if isinstance(word, dict) and type(word.get('start_ms')) is int else word
+                 for index, word in enumerate(result['words'])]
+        return dict(result, words=words)
 
     def set_reference(self, value):
         if not isinstance(value, dict):
@@ -390,14 +414,17 @@ class SpeakerVerify:
         if last - first >= self.context_ms or self.ring.start_ms is None:
             return first, last
         extra = self.context_ms - (last - first)
-        return max(first - extra // 2, int(self.ring.start_ms) + 1), min(last + extra - extra // 2, int(self.ring.end_ms))
+        held = self.ring
+        if self._memory is not None and self._memory.start_ms is not None and not self.ring.covers(first, last):
+            held = self._memory       # a late word: around it in the kept audio
+        return max(first - extra // 2, int(held.start_ms) + 1), min(last + extra - extra // 2, int(held.end_ms))
 
     async def _word(self, item):
         if not isinstance(item, dict) or not isinstance(item.get('start_ms'), int) or not isinstance(item.get('end_ms'), int):
             return item
         first, last = self._around(item['start_ms'], item['end_ms'])
         try:
-            score = await self.score(self.ring.span(first, last)) if self.ring.covers(first, last) else None
+            score = await self.score(self._span(first, last)) if self._covers(first, last) else None
         except ValueError:
             score = None
         if self._waits():   # decided once the separated sources / turns of this word are here
@@ -474,7 +501,7 @@ class SpeakerVerify:
             words = list(result['words'])
             for index, (first, last) in spans:
                 words[index] = await self._decide(words[index], first, last)
-            outputs.append(self.spec.validate(dict(result, words=words)))
+            outputs.append(self.spec.validate(self._settled_later(dict(result, words=words))))
         oldest = min((first for _, spans in self._pending for _, (first, _) in spans), default=None)
         if oldest is not None:
             self._blocks = [block for block in self._blocks if block.end_ms > oldest]
@@ -502,10 +529,10 @@ class SpeakerVerify:
             first, last = min(item['start_ms'] for item in words), max(item['end_ms'] for item in words)
         first, last = self._around(first, last)
         # Up to 500 ms of the tail may not have reached this module yet; score what is held.
-        if last - first >= self.min_utterance_ms and self.ring.covers(first, min(last, (self.ring.end_ms or 0) + 500)
-                                                                      - 500):
+        if last - first >= self.min_utterance_ms and (self.ring.covers(
+                first, min(last, (self.ring.end_ms or 0) + 500) - 500) or not self.ring.covers(first, last) and self._covers(first, last)):
             try:
-                score = await self.score(self.ring.span(first, last))
+                score = await self.score(self._span(first, last))
             except ValueError:
                 score = None
         match = score is not None and score >= self.threshold
@@ -527,4 +554,4 @@ class SpeakerVerify:
             result['words'] = [item[0] if isinstance(item, tuple) else item for item in result['words']]
             self._pending.append((result, spans))
             return result
-        return self.spec.validate(result)
+        return self.spec.validate(self._settled_later(result))

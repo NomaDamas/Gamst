@@ -44,6 +44,13 @@ module did not process (``thinned``: frames between these two times were process
 ``complete_until_ms`` of a module only advances over capture time that was processed or declared so.
 Audio is never joined across a gap.
 
+Catch-up (live audio). A module in a lane of its own that can ``fork()`` does not give audio up: when its lane is more
+than ``lag_ms`` behind, it skips to now and the skipped capture range becomes a TODO; a pool of catch-up workers (forks
+of the module, given its ``snapshot()`` from the TODO's start, hearing from its last pause) works the TODOs off from the
+input's kept audio (:meth:`keep_audio`, memory with a spill file) and commits their results at their capture times. A
+pending TODO holds ``complete_until_ms`` back, so what reads the module (a verification lane) waits for it
+(:meth:`_skip`, docs/catch-up-verification.md).
+
 The one exception is declared sampling: a module with ``every_ms`` looks at one frame per interval; the
 others are reported as ``sampled``, and are no gap.
 
@@ -484,6 +491,8 @@ class Pipeline:
         memory = self.memories[items[0].source]
         if memory.start_ms is not None:
             begin = max(begin, int(memory.start_ms))
+        if entry['until'] is not None:      # what was said complete already stays the live module's
+            begin = max(begin, min(start, entry['until'] + 1))
         for item in items:
             item.names.remove(name)
             if not item.names:
@@ -668,6 +677,15 @@ class Pipeline:
             drawing = getattr(entry['module'], 'drawing', None)     # what a screen draws is discarded at once
             if callable(getattr(drawing, 'clear', None)):
                 drawing.clear()
+        for entry in self.modules.values():
+            for task in entry['workers']:
+                task.cancel()
+                tasks.append(task)
+            for todo in entry['todos']:
+                self._gap(next(key for key, value in self.modules.items() if value is entry), [], todo['from_ms'],
+                          todo['end_ms'], todo['frames'], 'reset', record=False)
+            entry['todos'].clear()
+            entry['claims'].clear()
         for lane in self._lanes:
             if lane['task'] is not None and not lane['task'].done():
                 lane['task'].cancel()
@@ -728,6 +746,8 @@ class Pipeline:
         if media:
             entry = self.inputs[source]
             entry['frames'] += 1
+            if source in self.memories and frame.modality == 'audio' and frame.sample_rate:
+                self.memories[source].append(frame.data, frame.timestamp_ms, frame.sample_rate, frame.subject_id)
             if entry['last_ms'] is not None:
                 entry['intervals'].append(frame.timestamp_ms - entry['last_ms'])
             entry['last_ms'], entry['size'] = frame.timestamp_ms, getattr(frame.data, 'shape', (None, None))[:2]
@@ -915,6 +935,8 @@ class Pipeline:
         leader, running = self.modules[lane['name']], deque()
         try:
             while not self._closed:
+                if not running and self._lagging(lane):
+                    await self._skip(lane)
                 while lane['frames'] and len(running) < lane['width'] and not all(
                         self.modules[name]['paused'] for name in lane['frames'][0].names):
                     item = lane['frames'].popleft()
@@ -1215,10 +1237,7 @@ class Pipeline:
         sources = [self._complete_until(src) for src, _ in entry['links'] if src in self.inputs or src in self.modules]
         if not sources or None in sources:
             return entry['until']
-        bounds = list(sources)
-        if entry['lane'] is not None:
-            bounds += [item.frame.timestamp_ms - 1 for item in (*entry['lane']['busy'], *entry['lane']['frames'])
-                       if name in item.names]
+        bounds = list(sources) + self._inner_bounds(name, entry)
         if entry['off'] is not None:
             bounds.append(entry['off']['start_ms'] - 1)
         held = self._holding_from(entry)
@@ -1227,6 +1246,31 @@ class Pipeline:
         value = min(bounds)
         entry['until'] = value if entry['until'] is None else max(entry['until'], value)
         return entry['until']
+
+    def _inner_bounds(self, name, entry):
+        """What a module has not finished yet: frames waiting in its lane (a record from the earliest capture time it
+        speaks about) and catch-up TODOs (from the first sample their worker hears)."""
+        bounds = []
+        if entry['lane'] is not None:
+            for item in (*entry['lane']['busy'], *entry['lane']['frames']):
+                if name in item.names:
+                    data = item.frame.data
+                    begin = data.get('start_ms') if isinstance(data, dict) and not item.media else None
+                    bounds.append(min(item.frame.timestamp_ms, begin if type(begin) is int else item.frame.timestamp_ms) - 1)
+        bounds += [todo['from_ms'] - 1 for todo in entry['todos']]
+        return bounds
+
+    def complete_until(self, name):
+        """Capture time up to which everything for ``name`` (an input or module) was processed or declared, or None."""
+        return self._complete_until(name)
+
+    def inputs_complete_until(self, name):
+        """Up to where everything module ``name`` reads is complete and has reached it (not what it holds itself)."""
+        entry = self.modules[name]
+        sources = [self._complete_until(src) for src, _ in entry['links'] if src in self.inputs or src in self.modules]
+        if not sources or None in sources:
+            return None
+        return min(sources + self._inner_bounds(name, entry))
 
     def _complete_from(self, name):
         """Capture time from which ``complete_until_ms`` accounts for everything, or None before the first frame."""
@@ -1247,6 +1291,7 @@ class Pipeline:
         """Wait until every queued module has processed what it was given."""
         while True:
             tasks = [lane['task'] for lane in self._lanes if lane['task'] is not None and not lane['task'].done()]
+            tasks += [task for entry in self.modules.values() for task in entry['workers'] if not task.done()]
             if not tasks:
                 return
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -1280,15 +1325,30 @@ class Pipeline:
             if callable(getattr(module, 'reset', None)):
                 await _call(module.reset)
         started = time.monotonic()
+        slowdown = entry['slowdown']
+        if slowdown and frame.modality == 'audio':      # a test and debug option: this lane falls behind on purpose
+            origin = min((value['first_ms'] for value in self.inputs.values() if value['first_ms'] is not None),
+                         default=frame.timestamp_ms)
+            at = (frame.timestamp_ms - origin) / 1000
+            if any(low <= at < high for low, high in slowdown.get('spans_s') or ()):
+                await asyncio.sleep(slowdown['ms'] / 1000)
         output = await _call(module.process, frame)
         entry['last_run_ms'] = max(frame.timestamp_ms, entry['last_run_ms'] or 0)
         entry['processed'] += 1
         entry['last_latency_ms'] = round((time.monotonic() - started) * 1000, 3)
+        entry['busy_ms'] += entry['last_latency_ms']
         entry['latency'].append(entry['last_latency_ms'])
         return output
 
-    async def _commit(self, name, entry, frame, output, context):
-        if output is None:
+    async def _commit(self, name, entry, frame, output, context, *, keep=None):
+        if keep is None and entry['claims']:     # catch-up workers own these capture times
+            claims = list(entry['claims'])
+
+            def keep(start_ms, end_ms):
+                middle = (start_ms + end_ms) / 2
+                return not any(low <= middle <= high for low, high in claims)
+        output = self._trim(entry, output, keep)
+        if output is None or output == []:
             return []
         records, derived = [], []
         if entry['spec'] is not None:
@@ -1562,6 +1622,7 @@ class Pipeline:
     async def close(self):
         self._closed = True
         lanes = [lane['task'] for lane in self._lanes if lane['task'] is not None]
+        lanes += [task for entry in self.modules.values() for task in entry['workers']]
         for task in lanes:
             task.cancel()
         await asyncio.gather(*lanes, return_exceptions=True)
@@ -1573,6 +1634,8 @@ class Pipeline:
             close = getattr(entry['module'], 'close', None)
             if callable(close):
                 await _call(close)
+        for memory in self.memories.values():
+            memory.close()
         if getattr(self.human, 'pipeline', None) is self:
             self.human.pipeline = None
 
@@ -1584,6 +1647,14 @@ class Pipeline:
         return dict(lane=lane['name'], queue=lane['capacity'], queued=len(lane['frames']), backlog=len(waiting),
                     backlog_ms=age, max_backlog_ms=None if self._recorded else lane['max_backlog_ms'],
                     dropped=lane['dropped'])
+
+    @staticmethod
+    def _catch_status(entry):
+        catch = entry['catch']
+        return dict(entry['catch_up'], skips=catch['skips'], skipped_ms=catch['skipped_ms'], done=catch['done'],
+                    failed=catch['failed'], pending=len(entry['todos']), max_pending=catch['max_pending'],
+                    max_pending_ms=catch['max_pending_ms'], heard_ms=catch['heard_ms'], busy_ms=round(catch['busy_ms']),
+                    todo_to_done_ms=_percentiles(catch['wait_ms']), todos=list(catch['todos']))
 
     def status(self):
         """What is connected, on, behind, lost and complete; times are capture times in ms.
@@ -1600,6 +1671,7 @@ class Pipeline:
             name=self.name, complete=not any(value['gaps'] for value in self.modules.values()) and not self.failures(),
             failures=self.failures(), warnings=self.warnings(),
             backlog_bytes=self._held_bytes, max_backlog_bytes=self.max_backlog_bytes,
+            **({'audio_memory': {key: memory.status() for key, memory in self.memories.items()}} if self.memories else {}),
             inputs={key: dict(modality=value['modality'], frames=value['frames'], last_ms=value['last_ms'],
                               derived_from=value['derived_from'], host_fed=value['source'] is None,
                               missed=value['missed'], gaps=value['gaps'],
@@ -1632,7 +1704,8 @@ class Pipeline:
                                optional=value['optional'], paused=value['paused'], pauses=value['pauses'],
                                **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'])}
                                   if value['every_ms'] else {}),
-                               **self._backlog(value['lane']),
+                               **self._backlog(value['lane']), busy_ms=round(value['busy_ms']),
+                               **({'catch_up': self._catch_status(value)} if value['catch_up'] else {}),
                                **({'state': value['module'].status()}
                                   if callable(getattr(value['module'], 'status', None)) else {}))
                      for key, value in self.modules.items()})

@@ -102,6 +102,16 @@ class Session:
         self._connect = connect
         self.answers = asyncio.Queue()
         self.ws, self.reader, self.ended, self.seconds_sent = None, None, False, 0.
+        self.concurrency = int(config.get('concurrency', 1 if is_local(self.endpoint) else 2))
+
+    def fork(self):
+        """Another session of the same recogniser (a catch-up worker's); its audio is billed as well."""
+        return type(self)(dict(self.config), connect=self._connect)
+
+    def set_context(self, text):
+        """Text said just before this session's first sound (the recogniser's prompt; ``config['context_key']``)."""
+        base = self.config.setdefault('_own_' + self.context_key, self.config.get(self.context_key) or '')
+        self.config[self.context_key] = f'{base} {text}'.strip()
 
     async def _open_socket(self, url, headers):
         if self._connect is not None:
@@ -143,7 +153,7 @@ class Session:
 
 class OpenAISession(Session):
     """``gpt-live-transcribe``: 24 kHz PCM16 in, deltas and completed turns out; no word times (an aligner adds them)."""
-    rate, manual_commit, word_times = 24000, True, False
+    rate, manual_commit, word_times, context_key = 24000, True, False, 'prompt'
 
     async def open(self):
         headers = {'Authorization': 'Bearer ' + self.key} if self.key else {}
@@ -193,7 +203,7 @@ class OpenAISession(Session):
 
 class ElevenLabsSession(Session):
     """Scribe Realtime / Live: 16 kHz PCM16 in; committed segments with word times (seconds) out."""
-    rate, word_times = 16000, True
+    rate, word_times, context_key = 16000, True, 'previous_text'
 
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
@@ -225,7 +235,7 @@ class ElevenLabsSession(Session):
         message = dict(message_type='input_audio_chunk', audio_base_64=base64.b64encode(pcm).decode('ascii'),
                        commit=bool(commit), sample_rate=self.rate)
         if self._first and self.config.get('previous_text'):
-            message['previous_text'] = str(self.config['previous_text'])[:50]
+            message['previous_text'] = str(self.config['previous_text'])[-50:]   # what was said just before
         self._first = False
         await self._send(message)
 

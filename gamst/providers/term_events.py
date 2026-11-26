@@ -114,6 +114,29 @@ def _word_times(words, offset, length):
     return covered[0].get('start_ms'), covered[-1].get('end_ms'), covered
 
 
+def term_occurrences(value, terms):
+    """Where the counted words occur in one final utterance, as :class:`TermEvents` finds them: ``[{term, spoken,
+    start_ms, end_ms, words, timed}]`` (``words``: the utterance's words covering it; ``timed`` False: no word times, the
+    utterance's own times). ``terms``: ``{term: [spellings]}`` (:func:`parse_terms`)."""
+    found = []
+    text, words = str(value.get('text') or ''), value.get('words') or []
+    for term, spellings in terms.items():
+        taken = []
+        for spelling in sorted(spellings, key=lambda item: -len(normalize(item))):
+            for offset, size in matches(text, spelling):
+                if any(offset < stop and offset + size > first for first, stop in taken):
+                    continue
+                taken.append((offset, offset + size))
+                times = _word_times(words, offset, size) if words else None
+                spoken = normalize(text)[offset:offset + size] if spelling.startswith('re:') else spelling
+                start, end = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
+                if type(start) not in (int, float) or type(end) not in (int, float):
+                    continue
+                found.append(dict(term=term, spoken=spoken, start_ms=int(start), end_ms=int(end),
+                                  words=list(times[2]) if times else [], timed=times is not None))
+    return sorted(found, key=lambda item: item['end_ms'])
+
+
 KEPT = 16       # revisions an utterance that arrives late may still belong to
 OPEN = 4096     # provisional events (and word verdicts) held until they are settled; the oldest is let go
 
@@ -277,7 +300,8 @@ class TermEvents:
                     decided = {}
                     if checked:      # each word's own voice, where people share a phrase
                         other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
-                        decided = {key: checked[0][key] for key in ('decided_by', 'lips') if key in checked[0]}
+                        decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason')
+                                   if key in checked[0]}
                     if other and not self.report_others:
                         continue
                     if not other:
@@ -327,7 +351,7 @@ class TermEvents:
             revision = dict(event='event.revision', state='final' if match == counted else 'revoked', revises=key,
                             revised_event=event['event'], term=event['term'], start_ms=event['start_ms'],
                             end_ms=event['end_ms'], **words.identity,
-                            **{name: found[0][name] for name in ('slot', 'slot_score') if name in found[0]})
+                            **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]})
             if match != counted:
                 revision['reason'] = reason or ('another_voice' if counted else 'enrolled_voice')
             added = changed.setdefault(id(words), (words, []))[1]

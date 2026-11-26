@@ -22,6 +22,14 @@ gets a commit from :class:`Endpointer`, an energy pause detector with an adaptiv
 not tuned on a clip): a pause of ``pause_ms`` after speech, a shorter one past ``soft_max_seconds``, always at
 ``max_seconds``.
 
+Catch-up (:meth:`gamst.pipeline.Pipeline._skip`). A hosted session's state cannot be copied, so :meth:`StreamingWords.fork`
+opens a new session of the same recogniser, and :meth:`StreamingWords.snapshot` says where this one last paused (the end
+of its last committed turn, ``pause_ms``) and the text it committed last (``context``), which the fork gives the new
+session as its prompt (OpenAI ``prompt``, ElevenLabs ``previous_text``). :meth:`StreamingWords.trim` keeps the words said
+at capture times a worker owns. ``pending_since_ms`` is the capture time of the first sound whose words are not out yet
+(the open turn, or a committed one whose answer has not arrived), so the Pipeline's ``complete_until_ms`` never passes
+a word that is still coming.
+
 Latency. ``final_after_ms`` on a final record is the wall time from when its last word's sound reached this module to
 when the final answer did (a live microphone: from the moment it was said). A word's own latency is
 ``final_after_ms + (record end_ms - word end_ms)``. Partial records (``partials: true``) carry ``heard_to_ms``, the
@@ -55,7 +63,8 @@ def streaming_capability(version='1'):
          OutputField('aligned', 'boolean', required=False), OutputField('aligner', 'object', required=False),
          OutputField('align_error', 'string', required=False),
          OutputField('finalization_reason', 'string', required=False),
-         OutputField('final_after_ms', 'integer', required=False), OutputField('heard_to_ms', 'integer', required=False)),
+         OutputField('final_after_ms', 'integer', required=False), OutputField('heard_to_ms', 'integer', required=False),
+         OutputField('trimmed', 'boolean', required=False)),
         'native', stateful=True, reset_on_gap=True, freshness_ms=30000, interpretation='semantic_description',
         devices=('cpu', 'mps', 'cuda'), license='Apache-2.0')
 
@@ -239,6 +248,12 @@ class StreamingWords:
         self._revision = {}
         self._pump = None
         self.errors = []
+        self._commits = deque()       # (first, last) stream samples of commits whose words are not out yet
+        self._settled = 0             # stream samples before this one: every word of them is out
+        self._history = deque(maxlen=8)   # the last committed texts (a fork's context)
+        self._owns_aligner = True
+        self._options = dict(language=language, partials=partials, finish_timeout=finish_timeout,
+                             ring_seconds=ring_seconds, max_gap_ms=max_gap_ms)
 
     async def _open(self):
         if not self._opened:
@@ -269,6 +284,7 @@ class StreamingWords:
         if not self.session.manual_commit or at - self._started < RATE // 10:
             return
         self._segments.append((self._started, at))
+        self._commits.append((self._started, at))
         self._started, self._waiting = at, self._waiting + 1
         await self.session.commit()
 
@@ -359,12 +375,18 @@ class StreamingWords:
         if key not in self._order:
             if value is not None:
                 self._outbox.append(value)
+                self._history.append(value['text'])
+                if not self.session.manual_commit and value.get('words') and self.clock.sent:
+                    self._settled = max(self._settled, self._sample_at(value['end_ms']))
             return
         self._ready[key] = value
         while self._order and self._order[0] in self._ready:
             done = self._ready.pop(self._order.popleft())
+            if self._commits:
+                self._settled = max(self._settled, self._commits.popleft()[1])
             if done is not None:
                 self._outbox.append(done)
+                self._history.append(done['text'])
 
     async def _align(self, key, value, samples, previous):
         if previous is not None:
@@ -403,7 +425,8 @@ class StreamingWords:
         self._named.clear()
         self._order.clear()
         self._ready.clear()
-        self._waiting = self._started = 0
+        self._commits.clear()
+        self._waiting = self._started = self._settled = 0
         self._last_end_ms = None
 
     async def close(self):
@@ -413,8 +436,84 @@ class StreamingWords:
             if self._pump is not None:
                 self._pump.cancel()
         close = getattr(self.aligner, 'close', None)
-        if callable(close):
+        if callable(close) and self._owns_aligner:
             await _call(close)
+
+    # ------------------------------------------------------------------ catch-up
+
+    def _sample_at(self, capture_ms):
+        """The stream sample captured at ``capture_ms`` (the nearest piece's), for a recogniser that commits by itself."""
+        for first, count, end_ms, _ in self.clock.pieces:
+            start_ms = end_ms - 1000. * count / RATE
+            if capture_ms <= end_ms:
+                return first + max(0, min(count, int(round((capture_ms - start_ms) * RATE / 1000))))
+        return self.clock.sent
+
+    @property
+    def pending_since_ms(self):
+        """Capture time of the first sound whose words have not been given yet (None: all of it is out)."""
+        if not self._opened or self.clock.sent <= self._settled or not self.clock.pieces:
+            return None
+        return self.clock.capture_ms(self._settled)
+
+    @property
+    def can_fork(self):
+        return callable(getattr(self.session, 'fork', None))
+
+    @property
+    def max_forks(self):
+        """Sessions of this recogniser that may run at once: the provider's (``concurrency``), else 1."""
+        return int(getattr(self.session, 'concurrency', 1) or 1)
+
+    def snapshot(self):
+        """Where this session last paused (``pause_ms``) and what it committed last (``context``)."""
+        pause = None
+        if self.clock.sent and self.clock.pieces:
+            pause = self.clock.capture_ms(self._started if self.session.manual_commit else self._settled)
+        return dict(pause_ms=pause, context=' '.join(self._history)[-400:])
+
+    def fork(self):
+        """A new session of the same recogniser for a catch-up worker (the aligner is shared, not closed by it)."""
+        import copy
+        endpointer = None
+        if self.endpointer is not None:
+            endpointer = copy.copy(self.endpointer)
+            endpointer.reset()
+        other = StreamingWords(self.session.fork(), aligner=self.aligner, endpointer=endpointer, **self._options)
+        other.partials = False
+        other._owns_aligner = False
+        return other
+
+    def restore(self, state):
+        """A fork starts where ``snapshot`` was taken: the hosted session cannot be copied, so it gets the text as context."""
+        context = (state or {}).get('context')
+        if context and callable(getattr(self.session, 'set_context', None)):
+            self.session.set_context(context)
+
+    async def skipped(self, start_ms, end_ms):
+        """The Pipeline skipped [start_ms, end_ms] (a worker hears it): the open turn ends where the sound stopped."""
+        if self._opened:
+            await self._commit()
+        self._last_end_ms = None
+
+    @staticmethod
+    def trim(value, keep):
+        """The words of ``value`` said where ``keep(start_ms, end_ms)`` holds (an utterance without word times: all
+        or nothing, by its own times); None when nothing is left."""
+        if not isinstance(value, dict):
+            return value
+        words = [word for word in value.get('words') or () if isinstance(word, dict)
+                 and type(word.get('start_ms')) is int and type(word.get('end_ms')) is int]
+        if not words:
+            ends = (value.get('start_ms'), value.get('heard_to_ms', value.get('end_ms')))
+            return value if not all(type(at) is int for at in ends) or keep(*ends) else None
+        kept = [word for word in words if keep(word['start_ms'], word['end_ms'])]
+        if len(kept) == len(words):
+            return value
+        if not kept:
+            return None
+        return dict(value, words=kept, text=' '.join(str(word['text']) for word in kept), start_ms=kept[0]['start_ms'],
+                    end_ms=max(kept[-1]['end_ms'], kept[0]['start_ms'] + 1), trimmed=True)
 
 
 def spelled(words):

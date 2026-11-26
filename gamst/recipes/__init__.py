@@ -824,6 +824,11 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
                    show=getattr(args, 'refine_show', False), cached=getattr(args, 'refine_cached', None))
     context['stages'] = {item['name']: item for item in modules if item.get('in')}
+    slow = slowdowns(getattr(args, 'debug_slowdown', None))
+    unknown = set(slow) - {item['name'] for item in modules}
+    if unknown:
+        raise SystemExit(f"--debug-slowdown: no module {', '.join(sorted(unknown))} in this run")
+    modules = [dict(item, slowdown=slow[item['name']]) if item['name'] in slow else item for item in modules]
     for item in modules:
         if item.get('in'):
             continue  # runs inside the module it names (its build reads context['stages'])
@@ -854,7 +859,22 @@ def module_options(item, built, *, lanes=True):
     return dict(consumes=item['consumes'], spec=built.get('spec'), every_ms=built.get('every_ms'),
                 queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
                 optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
-                enabled=item.get('enabled', True))
+                enabled=item.get('enabled', True), catch_up=item.get('catch_up') if lanes else False,
+                slowdown=item.get('slowdown'))
+
+
+def slowdowns(values):
+    """``--debug-slowdown MODULE=MS@FROM-TO[,FROM-TO]`` -> {module: {"ms", "spans_s"}} (seconds from the first frame)."""
+    found = {}
+    for value in values or ():
+        try:
+            name, rest = value.split('=', 1)
+            ms, spans = rest.split('@', 1)
+            found[name] = dict(ms=float(ms), spans_s=[[float(part) for part in span.split('-', 1)]
+                                                      for span in spans.split(',')])
+        except ValueError:
+            raise SystemExit(f'--debug-slowdown {value!r}: write MODULE=MS@FROM-TO[,FROM-TO] (seconds)') from None
+    return found
 
 
 def _view_class(name):
@@ -1264,6 +1284,9 @@ def main(argv=None):
     start.add_argument('--vlm-remote-context', action='store_true',
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
     _asr_options(start)
+    start.add_argument('--debug-slowdown', action='append', metavar='MODULE=MS@FROM-TO[,FROM-TO]',
+                       help='test and debug: sleep MS before each audio frame of MODULE captured in those seconds of the '
+                            'run, so its live lane falls behind on purpose (it catches up without losing audio)')
     start.add_argument('--realtime', nargs='?', type=float, const=1., metavar='SPEED',
                        help='replay a recording at its own speed (or SPEED times it), as a live capture arrives')
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')

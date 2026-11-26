@@ -67,7 +67,7 @@ def with_state(item, revised):
     revision, record = found
     return dict(item, state=state, revised_by=dict(
         record_id=record.get('id'), timestamp_ms=record.get('timestamp_ms'),
-        **{key: revision[key] for key in ('reason',) if key in revision}))
+        **{key: revision[key] for key in ('reason', 'basis') if key in revision}))
 
 
 def gaps_of(records, capability=None):
