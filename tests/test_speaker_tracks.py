@@ -331,6 +331,15 @@ class RecipeAndBenchTest(unittest.TestCase):
         found = event_states(rows, {'r1': 100, 'r2': 300})
         self.assertEqual([(item['state'], item['committed_ms'], item['settled_ms'], item['settled_capture_ms'])
                           for item in found], [('revoked', 100, 300, 20)])
+        self.assertEqual(found[0]['committed_state'], 'provisional')
+
+    def test_a_video_shows_an_uncertain_word_as_uncertain_from_the_moment_it_is_committed(self):
+        from gamst.count_video import load_states, state_at
+        stated = [dict(event='term.spoken', event_id='d', replaces='x', state='uncertain', committed_state='uncertain',
+                       end_ms=2000, committed_ms=5000)]
+        event = load_states(dict(start_ms=1000, paced=True, event_states={'speech.term_events': stated}),
+                            'speech.term_events:term.spoken')[0]
+        self.assertEqual((state_at(event, 3.), state_at(event, 4.5)), (None, 'uncertain'))
 
 
 if __name__ == '__main__':

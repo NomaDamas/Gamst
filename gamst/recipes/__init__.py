@@ -1082,7 +1082,8 @@ def event_states(rows, known):
     """Each event with a revision state as it stands now, and when it was committed and settled.
 
     ``committed_ms`` / ``settled_ms``: when the Store learned the event and its revision (``known``: record ID ->
-    knowledge time); ``capture_ms`` / ``settled_capture_ms``: the capture times of those records.
+    knowledge time); ``capture_ms`` / ``settled_capture_ms``: the capture times of those records; ``committed_state``:
+    the state it was committed in (``final`` when it said none).
     """
     from ..counting import REVISION, revisions, with_state
     revised, found = revisions(rows), []
@@ -1090,7 +1091,8 @@ def event_states(rows, known):
         for item in row['observation']['value'].get('events') or ():
             if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
                 continue
-            entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'])
+            entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'],
+                         committed_state=item.get('state', 'final'))
             revision = revised.get(item['event_id'])
             if revision is not None:
                 entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'],

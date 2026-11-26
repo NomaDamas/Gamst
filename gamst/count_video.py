@@ -74,7 +74,7 @@ def load_states(report, wanted):
         found.append(dict(event, t=(event_time(event) - report['start_ms']) / 1000,
                           seen=max(seen if seen is not None else 0, (event_time(event) - report['start_ms']) / 1000),
                           settled=at(event, 'settled_ms' if known else 'settled_capture_ms'),
-                          first='final' if 'replaces' in event else 'provisional'))
+                          first=event.get('committed_state') or ('final' if 'replaces' in event else 'provisional')))
     return sorted(found, key=lambda event: event['seen'])
 
 
