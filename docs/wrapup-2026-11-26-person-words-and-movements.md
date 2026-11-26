@@ -2,7 +2,12 @@
 
 ## 요약 (한국어)
 
-- **동작:** 동작을 글로 설명하면(zero-shot, LLM이 규칙으로 바꿈) 또는 예시 영상(few-shot)으로 주면, GAMST가 **몇 번 했는지와 각 동작의 구간(시작·끝 시각)**을 실시간으로 찾는다. 감스트 샷건: 16/16, 시각 오차 평균 9 ms.
+- **동작 (일반화: 영상 속 인물이 특정 행동을 반복한 횟수와 구간 찾기):** 행동을 지정하는 방법은 세 가지다.
+  ① 글 묘사(zero-shot): LLM(에이전트)이 관절 규칙으로 바꾸거나, VLM이 구간을 제안하고 사장님이 확인한다. GAMST 안에 숨은 LLM은 없다.
+  ② 예시 영상(few-shot): 그 행동만 담은 짧은 영상 3개 이상(+ 아닌 예시)을 넣으면 임계값이 자동으로 정해진다.
+  ③ 규칙 파일.
+  결과는 횟수와 **행동마다 시작·끝 시각**, 근거다. 감스트 샷건(①, 글 묘사 → 규칙): 16/16, 시각 오차 평균 9 ms.
+  **측정하지 않은 것:** 샷건을 ②(예시 영상)로 센 결과. **실시간 아님:** 60 fps 11.9초 영상에 28.5초가 걸렸다(프레임당 31 ms).
 - **단어:** 지정한 단어를 **몇 번 말했는지와 각 단어의 구간**을 실시간으로 찾는다(말한 뒤 약 0.7초에 카운트). 철자 변형·낱말 단위·반복 수(달달달 = 3)를 지원한다.
 - **누가 말했나:** 지정한 사람의 목소리 샘플(few-shot: 같은 마이크로 미리 녹음 / 파일 / 같은 녹음의 구간 / 자동 주인공)로 그 사람이 말한 것만 센다. 기준 품질을 검사한다. 사장님 라벨 4개 영상: 33개 중 30개 맞음, 틀림 3개.
 - **모드:** 세기(count, 기본) / 찾기(search, 놓치지 않게 넉넉히 세고 후보와 이유를 함께 줌).
@@ -16,7 +21,7 @@
 
 | capability | how it is specified | what comes back | measured |
 |---|---|---|---|
-| Count a movement and find each occurrence | text (zero-shot: an LLM writes a rule over pose joints), example clips (few-shot), or a rule file | count, each occurrence's start/end capture time, its evidence | shotgun clip: 16/16, mean time error 9 ms (`testbed-2026-11-26.md`) |
+| Count a movement and find each occurrence | text (zero-shot: an LLM writes a rule over pose joints), example clips (few-shot), or a rule file | count, each occurrence's start/end capture time, its evidence | shotgun clip (text → rule): 16/16, mean time error 9 ms; 28.5 s for an 11.9 s 60 fps clip, not realtime at 60 fps; few-shot clips not measured on it (`testbed-2026-11-26.md`) |
 | Count a word and find each occurrence | words, spellings, `re:` patterns, whole-word `word:W` / repetitions `word:W*`, flags (`#may_be_number`) | count, each word's capture time, which recognisers heard it, state | words heard 45/46 on four clips; word → HUD ~0.7 s p50 (partials) |
 | Only one person's words | voice few-shot: `--record-voice-first N` (same microphone, live), `--voice-wav`, `--voice-range`, automatic main speaker; quality check with fallback | each word's speaker decision and reason | four owner-labelled clips: 30/33 right, 3 wrong (v8) |
 | Search instead of count | `--mode search`: recall first, candidates with reasons | candidates incl. uncertain ones, each with its reason | 뽀또: recall 78 % → 89 %, precision 78 % → 53 %; four clips 31 right (count mode 30) |
