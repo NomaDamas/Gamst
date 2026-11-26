@@ -58,5 +58,66 @@ only, no word times (34 partials in 12 s, about one per 0.35 s). So a heard word
 - Tests `tests/test_partial_counts.py` (13).
 - Run scripts `try-it/hud/v7/run.sh` / `video.sh` (= hud/l1 with PYTHONPATH on this worktree; `VER` names the video).
 
-## Runs
-(filled in below as they finish)
+## Runs (2026-11-27, paced as live, `try-it/hud/v7/run.sh`, voice per v6 defaults)
+Per clip and run: `VOICE=$T/testbed/<clip>/hud/m1.voice.json $T/guard.sh partial $T/hud/v7/run.sh <clip> v7a|v7b|v7c
+--voice-fallback $T/testbed/voice.json` (same reference and fallback as v6/v6r; 뽀또 uses the replace fallback like v6r).
+Scored with `scripts/score_owner_clips.py REPORT truth_owner.json --voice m1.voice.json` (enrolment segments excluded;
+person words 9 / 4 / 7 / 13 as in the v6 handoff). v6 rows rescored with the same script (뽀또: v6r, the v6 video's run).
+
+### Word end (owner label) -> first count on the HUD (s, p50 / p95 / max, person words)
+| clip | v6 | v7a | v7b | v7c |
+|---|---|---|---|---|
+| 뽀또 | 4.29 / 12.83 / 12.83 | 1.10 / 1.44 / 1.44 | 1.10 / 1.43 / 1.43 | 1.06 / 3.43 / 3.43 |
+| 몇기야 | 7.79 / 11.59 / 11.59 | 0.89 / 3.22 / 3.22 | 2.17 / 3.21 / 3.21 | 0.89 / 2.50 / 2.50 |
+| 시발 | 4.55 / 6.20 / 6.20 | 1.26 / 1.77 / 1.77 | 1.20 / 1.77 / 1.77 | 0.87 / 1.25 / 1.25 |
+| 달 | 1.65 / 1.65 / 1.65 | 0.47 / 1.10 / 1.10 | 0.26 / 1.52 / 1.52 | 0.29 / 1.57 / 1.57 |
+Pooled v7 (3 runs x 4 clips, 94 person words): p50 0.73, p95 2.17, max 3.43 s (v6: p50 ~4.3, max 12.8).
+Slow ones (> 1.6 s): 몇기야 17.34 (all 3 runs 2.5-3.2 s: the partial held the word only ~3 s later), 뽀또 28.1 (v7c, 3.4 s)
+and 몇기야 36.4 (v7b, 2.2 s): never stable in a partial before the commit, counted at L1's commit; 시발 23.18 / 24.78
+(1.7-1.8 s). No scored word was counted before its end; one excluded word (몇기야 2.72, inside the voice range) was
+heard at 1.91 s, before the owner's end label: the partial completed it from its start (keyterm bias).
+
+### Accuracy (right / counted) vs v6
+| clip | v6 L1 | v6 final | v7 heard (first count) a / b / c | v7 L1 a / b / c | v7 final a / b / c | withdrawn a / b / c |
+|---|---|---|---|---|---|---|
+| 뽀또 | 7/14 | 6/7 | 8/15, 8/15, 8/15 | 8/15, 8/15, 8/15 | 6/7, 6/7, 6/7 | 0 / 0 / 0 (heard 15/14/13) |
+| 몇기야 | 4/5 | 3/4 | 4/5, 4/5, 4/5 | 3/4, 4/5, 3/4 | 3/4, 3/4, 3/4 | 1 / 0 / 1 (heard 8/6/7) |
+| 시발 | 7/7 | 6/6 | 7/8, 7/7, 7/7 | 7/7, 7/7, 7/7 | 6/6, 6/6, 6/6 | 1 / 0 / 0 (heard 8/7/7) |
+| 달 | 13/13 | 8/8 | 13/16, 12/14, 12/14 | 13/13, 12/12, 12/12 | 13/13, 12/12, 12/12 | 3 / 2 / 2 (heard 23/22/19) |
+Withdrawn in total: 10 of 149 heard counts (6.7%), each shown as "-1 취소 #n 부분 인식 철회" when the final came: 몇기야 39.3
+(a person word the final did not write, run variance: v7a/v7c), 시발 58.6 (no word there; withdrawn at the end), 달 15.2 /
+21.3 / 24.5 (no word there). Clear other voice at the heard check (not counted): 뽀또 v7a 1.
+Errors at final (v7a): 뽀또 p->o 1, uncertain 1, not heard 1, o->p 1 (same class as v6r); 몇기야 o->p 1, not heard 1
+(39.24: Scribe's final did not write it in v7a/v7c; v7b wrote it); 시발 p->o 1 (41.76 heard_by_one, as v6); 달 0 (v6 had 5
+heard_by_one at 12.28 x5: run variance of the voters, lesson 22).
+v7c 달: verification lost its connection (RemoteDisconnected) -> words stayed provisional (final column = provisional).
+
+### Debounce (replayed on the v7a traces, `scripts/partial_flicker.py`, counts only)
+| N partials in a row | heard | withdrawn | flickers | delay after final word end p50 / p95 / max (s) |
+|---|---|---|---|---|
+| 1 | 67 | 15 (22%) | 0 | 0.28-0.64 / up to 2.76 |
+| **2 (default)** | 55 | 6 (11%) | 17 | 0.58-1.1 / up to 3.06 |
+| 3 | 41 | 0 | 24 | 0.9-1.4 / up to 3.36 |
+(per clip ranges; N=3 also loses heard words, which then wait for the commit.) Partials: 129-158 per clip (~2.5/s);
+flicker = a term that appeared in a partial and left before it was stable: 10-27 % of appearances at N=2 (v7a).
+With the voice check the live withdrawals at N=2 were 6 of 55 in v7a (one heard candidate was a clear other voice).
+
+### Videos v7 (run v7a; `try-it/hud/v7/video.sh SHORT v7a "목소리 메모"`, through guard)
+`~/Desktop/홍명보/gamst/GAMST 카운트 결과/뽀또/뽀또_카운트_v7.mp4`, `감스트의 해병대식 내리갈굼/몇기야_카운트_v7.mp4`,
+`감스트 피파 억까/시발_카운트_v7.mp4`, `애교쟁이 인디깅/달_카운트_v7.mp4`. Frames checked: 뽀또 12.3 (pale dashed frame, "1",
+"+1 들림", feed "들림 11.78초 #1" dotted, tally 들림 1), 15.0 (2, both 잠정 after L1), 48.0 ("12 -> 9", 확정 #1, 보류 #2/#3); 몇기야 41.4 ("8 -> 7", "-1 취소 #8 부분 인식 철회", 39.30초 struck out); 달 9.0 (3 들림), 16.3 (17: 잠정 16, 들림 1).
+Fixed after the first render: the U+2212 minus drew a box (the Korean font has none): ASCII "-"; the subtitle was
+too wide for the panel.
+
+### Cost
+Recognisers (Scribe + Speechmatics + gpt-live, list $1.69/h with keyterms ~$1.75/h) on 3 x 213.7 s + 12 s probe ~ $0.32;
+pyannoteAI ~51 jobs ~0.05 EUR (~$0.05). Total ~ $0.37 (cap $1.5).
+
+## Full suite (through guard, after the HUD fix)
+1735 tests: exactly the 15 known errors (test_stereo_context 7, test_stereo_metric 6, test_sam_audio_native 2).
+
+## Open / owner decisions
+- `heard` is on by default in person-term-count (owner decision 26); `--partials off` restores v6 timing.
+- N=2 chosen from the replay (N=1 withdraws twice as often; N=3 withdraws none but leaves more words to the commit).
+- Raw-partials path (`--without voice`) is unit-tested only, not run live.
+- Not merged into integration; not pushed.
