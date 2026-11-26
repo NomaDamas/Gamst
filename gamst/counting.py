@@ -8,12 +8,13 @@ Events are the ``events`` arrays inside observation values; an event's name is i
 Revision states (any capability). An event may be committed at once as ``state: "provisional"`` with a stable
 ``event_id``; a later record of the same capability marks it with an ``event.revision`` event::
 
-    {"event": "event.revision", "revises": "<event_id>", "state": "final" | "revoked", "reason": "...",
+    {"event": "event.revision", "revises": "<event_id>", "state": "final" | "revoked" | "uncertain", "reason": "...",
      "start_ms": ..., "end_ms": ...}      # the revised event's own times, so a window that holds it holds this too
 
 An event without ``state`` is final as committed. The newest revision of an ``event_id`` decides its state. A count
-is of provisional and final events; revoked ones are listed in ``states`` but not counted, unless ``where`` asks
-for a state (``{"state": "revoked"}``). Revisions are no events of their own (``event="event.revision"`` counts
+is of provisional and final events; revoked and uncertain ones are listed in ``states`` but not counted, unless ``where``
+asks for a state (``{"state": "revoked"}``). ``uncertain`` is neither said nor not said (overlapped speech whose voice
+is unclear): it is shown as such, never as revoked, and a later revision may settle it. Revisions are no events of their own (``event="event.revision"`` counts
 them). Nothing is changed in the record that holds the revised event.
 """
 from __future__ import annotations
@@ -29,7 +30,8 @@ GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames 
 INSTRUCTION_CAPABILITY = 'pipeline.instructions'    # records of gamst.pipeline: other words or another movement
 IDENTITY = ('reference_id', 'reference_revision')
 REVISION = 'event.revision'        # marks an earlier event (``revises``: its ``event_id``) final or revoked
-STATES = ('provisional', 'final', 'revoked')
+STATES = ('provisional', 'final', 'revoked', 'uncertain')
+COUNTED = ('provisional', 'final')    # what a count holds unless ``where`` asks for a state
 
 
 def event_name(item):
@@ -136,7 +138,7 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     (``current``: :func:`current_instructions`, or that of a newer event) is counted, the others are listed in
     ``other_instructions``. ``where`` with ``reference_id`` or ``reference_revision`` chooses.
 
-    Revision states (module docstring): revoked events are not counted unless ``where`` names a ``state``;
+    Revision states (module docstring): revoked and uncertain events are not counted unless ``where`` names a ``state``;
     ``states`` (and with ``group_by``, ``group_states``) say how many of each there are, once any event has one.
     """
     where = where or {}
@@ -169,7 +171,7 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
                 states[state] += 1
                 if group_by == '@event':
                     group_states.setdefault(name, dict.fromkeys(STATES, 0))[state] += 1
-                if state == 'revoked' and 'state' not in where:
+                if state not in COUNTED and 'state' not in where:
                     continue
             if any(key in item for key in IDENTITY):
                 reference, which = _about(item)
@@ -192,7 +194,10 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     result = dict(count=count, evidence=evidence, evidence_truncated=count > len(evidence))
     if group_by is not None:
         result['groups'] = groups
-    if stated:      # provisional + final = count; revoked ones are not in it
+    if stated:      # provisional + final = count; revoked and uncertain ones are not in it
+        for kept in (states, *group_states.values()):    # uncertain is said once there is one
+            if not kept['uncertain']:
+                del kept['uncertain']
         result['states'] = states
         if group_states:
             result['group_states'] = group_states

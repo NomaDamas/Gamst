@@ -162,7 +162,7 @@ def score_run(truth, report, *, finished_ms, duration_s, capability='speech.term
     if not stated:      # nothing was provisional: as committed is final
         stated = [dict(event, state='final') for event in report['events'].get(capability, ()) if event.get('event') == EVENT]
     spoken = [event for event in stated if event.get('event') == EVENT]
-    final = [event for event in spoken if event['state'] != 'revoked']
+    final = [event for event in spoken if event['state'] in ('provisional', 'final')]
     first = [event for event in spoken if 'replaces' not in event and event.get('decided_by') != 'verification']
     excluded = {id(event) for event, label, _ in match(truth, spoken, start) if label == 'excluded'}
     timed = [event for event in stated if id(event) not in excluded and event.get('committed_ms') is not None]
@@ -172,6 +172,7 @@ def score_run(truth, report, *, finished_ms, duration_s, capability='speech.term
                and event.get('decided_by') != 'verification']
     return dict(final=view(truth, final, start), at_once=view(truth, first, start),
                 revoked=sum(event['state'] == 'revoked' for event in spoken),
+                uncertain=sum(event['state'] == 'uncertain' for event in spoken),
                 settle_ms=_percentiles(settle), provisional_ms=_percentiles(at_once),
                 real_time_factor=round((finished_ms - start) / 1000 / duration_s, 2) if duration_s else None,
                 complete=report.get('complete'))
@@ -188,7 +189,8 @@ def words_of(truth, report, capability='speech.term_events'):
     for event, label, slot in match(truth, events, start):
         seen.add(slot)
         later = promoted.get(event.get('event_id'))
-        final = 'counted' if (later is not None or event['event'] == EVENT and event['state'] != 'revoked') else 'not counted'
+        final = 'counted' if (later is not None or event['event'] == EVENT and event['state'] in ('provisional', 'final')) \
+            else 'uncertain' if event['state'] == 'uncertain' else 'not counted'
         settled = (later or event).get('settled_ms') if later is None else later.get('committed_ms')
         added = event.get('decided_by') == 'verification'
         revised = event.get('revised_by') or {}

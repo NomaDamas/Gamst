@@ -75,22 +75,38 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
   sound a speaker is unidentified.
 - **Word rule** (`RULE`, a parameter set): an occurrence of a counted word in the first hearing is paired one to one,
   nearest first, with an occurrence of the same word in the second hearing whose end is within `near_ms` (1000);
-  paired -> the voice rule decides; unpaired and the second recogniser or a speaker was active there -> revoked
-  `not_heard` (`revoke_not_heard`); unpaired and nobody was -> revoked `no_speech` (`revoke_no_speech`); an unpaired
-  occurrence of the second hearing -> added, final (a `kind: "utterance"` value with `decided_by: "verification"`).
+  paired -> the voice rule decides. Unpaired, and the second recogniser or a speaker was active there:
+  - kept (final) when the voice evidence for the person is **clear** (`keep_clear_voice`, on): `clear` = `speaker` (the
+    person's diarized speaker is active at the word and no other speaker over `overlap_share`), `score` (the per-word
+    CAM++ score is at least `threshold + clear_margin`, margin 0.1), `either` (default) or `both`;
+  - `uncertain` (`uncertain_overlap`) when the person's speaker overlaps another one and the score is not clear;
+  - revoked `not_heard` when the voice points elsewhere or is absent.
+
+  Unpaired and nobody spoke there -> revoked `no_speech` (`revoke_no_speech`). An unpaired occurrence of the second
+  hearing -> added, final (a `kind: "utterance"` value with `decided_by: "verification"`).
+- **Vote** (off: `vote: false`): any `speech.transcript_words` source the item also reads (another recogniser's module,
+  e.g. AssemblyAI / Deepgram / Speechmatics adapters once registered) votes. A first-hearing occurrence that a voter also
+  heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
+  occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
+  `"rule": {"vote": true}`.
 - **Voice rule** (`VOICE`) on the word's span (the second hearing's): person speaker over `overlap_share` (0.3) and
   another one too -> overlapped: the per-word CAM++ score (1.5 s around the word) decides, below threshold it is
-  `uncertain_overlap` (not counted, said so); person dominant -> the person; another identified speaker dominant ->
+  `uncertain_overlap`; person dominant -> the person; another identified speaker dominant ->
   `other_speaker`; no speaker or an unidentified one -> the per-word score (`no_speaker`, `speaker_unidentified`).
   `active_share` 0.1: a speaker over less of the word is not active there.
 - Outputs (`speech.word_verdicts`): `verdicts` (every provisional word: `match`, `provisional`, `changed`, `basis`,
   `reason`, `heard`, `speaker`, `speaker_score`, `word_score`), added `utterance`s, and one `window` record per window
   (speakers, their own speech in ms and score; no audio, no embedding). `terms` turns verdicts into `event.revision`
   records (`final`, or `revoked` with the reason; `basis` is kept on the revision), only for provisional events.
-- Opt-in: `--with verification --allow-remote-asr` (the consent covers the second recogniser and pyannoteAI; both
-  print their price before audio is sent).
+- **Uncertain** (`uncertain_overlap`): the verdict says `uncertain: true`; `terms` gives the event the revision state
+  `uncertain`: not counted, not revoked (never "not said"), kept open, so a later lane's verdict for its `word_id`s
+  settles it (`final` / `revoked`; the newest revision decides). An added word that is uncertain is committed as
+  `term.spoken` with `state: "uncertain"` and a `word_id`. `count_events` gives `states.uncertain` beside the count and
+  `where={"state": "uncertain"}` lists them; `get_timeline` shows the state; the report's `states` has it; bench and
+  scoring leave uncertain words out of what is counted.
+- Opt-in: `--with verification --allow-remote-asr --allow-remote-diarization` (the first for the second recogniser, the
+  second for pyannoteAI; each prints its price before audio is sent).
 
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
-- Whether `--allow-remote-asr` should also be the consent for pyannoteAI in the verification lane, or a flag of its own.

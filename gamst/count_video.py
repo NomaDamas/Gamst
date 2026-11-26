@@ -83,8 +83,8 @@ def state_at(event, t):
     return event['state'] if event['settled'] is not None and t >= event['settled'] else event['first']
 
 
-STATE_COLOR = {'provisional': WARN, 'final': GOOD, 'revoked': REC}
-STATE_WORD = {'provisional': '잠정', 'final': '확정', 'revoked': '취소'}
+STATE_COLOR = {'provisional': WARN, 'final': GOOD, 'revoked': REC, 'uncertain': WARN}
+STATE_WORD = {'provisional': '잠정', 'final': '확정', 'revoked': '취소', 'uncertain': '불확실'}
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
@@ -163,7 +163,8 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         text.put(canvas, str(len(now)), SIDE + 32, 180, 230, GOOD if flash else WHITE, 'bold')
         text.put(canvas, count_label, SIDE + 32, 420, 28, GOOD, 'bold')
         if stated is not None:
-            text.put(canvas, f"확정 {tally['final']}  ·  잠정 {tally['provisional']}  ·  취소 {tally['revoked']}",
+            text.put(canvas, f"확정 {tally['final']}  ·  잠정 {tally['provisional']}  ·  취소 {tally['revoked']}"
+                     + (f"  ·  불확실 {tally['uncertain']}" if tally['uncertain'] else ''),
                      SIDE + 32, 452, 22, MUTED)
         text.put(canvas, f'{t:5.2f}초', WIDTH - 64, 136, 28, MUTED, anchor='right')
         appeared = (lambda event: event['seen']) if stated is not None else (lambda event: event['t'])
