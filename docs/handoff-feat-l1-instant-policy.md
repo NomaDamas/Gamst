@@ -32,11 +32,12 @@ Don't push.
   unmeasured), `consistent_majority` (>= 3 pieces: drop the most disagreeing pieces while more than half stay; a
   majority agreeing >= min_quality -> `used: cleaned`), `choose` (below `min_quality` 0.5: cleaned if a majority
   agrees, else first `--voice-fallback FILE` of the same model whose own quality
-  passes, `combined` (default; centroid of each, equal weight) or `replace`; else kept and flagged `reference_low`),
+  passes, `replace` (default since 0cd5927, measured below) or `combined` (centroid of each, equal weight); else kept
+  and flagged `reference_low`),
   `hud_line` ("목소리 기준 품질 낮음 (0.42 < 0.50) · 다른 녹음 샘플과 합쳐 씀"). Wired in `_reference_value` (runs only),
   report `voice_quality`, stderr note, live CountView line (ASCII), video HUD line (`count_video.py`, y 1036). Enrolment
   writes `quality` into every voice file. CLI `--voice-fallback` (repeatable), `--voice-min-quality`,
-  `--voice-fallback-mode combined|replace`.
+  `--voice-fallback-mode replace|combined`.
 - Tests `tests/test_l1_instant_policy.py`; `test_perception_recipes` voice keys + `quality`.
 
 ## Measured before the runs (offline, v2 study cache embeddings, owner labels, enrolment segments excluded)
@@ -83,3 +84,34 @@ v1 (owner's first look, coordinator's figure): 뽀또 8 counted / 6 right.
 
 ## Full suite (23:12-23:16, through guard)
 1722 tests: exactly the 15 known errors (test_stereo_context 7, test_stereo_metric 6, test_sam_audio_native 2).
+
+## Fallback mode measured live on 뽀또 (the only clip that reaches the fallback)
+| run | reference | L1 right/counted | final right/counted | p→o | o→p | uncertain | not heard |
+|---|---|---|---|---|---|---|---|
+| v5 m1 | main speaker (mixed) | 4/9 | 7/12 | 0 | 5 | 0 | 2 |
+| v6 | combined (equal weight) | 8/15 | 7/13 | 1 | 6 | 0 | 1 |
+| v6r | replaced by the other recording | 7/14 | 6/7 | 0 | 1 | 1 (19.74) | 2 |
+v6r: the other man's 49.86 / 50.4 / 52.2 and 20.72 / 24.16 revoked (L1 scores 0.19-0.30 against the other recording);
+only 27.42 stays (diarized with the person). -> default `replace` (the coordinator's order: owner sample, then another
+provided reference, then both combined). `combined` stays an option (`--voice-fallback-mode combined`): it is the
+safer one when the other recording's microphone differs (offline: 몇기야 / 시발 would lose their words on `replace`),
+but those clips never reach the fallback (they pass, or are cleaned).
+The 뽀또 video uses v6r (the default configuration now); 몇기야 / 시발 / 달 use v6 (no fallback involved).
+
+## L1 latency (word end -> the word is in the HUD count), and a short-turn option (run v6t)
+Measured from `event_states[*].history[0].decided_ms - end_ms` (paced as live). The delay is the live recogniser's
+turn: Scribe (manual commit) commits at the Endpointer's pause; a word early in a long turn waits for the turn's end
+(soft max 12 s, max 20 s by default).
+| clip | v6 p50 / max s | v6t (asr soft_max 3 s, max 8 s) p50 / max s | v6t L1 right/counted | v6t final |
+|---|---|---|---|---|
+| 뽀또 | 3.59 / 13.06 | 2.55 / 5.25 | 8/15 (same) | 7/13 (same) |
+| 몇기야 | 6.93 / 11.59 | 1.87 / 3.04 | 2/4 (17.34 not heard) | 2/3 |
+| 시발 | 4.55 / 6.20 | 1.62 / 3.77 | 7/8 | 6/6 (same) |
+| 달 | 1.82 / 3.22 | 1.29 / 1.74 | 10/10 (12.28 x2 not heard) | 11/11 |
+Short turns bring the count within ~1-4 s of each word but lost words at L1 on 몇기야 (1) and 달 (2 repetitions):
+not made default; the owner decides (recipe item options `soft_max_seconds` / `max_seconds` on `asr`; variant file
+`try-it/hud/l1/person-term-count-short-turns.json`, script `try-it/hud/l1/run-short-turns.sh`).
+
+## Cost of this branch (list prices)
+Recognisers (Scribe $0.27 + Speechmatics $0.40 + gpt-live $1.02 per hour) on 695 s of runs (v6a, v6, v6t: 3 x 213.7 s;
+v6r 54 s) ≈ $0.33; pyannoteAI 53 jobs 0.046 EUR (≈ $0.05). Offline studies local. Total ≈ $0.38 (cap $1.5).
