@@ -195,11 +195,13 @@ class WordVerification:
     def status(self):
         return dict({key: value for key, value in self.stats.items() if not isinstance(value, list)},
                     errors=self.stats['errors'][-5:], open=len(self._open), heard=len(self._heard),
-                    heard_terms=[dict(end_ms=item['end_ms'], timed=item['timed'], aligned=bool(value.get('aligned')))
-                                 for value in self._heard for item in term_occurrences(value, self.terms or {})][-64:],
+                    heard_terms=[dict(start_ms=item['start_ms'], end_ms=item['end_ms'], term=item['term'],
+                                      spoken=item['spoken'], timed=item['timed'], aligned=bool(value.get('aligned')))
+                                 for value in self._heard for item in term_occurrences(value, self.terms or {})][-256:],
                     diarize_ms=self.stats['diarize_ms'][-16:],
-                    voted_terms=[dict(end_ms=item['end_ms'], source=item['source'])
-                                 for item in self._vote_occurrences(float('-inf'), float('inf'))][-64:] if self.terms else [],
+                    voted_terms=[dict(start_ms=item['start_ms'], end_ms=item['end_ms'], term=item['term'],
+                                      spoken=item['spoken'], source=item['source'])
+                                 for item in self._vote_occurrences(float('-inf'), float('inf'))][-256:] if self.terms else [],
                     recogniser_errors=[str(item)[:200] for item in getattr(self.recogniser, 'errors', ())][-8:],
                     heard_turns=[dict(start_ms=value['start_ms'], end_ms=value['end_ms'], words=len(value.get('words') or ()),
                                       aligned=bool(value.get('aligned'))) for value in self._heard][-64:],
