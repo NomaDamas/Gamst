@@ -753,6 +753,13 @@ def _reference_value(reference, args):
             raise SystemExit(f"this recipe needs an enrolled {kind}: run 'gamst recipe enroll --kind {kind}' and "
                              f'pass --{kind} FILE ({name})')
         value, consent = saved_reference(path, kind)
+        if kind == 'voice' and hasattr(args, 'voice_min_quality'):    # a run: is the reference one person's voice?
+            from ..voice_quality import from_args, hud_line
+            value, consent, args.voice_quality = from_args(value, consent, args)
+            if args.voice_quality['low']:
+                print(f"note: {hud_line(args.voice_quality)}: the voice reference's pieces agree only "
+                      f"{args.voice_quality['quality']['mean']:.2f} (mean pairwise, < {args.voice_quality['min_quality']:g}); "
+                      f"used: {args.voice_quality['used']}", file=sys.stderr)
         if kind == 'voice' and getattr(args, 'voice_wav', None):
             value['wav'] = args.voice_wav   # extraction models condition on the clip itself
         return value, consent
@@ -799,6 +806,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
     remote_asr_preflight(recipe, modules, getattr(args, 'allow_remote_asr', False))
     pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
     references = reference_values(recipe, args)
+    pipeline.voice_quality = getattr(args, 'voice_quality', None)      # shown by the live view when low
     if sources is None:
         sources, offsets = open_inputs(recipe, args, inputs)
         replay = any(kind == 'take' for _, kind, _ in _sources(recipe, args, inputs))
@@ -821,7 +829,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
-                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)),
+                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)), l1=_l1(args),
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
@@ -943,6 +951,8 @@ async def run_pipeline(recipe, args):
         report['voice_sample'] = {key: value for key, value in args.voice_sample.items() if key != 'segments_s'}
         report['voice_sample']['excluded_s'] = args.voice_sample.get('segments_s') or (
             [[args.voice_sample['from_s'], args.voice_sample['to_s']]] if 'from_s' in args.voice_sample else [])
+    if getattr(args, 'voice_quality', None):    # how self-consistent the voice reference is (gamst/voice_quality.py)
+        report['voice_quality'] = args.voice_quality
     inputs, first = recipe['inputs'], recipe['inputs'][0]['id']    # several: "frames" are those of the first input
     if len(inputs) > 1:
         report['input_frames'] = {item['id']: 0 for item in inputs}
@@ -1259,8 +1269,37 @@ def _movement_options(parser):
     parser.add_argument('--speaker-decision', metavar='JSON|FILE',
                         help='speaker decision v2: compare with the references AND the other voices present '
                              '(gamst/providers/voice_bank.py; {"l1": {...}, "l4": {...}, "bank": {...}})')
+    parser.add_argument('--l1', choices=['instant', 'threshold'],
+                        help="live lane (L1) with a verification lane: 'instant' counts every heard word at once and "
+                             "excludes only a clearly other voice (person-term-count's default); 'threshold' counts a "
+                             'word at once only when its voice score reaches --speaker-threshold (the old behaviour)')
+    parser.add_argument('--l1-clear-other', type=float, metavar='SCORE',
+                        help="with --l1 instant: a word whose voice score is below this is another person's at once "
+                             '(default 0.2)')
+    parser.add_argument('--l1-clear-margin', type=float, metavar='COSINE',
+                        help='with --l1 instant and speaker decision v2: excluded at once when a known other voice is '
+                             'this much closer than the person (default: off)')
+    parser.add_argument('--voice-fallback', action='append', default=[], metavar='FILE',
+                        help='another enrolled voice of the same person (e.g. an owner sample from another recording): '
+                             'used when the voice reference is not self-consistent (gamst/voice_quality.py)')
+    parser.add_argument('--voice-min-quality', type=float, metavar='COSINE',
+                        help='least self-consistency (mean pairwise similarity of its pieces) of a voice reference '
+                             'used alone (default 0.5)')
+    parser.add_argument('--voice-fallback-mode', choices=['combined', 'replace'],
+                        help="a low-quality reference with a --voice-fallback: 'combined' (default: both, equal weight) "
+                             "or 'replace' (the fallback alone)")
     parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
     parser.add_argument('--exit', type=float, help='release threshold')
+
+
+def _l1(args):
+    """The live lane's policy from ``--l1``, ``--l1-clear-other`` and ``--l1-clear-margin`` (None: the recipe's)."""
+    found = {key: value for key, value in (('policy', getattr(args, 'l1', None)),
+                                           ('clear_other', getattr(args, 'l1_clear_other', None)),
+                                           ('clear_margin', getattr(args, 'l1_clear_margin', None))) if value is not None}
+    if found and 'policy' not in found:
+        found['policy'] = 'instant'
+    return found or None
 
 
 def _speaker_decision(value):

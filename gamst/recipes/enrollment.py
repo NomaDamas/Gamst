@@ -134,8 +134,9 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
         raise SystemExit(f'voice enrollment: {error}') from error
     finally:
         await _close(embedder)
+    from ..voice_quality import self_consistency
     saved.update(recipe=recipe['name'], seconds=round(len(audio) / SAMPLE_RATE, 2), consent=consent,
-                 enrolled_from=origin)
+                 enrolled_from=origin, quality=self_consistency(saved['embeddings']))
     _save(args.out, saved)
     print(json.dumps(dict(out=args.out, kind='voice', clips=len(saved['embeddings']), model=saved['model'],
                           enrolled_from={key: value for key, value in origin.items() if key != 'segments_s'})), flush=True)

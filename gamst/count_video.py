@@ -254,6 +254,8 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
     if hold_settled and hud is not None:     # the last stretch is decided after the input ends: show it settle
         last_change = max((at for item in hud['items'] for at, _, _ in item['steps']), default=0)
         hold_until = min(max(end, last_change + CHANGE_S), end + HOLD_MAX_S)
+    from .voice_quality import hud_line
+    warning = hud_line(report.get('voice_quality'))     # the voice reference is not one person's voice for sure
     text, trail = KoreanText(), deque(maxlen=max(2, round(.25 * fps)))
     last = None
     marks = [(event, True) for event in counted] + [(event, False) for event in others]
@@ -297,6 +299,8 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
                         start, end)
         cv2.line(canvas, (place(t), bar_y - 34), (place(t), bar_y + 34), WARN, 2)
         text.put(canvas, note, 32, 1000, 24, MUTED)
+        if warning:
+            text.put(canvas, f'주의: {warning}', 32, 1036, 24, WARN, 'bold')
         sink.stdin.write(canvas.tobytes())
     sink.stdin.close()
     if sink.wait():
