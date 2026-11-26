@@ -253,6 +253,34 @@ RF_NANO_SHA = "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d"
 RF_LARGE_SHA = "0f4e20e19a99c0f8a62b5685f57f6c8b5c371c59081feda6752a0561a79ccf38"
 MOBILECLIP_SHA = "35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f"
 HF = "https://huggingface.co"
+QWEN_ASR_REV = "7278e1e70fe206f11671096ffdd38061171dd6e5"
+QWEN_ASR_FILES = {   # the whole snapshot (the transformers loader reads the directory); sizes and digests of these bytes
+    "chat_template.json": (1161, "75a8cfca24f00de72d796fbfed6858fc9614ef3dabd8696684cc3bc03a9c58ff"),
+    "config.json": (6194, "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f"),
+    "generation_config.json": (142, "1da527824d81e07118facff437e03f2e24a23311e3bdeb2368973fe77e5f275c"),
+    "merges.txt": (1671853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+    "model-00001-of-00002.safetensors": (4220320824, "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6"),
+    "model-00002-of-00002.safetensors": (478200688, "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc"),
+    "model.safetensors.index.json": (64821, "f994739fe38e5210b9e3e8ce6c6307315e2ceac3cb630e7b7414d69dce520f60"),
+    "preprocessor_config.json": (330, "45e120a4eda2c20c5d7f2ea9354e63536bf35e27aa573fb7cdf78017b378770d"),
+    "tokenizer_config.json": (12487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"),
+    "vocab.json": (2776833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+}
+QWEN_ALIGNER_REV = "c7cbfc2048c462b0d63a45797104fc9db3ad62b7"
+QWEN_ALIGNER_FILES = {
+    "chat_template.json": (1161, "75a8cfca24f00de72d796fbfed6858fc9614ef3dabd8696684cc3bc03a9c58ff"),
+    "config.json": (5982, "d616c65d46c4b90bdc651b0a0963ea932732241140f337f9bb6b0335a9c8ef09"),
+    "generation_config.json": (115, "948d089b23bca1d214e768d59c4438365665f52ec6d33678f4062206b3fbbb8c"),
+    "merges.txt": (1671853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+    "model.safetensors": (1835544544, "47831d0e82f96b20e9034dba01a075ee06436654719f6a68289e49f1b65ce0e7"),
+    "preprocessor_config.json": (330, "45e120a4eda2c20c5d7f2ea9354e63536bf35e27aa573fb7cdf78017b378770d"),
+    "tokenizer_config.json": (12666, "3ab80063f8511deb9566e6ad438d17b7a6277fcffd52d92854112f19d36bd81c"),
+    "vocab.json": (2776833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+}
+# qwen-asr's transformers backend (no vLLM): ASR and aligner share one environment so one worker holds both.
+QWEN_TRANSFORMERS = ("qwen-asr==0.0.6", "transformers==4.57.6", "accelerate==1.12.0", "torch==2.8.0", "numpy>=1.24")
+QWEN_TRANSFORMERS_ENVIRONMENT = "qwen-asr-transformers"
+HOSTED_ASR_ADAPTER = "use the hosted-words part (phrases; audio leaves the device)"
 VLM_ADAPTER = "a VLM interprets sampled segments, not every frame: use the semantic-scene part"
 
 
@@ -477,6 +505,9 @@ ROLES = {
         "faster_whisper.small": _candidate("faster_whisper.small", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 2048, 1024, 1500, ESTIMATED, "MIT code; Whisper model license requires review", "GAMST direct FasterWhisperPlugin; pinned converted bundle; target acceptance unmeasured", tuple(_weight(name, HF + "/Systran/faster-whisper-small/resolve/" + WHISPER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_FILES.items()), environment="faster-whisper", bundle=True, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}, adapter="use the whisper-words part"),
         "faster_whisper.large_v3_turbo": _candidate("faster_whisper.large_v3_turbo", None, ("faster-whisper>=1.0,<2",), ("cpu", "cuda"), 4096, 3072, 1800, ESTIMATED, "MIT code; converted weights: license not checked", "Run on one 54 s Korean clip, 2026-11-26; accuracy not measured", tuple(_weight(name, HF + "/dropbox-dash/faster-whisper-large-v3-turbo/resolve/" + WHISPER_TURBO_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in WHISPER_TURBO_FILES.items()), environment="faster-whisper", bundle=True, automatic=False, config={"plugin": "gamst.plugins.FasterWhisperPlugin", "device": "cpu"}, adapter="use the whisper-words part"),
         "qwen3.asr_1_7b": _candidate("qwen3.asr_1_7b", "qwen3.asr", ("qwen-asr==0.0.6", "vllm==0.14.0", "transformers==4.57.6", "numpy>=1.24"), ("cuda",), 16384, 7844, 12000, {"ram": "estimated", "vram": "VERIFY.md measured 7844 MiB", "disk": "estimated"}, "Qwen model license requires review", "not run with these pins (VERIFY.md's real-audio result predates them)", (_weight("Qwen3-ASR-1.7B", HF + "/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5", None, 4000 * MIB, "revision-pinned snapshot; per-file SHA256 unpinned"),), environment="qwen-asr", python="3.11", min_vram_bytes=12 * GIB, automatic=False, config={"gpu_memory_utilization": 0.07, "max_model_len": 8192}, adapter="reads exact hops of one channel: use the qwen-words part"),
+        "qwen3.asr_1_7b.transformers": _candidate("qwen3.asr_1_7b.transformers", "qwen3.asr.words", QWEN_TRANSFORMERS, ("cpu", "mps"), 12288, 0, 4700, {"ram": "estimated", "vram": "none (CPU/MPS)", "disk": "pinned snapshot bytes"}, "Apache-2.0", "Run on one 54 s Korean clip on Apple M2 Pro, 2026-11-26 (docs/measurements/sota-asr-2026-11-26.md); needs the audio.word_alignment candidate qwen3.forced_aligner_0_6b in the same environment", tuple(_weight(name, HF + "/Qwen/Qwen3-ASR-1.7B/resolve/" + QWEN_ASR_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in QWEN_ASR_FILES.items()), environment=QWEN_TRANSFORMERS_ENVIRONMENT, python="3.11", bundle=True, config={"device": "mps", "dtype": "bfloat16"}, adapter="phrases with aligned word times: use the qwen-words part"),
+        "alibaba.qwen_audio_3_1_asr_flash.hosted": _candidate("alibaba.qwen_audio_3_1_asr_flash.hosted", "hosted.asr.words", ("numpy>=1.24",), ("cpu", "mps", "cuda"), 256, 0, 0, ESTIMATED, "Alibaba Model Studio terms", "Not run with a key. Adapter checked against a stand-in server only. Audio leaves the machine and it costs money ($0.15 / 1M input tokens, Singapore list price, 2026-11-26)", environment="asr-endpoint", automatic=False, config={"api": "dashscope", "endpoint": "https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", "model": "qwen-audio-3.1-asr-flash", "revision": "hosted-unversioned", "api_key_env": "DASHSCOPE_API_KEY", "allow_remote": False, "price": "$0.15 per 1M input tokens + $0.47 per 1M output tokens (Singapore list price, 2026-11-26)"}, adapter=HOSTED_ASR_ADAPTER),
+        "elevenlabs.scribe_v2.hosted": _candidate("elevenlabs.scribe_v2.hosted", "hosted.asr.words", ("numpy>=1.24",), ("cpu", "mps", "cuda"), 256, 0, 0, ESTIMATED, "ElevenLabs terms", "Not run with a key. Adapter checked against a stand-in server only. Audio leaves the machine and it costs money ($0.20 per hour of audio, keyterms +20-25%, 2026-11-26)", environment="asr-endpoint", automatic=False, config={"api": "elevenlabs", "endpoint": "https://api.elevenlabs.io/v1/speech-to-text", "model": "scribe_v2", "revision": "hosted-unversioned", "api_key_env": "ELEVENLABS_API_KEY", "allow_remote": False, "price": "$0.20 per hour of audio sent; keyterms add 20-25% (2026-11-26)"}, adapter=HOSTED_ASR_ADAPTER),
         "moonshine.tiny": _candidate("moonshine.tiny", "moonshine_voice.native", ("moonshine-voice==0.0.45", "numpy>=1.24"), ("cpu",), 512, 0, 500, ESTIMATED, "MIT", "GAMST adapter implemented; real-weight acceptance pending", (_weight("moonshine-v2-tiny-streaming-en", "https://github.com/moonshine-ai/moonshine-v2/tree/49bc3af5bb0d767d5156fb579fa5f9853b559bf3", None, 200 * MIB),), environment="moonshine", automatic=False, adapter="reads exact hops and has no worker profile: gamst.providers.moonshine_asr"),
     }, _defaults("faster_whisper.small", "qwen3.asr_1_7b"), ("audio.vad",)),
     "audio.events": Role("audio.events", "Environmental audio events", {
@@ -503,7 +534,7 @@ ROLES = {
         "sam_audio.span": _candidate("sam_audio.span", "target_speech.local", (), ("cpu", "cuda"), 8192, 0, 0, ESTIMATED, "SAM License; gated weights", "Reuses the existing SAM-Audio loader with speaker-match spans; not run", environment="sam-audio", automatic=False, config={"backend": "sam-span"}),
     }, _defaults("wesep.bsrnn_ecapa"), ("audio.speaker_verify",)),
     "audio.word_alignment": Role("audio.word_alignment", "Word times for final transcripts", {
-        "qwen3.forced_aligner_0_6b": _candidate("qwen3.forced_aligner_0_6b", "qwen3.forced_aligner", ("qwen-asr==0.0.6",), ("cuda",), 8192, 4096, 4000, ESTIMATED, "Apache-2.0", "Adapter written from source; not run. Needs the whole snapshot c7cbfc2048c462b0d63a45797104fc9db3ad62b7", (_weight("model.safetensors", HF + "/Qwen/Qwen3-ForcedAligner-0.6B/resolve/c7cbfc2048c462b0d63a45797104fc9db3ad62b7/model.safetensors", "47831d0e82f96b20e9034dba01a075ee06436654719f6a68289e49f1b65ce0e7", 1835544544, "publisher metadata"),), environment="qwen-aligner", automatic=False, config={}),
+        "qwen3.forced_aligner_0_6b": _candidate("qwen3.forced_aligner_0_6b", "qwen3.forced_aligner", QWEN_TRANSFORMERS, ("cpu", "mps", "cuda"), 4096, 2048, 1900, {"ram": "estimated", "vram": "estimated", "disk": "pinned snapshot bytes"}, "Apache-2.0", "Run inside the qwen3.asr_1_7b.transformers worker on Apple M2 Pro, 2026-11-26; the CUDA streaming path (qwen-words with its own config) not run", tuple(_weight(name, HF + "/Qwen/Qwen3-ForcedAligner-0.6B/resolve/" + QWEN_ALIGNER_REV + "/" + name, sha, size, "pinned source bytes") for name, (size, sha) in QWEN_ALIGNER_FILES.items()), environment=QWEN_TRANSFORMERS_ENVIRONMENT, python="3.11", bundle=True, config={}),
     }, _defaults("qwen3.forced_aligner_0_6b"), ("audio.asr",)),
     "vision.face_identity": Role("vision.face_identity", "Is this visible face the enrolled person (needs a consent record)", {
         "lvface.t": _lvface("T", "bf8da0e1e93c432d9a1d874a9ba0990f5859f970e8864b3990f2f33d11f9cdb3", 76653813, "Not run"),

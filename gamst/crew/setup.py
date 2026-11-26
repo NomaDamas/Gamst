@@ -558,6 +558,13 @@ def _role_config(selection, weight_paths, source_dir):
         config.update(path=first["path"], sha256=first["sha256"])
     elif model == "faster_whisper.small":
         config["model_path"] = str(Path(first["path"]).parent)
+    elif model == "qwen3.asr_1_7b.transformers":
+        files = {item["name"]: item["sha256"] for item in weight_paths}
+        config.update(model_path=str(Path(first["path"]).parent), files=files,
+                      sha256=files["model-00001-of-00002.safetensors"])
+    elif model == "qwen3.forced_aligner_0_6b":
+        weights = next(item for item in weight_paths if item["name"] == "model.safetensors")
+        config.update(path=str(Path(weights["path"]).parent), sha256=weights["sha256"])
     elif model == "nemotron3":
         config["path"] = str(Path(first["path"]).parent)
     elif model == "video_depth.large":

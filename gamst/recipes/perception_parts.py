@@ -90,20 +90,102 @@ async def _whisper_words(options, context):
     return dict(module=module, spec=module.spec)
 
 
+PHRASE_KEYS = ('hop_seconds', 'margin_seconds', 'max_seconds')
+
+
+def bias_terms(options, context):
+    """The spellings of the terms reference named by ``"bias"`` (a recipe option), or none.
+
+    The model is told these words before it listens (Qwen3-ASR's context prompt, a hosted API's hot words or key
+    terms). That can make it write one of them where it was not said: measure with and without. Words given while a
+    run goes on (MCP) do not change it.
+    """
+    name = options.get('bias')
+    if not name:
+        return []
+    from ..providers.term_events import parse_terms
+    value = (context.get('references') or {}).get(name)
+    if value is None:
+        raise SystemExit(f"{options.get('name')}: \"bias\" names the reference {name!r}, which this run does not have")
+    terms, _ = parse_terms(value)[:2]
+    spellings = []
+    for term, written in terms.items():
+        for spelling in [term, *written]:
+            if not str(spelling).startswith('re:') and spelling not in spellings:
+                spellings.append(spelling)
+    return spellings[:100]
+
+
 async def _qwen_words(options, context):
-    """Qwen3-ASR (existing worker profile) + Qwen3-ForcedAligner, each in its own environment."""
+    """Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B.
+
+    Set up by role (no ``"config"``): the transformers backend in one worker (CPU or Apple MPS), the same phrases as
+    ``whisper-words`` with ``segmentation: phrases``. ``"bias": "terms"`` gives the words being counted to Qwen3-ASR as
+    its context prompt; ``"pause_seconds"`` splits phrases where the words pause.
+
+    With ``"config": {"asr": {...}, "aligner": {...}}``: the CUDA streaming engine (vLLM) and the aligner, each in its
+    own environment (:class:`gamst.providers.asr_words.AlignedASR`).
+    """
     from ..process_provider import ProcessProvider
     from ..providers.asr_words import AlignedASR
-    config, python, _ = _entry(options, context, None)
-    if 'asr' not in config or 'aligner' not in config:
-        raise SystemExit('qwen-words needs config.asr and config.aligner ({"python", "config"} each)')
-    asr, aligned = config['asr'], config['aligner']
-    aligner = await _open('RemoteAligner', (aligned['config'], aligned.get('python') or python,
-                                            'qwen3.forced_aligner'))
-    worker = await ProcessProvider.open(asr.get('python') or python, asr.get('profile', 'qwen3.asr.endpoint'),
-                                        asr['config'], startup_timeout=600, inference_timeout=120)
-    module = AlignedASR(worker, aligner, language=context.get('language') or options.get('language'),
-                        hop_ms=int(options.get('hop_ms', 20)))
+    if isinstance(options.get('config'), dict) and 'asr' in options['config']:
+        config, python, _ = _entry(options, context, None)
+        if 'aligner' not in config:
+            raise SystemExit('qwen-words needs config.asr and config.aligner ({"python", "config"} each)')
+        asr, aligned = config['asr'], config['aligner']
+        aligner = await _open('RemoteAligner', (aligned['config'], aligned.get('python') or python,
+                                                'qwen3.forced_aligner'))
+        worker = await ProcessProvider.open(asr.get('python') or python, asr.get('profile', 'qwen3.asr.endpoint'),
+                                            asr['config'], startup_timeout=600, inference_timeout=120)
+        module = AlignedASR(worker, aligner, language=context.get('language') or options.get('language'),
+                            hop_ms=int(options.get('hop_ms', 20)))
+        return dict(module=module, spec=module.spec)
+    asr, python, profile = _entry(options, context, 'qwen3.asr.words')
+    if 'files' not in asr:
+        raise SystemExit('qwen-words without its own config needs the audio.asr candidate qwen3.asr_1_7b.transformers')
+    aligner = context['installed'](dict(use='role', role='audio.word_alignment',
+                                        candidate=options.get('aligner', 'qwen3.forced_aligner_0_6b')))['config']
+    config = dict(model_path=asr['model_path'], files=asr['files'], sha256=asr['sha256'], aligner_path=aligner['path'],
+                  aligner_sha256=aligner['sha256'], device=options.get('device', asr.get('device', 'cpu')),
+                  dtype=options.get('dtype', asr.get('dtype', 'float32')),
+                  language=context.get('language') or options.get('language') or 'ko',
+                  pause_seconds=float(options.get('pause_seconds', .5)),
+                  phrases={key: options[key] for key in PHRASE_KEYS if key in options})
+    terms = bias_terms(options, context)
+    if terms:
+        config['context'] = ' '.join(terms)
+    from ..providers import model_workers
+    module = await model_workers.RemoteWhisper.open(python, profile, config, startup_timeout=600, inference_timeout=300)
+    return dict(module=module, spec=module.spec)
+
+
+async def _hosted_words(options, context):
+    """A hosted ASR API with word times (``alibaba.*.hosted``, ``elevenlabs.*.hosted``), as phrases.
+
+    Audio leaves the device and it costs money: the config's ``allow_remote`` (or ``--allow-remote-asr``) is the
+    owner's opt-in, and the cost line is printed before anything is sent. ``"bias": "terms"`` sends the counted words
+    as hot words / key terms.
+    """
+    from ..providers.hosted_asr import check_config, cost_line
+    config, python, profile = _entry(options, context, 'hosted.asr.words')
+    if context.get('allow_remote_asr'):
+        config['allow_remote'] = True
+    for key in ('endpoint', 'api_key_env'):
+        if options.get(key):
+            config[key] = options[key]
+    config.update(language=context.get('language') or options.get('language') or 'ko',
+                  pause_seconds=float(options.get('pause_seconds', .5)),
+                  phrases={key: options[key] for key in PHRASE_KEYS if key in options} or dict(hop_seconds=8.))
+    terms = bias_terms(options, context)
+    if terms:
+        config['terms'] = terms
+    try:
+        check_config(config)
+    except (ValueError, PermissionError) as error:
+        raise SystemExit(f"{options.get('name')}: {error}") from error
+    print('note: ' + cost_line(config, config['phrases']), file=sys.stderr)
+    from ..providers import model_workers
+    module = await model_workers.RemoteWhisper.open(python, profile, config, startup_timeout=60, inference_timeout=120)
     return dict(module=module, spec=module.spec)
 
 
@@ -391,8 +473,11 @@ def parts(Part):
                               build=_target_speech),
         'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
                               transcribes=True),
-        'qwen-words': Part('module', role='audio.word_alignment', candidate='qwen3.forced_aligner_0_6b',
-                           build=_qwen_words, transcribes=True),
+        'qwen-words': Part('module', role='audio.asr', candidate='qwen3.asr_1_7b.transformers',
+                           build=_qwen_words, transcribes=True,
+                           extra_roles=(('aligner', 'audio.word_alignment', 'qwen3.forced_aligner_0_6b'),)),
+        'hosted-words': Part('module', role='audio.asr', candidate='elevenlabs.scribe_v2.hosted', build=_hosted_words,
+                             transcribes=True),
         'prosody': Part('module', role='audio.prosody', candidate='dsp', build=_prosody),
         'audio-onsets': Part('module', build=_audio_onsets),
         'coincidence': Part('module', build=_coincidence),

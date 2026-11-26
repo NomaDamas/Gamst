@@ -24,6 +24,8 @@ class Part:
     build: Callable[..., Any] | None = None       # async (options, context) -> dict(module, spec?, every_ms?)
     sampling: Callable[..., Any] | None = None    # (options, fps) -> dict(required_fps, ...) or None
     transcribes: bool = False                     # commits utterances with text and times
+    # Further roles the builder reads: (item key naming the candidate, role, default candidate).
+    extra_roles: tuple = ()
 
 
 # ---------------------------------------------------------------- sampling rules (physics, no tuning)
