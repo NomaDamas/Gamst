@@ -102,11 +102,14 @@ class WordVerification:
     owns_process = True
 
     def __init__(self, recogniser, diarizer, embedder, *, reference='voice', terms='terms', audio='microphone',
-                 rule=None, voice=None, windows=None, capability_id='speech.word_verdicts'):
+                 rule=None, voice=None, windows=None, feed_speed=None, capability_id='speech.word_verdicts'):
         self.recogniser, self.diarizer, self.embedder = recogniser, diarizer, embedder
         self.reference_name, self.terms_name, self.audio = reference, terms, audio
         self.rule, self.voice = _settings(RULE, rule, 'rule'), _settings(VOICE, voice, 'voice')
         self.windows = _settings(WINDOWS, windows, 'window')
+        # None: the second recogniser gets the complete audio as soon as it is complete (in bursts); a number: at most
+        # that many times real time, evenly
+        self.feed_speed = None if feed_speed is None else float(feed_speed)
         if not 0 < self.windows['step_ms'] <= 120000 or self.windows['before_ms'] < 0 or self.windows['after_ms'] < 0:
             raise ValueError('windows need 0 < step_ms <= 120000 and non-negative before_ms, after_ms')
         self.spec = CapabilitySpec(
@@ -168,6 +171,9 @@ class WordVerification:
     def status(self):
         return dict({key: value for key, value in self.stats.items() if not isinstance(value, list)},
                     errors=self.stats['errors'][-5:], open=len(self._open), heard=len(self._heard),
+                    heard_terms=[dict(end_ms=item['end_ms'], timed=item['timed'], aligned=bool(value.get('aligned')))
+                                 for value in self._heard for item in term_occurrences(value, self.terms or {})][-64:],
+                    diarize_ms=self.stats['diarize_ms'][-16:],
                     fed_until_ms=self._fed, decided_until_ms=None if self._origin is None else
                     self._origin + self._decided * self.windows['step_ms'])
 
@@ -272,6 +278,17 @@ class WordVerification:
             chunk = self.memory.after(position)
             if chunk is None or chunk[0] > complete:
                 break
+            if self.feed_speed and not self._final:
+                if getattr(self, '_pace', None) is None:
+                    self._pace = (time.monotonic(), position)
+                due = self._pace[0] + (chunk[0] - self._pace[1]) / 1000 / self.feed_speed
+                if time.monotonic() < due:
+                    break
+            elif self.feed_speed and self._final and getattr(self, '_pace', None) is not None:
+                due = self._pace[0] + (chunk[0] - self._pace[1]) / 1000 / self.feed_speed
+                if time.monotonic() < due:
+                    await asyncio.sleep(min(.1, due - time.monotonic()))
+                    continue
             end_ms, samples, rate, subject = chunk
             begin = end_ms - 1000. * len(samples) / rate
             if begin < position:

@@ -354,6 +354,8 @@ class TermEvents:
                             **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]})
             if match != counted:
                 revision['reason'] = reason or ('another_voice' if counted else 'enrolled_voice')
+            elif reason:        # unchanged, and the verdict says why (e.g. another voice's word, overlapped speech)
+                revision['reason'] = reason
             added = changed.setdefault(id(words), (words, []))[1]
             added.append(revision)
             if match and not counted:       # the enrolled voice after all: counted from now on, as final
