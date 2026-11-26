@@ -253,7 +253,7 @@ def bias_terms(options, context):
     name = options.get('bias')
     if not name:
         return []
-    from ..providers.term_events import parse_terms
+    from ..providers.term_events import parse_terms, plain
     value = (context.get('references') or {}).get(name)
     declared = {item.get('name') for item in (context.get('recipe') or {}).get('references') or ()}
     if value is None and name not in declared:
@@ -263,8 +263,8 @@ def bias_terms(options, context):
     terms, _ = parse_terms(value)[:2]
     spellings = []
     for term, written in terms.items():
-        for spelling in [term, *written]:
-            if not str(spelling).startswith('re:') and spelling not in spellings:
+        for spelling in [plain(item) for item in [term, *written]]:     # no patterns; whole words as written
+            if spelling and spelling not in spellings:
                 spellings.append(spelling)
     return spellings[:100]
 

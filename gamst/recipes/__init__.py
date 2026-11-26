@@ -1283,7 +1283,8 @@ def main(argv=None):
     _source_options(start)
     _speed_options(start)
     _movement_options(start)
-    start.add_argument('--terms', help='comma-separated words to count (re:PATTERN for a pattern), or a terms file')
+    start.add_argument('--terms', help='comma-separated words to count (re:PATTERN for a pattern, word:W for W only as a whole word, word:W* '
+                            'for whole words made of W, each repetition counted), or a terms file')
     start.add_argument('--language', help="spoken language, e.g. ko (default: the recipe's)")
     start.add_argument('--vlm-context', metavar='NAMES', help='what a VLM module gets as text besides the frames: '
                        "transcript,counts (default: both), one of them, or none")

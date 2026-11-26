@@ -39,6 +39,26 @@ On this device instead (set up the same way, `gamst recipe setup person-term-cou
 fewer of the counted words on the one shop clip measured (docs/measurements/streaming-asr-2026-11-26.md). Whisper
 (`faster_whisper.*`, part `whisper-words`) and the others in `gamst recipe roles` stay registered choices.
 
+## How a word is matched
+
+A term is found anywhere in the recognizer's text by default, inside other words too (Korean particles after it still
+match: "대박이"). Where the spelling is also part of other words, write it as a whole word:
+
+- `word:18` matches only a word that is exactly "18" ("18!" too), never "180", "2018" or "18살".
+- `word:달*` matches a word made only of "달" and counts each repetition: "달" 1, "달달" 2, "달달달" 3; never "달라", "달걀",
+  "달려", "달이". Repetitions in one word share its time evenly and are verified one by one.
+- Nothing may follow the spelling inside the word, particles included: the particle forms are often the other meaning.
+- Words are the recognizer's own (spaces in its text), so this needs a language written with spaces between words.
+- `#flag` at the end of a spelling goes on its events (`flags`); a spelling of numerals (`18`) is flagged
+  `may_be_number` by itself. Several spellings as one term need a terms file:
+
+```json
+{"kind": "terms", "method": "text", "confirmed": true,
+ "terms": {"시발": ["시발", "씨발", "씨팔", "십팔#may_be_number", "word:18"]}}
+```
+
+`--terms 'word:달*'` names the term "달". Recognizers are told the plain spellings (`달`, `18`) as key terms.
+
 ## Words by example
 
 ```bash

@@ -225,12 +225,29 @@ class WordVerification:
                     self._utterances.append(value)
                     for word in words:
                         self._open[word['word_id']] = dict(word, utterance_id=value.get('utterance_id'))
+                    self._repetitions(value)
                     self._late()
         elif frame.modality == 'audio' and self._origin is None and self.memory is not None and self.memory.start_ms:
             self._origin = int(self.memory.start_ms)
         if self._task is None and self._origin is not None and not self._done:
             self._task = asyncio.ensure_future(self._work())
         return self._take()
+
+    def _repetitions(self, value):
+        """A word holding several repetitions of a whole-word term (``word:달*``: "달달달") is decided per repetition:
+        each is an open word of its own (:func:`gamst.providers.term_events.part_id`, its share of the word's time)."""
+        whole = set()
+        for item in term_occurrences(value, self.terms or {}):
+            if item.get('part') is None:
+                continue
+            for word, word_id in zip([word for word in item['words'] if isinstance(word.get('word_id'), str)],
+                                     item['word_ids']):
+                if word['word_id'] in self._open:
+                    self._open[word_id] = dict(self._open[word['word_id']], word_id=word_id, start_ms=item['start_ms'],
+                                               end_ms=item['end_ms'])
+                    whole.add(word['word_id'])
+        for word_id in whole:
+            del self._open[word_id]
 
     async def finish(self):
         self._final = True
@@ -573,7 +590,7 @@ class WordVerification:
         found = []
         for value in self._utterances:
             for item in term_occurrences(value, self.terms):
-                ids = [word['word_id'] for word in item['words'] if word.get('word_id') in self._open]
+                ids = [word_id for word_id in item['word_ids'] if word_id in self._open]
                 if ids and low <= item['end_ms'] < high:
                     found.append(dict(item, word_ids=ids))
         return found

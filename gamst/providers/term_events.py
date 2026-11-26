@@ -29,6 +29,23 @@ Text-pattern styles of speaking (a filler, a sentence ending) are terms too: a t
 ``re:<pattern>`` is a regular expression over the normalized text (lower case, no spaces or
 punctuation), e.g. ``re:(거든요|잖아요)$``.
 
+Whole-word terms (:func:`spelling_parts`). ``word:<spelling>`` matches only a word of the recogniser that is exactly
+the spelling once normalized (``word:18`` matches "18" and "18!", never "180", "2018" or "18살"); ``word:<spelling>*``
+matches a word made only of repetitions of it and counts each repetition (``word:달*``: "달" 1, "달달" 2, "달달달" 3;
+never "달라", "달걀", "달려"). Words are the recogniser's own: the whitespace-separated tokens of its text (Korean and
+other space-delimited scripts; normalization removes spaces, so the joined text cannot say where a word ends; the
+aligner's word list cannot either: Qwen3-ForcedAligner splits a Korean word into a stem and an ending, "달달달" into
+"달달" + "달"). Nothing may follow the spelling inside the word, Korean particles included: a whole-word term is used
+where the spelling is also part of other words, and the particle forms ("달이", "달도", "18을") are the other meaning's
+(the moon, the number) as often as not, so allowing them would bring back the matches the term is there to refuse.
+Several repetitions in one recogniser word share the word's time evenly, and each has its own word ID
+(:func:`part_id`), so the verification lane decides each one. A term given as a list names itself without the
+prefix (``word:달*`` counts as the term "달").
+
+Flags. A spelling may end in ``#flag`` (``십팔#may_be_number``); its events say ``flags: [...]``. A spelling made
+only of digits or other numerals (``18``, ``十八``) is flagged ``may_be_number`` by itself: the event may be the number,
+not the word that sounds like it.
+
 Revision states (:mod:`gamst.counting`). Every event has a stable ``event_id``. Where the words that decide it say
 ``state: "provisional"`` (:class:`gamst.providers.speaker_tracks.SpeakerTracks`), so does the event: it is counted at
 once. A later ``verdicts`` value (``{"kind": "verdicts", "verdicts": [{"word_id", "match", "reason"?}]}``, from
@@ -54,19 +71,101 @@ def normalize(text):
     return _DROP.sub('', unicodedata.normalize('NFKC', str(text)).lower())
 
 
+WORD = 'word:'
+NUMBER = 'may_be_number'
+_FLAG = re.compile(r'#([A-Za-z_][A-Za-z0-9_]*)$')
+
+
+def spelling_parts(spelling):
+    """What a spelling asks for: ``{kind: "text" | "re" | "word", body, repeat, flags}``.
+
+    ``re:PATTERN``: a pattern over the normalized text. ``word:SPELLING`` (``word:SPELLING*``: repeated): whole words
+    only. Otherwise text, found anywhere (inside other words too). ``#flag`` at the end (not for patterns) is kept on the
+    events; numerals are flagged ``may_be_number`` by themselves.
+    """
+    spelling = str(spelling)
+    if spelling.startswith('re:'):
+        return dict(kind='re', body=spelling, repeat=False, flags=())
+    flags = []
+    while True:
+        found = _FLAG.search(spelling)
+        if found is None or not normalize(spelling[:found.start()]):
+            break
+        flags.insert(0, found.group(1))
+        spelling = spelling[:found.start()]
+    kind, repeat = 'text', False
+    if spelling.startswith(WORD):
+        kind, spelling = 'word', spelling[len(WORD):]
+        if spelling.endswith('*'):
+            repeat, spelling = True, spelling[:-1]
+    body = normalize(spelling)
+    if body and body.isnumeric() and NUMBER not in flags:
+        flags.append(NUMBER)
+    return dict(kind=kind, body=spelling.strip(), repeat=repeat, flags=tuple(flags))
+
+
+def plain(spelling):
+    """The spelling as a recogniser should be told it (no ``word:``, ``*`` or flags); None for a pattern."""
+    parts = spelling_parts(spelling)
+    return None if parts['kind'] == 're' else parts['body']
+
+
+def term_name(spelling):
+    """The name a term given as a list has: its spelling without ``word:``, ``*`` and flags (patterns as given)."""
+    return plain(spelling) or str(spelling)
+
+
+def part_id(word_id, index):
+    """The ID of the ``index``-th repetition inside one recogniser word (``word:SPELLING*``)."""
+    return f'{word_id}~{index}'
+
+
+def _tokens(text):
+    """(offset in the normalized text, normalized token) of each whitespace-separated word of ``text``."""
+    position, found = 0, []
+    for raw in str(text).split():
+        token = normalize(raw)
+        if token:
+            found.append((position, token))
+            position += len(token)
+    return found
+
+
+def spans(text, term):
+    """``[(offset, length, part)]`` in normalized text of non-overlapping occurrences of one spelling. ``part`` is
+    ``(index, repetitions, word offset, word length)`` for a repeated whole word of more than one repetition, else
+    None."""
+    parts = spelling_parts(term)
+    if parts['kind'] != 'word':
+        return [(offset, size, None) for offset, size in matches(text, term)]
+    needle = normalize(parts['body'])
+    found = []
+    for offset, token in _tokens(text):
+        if token == needle:
+            found.append((offset, len(needle), None))
+        elif parts['repeat'] and len(token) % len(needle) == 0 and token == needle * (len(token) // len(needle)):
+            times = len(token) // len(needle)
+            found += [(offset + index * len(needle), len(needle), (index, times, offset, len(token)))
+                      for index in range(times)]
+    return found
+
+
 def occurrences(text, term):
     """Start offsets (in normalized text) of non-overlapping occurrences of ``term``."""
     return [offset for offset, _ in matches(text, term)]
 
 
 def matches(text, term):
-    """(offset, length) in normalized text of non-overlapping occurrences; ``re:`` terms are patterns."""
+    """(offset, length) in normalized text of non-overlapping occurrences; ``re:`` terms are patterns, ``word:`` terms
+    whole words (:func:`spelling_parts`)."""
+    if spelling_parts(term)['kind'] == 'word':
+        return [(offset, size) for offset, size, _ in spans(text, term)]
     haystack = normalize(text)
     if str(term).startswith('re:'):
         pattern = _pattern(term)
         return [(found.start(), found.end() - found.start()) for found in pattern.finditer(haystack)
                 if found.end() > found.start()]
-    needle = normalize(term)
+    needle = normalize(spelling_parts(term)['body'])
     found, start = [], 0
     while needle:
         index = haystack.find(needle, start)
@@ -92,7 +191,7 @@ def _valid(spelling):
             return bool(spelling[3:]) and _pattern(spelling) is not None
         except re.error as exc:
             raise ValueError(f'invalid term pattern {spelling!r}: {exc}') from exc
-    return bool(normalize(spelling))
+    return bool(normalize(spelling_parts(spelling)['body']))
 
 
 def check_spelling(spelling):
@@ -114,26 +213,59 @@ def _word_times(words, offset, length):
     return covered[0].get('start_ms'), covered[-1].get('end_ms'), covered
 
 
+def _part_times(words, offset, size, part):
+    """:func:`_word_times`; a repetition inside a word gets its even share of the word's time."""
+    if part is None:
+        return _word_times(words, offset, size)
+    index, repetitions, first, length = part
+    times = _word_times(words, first, length)
+    if times is None or type(times[0]) not in (int, float) or type(times[1]) not in (int, float):
+        return times
+    start, end = times[:2]
+    return (start + (end - start) * index // repetitions, start + (end - start) * (index + 1) // repetitions, times[2])
+
+
+def _found(text, spellings):
+    """``[(offset, size, spelling, part)]``: occurrences of a term's spellings, longer spellings first, never two over
+    the same characters."""
+    found, taken = [], []
+    for spelling in sorted(spellings, key=lambda item: -len(normalize(spelling_parts(item)['body']))):
+        for offset, size, part in spans(text, spelling):
+            if any(offset < stop and offset + size > first for first, stop in taken):
+                continue  # a longer spelling already counted these characters
+            taken.append((offset, offset + size))
+            found.append((offset, size, spelling, part))
+    return found
+
+
+def _spoken(text, offset, size, spelling):
+    return normalize(text)[offset:offset + size] if spelling.startswith('re:') else spelling_parts(spelling)['body']
+
+
+def word_ids(covered, part):
+    """The word IDs one occurrence is decided by (a repetition: its own :func:`part_id` of each word)."""
+    ids = [word['word_id'] for word in covered if isinstance(word.get('word_id'), str)]
+    return ids if part is None else [part_id(item, part[0]) for item in ids]
+
+
 def term_occurrences(value, terms):
     """Where the counted words occur in one final utterance, as :class:`TermEvents` finds them: ``[{term, spoken,
-    start_ms, end_ms, words, timed}]`` (``words``: the utterance's words covering it; ``timed`` False: no word times, the
-    utterance's own times). ``terms``: ``{term: [spellings]}`` (:func:`parse_terms`)."""
+    start_ms, end_ms, words, timed, word_ids, part, flags}]`` (``words``: the utterance's words covering it; ``timed``
+    False: no word times, the utterance's own times; ``part``: ``[index, repetitions]`` of a repeated whole word).
+    ``terms``: ``{term: [spellings]}`` (:func:`parse_terms`)."""
     found = []
     text, words = str(value.get('text') or ''), value.get('words') or []
     for term, spellings in terms.items():
-        taken = []
-        for spelling in sorted(spellings, key=lambda item: -len(normalize(item))):
-            for offset, size in matches(text, spelling):
-                if any(offset < stop and offset + size > first for first, stop in taken):
-                    continue
-                taken.append((offset, offset + size))
-                times = _word_times(words, offset, size) if words else None
-                spoken = normalize(text)[offset:offset + size] if spelling.startswith('re:') else spelling
-                start, end = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
-                if type(start) not in (int, float) or type(end) not in (int, float):
-                    continue
-                found.append(dict(term=term, spoken=spoken, start_ms=int(start), end_ms=int(end),
-                                  words=list(times[2]) if times else [], timed=times is not None))
+        for offset, size, spelling, part in _found(text, spellings):
+            times = _part_times(words, offset, size, part) if words else None
+            start, end = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
+            if type(start) not in (int, float) or type(end) not in (int, float):
+                continue
+            covered = list(times[2]) if times else []
+            found.append(dict(term=term, spoken=_spoken(text, offset, size, spelling), start_ms=int(start),
+                              end_ms=int(end), words=covered, timed=times is not None,
+                              word_ids=word_ids(covered, part), part=None if part is None else list(part[:2]),
+                              flags=list(spelling_parts(spelling)['flags'])))
     return sorted(found, key=lambda item: item['end_ms'])
 
 
@@ -168,7 +300,7 @@ def parse_terms(value):
     if isinstance(value, dict) and value.get('kind') == 'terms' and isinstance(value.get('terms'), dict):
         origin = dict(method=str(value.get('method', 'examples')), confirmed=value.get('confirmed') is True)
         value = value['terms']
-    mapping = {str(term): [str(term)] for term in value} if isinstance(value, (list, tuple)) else \
+    mapping = {term_name(term): [str(term)] for term in value} if isinstance(value, (list, tuple)) else \
         {str(term): [str(item) for item in (spellings or [term])] for term, spellings in dict(value).items()}
     if not mapping or any(not _valid(item) for spellings in mapping.values() for item in spellings):
         raise ValueError('terms must be non-empty text')
@@ -282,54 +414,51 @@ class TermEvents:
         """One record of what this revision of the words has in an utterance, or None."""
         events = []
         for term, spellings in words.terms.items():
-            taken = []
-            for spelling in sorted(spellings, key=lambda item: -len(normalize(item))):
-                for offset, size in matches(value['text'], spelling):
-                    if any(offset < stop and offset + size > first for first, stop in taken):
-                        continue  # a longer spelling already counted these characters
-                    taken.append((offset, offset + size))
-                    times = _word_times(value['words'], offset, size) if value.get('words') else None
-                    start_ms, end_ms = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
-                    across = not times and (start < words.from_ms or words.until_ms is not None and end >= words.until_ms)
-                    if times and type(start_ms) in (int, float) and not (
-                            words.from_ms <= start_ms and (words.until_ms is None or start_ms < words.until_ms)):
-                        continue  # said when other words were asked for
-                    speaker = value['speaker'] if isinstance(value.get('speaker'), dict) else {}
-                    other, score = speaker.get('match') is False, speaker.get('score')
-                    checked = [word for word in (times[2] if times else ()) if type(word.get('match')) is bool]
-                    decided = {}
-                    if checked:      # each word's own voice, where people share a phrase
-                        other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
-                        decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason')
-                                   if key in checked[0]}
-                    ids = [word['word_id'] for word in (times[2] if times else ()) if isinstance(word.get('word_id'), str)]
-                    provisional = bool(ids) and any(word.get('state') == 'provisional' for word in times[2])
-                    uncertain = bool(ids) and not provisional and any(word.get('state') == 'uncertain' for word in times[2])
-                    if uncertain:       # neither the person's nor another's yet: shown, not counted, settled later
-                        other = False
-                    if other and not self.report_others:
-                        continue
-                    if not other and not uncertain:
-                        words.total += 1
-                        words.counts[term] = words.counts.get(term, 0) + 1
-                    spoken = normalize(value['text'])[offset:offset + size] if spelling.startswith('re:') else spelling
-                    slot = {key: checked[0][key] for key in ('slot', 'slot_score') if checked and key in checked[0]}
-                    event = dict(event='term.other_voice' if other else 'term.spoken',
-                                 **({'state': 'provisional'} if provisional else {'state': 'uncertain'} if uncertain
-                                    else {}), term=term,
-                                 event_id=event_id(value.get('utterance_id'), offset, term, *words.identity.values()),
-                                 spoken=spoken, reference=self.reference_name,
-                                 **words.identity, utterance_id=value.get('utterance_id'), start_ms=start_ms,
-                                 end_ms=end_ms, word_timed=times is not None, **words.origin,
-                                 **({'across_change': True} if across else {}),
-                                 **({} if score is None else {'speaker_score': score}), **decided, **slot,
-                                 **({'word_ids': ids} if provisional or uncertain else {}),
-                                 **({} if self.speaker_bound else {'speaker': 'not_bound'}))
-                    if provisional or uncertain:     # [event, words, counted in the total now]
-                        self._open[event['event_id']] = [event, words, provisional and not other]
-                        while len(self._open) > OPEN:
-                            self._open.popitem(last=False)
-                    events.append(event)
+            for offset, size, spelling, part in _found(value['text'], spellings):
+                times = _part_times(value['words'], offset, size, part) if value.get('words') else None
+                start_ms, end_ms = times[:2] if times else (value.get('start_ms'), value.get('end_ms'))
+                across = not times and (start < words.from_ms or words.until_ms is not None and end >= words.until_ms)
+                if times and type(start_ms) in (int, float) and not (
+                        words.from_ms <= start_ms and (words.until_ms is None or start_ms < words.until_ms)):
+                    continue  # said when other words were asked for
+                speaker = value['speaker'] if isinstance(value.get('speaker'), dict) else {}
+                other, score = speaker.get('match') is False, speaker.get('score')
+                checked = [word for word in (times[2] if times else ()) if type(word.get('match')) is bool]
+                decided = {}
+                if checked:      # each word's own voice, where people share a phrase
+                    other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
+                    decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason')
+                               if key in checked[0]}
+                ids = word_ids(times[2] if times else (), part)
+                provisional = bool(ids) and any(word.get('state') == 'provisional' for word in times[2])
+                uncertain = bool(ids) and not provisional and any(word.get('state') == 'uncertain' for word in times[2])
+                if uncertain:       # neither the person's nor another's yet: shown, not counted, settled later
+                    other = False
+                if other and not self.report_others:
+                    continue
+                if not other and not uncertain:
+                    words.total += 1
+                    words.counts[term] = words.counts.get(term, 0) + 1
+                spoken = _spoken(value['text'], offset, size, spelling)
+                flags = spelling_parts(spelling)['flags']
+                slot = {key: checked[0][key] for key in ('slot', 'slot_score') if checked and key in checked[0]}
+                event = dict(event='term.other_voice' if other else 'term.spoken',
+                             **({'state': 'provisional'} if provisional else {'state': 'uncertain'} if uncertain
+                                else {}), term=term,
+                             event_id=event_id(value.get('utterance_id'), offset, term, *words.identity.values()),
+                             spoken=spoken, reference=self.reference_name, **({'flags': list(flags)} if flags else {}),
+                             **({'repetition': list(part[:2])} if part else {}),
+                             **words.identity, utterance_id=value.get('utterance_id'), start_ms=start_ms,
+                             end_ms=end_ms, word_timed=times is not None, **words.origin,
+                             **({'across_change': True} if across else {}),
+                             **({} if score is None else {'speaker_score': score}), **decided, **slot,
+                             **({'word_ids': ids} if provisional or uncertain else {}),
+                             **({} if self.speaker_bound else {'speaker': 'not_bound'}))
+                if provisional or uncertain:     # [event, words, counted in the total now]
+                    self._open[event['event_id']] = [event, words, provisional and not other]
+                    while len(self._open) > OPEN:
+                        self._open.popitem(last=False)
+                events.append(event)
         if not events:
             return None
         return self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
