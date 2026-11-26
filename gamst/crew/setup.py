@@ -565,8 +565,9 @@ def _role_config(selection, weight_paths, source_dir):
     elif model == "qwen3.forced_aligner_0_6b":
         weights = next(item for item in weight_paths if item["name"] == "model.safetensors")
         config.update(path=str(Path(weights["path"]).parent), sha256=weights["sha256"])
-    elif model == "nemotron3":
-        config["path"] = str(Path(first["path"]).parent)
+    elif model in ("nemotron3", "sortformer.v2_1", "diarizen.large_s80_v2", "pyannote.community1"):
+        # The bundle directory (a weight named "plda/plda.npz" lies two levels below it); the loader verifies its files.
+        config["path"] = str(Path(first["path"]).parents[len(Path(first["name"]).parts) - 1])
     elif model == "video_depth.large":
         config.update(path=first["path"], sha256=first["sha256"], source_dir=source_dir)
     elif model.startswith("efficienttam."):

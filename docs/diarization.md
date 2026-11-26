@@ -161,3 +161,23 @@ parity, DER, latency, sustained memory, live delivery and licensing. Family#26
 stays open, including TalkNet audiovisual association, off-screen speakers,
 clock skew and face absence. No SOTA quality, lower VLM cost or faster task-answer
 claim follows from these software tests.
+
+## Other `audio.diarization` candidates (2026-11-26)
+
+Every candidate of the role emits this same `diarization` object (built by `slot_record` in
+`gamst/providers/diarization.py`): eight `activity` entries per chunk, half-open `intervals_ms`, and the flags above.
+A consumer reads `intervals_ms` and `frame_ms` and never depends on which model produced them. What differs:
+
+| candidate | profile | live? | slots, frame | notes |
+|---|---|---|---|---|
+| `nemotron3` (default) | `nemotron3.diarization` | live | 8, 10 ms | this page |
+| `sortformer.v2_1` | `sortformer.diarization` | live | 4 (slots 4-7 always empty), 80 ms | NeMo 3.0.0's `forward_streaming_step`, fed as blocks arrive; output identical to NeMo's own streaming loop. Modes `ultra_low_latency` (80 ms look-ahead), `low_latency` (560 ms), `high_latency` |
+| `pyannoteai.live1.hosted` | `pyannoteai.live.diarization` | live, hosted | 8, 10 ms | Live-1 WebSocket; chunks are committed up to the server's `last_predicted_timestamp`; `threshold`/`lookahead_ms` are `null` (turns, no scores); `mean_probability` = share of the chunk active |
+| `pyannoteai.precision3.offline`, `pyannoteai.community1.offline` | `pyannoteai.offline.diarization` | **reference, not live** | 8, 10 ms | one record when the session finishes; hosted `/v1/diarize` |
+| `diarizen.large_s80_v2` | `offline.diarization` (`backend: diarizen`) | **reference, not live** | 8, 10 ms | CC BY-NC weights: `allow_noncommercial: true` required |
+| `pyannote.community1` | `offline.diarization` (`backend: community-1`) | **reference, not live** | 8, 10 ms | gated download; not run here |
+
+Choose one in a recipe with `--with-role audio.diarization=sortformer.v2_1` (or `"candidate"` in a `role` item; a
+prepared-by-hand candidate also carries its `"config"`). Hosted candidates need `allow_remote: true` and
+`PYANNOTEAI_API_KEY` in the environment, and print a cost line before each stream or job. Measured on the owner's
+clip: [measurements/diarization-2026-11-26.md](measurements/diarization-2026-11-26.md).

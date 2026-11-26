@@ -18,6 +18,37 @@ ARTIFACTS = {
     'model.safetensors': (396954592, 'c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6'),
 }
 MODES = {'ultra_low_latency': (3, 1), 'very_low_latency': (6, 2), 'low_latency': (9, 4)}
+SLOTS = 8
+
+
+def slot_activity(np, probabilities, start_ms, frame_ms, threshold, slots=SLOTS):
+    """One chunk's per-slot activity: thresholded half-open intervals and mean/max score of each slot.
+
+    ``probabilities`` is (frames, model slots); a model with fewer slots than ``slots`` reports the rest as
+    never active (score 0), so every ``audio.diarization`` candidate emits the same eight entries.
+    """
+    activity = []
+    for slot in range(slots):
+        scores = probabilities[:, slot] if slot < probabilities.shape[1] else np.zeros(len(probabilities), np.float32)
+        active = np.r_[False, scores > threshold, False].astype(np.int8)
+        edges = np.diff(active)
+        intervals = [[start_ms+int(a)*frame_ms, start_ms+int(b)*frame_ms]
+                     for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
+        activity.append(dict(slot=slot, intervals_ms=intervals,
+                             mean_probability=float(scores.mean()), max_probability=float(scores.max())))
+    return activity
+
+
+def slot_record(spec, *, session_id, chunks, capture_end_ms, final, mode, threshold, lookahead_ms,
+                source_revision, checkpoint_sha256, artifact_hashes_verified, overlap_supported=True):
+    """The one ``audio.speaker_activity`` value every ``audio.diarization`` candidate emits."""
+    return spec.validate({'diarization': dict(session_id=session_id, chunks=chunks,
+        capture_end_ms=capture_end_ms, final=final, mode=mode, threshold=threshold,
+        slot_count=SLOTS, identity_verified=False, slot_continuity_verified=False,
+        lookahead_ms=lookahead_ms, source_revision=source_revision,
+        checkpoint_sha256=checkpoint_sha256,
+        artifact_hashes_verified=artifact_hashes_verified, quality_verified=False,
+        turn_boundaries_final=False, overlap_supported=overlap_supported)})
 
 
 class _NativeBackend:
@@ -54,7 +85,61 @@ class _NativeBackend:
             return logits.sigmoid()[0].cpu().numpy().copy(), state
 
 
-class NemotronDiarization:
+class SlotStream:
+    """What every live ``audio.diarization`` candidate shares: 16 kHz mono capture blocks in order.
+
+    A gap, a reordered block or another sensor starts a new session (``_clear``): slots never carry across.
+    """
+    np = None
+
+    def _pcm(self, frame):
+        np = self.np
+        if (not isinstance(frame, InputFrame) or frame.modality != 'audio' or
+                type(frame.sample_rate) is not int or frame.sample_rate != 16000 or
+                not isinstance(frame.sensor, SensorMetadata) or len(frame.sensor.channels) != 1):
+            raise ValueError('explicit16kHz mono audio frame/channel metadata required')
+        identifier(frame.subject_id)
+        data = frame.data
+        if type(data) is bytes:
+            if not 320 <= len(data) <= 32000 or len(data) % 320:
+                raise ValueError('PCM16 must be10..1000ms in whole10ms blocks')
+            values = np.frombuffer(data, dtype='<i2').astype(np.float32) / 32768
+        else:
+            if (type(data) is not np.ndarray or data.dtype not in (np.dtype('int16'), np.dtype('float32')) or
+                    data.ndim not in (1, 2) or data.ndim == 2 and data.shape[1] != 1 or
+                    not 160 <= len(data) <= 16000 or len(data) % 160):
+                raise ValueError('mono int16/float32 of10..1000ms in whole10ms blocks required')
+            values = data.reshape(-1).astype(np.float32, copy=True)
+            if data.dtype == np.int16:
+                values /= 32768
+        if not np.isfinite(values).all() or np.max(np.abs(values)) > 1:
+            raise ValueError('PCM must be finite and normalized')
+        ts, duration = frame.timestamp_ms, len(values) // 16
+        if type(ts) is not int or not duration <= ts <= 2**53-1:
+            raise ValueError('integer capture-end timestamp must cover block duration')
+        return values, ts, duration
+
+    def _accept(self, frame):
+        """The block's samples; clears the session first when the capture is not contiguous with the last block."""
+        values, ts, duration = self._pcm(frame)
+        sensor = frame.sensor
+        owner = (frame.subject_id, sensor.source_id, sensor.sensor_id, sensor.stream_epoch, sensor.channels,
+                 sensor.calibration_id, sensor.coordinate_frame, sensor.capture_sequence is not None)
+        seq = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
+        if owner == self._owner and self._last:
+            if ts <= self._last[0] or seq <= self._last[1]:
+                raise ValueError('capture order must increase')
+            if ts-duration != self._last[0] or seq != self._last[1]+1:
+                self._clear()
+        elif self._owner is not None:
+            self._clear()
+        if self._origin is None:
+            self._origin = ts-duration
+        self._owner, self._last = owner, (ts, seq)
+        return values
+
+
+class NemotronDiarization(SlotStream):
     """One source/session; backend doubles do not establish trained inference."""
     def __init__(self, backend, *, mode='ultra_low_latency', threshold=.5, device='cpu'):
         self.spec = self.capability(mode=mode, threshold=threshold, device=device)
@@ -153,55 +238,14 @@ class NemotronDiarization:
             self.backend = None
             self.closed = True
 
-    def _pcm(self, frame):
-        np = self.np
-        if (not isinstance(frame, InputFrame) or frame.modality != 'audio' or
-                type(frame.sample_rate) is not int or frame.sample_rate != 16000 or
-                not isinstance(frame.sensor, SensorMetadata) or len(frame.sensor.channels) != 1):
-            raise ValueError('explicit16kHz mono audio frame/channel metadata required')
-        identifier(frame.subject_id)
-        data = frame.data
-        if type(data) is bytes:
-            if not 320 <= len(data) <= 32000 or len(data) % 320:
-                raise ValueError('PCM16 must be10..1000ms in whole10ms blocks')
-            values = np.frombuffer(data, dtype='<i2').astype(np.float32) / 32768
-        else:
-            if (type(data) is not np.ndarray or data.dtype not in (np.dtype('int16'), np.dtype('float32')) or
-                    data.ndim not in (1, 2) or data.ndim == 2 and data.shape[1] != 1 or
-                    not 160 <= len(data) <= 16000 or len(data) % 160):
-                raise ValueError('mono int16/float32 of10..1000ms in whole10ms blocks required')
-            values = data.reshape(-1).astype(np.float32, copy=True)
-            if data.dtype == np.int16:
-                values /= 32768
-        if not np.isfinite(values).all() or np.max(np.abs(values)) > 1:
-            raise ValueError('PCM must be finite and normalized')
-        ts, duration = frame.timestamp_ms, len(values) // 16
-        if type(ts) is not int or not duration <= ts <= 2**53-1:
-            raise ValueError('integer capture-end timestamp must cover block duration')
-        return values, ts, duration
-
     def process(self, frame):
         with self._lock:
             if self.closed or self._finished:
                 raise RuntimeError('diarization session is closed/finished; reset before reuse')
             try:
-                values, ts, duration = self._pcm(frame)
-                sensor = frame.sensor
-                owner = (frame.subject_id, sensor.source_id, sensor.sensor_id, sensor.stream_epoch, sensor.channels,
-                         sensor.calibration_id, sensor.coordinate_frame, sensor.capture_sequence is not None)
-                seq = sensor.capture_sequence if sensor.capture_sequence is not None else sensor.sequence
-                if owner == self._owner and self._last:
-                    if ts <= self._last[0] or seq <= self._last[1]:
-                        raise ValueError('capture order must increase')
-                    if ts-duration != self._last[0] or seq != self._last[1]+1:
-                        self._clear()
-                elif self._owner is not None:
-                    self._clear()
-                if self._origin is None:
-                    self._origin = ts-duration
+                values = self._accept(frame)
                 self._buffer = self.np.concatenate((self._buffer, values))
                 self._received += len(values)
-                self._owner, self._last = owner, (ts, seq)
                 chunks = []
                 while len(self._buffer) >= (self.first_samples if self._cursor == 0 else self.later_samples):
                     count = self.first_samples if self._cursor == 0 else self.later_samples
@@ -221,15 +265,7 @@ class NemotronDiarization:
                 not np.isfinite(probabilities).all() or np.any(probabilities < 0) or np.any(probabilities > 1)):
             raise ValueError('invalid native frame probability grid/cache')
         start = self._origin+self._cursor*10
-        activity = []
-        for slot in range(8):
-            scores = probabilities[:, slot]
-            active = np.r_[False, scores > self.threshold, False].astype(np.int8)
-            edges = np.diff(active)
-            intervals = [[start+int(a)*10, start+int(b)*10]
-                         for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
-            activity.append(dict(slot=slot, intervals_ms=intervals,
-                                 mean_probability=float(scores.mean()), max_probability=float(scores.max())))
+        activity = slot_activity(np, probabilities, start, 10, self.threshold)
         self._cache = cache
         self._cursor += expected
         if not last:
@@ -240,13 +276,11 @@ class NemotronDiarization:
         return dict(start_ms=start, end_ms=start+expected*10, frame_ms=10, activity=activity)
 
     def _result(self, chunks, *, final):
-        return self.spec.validate({'diarization': dict(session_id=self._session, chunks=chunks,
-            capture_end_ms=self._last[0], final=final, mode=self.mode, threshold=self.threshold,
-            slot_count=8, identity_verified=False, slot_continuity_verified=False,
-            lookahead_ms=self.right_frames*10, source_revision=REVISION,
-            checkpoint_sha256=ARTIFACTS['model.safetensors'][1],
-            artifact_hashes_verified=self._artifacts_verified, quality_verified=False,
-            turn_boundaries_final=False, overlap_supported=True)})
+        return slot_record(self.spec, session_id=self._session, chunks=chunks, capture_end_ms=self._last[0],
+                           final=final, mode=self.mode, threshold=self.threshold,
+                           lookahead_ms=self.right_frames*10, source_revision=REVISION,
+                           checkpoint_sha256=ARTIFACTS['model.safetensors'][1],
+                           artifact_hashes_verified=self._artifacts_verified)
 
     def finish(self):
         with self._lock:

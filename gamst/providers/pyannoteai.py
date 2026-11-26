@@ -64,7 +64,7 @@ class PyannoteAI:
     """A few blocking HTTP calls (``urllib``); run them off the event loop."""
 
     def __init__(self, *, endpoint=ENDPOINT, api_key_env='PYANNOTEAI_API_KEY', model='precision-2',
-                 eur_per_hour, eur_per_voiceprint, allow_remote=False, matching_threshold=0,
+                 eur_per_hour, eur_per_voiceprint=.015, allow_remote=False, matching_threshold=0,
                  poll_s=2., timeout_s=600., out=None, **_):
         if allow_remote is not True:
             raise PermissionError('pyannoteAI is a hosted service: the audio leaves this device and each job is '
@@ -127,10 +127,13 @@ class PyannoteAI:
 
     # ------------------------------------------------------------------ paid calls
 
-    def _say(self, kind, cost, detail):
-        self.out.write(f'pyannoteAI {kind}: {detail}; expected cost {cost:.4f} EUR (list price, before any '
-                       f'included credit); the audio leaves this device\n')
+    def _write(self, line):
+        self.out.write(line + '\n')
         self.out.flush()
+
+    def _say(self, kind, cost, detail):
+        self._write(f'pyannoteAI {kind}: {detail}; expected cost {cost:.4f} EUR (list price, before any '
+                    f'included credit); the audio leaves this device')
 
     def voiceprint(self, samples):
         seconds = len(samples) / SAMPLE_RATE
@@ -157,6 +160,40 @@ class PyannoteAI:
         self.calls.append(dict(call='identify', seconds=round(seconds, 2), billed_s=round(billed, 2),
                                eur=round(cost, 6)))
         return output
+
+    def diarize(self, samples, *, exclusive=False):
+        """``/v1/diarize`` of the whole sound (offline): ``{"diarization": [{speaker, start, end}], ...}``."""
+        seconds = len(samples) / SAMPLE_RATE
+        billed = max(MIN_BILLED_S, seconds)
+        cost = billed / 3600 * self.eur_per_hour
+        self._say('diarize', cost, f'{seconds:.1f} s of audio (billed as {billed:.1f} s), model {self.model}, '
+                                   f'{self.eur_per_hour} EUR/h')
+        body = {'url': self.upload(samples), 'model': self.model}
+        if exclusive:
+            body['exclusive'] = True
+        output = self._job(self._request('POST', '/v1/diarize', body))
+        self.spent_eur += cost
+        self.calls.append(dict(call='diarize', seconds=round(seconds, 2), billed_s=round(billed, 2),
+                               eur=round(cost, 6)))
+        return output
+
+    def live_stream(self, *, heartbeat_ms=200):
+        """``POST /v1/live`` -> the single-use WebSocket URL of one Live-1 stream (billed by streamed duration)."""
+        self._say('live stream', MIN_BILLED_S / 3600 * self.eur_per_hour,
+                  f'Live-1 at {self.eur_per_hour} EUR/h of streamed audio, {MIN_BILLED_S:.0f} s minimum per stream; '
+                  f'the cost shown is that minimum')
+        return self._request('POST', '/v1/live', {'heartbeat': {'enabled': True, 'interval': int(heartbeat_ms)}})['url']
+
+    def streamed(self, seconds):
+        """Book one finished stream: billed by the seconds sent, 20 s minimum."""
+        if seconds <= 0:
+            return
+        billed = max(MIN_BILLED_S, seconds)
+        cost = billed / 3600 * self.eur_per_hour
+        self.spent_eur += cost
+        self.calls.append(dict(call='live', seconds=round(seconds, 2), billed_s=round(billed, 2), eur=round(cost, 6)))
+        self._write(f'pyannoteAI live stream ended: {seconds:.1f} s streamed (billed as {billed:.1f} s), '
+                    f'about {cost:.4f} EUR at list price')
 
 
 def turns(output, label, offset_ms):

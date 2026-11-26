@@ -421,6 +421,78 @@ def _sapiens2(size, revision, sha, count):
 LIGHT_ASD_SOURCE = {"url": "https://github.com/Junhua-Liao/Light-ASD", "revision": "ed38c232de5efe0261dbd68627c0ade7cdfe14eb"}
 
 
+# audio.diarization beside nemotron3. Every candidate emits the same slot record (gamst.providers.diarization.slot_record);
+# measured on one 54 s Korean shop clip, Mac M2 Pro CPU, 2026-11-26: docs/measurements/diarization-2026-11-26.md.
+DIAR_DOC = "docs/measurements/diarization-2026-11-26.md"
+SORTFORMER_REV = "cd03eee90fbec18297ac31b8c21546e596b7f71c"
+DIARIZEN_REV = "027b3e221b9d81dce2be794084f1dbd3ba2da403"
+COMMUNITY1_REV = "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
+PYANNOTEAI_HOSTED = {"endpoint": "https://api.pyannote.ai", "api_key_env": "PYANNOTEAI_API_KEY", "allow_remote": False}
+DIARIZATION_CANDIDATES = {
+    "sortformer.v2_1": _candidate(
+        "sortformer.v2_1", "sortformer.diarization",
+        ("nemo_toolkit[asr]==3.0.0", "torch==2.8.0", "torchaudio==2.8.0", "numpy<2.4"), ("cpu", "cuda"),
+        4096, 2048, 1800, {"ram": "measured 1.7 GB peak RSS on Mac CPU", "vram": "estimated", "disk": "measured: env 1.3 GB, weights 0.47 GB"},
+        "LIVE. Weights: NVIDIA Open Model License (model card license_name nvidia-open-model-license); NeMo Apache-2.0",
+        "Live 4-slot streaming; per-frame output identical to NeMo's own streaming loop (20 s of the clip, both modes). "
+        "Mac M2 Pro CPU: real-time factor 1.42 (low_latency) and 2.29 (ultra_low_latency), so slower than real time on that CPU. "
+        "The person's words and the other voices' words were in the same slot. " + DIAR_DOC,
+        (_weight("diar_streaming_sortformer_4spk-v2.1.nemo", HF + "/nvidia/diar_streaming_sortformer_4spk-v2.1/resolve/" + SORTFORMER_REV + "/diar_streaming_sortformer_4spk-v2.1.nemo",
+                 "8abd32832159c6ac1148c926b7276f35ba34582c444e559dce1f1253fea42ef8", 471367680, "publisher metadata; downloaded"),),
+        environment="sortformer", python="3.11", bundle=True, config={"mode": "low_latency", "device": "cpu"}),
+    "pyannoteai.live1.hosted": _candidate(
+        "pyannoteai.live1.hosted", "pyannoteai.live.diarization", ("websockets==17.4", "numpy>=1.24"), ("cpu",), 256, 0, 0, ESTIMATED,
+        "LIVE, hosted: pyannoteAI terms; the audio leaves the device (EEA servers for streams); billed by streamed duration, 20 s minimum per stream",
+        "Live-1 WebSocket, up to 8 speakers. One 54 s run: 0.70 s median / 0.81 s p95 from capture to slot record "
+        "(first record 5.5 s after the stream opened). Like the local live models, it put the person and the other voices "
+        "in the same slots. 0.198 EUR/h on the Developer plan (pyannote.ai/pricing, 2026-11-26). " + DIAR_DOC,
+        environment="pyannoteai-live", automatic=False,
+        config={**PYANNOTEAI_HOSTED, "model": "live-1", "eur_per_hour": 0.198, "heartbeat_ms": 200}),
+    "pyannoteai.precision3.offline": _candidate(
+        "pyannoteai.precision3.offline", "pyannoteai.offline.diarization", ("numpy>=1.24",), ("cpu",), 256, 0, 0, ESTIMATED,
+        "REFERENCE, NOT LIVE (one record when the session ends), hosted: pyannoteAI terms; the audio leaves the device; billed per job, 20 s minimum",
+        "Offline reference. On the clip one slot held all 10 of the person's words; 2 of the other voices' 5 words were in it too, both during overlap. "
+        "54.3 s took 12.7 s end to end, upload included. 0.112 EUR/h (Developer plan, 2026-11-26). " + DIAR_DOC,
+        environment="pyannoteai-hosted", automatic=False,
+        config={**PYANNOTEAI_HOSTED, "model": "precision-3", "eur_per_hour": 0.112}),
+    "pyannoteai.community1.offline": _candidate(
+        "pyannoteai.community1.offline", "pyannoteai.offline.diarization", ("numpy>=1.24",), ("cpu",), 256, 0, 0, ESTIMATED,
+        "REFERENCE, NOT LIVE, hosted: pyannoteAI terms (the community-1 model is CC BY 4.0); the audio leaves the device; billed per job",
+        "Offline reference. On the clip almost everything was one slot, both the person and the other voices. 0.035 EUR/h (2026-11-26). " + DIAR_DOC,
+        environment="pyannoteai-hosted", automatic=False,
+        config={**PYANNOTEAI_HOSTED, "model": "community-1", "eur_per_hour": 0.035}),
+    "diarizen.large_s80_v2": _candidate(
+        "diarizen.large_s80_v2", "offline.diarization",
+        ("diarizen @ git+https://github.com/BUTSpeechFIT/DiariZen.git@844f5555b0a98acd0931511fc641a8c5b8ba92c7",
+         "pyannote.audio @ git+https://github.com/BUTSpeechFIT/DiariZen.git@844f5555b0a98acd0931511fc641a8c5b8ba92c7#subdirectory=pyannote-audio",
+         "torch==2.1.1", "torchaudio==2.1.1", "numpy==1.26.4", "transformers==4.46.3", "speechbrain==1.1.1", "accelerate", "psutil", "toml", "scipy", "einops", "soundfile"),
+        ("cpu", "cuda"), 12288, 4096, 1100, {"ram": "measured 10.9 GB peak RSS on Mac CPU (batch 32)", "vram": "estimated", "disk": "measured: env 0.7 GB, weights 0.3 GB"},
+        "OPT-IN, REFERENCE, NOT LIVE: DiariZen weights CC BY-NC 4.0, non-commercial/research only (allow_noncommercial); code MIT; "
+        "WeSpeaker ResNet34 embedding and PLDA CC BY 4.0",
+        "Offline reference (published: best open model on Voice Arena Diarization-Bench v1 after Nemotron 3). On the clip one slot held all 10 of the person's words; "
+        "2 of the other voices' 5 words were in it too, both during overlap. Mac CPU real-time factor 1.22. " + DIAR_DOC,
+        (_weight("config.toml", HF + "/BUT-FIT/diarizen-wavlm-large-s80-md-v2/resolve/" + DIARIZEN_REV + "/config.toml", "6eb3dab9c3892efc4a271ef5f88b5453e6e96789961084a15e88ca352de98503", 657, "downloaded"),
+         _weight("pytorch_model.bin", HF + "/BUT-FIT/diarizen-wavlm-large-s80-md-v2/resolve/" + DIARIZEN_REV + "/pytorch_model.bin", "689a10f0cbde6345b4bf9b1670cf3196488634b34e5b07bea0fe40d508e1196b", 278071526, "publisher metadata; downloaded"),
+         _weight("plda/plda.npz", HF + "/BUT-FIT/diarizen-wavlm-large-s80-md-v2/resolve/" + DIARIZEN_REV + "/plda/plda.npz", "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255", 133852, "publisher metadata; downloaded"),
+         _weight("plda/xvec_transform.npz", HF + "/BUT-FIT/diarizen-wavlm-large-s80-md-v2/resolve/" + DIARIZEN_REV + "/plda/xvec_transform.npz", "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f", 134376, "publisher metadata; downloaded"),
+         _weight("embedding/pytorch_model.bin", HF + "/pyannote/wespeaker-voxceleb-resnet34-LM/resolve/837717ddb9ff5507820346191109dc79c958d614/pytorch_model.bin", "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56", 26645418, "publisher metadata; downloaded")),
+        environment="diarizen", python="3.11", automatic=False, bundle=True,
+        source={"url": "https://github.com/BUTSpeechFIT/DiariZen", "revision": "844f5555b0a98acd0931511fc641a8c5b8ba92c7"},
+        config={"backend": "diarizen", "allow_noncommercial": False}),
+    "pyannote.community1": _candidate(
+        "pyannote.community1", "offline.diarization", ("pyannote.audio==4.1.1", "torch==2.8.0", "torchaudio==2.8.0"), ("cpu", "mps", "cuda"),
+        4096, 0, 40, ESTIMATED,
+        "REFERENCE, NOT LIVE: CC BY 4.0 weights; gated: the owner accepts the conditions of pyannote/speaker-diarization-community-1 on Hugging Face",
+        "Adapter written; not run here (the gate needs the owner's Hugging Face account). The hosted pyannoteai.community1.offline was run instead. " + DIAR_DOC,
+        tuple(_weight(name, HF + "/pyannote/speaker-diarization-community-1/resolve/" + COMMUNITY1_REV + "/" + name, sha, size, "publisher metadata")
+              for name, sha, size in (("segmentation/pytorch_model.bin", "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e", 5906507),
+                                      ("embedding/pytorch_model.bin", "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929", 26646242),
+                                      ("plda/plda.npz", "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255", 133852),
+                                      ("plda/xvec_transform.npz", "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f", 134376))),
+        environment="pyannote-community1", python="3.11", automatic=False, bundle=True, config={"backend": "community-1"}),
+}
+
+
 def _light_asd(name, filename, sha, license_name, verification, **kwargs):
     return _candidate(
         name, "active_speaker.lightasd", ("torch==2.8.0", "numpy>=1.24", "scipy>=1.10"), ("cpu", "cuda"),   # MPS lacks an operator it uses
@@ -517,6 +589,7 @@ ROLES = {
     }, _defaults("yamnet")),
     "audio.diarization": Role("audio.diarization", "Streaming speaker activity slots, not identity", {
         "nemotron3": _candidate("nemotron3", "nemotron3.diarization", ("transformers==5.23.0", "torch==2.8.0", "safetensors==0.8.0", "numpy>=1.24"), ("cpu", "cuda"), 4096, 1100, 3500, {"ram": "estimated", "vram": "VERIFY.md measured 1100 MiB", "disk": "estimated"}, "OpenMDW-1.1 declared; redistribution review required", "VERIFY.md: real-audio success, 1.5 ms/80 ms block, 13.8 ms p95", tuple(_weight(name, HF + "/nvidia/Nemotron-3-Diarization/resolve/" + DIAR_REV + "/" + name, sha, size, "GAMST diarization.py pinned bytes") for name, size, sha in (("config.json", 1458, "dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873"), ("processor_config.json", 623, "91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e"), ("model.safetensors", 396954592, "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6"))), environment="nemotron3", python="3.11", bundle=True),
+        **DIARIZATION_CANDIDATES,
     }, _defaults("nemotron3"), ("audio.vad",)),
     "audio.prosody": Role("audio.prosody", "Pitch/energy/rate DSP features", {
         "dsp": _candidate("dsp", "audio.prosody", ("numpy>=1.24",), ("cpu",), 128, 0, 50, ESTIMATED, "Apache-2.0", "Deterministic GAMST DSP; not emotion recognition", environment="audio-dsp"),
