@@ -389,6 +389,18 @@ def _sapiens2(size, revision, sha, count):
         environment="sapiens2", python="3.11", automatic=False, config={})
 
 
+LIGHT_ASD_SOURCE = {"url": "https://github.com/Junhua-Liao/Light-ASD", "revision": "ed38c232de5efe0261dbd68627c0ade7cdfe14eb"}
+
+
+def _light_asd(name, filename, sha, license_name, verification, **kwargs):
+    return _candidate(
+        name, "active_speaker.lightasd", ("torch==2.8.0", "numpy>=1.24", "scipy>=1.10"), ("cpu", "cuda"),   # MPS lacks an operator it uses
+        1024, 0, 400, ESTIMATED, license_name, verification,
+        (_weight(filename, f"https://raw.githubusercontent.com/Junhua-Liao/Light-ASD/{LIGHT_ASD_SOURCE['revision']}/weight/{filename}",
+                 sha, 4175289, "pinned source bytes"),),
+        environment="lightasd", source=LIGHT_ASD_SOURCE, config={"device": "cpu"}, **kwargs)
+
+
 def _vlm_endpoint(name, model, revision, license_name, verification, *, automatic=True, **config):
     return _candidate(
         name, "streamingvlm.local", (), ("cpu", "mps", "cuda"), 128, 0, 0, ESTIMATED, license_name, verification,
@@ -497,6 +509,15 @@ ROLES = {
         "lvface.t": _lvface("T", "bf8da0e1e93c432d9a1d874a9ba0990f5859f970e8864b3990f2f33d11f9cdb3", 76653813, "Not run"),
         "lvface.b": _lvface("B", "9d834ed8e927fd35b9123b2bf97c40aad05785b1f9ecfb1c4c1f6242d38d1382", 455533594, "Not run; same adapter as lvface.t"),
     }, _defaults("lvface.b")),
+    "vision.active_speaker": Role("vision.active_speaker", "Which visible face is speaking: lips that move with the sound (with vision.face and, for the enrolled person, vision.face_identity)", {
+        "lightasd.ava": _light_asd("lightasd.ava", "pretrain_AVA_CVPR.model", "d44bc3ea7baa8e0946fa3921311714a630ed8b90a1928fab0dbe30d918909317",
+                                   "MIT (code and weights, Junhua-Liao/Light-ASD); trained on AVA-ActiveSpeaker (its terms not checked here)",
+                                   "Upstream: 94.06 mAP on AVA-ActiveSpeaker val. GAMST: one 54 s shop clip, 2026-11-26 (docs/measurements/av-speaker-2026-11-26.md)"),
+        "lightasd.talkset": _light_asd("lightasd.talkset", "finetuning_TalkSet.model", "efc375833887eefa9d209dc92810e18519b04c3c73ea35a549f2a7f40b7d94d5",
+                                       "OPT-IN: MIT code; fine-tuned on TalkSet (VoxCeleb2 + LRS3, LRS3 non-commercial): allow_noncommercial",
+                                       "Upstream: 95.5 F1 on Columbia ASD. GAMST: same clip as lightasd.ava",
+                                       automatic=False),
+    }, _defaults("lightasd.ava"), ("vision.face",)),
     "vision.body_identity": Role("vision.body_identity", "Short-horizon body match of the enrolled person (needs a consent record)", {
         "solider.swin_b_msmt17": _candidate("solider.swin_b_msmt17", "body.embedding", ("torch>=2.2", "torchvision", "yacs", "opencv-python>=4.8,<5", "numpy>=1.24"), ("cuda",), 4096, 2048, 2000, ESTIMATED, "MIT (SOLIDER-REID), Apache-2.0 (SOLIDER); MSMT17 data terms require review", "Adapter written from source; not run. Checkpoint is on Google Drive only, no published digest", (_weight("transformer_120.pth", "https://drive.google.com/file/d/1Y-RFAYdT56vnMjwxH1Ym3DVhZzZuMQZs/view", None, 0, "size unknown"),), environment="solider", automatic=False, source={"url": "https://github.com/tinyvision/SOLIDER-REID", "revision": "8c08e1c3255e8e1e51e006bf189e52cc57b009ed"}, config={}),
     }, _defaults("solider.swin_b_msmt17"), ("vision.pose",)),

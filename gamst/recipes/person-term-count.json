@@ -5,7 +5,8 @@
   "hardware": {
     "min_fps": null,
     "microphone": "16 kHz mono",
-    "compute": "CPU (CAM++ speaker embedding, faster-whisper small)"
+    "compute": "CPU (CAM++ speaker embedding, faster-whisper small)",
+    "camera": "only with --with lips: the same capture's video (a video file gives both)"
   },
   "inputs": [
     {
@@ -14,6 +15,14 @@
       "sources": [
         "microphone",
         "audio",
+        "video"
+      ]
+    },
+    {
+      "id": "camera",
+      "use": "camera",
+      "sources": [
+        "camera",
         "video"
       ]
     }
@@ -27,6 +36,14 @@
         "speaker",
         "target_voice",
         "speaker_check"
+      ]
+    },
+    {
+      "name": "person",
+      "kind": "person",
+      "label": "the enrolled face (gamst recipe enroll person-action-count --kind person)",
+      "for": [
+        "lips"
       ]
     },
     {
@@ -102,13 +119,61 @@
       "words": true
     },
     {
+      "name": "faces",
+      "use": "face-points",
+      "in": "lips",
+      "optional": "off",
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "face_identity",
+      "use": "face-identity",
+      "in": "lips",
+      "optional": "off",
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "lips",
+      "use": "active-speaker",
+      "reference": "person",
+      "consumes": [
+        "camera",
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "speaker_lips",
+      "use": "speaker-evidence",
+      "consumes": [
+        "speaker_check",
+        "lips"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "lips"
+      ]
+    },
+    {
       "name": "terms",
       "use": "terms",
       "reference": "terms",
       "consumes": [
-        "speaker_check"
+        "speaker_lips"
       ],
       "consumes_without": {
+        "speaker_lips": [
+          "speaker_check"
+        ],
         "speaker_check": [
           "asr:speech.transcript_words"
         ]
@@ -120,6 +185,6 @@
   "records": [
     "speech.term_events"
   ],
-  "limits": "overlapping voices are not separated by default (--with target_voice mutes other voices before the words are read; a separation model can replace it in a copy of this recipe); the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound)",
-  "measured": "one 54 s clip of several people in a noisy shop (2026-11-26): see docs/measurements/testbed-2026-11-26.md"
+  "limits": "overlapping voices are not separated by default (--with target_voice mutes other voices before the words are read; a separation model can replace it in a copy of this recipe); the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound); --with lips (off by default) consults faces only for words whose voice score is in the ambiguous band, and only faces that pass the gate (size, turn, mouth in the picture, sharpness); it needs an enrolled face (--person) and the camera of the same capture",
+  "measured": "one 54 s clip of several people in a noisy shop (2026-11-26): see docs/measurements/testbed-2026-11-26.md; --with lips on the same clip changed no word (0 fixes, 0 breaks): docs/measurements/av-speaker-2026-11-26.md"
 }

@@ -138,9 +138,9 @@ class MediaPipeVideoContext:
         return self._run(frame)[0]
 
     def query(self, frame, request=None):
-        """Body only: (public value, joint rows) for the module that owns this worker."""
-        if self.kind != 'body':
-            raise ValueError('only body video has a private payload')
+        """Body and face: (public value, point rows) for the module that owns this worker."""
+        if self.kind not in ('body', 'face'):
+            raise ValueError('only body and face video have a private payload')
         return self._run(frame, private=True)
 
     def _run(self, frame, private=False):

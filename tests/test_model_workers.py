@@ -118,7 +118,7 @@ LOADERS = {
     'emotion2vec.seed.onnx': 'vocal_expression', 'factorizephys.local': 'factorizephys_context',
     'silero.activity': 'vad', 'qwen3.forced_aligner': 'asr_words', 'speaker.embedding': 'speaker_verify',
     'face.embedding': 'person_match', 'body.embedding': 'person_match', 'target_speech.local': 'target_speech',
-    'sapiens2.pose': 'sapiens2_pose', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
+    'sapiens2.pose': 'sapiens2_pose', 'active_speaker.lightasd': 'active_speaker', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None, 'faster_whisper.large_v3_turbo': None,
     'pg.physical.local': None, 'opencv': None, 'sounddevice': None, 'pillow': None,   # no version check in a provider file
 }

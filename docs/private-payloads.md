@@ -14,6 +14,7 @@ Joint positions, identity embeddings and separated waveforms are answers for one
 |---|---|---|
 | `mediapipe.body.video` (also has a public mode) | 33 x (x, y, visibility, presence), at most 4 people | `PoseWorkerPlugin` |
 | `sapiens2.pose` | 308 x (x, y, visibility), at most 8 people | `Sapiens2PosePlugin` |
+| `mediapipe.face.video` (also has a public mode) | 9 x (x, y): ArcFace five, inner lips, extent; at most 4 faces | `ActiveSpeaker` (`gamst/providers/active_speaker.py`) |
 | `speaker.embedding`, `face.embedding`, `body.embedding` | one vector, 16..4096 | `SpeakerVerify`, `TargetPerson`, enrollment |
 | `target_speech.local` | samples, exactly as many as the block | `TargetSpeech`, `SAMSpanSpeech` |
 

@@ -19,6 +19,8 @@ profile                    worker (real model)                                  
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
 =========================  ==================================================  ====================
 
+``active_speaker.lightasd`` (Light-ASD: face crops and sound -> speaking logits) answers ``RemoteActiveSpeaker``.
+
 Every config names local files. Model identity must be known before the worker starts (an enrollment
 made with another model is refused), so the weight's ``sha256`` is required.
 """
@@ -43,6 +45,7 @@ FIELDS = {
     'faster_whisper.words': ('audio', (OutputField('transcripts', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
+    'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
 
@@ -53,7 +56,8 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2'}.get(profile) or {
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2',
+            'active_speaker.lightasd': 'lightasd'}.get(profile) or {
         'usef': 'usef-tfgridnet', 'sam-span': 'sam-audio'}.get(config.get('backend'), config.get('backend'))
     return f'{name}:{digest[:16]}'
 
@@ -65,6 +69,9 @@ def capability(profile, config):
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
     if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
         raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
+    if profile == 'active_speaker.lightasd':
+        from .active_speaker import check_weights
+        check_weights(config.get('sha256'), config.get('allow_noncommercial', False))
     if not (profile == 'faster_whisper.words' and 'sha256' not in config):
         model_id(profile, config)
     digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -181,6 +188,18 @@ class _Pose(_Worker):
                     image_width=int(width), image_height=int(height)), joints
 
 
+class _ActiveSpeaker(_Worker):
+    """One window of one face: ``frame.data`` is ``active_speaker.pack_window``, the request says how many frames."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def process_regions(self, frame, request):
+        from .active_speaker import unpack_window
+        faces, pcm = unpack_window(frame.data, request['frames'])
+        return dict(scores=[round(float(value), 4) for value in self.model.scores(faces, pcm)])
+
+
 def load(profile, config):
     """Build the real model in the worker's interpreter."""
     capability(profile, config)
@@ -218,6 +237,10 @@ def load(profile, config):
             from .whisper_phrases import PhraseWorker, WhisperPhrases
             return _Whisper(PhraseWorker(WhisperPhrases(plugin, **phrases)))
         return _Whisper(WhisperWords(plugin))
+    if profile == 'active_speaker.lightasd':
+        from .active_speaker import LightASD
+        return _ActiveSpeaker(LightASD.from_local(config.pop('source_dir'), config.pop('checkpoint_path'),
+                                                  config.pop('sha256'), **config))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))
@@ -320,3 +343,17 @@ class RemotePose(_Client):
                      image_width=result['image_width'], image_height=result['image_height'],
                      landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
                 for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
+
+
+class RemoteActiveSpeaker(_Client):
+    """Light-ASD in its own environment: (face crops, PCM16) of one face -> one speaking logit per crop."""
+
+    async def scores(self, faces, pcm):
+        from .active_speaker import pack_window
+        self._sequence += 1
+        frame = InputFrame(pack_window(faces, pcm), 'video', 0, 'local-user', None,
+                           SensorMetadata(source_id='gamst.model', sensor_id='lips', sequence=self._sequence))
+        result = await self.worker.process_regions(frame, dict(frames=len(faces)))
+        if len(result['scores']) != len(faces):
+            raise ValueError('Light-ASD returned another number of scores than faces')
+        return result['scores']

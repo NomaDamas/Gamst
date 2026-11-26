@@ -13,7 +13,8 @@ aligner) the event gets the matching words' times; otherwise the utterance's tim
 Which voice a transcript belongs to is decided upstream: feed this module the transcript of a
 derived input (one enrolled person's separated voice) to count what that person said. A transcript
 that carries ``speaker: {"match": false}`` (re-checked by ``gamst.providers.speaker_verify``) is not
-counted.
+counted. Where a word also says what decided it (``decided_by`` and ``lips`` of
+:mod:`gamst.providers.speaker_evidence`), its event says so too.
 
 Each event says how its term was given (``method``: ``text``, or ``examples`` of ``gamst recipe enroll --kind
 terms``, with ``confirmed``) and, when nothing upstream ties the sound to an enrolled voice, ``speaker:
@@ -253,8 +254,10 @@ class TermEvents:
                     speaker = value['speaker'] if isinstance(value.get('speaker'), dict) else {}
                     other, score = speaker.get('match') is False, speaker.get('score')
                     checked = [word for word in (times[2] if times else ()) if type(word.get('match')) is bool]
+                    decided = {}
                     if checked:      # each word's own voice, where people share a phrase
                         other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
+                        decided = {key: checked[0][key] for key in ('decided_by', 'lips') if key in checked[0]}
                     if other and not self.report_others:
                         continue
                     if not other:
@@ -266,7 +269,7 @@ class TermEvents:
                                        **words.identity, utterance_id=value.get('utterance_id'), start_ms=start_ms,
                                        end_ms=end_ms, word_timed=times is not None, **words.origin,
                                        **({'across_change': True} if across else {}),
-                                       **({} if score is None else {'speaker_score': score}),
+                                       **({} if score is None else {'speaker_score': score}), **decided,
                                        **({} if self.speaker_bound else {'speaker': 'not_bound'})))
         if not events:
             return None

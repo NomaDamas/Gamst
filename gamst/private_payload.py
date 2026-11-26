@@ -54,7 +54,7 @@ class Contract:
     def check_public(self, public, shape):
         """The two parts must describe the same answer."""
         if self.kind == 'joints':
-            consistent = public is not None and len(public['poses']) == shape[0]
+            consistent = public is not None and len(public['poses' if 'poses' in public else 'faces']) == shape[0]
         elif self.kind == 'embedding':
             consistent = public is not None and public['usable'] == (shape[0] > 0)
         else:
@@ -66,6 +66,7 @@ class Contract:
 CONTRACTS = {
     'mediapipe.body.video': Contract('joints', 33, ('x', 'y', 'visibility', 'presence'), 4, 100., private_only=False),
     'sapiens2.pose': Contract('joints', 308, ('x', 'y', 'visibility'), 8, 100.),
+    'mediapipe.face.video': Contract('joints', 9, ('x', 'y'), 4, 100., private_only=False),
     'speaker.embedding': Contract('embedding', max_items=4096),
     'face.embedding': Contract('embedding', max_items=4096),
     'body.embedding': Contract('embedding', max_items=4096),

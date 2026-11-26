@@ -155,6 +155,40 @@ async def _target_person(options, context):
                                     emits=emits[0] if emits else None, joints=joints, **arguments))
 
 
+async def _active_speaker(options, context):
+    """Lips that move with the sound, per face; its ``face-points`` and ``face-identity`` stages run inside it."""
+    from ..providers.active_speaker import ActiveSpeaker, RemoteFacePoints
+    stages = list(context.get('stages', {}).values())
+    points = next((item for item in stages if item['use'] == 'face-points'), None)
+    identity = next((item for item in stages if item['use'] == 'face-identity'), None)
+    if points is None:
+        raise SystemExit('active-speaker needs a face-points stage ("in": "<this module>")')
+    config, python, _ = _entry(points, context, 'mediapipe.face.video')
+    opened = [await RemoteFacePoints.open(python, config)]
+    try:
+        opened.append(await _open('RemoteActiveSpeaker', _entry(options, context, 'active_speaker.lightasd')))
+        opened.append(await face_embedder(identity, context) if identity is not None else None)
+    except BaseException:
+        for worker in opened:
+            await worker.close()
+        raise
+    faces, lips, embedder = opened
+    arguments = {name: options[name] for name in ('hop_ms', 'lookahead_ms', 'context_ms', 'min_face_px', 'max_yaw',
+                                                  'min_sharpness', 'identity_every_ms') if name in options}
+    module = ActiveSpeaker(faces, lips, embedder, reference=options.get('reference', 'person'), **arguments)
+    return dict(module=module, spec=module.spec)
+
+
+async def _speaker_evidence(options, context):
+    from ..providers.speaker_evidence import SpeakerEvidence
+    arguments = {name: options[name] for name in ('low', 'high', 'margin_ms', 'min_slots', 'speaking_logit',
+                                                  'face_threshold', 'face_reject') if name in options}
+    threshold = context.get('speaker_threshold')
+    module = SpeakerEvidence(threshold=float(options.get('threshold', .5) if threshold is None else threshold),
+                             **arguments)
+    return dict(module=module, spec=module.spec)
+
+
 async def _sapiens2_pose(options, context):
     from ..providers.sapiens2_pose import Sapiens2PosePlugin
     entry = _entry(options, context, 'sapiens2.pose')
@@ -365,6 +399,10 @@ def parts(Part):
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
         'sapiens2-pose': Part('module', role='vision.pose', candidate='sapiens2.1b', build=_sapiens2_pose),
+        'active-speaker': Part('module', role='vision.active_speaker', candidate='lightasd.ava', build=_active_speaker),
+        'face-points': Part('module', role='vision.face', candidate='mediapipe.face'),        # a stage of active-speaker
+        'face-identity': Part('module', role='vision.face_identity', candidate='lvface.b'),   # a stage of active-speaker
+        'speaker-evidence': Part('module', build=_speaker_evidence),
         'semantic-scene': Part('module', role='vision.semantic_scene', candidate='qwen3.5.endpoint',
                                build=_semantic_scene),
     }

@@ -565,6 +565,8 @@ def _role_config(selection, weight_paths, source_dir):
     elif model.startswith("efficienttam."):
         config.update(checkpoint_path=first["path"], checkpoint_sha256=first["sha256"], source_dir=source_dir,
                       runtime_root=str(Path(first["path"]).parent / "runtime"))
+    elif model.startswith("lightasd."):
+        config.update(checkpoint_path=first["path"], sha256=first["sha256"], source_dir=source_dir)
     elif model == "factorizephys":
         config.update(checkpoint_path=first["path"], checkpoint_sha256=first["sha256"], source_dir=source_dir)
     return config

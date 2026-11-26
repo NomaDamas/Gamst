@@ -51,10 +51,18 @@ def mfcc(pcm):
     See docs/licenses/python-speech-features-MIT.txt. No normalization/padding.
     """
     import numpy as np
-    from scipy.fftpack import dct
     if (type(pcm) is not np.ndarray or pcm.dtype != np.dtype('int16') or pcm.ndim != 1 or
             len(pcm) not in tuple(n*640+240 for n in (25, 50, 75, 100, 125, 150))):
         raise ValueError('exact bounded PCM16 audiovisual window required')
+    return mfcc_frames(pcm)
+
+
+def mfcc_frames(pcm):
+    """The same features for any PCM16 of at least 400 samples: one row per 160 samples (whole frames only)."""
+    import numpy as np
+    from scipy.fftpack import dct
+    if type(pcm) is not np.ndarray or pcm.dtype != np.dtype('int16') or pcm.ndim != 1 or len(pcm) < 400:
+        raise ValueError('PCM16 mono of at least 400 samples required')
     signal = pcm.astype(np.float64)
     emphasized = np.r_[signal[0], signal[1:]-.97*signal[:-1]]
     frames = np.lib.stride_tricks.sliding_window_view(emphasized, 400)[::160]
@@ -76,9 +84,10 @@ def mfcc(pcm):
     return features.astype(np.float32)
 
 
-def _classes(blobs):
+def _classes(blobs, entry=('talkNetModel', 'talkNetModel')):
     # Only exact hash-verified upstream bytes reach this function. Rewrite the
-    # three absolute model imports into a unique temporary package namespace.
+    # absolute ``from model.`` imports into a unique temporary package namespace.
+    # ``blobs`` are in dependency order; ``entry`` is (module, class) to return.
     package = '_gamst_talknet_'+uuid.uuid4().hex
     root = types.ModuleType(package)
     root.__path__ = []
@@ -93,7 +102,7 @@ def _classes(blobs):
             sys.modules[name] = module
             source = blob.decode('utf-8').replace('from model.', 'from '+package+'.')
             exec(compile(source, filename, 'exec'), module.__dict__)
-        return modules[package+'.talkNetModel'].talkNetModel
+        return getattr(modules[package+'.'+entry[0]], entry[1])
     finally:
         for name, module in modules.items():
             if sys.modules.get(name) is module:
