@@ -98,8 +98,24 @@ unanswered turn, no queued record there) by `near_ms`, so a catch-up worker neve
   heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
   occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
   `"rule": {"vote": true}`.
-- **Majority** (`decide: "majority"`; the recipe sets it, with `vote`, when the item reads another recogniser: `--with
-  vote` adds `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary): an occurrence is **said** when at
+- **Primary first** (`decide: "primary"`, owner decision 31: "the state of the art comes first; weaker models must not
+  win by a vote"; the recipe sets it, with `vote`, when the item reads another recogniser: `--with vote` adds
+  `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary). The first hearing is the **primary**
+  recogniser: the recipe's live `asr` item, i.e. the registry's `audio.asr` default, chosen by published results (today
+  ElevenLabs Scribe v3 Live). A primary word another recogniser also wrote within `near_ms` is said (the voice rule
+  decides who). A word only the primary wrote **stands** (the voice rule decides who) unless it is **contested**: the
+  other recognisers (`contest_by: "all"` of those the item reads, default, or `"any"`) wrote other words within
+  `near_ms` of it, i.e. heard speech there and wrote something else. A contested word is **vetoed** (revoked, reason
+  `vetoed`) only when the primary's own confidence in it is low too (`low_confidence`, a probability: the lowest
+  `confidence` or `exp(logprob)` of its words; default `null` = no veto, because on the owner clips the primary's
+  confidence does not separate its invented word from true ones, see "Primary confidence" below); otherwise it is
+  `uncertain` (`contested: "uncertain"`, default: reason `contested`, shown, not counted, never "not said") or stands
+  (`contested: "stand"`). A contested word the voice gives to another speaker stays that speaker's (`other_speaker`).
+  Words only the other recognisers wrote are added as under majority (`add: "agreed"`: two of them, or one alone with a
+  clear voice) or whenever one wrote it (`add: "any"`). Verdict bases: `primary+uncontested+<voice>`,
+  `primary+contested(second+third)+<voice>`, `...+low_confidence`; the verdict carries `primary_confidence` when the
+  recogniser gave one.
+- **Majority** (`decide: "majority"`, an option since decision 31; before, the recipe default with voters): an occurrence is **said** when at
   least two of the recognisers (the first hearing, the second one, the voters) wrote the same word within `near_ms`
   (paired one to one, nearest first); the voice rule then decides who. An occurrence only one of them wrote is revoked
   (`heard_by_one`), or not added, unless `keep_single` (on) and no other recogniser wrote anything within `near_ms` of it
