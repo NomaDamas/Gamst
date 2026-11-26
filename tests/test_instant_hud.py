@@ -88,9 +88,9 @@ if __name__ == '__main__':
 class SameClipVoiceTest(unittest.TestCase):
     def test_the_main_speaker_is_who_speaks_alone_longest(self):
         from gamst.recipes.enrollment import choose_main_speaker
-        turns = [(0., 4., 'A'), (3., 9., 'B'), (10., 12., 'A')]
+        turns = [(0., 4., 'A'), (3., 10., 'B'), (11., 12., 'A')]
         speaker, pieces, seconds = choose_main_speaker(turns, 0., 15.)
-        self.assertEqual((speaker, pieces, seconds), ('B', [(4., 9.)], 5.))
+        self.assertEqual((speaker, pieces, seconds), ('B', [(4., 10.)], 6.))
         self.assertIsNone(choose_main_speaker([], 0., 15.))
 
     def test_owner_scores_count_repetitions_and_leave_out_the_voice_reference(self):
