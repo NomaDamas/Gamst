@@ -22,14 +22,16 @@ Don't push.
 ## Done (committed)
 - A. `SpeakerVerify(l1={policy, clear_other, clear_margin})` (`gamst/providers/speaker_verify.py`, module doc "L1
   policy"): `instant` = a provisional word counts at once (also without a score) unless its score < `clear_other`
-  (default 0.2) or, with the v2 bank, a known other voice is closer by `clear_margin` (default off); `threshold` = old.
+  (default 0.1; first 0.2, lowered after a person word scored 0.15 offline) or, with the v2 bank, a known other voice is closer by `clear_margin` (default off); `threshold` = old.
   Words carry `l1: "instant"`. Only for provisional words (a verification lane settles them): otherwise refused.
-  `person-term-count.json` speaker_check `"l1": {"policy": "instant", "clear_other": 0.2}`; passed by
+  `person-term-count.json` speaker_check `"l1": {"policy": "instant", "clear_other": 0.1}`; passed by
   `perception_parts._speaker_verify` only when verification reads the words. CLI `--l1 instant|threshold`,
   `--l1-clear-other`, `--l1-clear-margin`. Why 0.2: m1 L1 scores of the person's words 0.26-0.82, other voices
   0.36-0.79 (no threshold separates them at L1).
 - B. `gamst/voice_quality.py`: `self_consistency` (mean / min pairwise cosine of a reference's embeddings; one piece =
-  unmeasured), `choose` (below `min_quality` 0.5: first `--voice-fallback FILE` of the same model whose own quality
+  unmeasured), `consistent_majority` (>= 3 pieces: drop the most disagreeing pieces while more than half stay; a
+  majority agreeing >= min_quality -> `used: cleaned`), `choose` (below `min_quality` 0.5: cleaned if a majority
+  agrees, else first `--voice-fallback FILE` of the same model whose own quality
   passes, `combined` (default; centroid of each, equal weight) or `replace`; else kept and flagged `reference_low`),
   `hud_line` ("목소리 기준 품질 낮음 (0.42 < 0.50) · 다른 녹음 샘플과 합쳐 씀"). Wired in `_reference_value` (runs only),
   report `voice_quality`, stderr note, live CountView line (ASCII), video HUD line (`count_video.py`, y 1036). Enrolment
@@ -46,9 +48,16 @@ Reference quality (mean pairwise): 뽀또 0.417 (2 pieces), 몇기야 0.625, 시
 | 몇기야 (5) | 0 / 1 | 3 / 0 | 0 / 1 | 3 / 0 |
 | 시발 (7) | 0 / 0 | 7 / 0 | 0 / 0 | 7 / 0 |
 | 달 (1) | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
--> fallback default `combined`. With min_quality 0.5, 뽀또 and 시발 fall back (combined), 몇기야 and 달 keep their own.
+-> fallback default `combined`. With min_quality 0.5: 뽀또 combined (2 pieces, no majority), 시발 cleaned (pieces 0,1
+agree 0.665; piece 2 off), 몇기야 and 달 keep their own. (Offline the combined reference puts the person's word scores
+near 0.47 on 시발, under L4's absolute 0.5: run v6a used combined on 시발 and lost 24.78 at final -> cleaning added.)
 
 ## Runs (v6)
 Command per clip: `VOICE=$T/testbed/<clip>/hud/m1.voice.json $T/guard.sh l1 $T/hud/l1/run.sh <clip> v6 --voice-fallback
 $T/testbed/voice.json` (`hud/l1/run.sh` = `hud/run.sh` with PYTHONPATH on this worktree; same m1 reference so only the
-policy and the check change). Started 23:0x. Results: see below when filled.
+policy and the check change).
+- v6a (23:01-23:06; code before cleaning, clear_other 0.2; reports of bbo/marine/fifa lack `voice_quality` (bug, fixed
+  51e5316); files `testbed/<clip>/hud/v6a.*`): 뽀또 L1 7/14 final 7/12 (o→p 5); 몇기야 L1 3/4 final 2/3 (27.1 revoked:
+  the second recogniser did not write it this time, heard_by_one; run-to-run variance of hosted ASR); 시발 L1 7/7 final
+  5/5 (24.78 revoked: no_speaker + per-word 0.48 vs the combined reference); 달 L1 12/12 final 12/12.
+- v6 (final code) started 23:08.
