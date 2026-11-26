@@ -115,3 +115,13 @@ not made default; the owner decides (recipe item options `soft_max_seconds` / `m
 ## Cost of this branch (list prices)
 Recognisers (Scribe $0.27 + Speechmatics $0.40 + gpt-live $1.02 per hour) on 695 s of runs (v6a, v6, v6t: 3 x 213.7 s;
 v6r 54 s) ≈ $0.33; pyannoteAI 53 jobs 0.046 EUR (≈ $0.05). Offline studies local. Total ≈ $0.38 (cap $1.5).
+
+## Videos v6 (`try-it/hud/l1/video.sh SHORT RUN "목소리 메모"`, through guard)
+`~/Desktop/홍명보/gamst/GAMST 카운트 결과/뽀또/뽀또_카운트_v6.mp4` (run v6r), `감스트의 해병대식 내리갈굼/몇기야_카운트_v6.mp4`,
+`감스트 피파 억까/시발_카운트_v6.mp4`, `애교쟁이 인디깅/달_카운트_v6.mp4` (run v6). HUD: bottom line "주의: 목소리 기준
+품질 낮음 (0.42 < 0.50) · 다른 녹음 샘플로 바꿈" (뽀또) / "(0.45 < 0.50) · 어긋난 조각 1개 빼고 씀" (시발).
+Frames checked (뽀또 14.3/15/25/45/69.5, 시발 21/22/47.2, 몇기야 24.5/25.6, 달 10.4/11.2/34): Korean readable; every
+heard word enters the count as 잠정 at L1's commit (뽀또 25.0 s: 7 incl. 19.74/21.40/22.30); corrections appear when
+decided (뽀또 45.0 s "9 → 6", 69.5 s "12 → 8" with 취소 #13-15 다른 사람 목소리 / 화자 없음). Word -> count delay =
+the L1 latency table above: 1.3-3.3 s for 달, 1.3-5 s for 시발, up to 13 s for words early in a long turn (뽀또 38.26,
+몇기야 2.72 / 14.38): only the short-turn option brings those within ~1-4 s.
