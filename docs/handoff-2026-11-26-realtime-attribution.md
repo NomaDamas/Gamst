@@ -94,3 +94,23 @@ final words identical. Shotgun movement clip: 16/16 (text rule, collision = sudd
 - Licences: Nemotron-3 (OpenMDW-1.1, redistribution review), Sortformer (NVIDIA Open Model License), DiariZen
   (CC BY-NC, opt-in).
 - Voice reference for the new clips: another recording of the person (current) or owner-marked ranges per clip.
+
+
+## 8. Update (end of 2026-11-26) — read this section first
+
+- Integration HEAD e346ede (pushed). Decisions now 1-29 in `docs/decision-log-2026-11-26.md`.
+- Owner labelled all four clips (labelling tool `.local-run/try-it/label_tool`, run `../host/bin/python server.py 8777`;
+  labels in `~/Desktop/홍명보/gamst/GAMST 라벨링/<clip> - 정답.json`, truth files `try-it/testbed/<bbo|marine|fifa|indi>/truth_owner.json`, `truth_score.json`).
+  Owner counts: 뽀또 10 (owner earlier said 9 — confirm), 몇기야 6, 시발 7, 달 23.
+- Scores vs labels (`docs/measurements/owner-labels-2026-11-26.md`): words heard 45/46; attributed right only 8/45 with the
+  other-recording voice. Bottleneck (`docs/measurements/attribution-bottleneck-2026-11-26.md`): (1) voice reference from another
+  recording; (2) deciding one short word at a time. Not the lane structure; live diarization is weak on this audio, Precision-3 is
+  fine; overlap is a real limit (TSE PS4 no gain).
+- Running (agent in `.local-run/wt-hud`, branch `feat/instant-hud`, handoff `docs/handoff-feat-instant-hud.md` there):
+  instant L1 HUD with later visible corrections (decision 26); same-recording voice (automatic main speaker for the test clips; owner
+  labels no ranges); voice sample UX (`--record-voice-first`, `--voice-wav`, `--voice-range`; decision 28); speaker decision v2
+  (relative comparison with automatic negatives, several references incl. L4-final words, word-anchored diarization context;
+  decision 29); leave-one-clip-out validation; per-error-type table; rerun four clips; videos `<term>_카운트_v5_즉시.mp4`;
+  per-repetition times for "달달달" via Qwen3-ForcedAligner.
+- Next after it: merge feat/instant-hud, suite via guard.sh, push, report to the owner in Korean with the per-error table and
+  video paths; then continue toward "더 완벽" (owner's words): remaining errors by type, voice sample UX demo, promotion video.
