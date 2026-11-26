@@ -1,5 +1,6 @@
 """Instructions while a recipe runs. The recipe, its workers, the Pipeline, the Store and the MCP server are the real ones;
-only the two model objects (the recognizer, the pose detector) are stand-ins, inside the real worker processes."""
+only the two models are stand-ins: the recognizer (the default, hosted Scribe Live, answered by a local WebSocket
+stand-in; Whisper inside the real worker process when it is chosen) and the pose detector (inside its worker)."""
 import asyncio
 import json
 import os
@@ -22,6 +23,7 @@ from gamst.recipes.instructions import Instructions
 from gamst.schema import timestamp
 from tests.test_movement_spec import condition, grey_video, movement, entry, frame, repetition, vector
 from tests.test_multi_input import HAS_CV, HAS_FFMPEG, Recipes, ffmpeg, wav
+from tests.test_streaming_asr import ScribeStandIn
 
 ROOT = str(Path(recipes.__file__).parents[2])
 WORKER = f'''#!{sys.executable}
@@ -60,11 +62,20 @@ from gamst.provider_worker import main
 main()
 '''
 LEAVE = ['--without', 'person', '--without', 'voice']
+WORDS = {2: '대박', 4: '사과', 6: '바나나'}
+
+
+def loud_tenths():
+    """The worker's Whisper stand-in as the Scribe stand-in hears it: a word for each loud tenth of a second."""
+    def word(index, samples):
+        text = WORDS.get(round(10 * float(np.abs(samples).max()))) if len(samples) else None
+        return (text, 0., .1) if text else None
+    return word
 
 
 def speech(seconds, **words):
-    """Sound with a loud tenth of a second per word: ``{word: [seconds]}``."""
-    level = dict(big=.2, apple=.4, banana=.6)
+    """Sound with a loud tenth of a second per word: ``{word: [seconds]}``; ``hum`` is sound that is no word."""
+    level = dict(big=.2, apple=.4, banana=.6, hum=.1)
     samples = np.zeros(16000 * seconds, np.float32)
     for word, times in words.items():
         for at in times:
@@ -88,6 +99,7 @@ class Case(Recipes):
         patcher = mock.patch.dict(os.environ, PYTHONPATH=ROOT)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.scribe = ScribeStandIn(loud_tenths, block_s=.1).start(self)
 
     def write_profile(self, *roles):
         entries = {'audio.asr': dict(model='faster_whisper.small', provider_profile='faster_whisper.words', python=str(self.python),
@@ -115,7 +127,8 @@ class Case(Recipes):
 
 class Words(Case):
     def test_words_are_replaced_from_a_stated_time_and_never_mixed(self):
-        said = speech(12, big=[.5, 1.5, 7.5], apple=[1.0, 8.0, 10.5], banana=[5.5])
+        # the sound after 10.5 keeps that turn open past the question at 11.5 (the recognizer commits after a pause)
+        said = speech(12, big=[.5, 1.5, 7.5], apple=[1.0, 8.0, 10.5], banana=[5.5], hum=[10.8, 11.1, 11.4, 11.7])
         seen = {}
 
         async def change(call, pipeline):
@@ -146,7 +159,7 @@ class Words(Case):
                          ('set', {'사과': ['사과']}, change['effective_from_ms'], change['effective_from_ms']))
         start = seen['start'] - 100
         self.assertEqual(change['effective_from_ms'], start + 4101)     # right after the last sound taken in
-        # 사과 at 8.0 only (10.5 is in a window not transcribed yet); 대박 at 7.5 was not asked for any more
+        # 사과 at 8.0 only (10.5 is in a turn not transcribed yet); 대박 at 7.5 was not asked for any more
         self.assertEqual((seen['count']['count'], seen['old']['count']), (1, 2))
         self.assertEqual([(item['reference_revision'], item['count']) for item in seen['count']['other_instructions']], [(1, 2)])
         self.assertEqual(seen['count']['counted_from_ms'], dict(terms=change['effective_from_ms']))
@@ -173,15 +186,26 @@ class Words(Case):
         self.assertEqual(report['other_instructions']['speech.term_events'][0]['count'], 2)
         self.assertEqual({event['term'] for event in report['events']['speech.term_events']}, {'사과'})
         self.assertTrue(report['complete'])
+        # the recipe's own recogniser: one session of the default candidate
+        self.assertEqual(len(self.scribe.queries), 1)
+        self.assertIn('model_id=scribe_v3_live', self.scribe.queries[0])
+
+    def test_whisper_is_still_a_choice(self):
+        """``--asr faster_whisper.small``: the Whisper part in its real worker (a stand-in model) instead of the default."""
+        report = self.scene('--audio', wav(self.tmp / 'a.wav', speech(4, big=[.5, 2.5])), '--without', 'movement',
+                            '--terms', '대박', '--asr', 'faster_whisper.small', *LEAVE)
+        self.assertEqual(report['counts']['speech.term_events'], {'term.spoken': 2})
+        self.assertEqual(self.scribe.queries, [])        # nothing went to the default recogniser
 
     def test_a_word_belongs_to_what_was_asked_when_it_was_said(self):
-        """One recognizer window spans the change: its words are told apart by their own times."""
-        said = speech(6, big=[.5, 2.5], apple=[.8, 2.2])
+        """One recognizer turn spans the change: its words are told apart by their own times."""
+        said = speech(6, big=[.5, 2.5], apple=[.8, 2.2], hum=[1.1, 1.4, 1.7, 2.0])     # no pause from 0.5 to 2.6 s
 
         async def change(call, pipeline):
             await call('set_instruction', dict(kind='terms', actor='user', terms=dict(과일=['사과', '바나나'])))
 
         report = self.scene('--audio', wav(self.tmp / 'a.wav', said), '--without', 'movement', '--terms', '대박', *LEAVE, at={1.5: change})
+        self.assertEqual(self.scribe.turns, [['대박', '사과', '사과', '대박']])
         self.assertEqual([event['term'] for event in report['events']['speech.term_events']], ['과일'])
         self.assertEqual(report['other_instructions']['speech.term_events'][0]['count'], 1)
 

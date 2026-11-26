@@ -20,13 +20,16 @@ A part whose enrollment is missing is refused with the option that leaves it out
 ```bash
 gamst recipe setup scene --without person --without voice
 gamst recipe enroll scene --video a.mp4 --video b.mp4 --negative c.mp4 --mode sequence --out move.json
-gamst recipe run scene --video film.mp4 --exemplar move.json --terms 대박 --without person --without voice
-gamst recipe run scene --camera 0 --microphone --without movement --without voice --terms 대박
+gamst recipe run scene --video film.mp4 --exemplar move.json --terms 대박 --without person --without voice --allow-remote-asr
+gamst recipe run scene --camera 0 --microphone --without movement --without voice --terms 대박 --allow-remote-asr
 gamst recipe run scene --video film.mp4 ... --with semantic            # VLM: segments, with this run's transcript and counts
 gamst recipe run scene --video film.mp4 ... --with-role audio.events --with-role vision.hand
 gamst recipe roles                                                     # what can be added, what cannot and why
 ```
 
+- `speech` transcribes with the hosted streaming Scribe v3 Live by default: the sound leaves the device and is billed, so a
+  run with `speech` needs `--allow-remote-asr` (key in `ELEVENLABS_API_KEY`), or a local recognizer with
+  `--asr sherpa.zipformer_ko_streaming` / `--asr voxtral.mini_4b_realtime_2602.mlx` (see `gamst-person-terms`).
 - `--video FILE` reads the pictures and the file's own sound (ffmpeg and ffprobe on PATH; local files only, nothing written to disk).
 - `--camera 0 --microphone` uses the host's clock for both. A camera frame is late by the camera's own latency, which GAMST does
   not know. Measure it (a clap in view), then `--offset-ms camera=-80`. The offset is in the report.

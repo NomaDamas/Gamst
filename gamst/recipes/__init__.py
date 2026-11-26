@@ -781,7 +781,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
     the frames, ``Pipeline.push``) replaces what the command line names.
     """
     from ..pipeline import Pipeline
-    pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
+    from .perception_parts import remote_asr_preflight
     inputs = recipe['inputs']
     if modules is None:
         modules = recipe['modules']
@@ -790,6 +790,8 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
         present = {item['name'] for item in modules}
         recipe = dict(recipe, references=[item for item in recipe.get('references', ()) if not item.get('for')
                                           or present & set(_listed(item['for']))])
+    remote_asr_preflight(recipe, modules, getattr(args, 'allow_remote_asr', False))
+    pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
     references = reference_values(recipe, args)
     if sources is None:
         sources, offsets = open_inputs(recipe, args, inputs)
@@ -1127,6 +1129,18 @@ def _optional_options(parser):
                         help='add a registry role as a module (gamst recipe roles); @MS: look at one frame per MS')
 
 
+def _asr_options(parser, consent=True):
+    """``--asr`` (and ``--allow-remote-asr``) for the actions that transcribe or set up the transcribing module."""
+    if consent:
+        parser.add_argument('--allow-remote-asr', action='store_true',
+                            help="consent to sending the sound to a hosted ASR module's paid API (stream-words, "
+                                 "hosted-words; the default recogniser elevenlabs.scribe_v3_live.hosted is one)")
+    parser.add_argument('--asr', metavar='CANDIDATE',
+                        help='the audio.asr candidate that transcribes (e.g. elevenlabs.scribe_v3_live.hosted, '
+                             'openai.gpt_live_transcribe.hosted, sherpa.zipformer_ko_streaming, '
+                             'voxtral.mini_4b_realtime_2602.mlx); the part that builds it replaces the recipe\'s')
+
+
 def _speed_options(parser):
     speed = parser.add_mutually_exclusive_group()
     speed.add_argument('--max-rev-s', type=float, help="fastest turn rate to count (default: the recipe's)")
@@ -1211,6 +1225,7 @@ def main(argv=None):
     install.add_argument('--isolation', choices=['venv', 'current'], default='venv',
                          help='venv: one environment per model (default); current: everything into this python')
     install.add_argument('--profile', help='profile to write (default ~/.config/gamst/profile.json)')
+    _asr_options(install, consent=False)
     verify = actions.add_parser('check', help='can this camera run the recipe without aliasing?')
     verify.add_argument('recipe')
     verify.add_argument('--fps', type=float, help='camera frames per second (omit to get the required rate)')
@@ -1235,6 +1250,7 @@ def main(argv=None):
                             'clips, proposed first and saved when confirmed')
     learn.add_argument('--consent', help='who consented to being enrolled, and to what')
     learn.add_argument('--language', help="spoken language of term clips, e.g. ko (default: the recipe's)")
+    _asr_options(learn)
     learn.add_argument('--out', help='enrollment JSON to write')
     start = actions.add_parser('run', help='run the recipe')
     start.add_argument('recipe')
@@ -1247,12 +1263,7 @@ def main(argv=None):
                        "transcript,counts (default: both), one of them, or none")
     start.add_argument('--vlm-remote-context', action='store_true',
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
-    start.add_argument('--allow-remote-asr', action='store_true',
-                       help="consent to sending the sound to a hosted ASR module's paid API (hosted-words)")
-    start.add_argument('--asr', metavar='CANDIDATE',
-                       help='the audio.asr candidate that transcribes (e.g. openai.gpt_live_transcribe.hosted, '
-                            'elevenlabs.scribe_v2_realtime.hosted, sherpa.zipformer_ko_streaming, '
-                            'voxtral.mini_4b_realtime_2602.mlx); the part that builds it replaces the recipe\'s')
+    _asr_options(start)
     start.add_argument('--realtime', nargs='?', type=float, const=1., metavar='SPEED',
                        help='replay a recording at its own speed (or SPEED times it), as a live capture arrives')
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')

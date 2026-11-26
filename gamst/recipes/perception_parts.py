@@ -267,7 +267,10 @@ async def _hosted_words(options, context):
         config['terms'] = terms
     try:
         check_config(config)
-    except (ValueError, PermissionError) as error:
+    except PermissionError:
+        raise SystemExit(remote_asr_refused(options.get('name'), options.get('candidate', HOSTED_WORDS),
+                                            (context.get('recipe') or {}).get('name'))) from None
+    except ValueError as error:
         raise SystemExit(f"{options.get('name')}: {error}") from error
     print('note: ' + cost_line(config, config['phrases']), file=sys.stderr)
     from ..providers import model_workers
@@ -276,6 +279,45 @@ async def _hosted_words(options, context):
 
 
 ENDPOINT_KEYS = ('pause_ms', 'short_pause_ms', 'min_seconds', 'soft_max_seconds', 'max_seconds', 'margin_db')
+STREAM_WORDS, HOSTED_WORDS = 'openai.gpt_live_transcribe.hosted', 'elevenlabs.scribe_v2.hosted'   # the parts' defaults
+
+
+def remote_asr_refused(name, candidate, recipe=None):
+    """What a run says when a hosted recogniser would get the sound without the owner's opt-in."""
+    from ..crew.registry import ROLES
+    local = sorted(key for key, chosen in ROLES['audio.asr'].candidates.items()
+                   if chosen.provider_profile == 'streaming.asr.words')
+    return (f"{name}: {candidate} sends the sound to a paid hosted API (it leaves this device and is billed). "
+            f"To consent, add --allow-remote-asr (or \"allow_remote\": true in the module's \"config\"). "
+            f"To transcribe on this device instead, add {' or '.join('--asr ' + key for key in local)} "
+            f"(set it up first: gamst recipe setup {recipe or 'RECIPE'} --asr CANDIDATE)")
+
+
+def remote_asr_preflight(recipe, modules, allowed):
+    """Before any input opens or worker starts: a hosted streaming recogniser without the opt-in stops the run.
+
+    Only ``stream-words`` is checked here (its config is the registry's and the item's, known before the run);
+    ``hosted-words`` reads the config setup wrote, and its builder refuses the same way.
+    """
+    if allowed:
+        return
+    from ..providers.streaming_hosted import check_config
+    for item in modules:
+        if item.get('use') != 'stream-words':
+            continue
+        candidate = item.get('candidate', STREAM_WORDS)
+        own = item.get('config') if isinstance(item.get('config'), dict) else {}
+        config = dict(_registry_config('audio.asr', candidate) or {}, **own)
+        if item.get('endpoint'):
+            config['endpoint'] = item['endpoint']
+        if 'api' not in config:
+            continue        # a local recogniser
+        try:
+            check_config(config)
+        except PermissionError:
+            raise SystemExit(remote_asr_refused(item['name'], candidate, recipe.get('name'))) from None
+        except ValueError:
+            pass            # the builder says what is wrong
 
 
 def _registry_config(role, candidate):
@@ -298,7 +340,7 @@ async def _stream_words(options, context):
     partial records. ``"bias": "terms"`` gives the counted words as key terms / keywords where the API has them.
     """
     from ..providers import model_workers
-    candidate = options.get('candidate', 'openai.gpt_live_transcribe.hosted')
+    candidate = options.get('candidate', STREAM_WORDS)
     registry = _registry_config('audio.asr', candidate) or {}
     language = context.get('language') or options.get('language') or 'ko'
     if 'api' in registry or 'api' in (options.get('config') or {}):
@@ -317,7 +359,10 @@ async def _stream_words(options, context):
         try:
             check_config(config)
             chosen = session(config)
-        except (ValueError, PermissionError) as error:
+        except PermissionError:
+            raise SystemExit(remote_asr_refused(options.get('name'), candidate,
+                                                (context.get('recipe') or {}).get('name'))) from None
+        except ValueError as error:
             raise SystemExit(f"{options.get('name')}: {error}") from error
         seconds = None
         for source in (context.get('inputs') or {}).values():
