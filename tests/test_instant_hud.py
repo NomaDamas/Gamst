@@ -107,3 +107,73 @@ class SameClipVoiceTest(unittest.TestCase):
         self.assertEqual((result['counted'], result['right'], result['other'], result['recall']), (4, 3, 1, 1.))
         errors = error_types(truth, dict(start_ms=1000, event_states={'speech.term_events': events}))
         self.assertEqual((errors['person'], errors['counted_right'], errors['other_to_person']), (3, 3, 1))
+
+
+class VoiceBankTest(unittest.TestCase):
+    def test_a_word_counts_only_when_closer_to_the_person_than_to_every_known_other_voice(self):
+        from gamst.providers.voice_bank import VoiceBank, shared
+        bank = VoiceBank([[1., 0., 0.]], grow=True, combine='max')
+        near_other = [.8, .6, 0.]       # 0.8 to the person
+        self.assertTrue(bank.decide(near_other, floor=.5, margin=.1)[0])
+        bank.add_negative([.6, .8, 0.], 'w1:B')      # another speaker of a window where the person was clear
+        matched, pos, neg = bank.decide(near_other, floor=.5, margin=.1)
+        self.assertEqual((matched, pos, neg), (False, .8, .96))
+        self.assertTrue(bank.add_person([.7, .7, 0.], 'w2:A'))
+        self.assertFalse(bank.add_person([.7, .7, 0.], 'w2:A'))     # once per window speaker
+        self.assertEqual(bank.status()['references'], 2)
+        pipeline = type('P', (), {})()
+        self.assertIs(shared(pipeline, 'voice', [[1., 0., 0.]]), shared(pipeline, 'voice', [[0., 1., 0.]]))
+
+    def test_the_live_lane_decides_a_word_against_the_bank(self):
+        from gamst.providers.speaker_verify import SpeakerVerify
+
+        class Embedder:
+            model_id = 'stand-in'
+
+            def embed(self, samples, rate):
+                return [.8, .6, 0.]
+        module = SpeakerVerify(Embedder(), words=True, context_ms=1500, segments=False, relative=dict(floor=.5, margin=.1))
+        pipeline = type('P', (), dict(references={'voice': dict(kind='voice', value=dict(
+            model='stand-in', embeddings=[[1., 0., 0.]]))}))()
+        module.bind(pipeline)
+        module.bank.add_negative([.6, .8, 0.], 'B')
+        import asyncio
+        import numpy as np
+        module._covers = lambda first, last: True
+        module._span = lambda first, last: np.full(16000, .1, dtype=np.float32)
+        word = asyncio.run(module._word(dict(text='a', start_ms=500, end_ms=800)))
+        self.assertEqual((word['match'], word['speaker_score'], word['negative_score'], word['decision']),
+                         (False, .8, .96, 'relative'))
+
+    def test_verification_names_the_closest_speaker_with_a_margin_and_keeps_the_others_as_negatives(self):
+        import asyncio
+        import numpy as np
+        from gamst.providers.voice_bank import VoiceBank
+        from gamst.providers.word_verification import WordVerification
+        voices = {0: [.9, .436, 0.], 1: [.8, .6, 0.]}      # speaker A (0-2 s) and B (2-4 s): both near the person
+
+        class Memory:
+            start_ms, end_ms = 0, 4000
+
+            def span(self, low, high, rate):
+                return np.full(int((high - low) * rate / 1000), .1 + .1 * (low >= 2000), dtype=np.float32)
+
+        class Embedder:
+            model_id = 'stand-in'
+
+            def embed(self, samples, rate):
+                return voices[int(samples[0] > .15)]
+
+        class Diarizer:
+            def diarize(self, samples):
+                return [(0., 2., 'A'), (2., 4., 'B')]
+        module = WordVerification(object(), Diarizer(), Embedder(), voice=dict(decision='relative', floor=.5, margin=.05))
+        module.memory, module.target = Memory(), [1., 0., 0.]
+        module.bank = VoiceBank([[1., 0., 0.]])
+        window = asyncio.run(module._diarized(0, 4000))
+        self.assertEqual(window['person'], {'A'})
+        self.assertEqual(module.bank.status()['negatives'], 1)
+        module.voice['margin'] = .2      # not clearly closer: nobody is named, nothing is learnt
+        module.bank = VoiceBank([[1., 0., 0.]])
+        window = asyncio.run(module._diarized(0, 4000))
+        self.assertEqual((window['person'], module.bank.status()['negatives']), (set(), 0))

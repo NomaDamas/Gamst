@@ -42,8 +42,23 @@ demo venv, anything outside GAMST, others' files. Commits end with `Co-Authored-
   end, `error_types()`, `live_events()`); `scripts/score_owner_clips.py REPORT TRUTH --voice V [--exclude
   segments|window]` (default segments, decision 28).
 - C. Four clips rerun (run name m1) + videos v5 (see below). Frames checked (Korean readable, corrections shown).
-- Started (uncommitted at writing -> check `git status`): `gamst/providers/voice_bank.py` (VoiceBank: references,
-  negatives, `decide(vector, floor, margin)`, `shared(pipeline, reference, embeddings, settings)`), not wired yet.
+- v2 wired (default unchanged): `gamst/providers/voice_bank.py`; `SpeakerVerify(relative=, bank=)`;
+  `WordVerification` voice `decision: relative`, `floor`, `margin`, `word_margin`, `anchor_ms`, `anchor_join_ms`
+  (`_diarized`, `_anchored`, `_word_match`, references grow from person_speaker decisions); CLI
+  `--speaker-decision JSON|FILE` ({"l1", "l4", "bank"}). Tests in `tests/test_instant_hud.py`.
+- D measured (`scripts/qa_repetition_times.py`, 4 달 words, 22 repetitions, reference = syllable energy nuclei):
+  even split mean |error| 49 ms (median 30), aligner with syllables as separate words 73 ms (65), aligner with one word
+  94 ms (58). The aligner does not improve per-repetition times: the even split stays.
+- v2 offline study (`try-it/testbed/v2/*.json`, 36 labelled words, anchored contexts 10/5 and 4/2, 0.045 EUR),
+  segments excluded. Same-clip "current" rule: final person→other 2, other→person 6 (뽀또 5 of 6 other-voice words
+  counted, 몇기야 1 of 1). v2 LOCO (1944 settings; ties to the smallest change): held-out final person→other 7,
+  other→person 6 (뽀또 fold chose margin 0.1/max and lost 6 of the person's words); 몇기야/시발/달 folds: as current or
+  1 better (시발 7/7). Why: in 뽀또 the main-speaker reference itself is mixed (its two 3 s clips 0.42 apart), and the
+  other voice scores like the person on CAM++ (other speakers' segment scores 0.55-0.85 vs the person's 0.49-0.76);
+  in 몇기야 Precision-3 put the other voice's word (14.38) inside the person's speaker. Training clips other than 뽀또
+  have 1 other-voice word in total, so the margins cannot be learnt there.
+- v2 live runs (run name v2, each clip with its fold's parameters, `try-it/hud/v2/<clip>.json`, same m1 voice): started
+  22:2x; score them like m1.
 
 ## Measured: per clip vs owner truth (`try-it/testbed/<clip>/truth_owner.json`), words inside the enrolled
 main-speaker segments excluded (decision 28)
