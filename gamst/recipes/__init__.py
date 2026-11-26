@@ -344,14 +344,14 @@ def roles(recipe):
     """``{role: candidate}`` of the role registry that the recipe's parts need."""
     from ..crew.registry import ROLES
     selected, open_choice = {}, []
-    for item, _ in _items(recipe):
-        role, model = _role(item)
-        if role is None:
-            continue
-        if model is None:
-            open_choice.append(role)
-        elif selected.setdefault(role, model) != model:
-            raise ValueError(f"{recipe['name']}: {role} is both {selected[role]} and {model}")
+    for item, part in _items(recipe):
+        for role, model in [_role(item)] + [(role, item.get(key, default)) for key, role, default in part.extra_roles]:
+            if role is None:
+                continue
+            if model is None:
+                open_choice.append(role)
+            elif selected.setdefault(role, model) != model:
+                raise ValueError(f"{recipe['name']}: {role} is both {selected[role]} and {model}")
     for role in open_choice:    # what gamst setup chooses for this machine
         if role not in selected:
             from ..crew.setup import detect_hardware
@@ -760,6 +760,8 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
+                   references={reference['name']: value for reference, value, _ in references},
+                   allow_remote_asr=getattr(args, 'allow_remote_asr', False),
                    record_dir=getattr(args, 'record_dir', None), replay=replay,
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
@@ -957,7 +959,7 @@ async def run_pipeline(recipe, args):
                 found = [event for row in own for event in row['observation']['value']['events'] if is_current(event, newest)]
                 report['score'] = dict(score(truth, found, start_ms=report.get('start_ms', 0)),
                                        complete=not pipeline.lost(truth['capability'])['gaps'])
-            if any(item['use'] in ('whisper-words', 'qwen-words', 'prosody') for item in recipe['modules']):
+            if any(PARTS[item['use']].transcribes or item['use'] == 'prosody' for item in recipe['modules']):
                 report['speaker'] = 'enrolled' if speaker_bound(recipe['modules']) else 'not_bound'
             report['pipeline'] = pipeline.status()
             report['errors'] = {name: item['last_error'] for name, item in report['pipeline']['modules'].items()
@@ -1156,6 +1158,8 @@ def main(argv=None):
                        "transcript,counts (default: both), one of them, or none")
     start.add_argument('--vlm-remote-context', action='store_true',
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
+    start.add_argument('--allow-remote-asr', action='store_true',
+                       help="consent to sending the sound to a hosted ASR module's paid API (hosted-words)")
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
     _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')

@@ -120,6 +120,7 @@ LOADERS = {
     'face.embedding': 'person_match', 'body.embedding': 'person_match', 'target_speech.local': 'target_speech',
     'sapiens2.pose': 'sapiens2_pose', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None, 'faster_whisper.large_v3_turbo': None,
+    'qwen3.asr.words': 'qwen_words', 'hosted.asr.words': None,   # a hosted API loads no package
     'pg.physical.local': None, 'opencv': None, 'sounddevice': None, 'pillow': None,   # no version check in a provider file
 }
 VERSION = re.compile(r'\d+(\.\d+)+')

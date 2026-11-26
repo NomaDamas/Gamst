@@ -16,6 +16,8 @@ profile                    worker (real model)                                  
 ``target_speech.local``    WeSep / USEF-TFGridNet / SAM-Audio spans             ``RemoteExtractor``
 ``qwen3.forced_aligner``   Qwen3-ForcedAligner                                  ``RemoteAligner``
 ``faster_whisper.words``   FasterWhisperPlugin with word times                  ``RemoteWhisper``
+``qwen3.asr.words``        Qwen3-ASR + Qwen3-ForcedAligner phrases (no CUDA)    ``RemoteWhisper``
+``hosted.asr.words``       a hosted ASR API's phrases (audio leaves the device) ``RemoteWhisper``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
 =========================  ==================================================  ====================
 
@@ -41,6 +43,8 @@ FIELDS = {
     'target_speech.local': ('audio', (OutputField('samples_returned', 'integer'),)),
     'qwen3.forced_aligner': ('audio', (OutputField('items', 'array'),)),
     'faster_whisper.words': ('audio', (OutputField('transcripts', 'array'),)),
+    'qwen3.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
+    'hosted.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
 }
@@ -53,7 +57,8 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2'}.get(profile) or {
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'qwen3.asr.words': 'qwen3-asr',
+            'hosted.asr.words': 'hosted-asr'}.get(profile) or {
         'usef': 'usef-tfgridnet', 'sam-span': 'sam-audio'}.get(config.get('backend'), config.get('backend'))
     return f'{name}:{digest[:16]}'
 
@@ -65,7 +70,10 @@ def capability(profile, config):
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
     if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
         raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
-    if not (profile == 'faster_whisper.words' and 'sha256' not in config):
+    if profile == 'hosted.asr.words':
+        from .hosted_asr import check_config
+        check_config(config)
+    elif not (profile == 'faster_whisper.words' and 'sha256' not in config):
         model_id(profile, config)
     digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     return CapabilitySpec(f'model.{profile}', f'model.{profile}', modality, f'{profile}.worker', '1.' + digest, fields,
@@ -218,6 +226,19 @@ def load(profile, config):
             from .whisper_phrases import PhraseWorker, WhisperPhrases
             return _Whisper(PhraseWorker(WhisperPhrases(plugin, **phrases)))
         return _Whisper(WhisperWords(plugin))
+    if profile == 'qwen3.asr.words':
+        from .qwen_words import QwenDecoder
+        from .whisper_phrases import PhraseWorker, Phrases
+        phrases = config.pop('phrases', None) or {}
+        config.pop('sha256')
+        decoder = QwenDecoder.from_local(config.pop('model_path'), config.pop('files'), config.pop('aligner_path'),
+                                         config.pop('aligner_sha256'), **config)
+        return _Whisper(PhraseWorker(Phrases(decoder, **phrases)))
+    if profile == 'hosted.asr.words':
+        from .hosted_asr import load_decoder
+        from .whisper_phrases import PhraseWorker, Phrases
+        phrases = config.pop('phrases', None) or {}
+        return _Whisper(PhraseWorker(Phrases(load_decoder(config), **phrases)))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))
@@ -282,7 +303,8 @@ class RemoteExtractor(_Client):
 
 
 class RemoteWhisper(_Client):
-    """Pipeline module: the Whisper worker's windows as ``speech.transcript_words`` records."""
+    """Pipeline module: a transcript worker's utterances (Whisper windows or phrases, Qwen3-ASR or hosted
+    phrases) as ``speech.transcript_words`` records."""
     owns_process = True
 
     def __init__(self, worker, profile, config):
