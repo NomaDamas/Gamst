@@ -225,6 +225,14 @@ def _part_times(words, offset, size, part):
     return (start + (end - start) * index // repetitions, start + (end - start) * (index + 1) // repetitions, times[2])
 
 
+def _whole_word(words, part):
+    """``{word_start_ms, word_end_ms}`` of the recogniser word a repetition is part of (empty without word times)."""
+    times = _word_times(words or (), part[2], part[3]) if words else None
+    if not times or type(times[0]) not in (int, float) or type(times[1]) not in (int, float):
+        return {}
+    return dict(word_start_ms=int(times[0]), word_end_ms=int(times[1]))
+
+
 def _found(text, spellings):
     """``[(offset, size, spelling, part)]``: occurrences of a term's spellings, longer spellings first, never two over
     the same characters."""
@@ -448,6 +456,7 @@ class TermEvents:
                              event_id=event_id(value.get('utterance_id'), offset, term, *words.identity.values()),
                              spoken=spoken, reference=self.reference_name, **({'flags': list(flags)} if flags else {}),
                              **({'repetition': list(part[:2])} if part else {}),
+                             **(_whole_word(value.get('words'), part) if part else {}),
                              **words.identity, utterance_id=value.get('utterance_id'), start_ms=start_ms,
                              end_ms=end_ms, word_timed=times is not None, **words.origin,
                              **({'across_change': True} if across else {}),
@@ -500,7 +509,8 @@ class TermEvents:
             revision = dict(event='event.revision', state=state, revises=key,
                             revised_event=event['event'], term=event['term'], start_ms=event['start_ms'],
                             end_ms=event['end_ms'], **words.identity,
-                            **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]})
+                            **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]},
+                            **({'by': found[0]['settled_by']} if isinstance(found[0].get('settled_by'), str) else {}))
             if state == 'revoked' or uncertain:
                 revision['reason'] = reason or ('another_voice' if spoken else 'enrolled_voice')
             elif reason:        # unchanged, and the verdict says why (e.g. another voice's word)

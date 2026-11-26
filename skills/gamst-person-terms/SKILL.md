@@ -26,6 +26,24 @@ gamst recipe run person-voice-style-count --microphone --voice me.json --exempla
 
 `--video FILE` reads a video's own sound (needs ffmpeg and ffprobe on PATH).
 
+### The voice sample from the same input (recommended)
+
+Microphones and recordings change a voice more than the model does, so take the sample from the input you count on
+(`gamst/recipes/voice_sample.py`, each needs `--voice-consent "..."`):
+
+```bash
+# live: a short recording step first ("세려는 사람만 8초 동안 말해 주세요", countdown, level meter, record again?)
+gamst recipe run person-term-count --microphone --record-voice-first 8 --voice-consent "..." --terms 대박 --allow-remote-asr
+# a recording: the person alone in these seconds of the same recording, or a WAV sample of them
+gamst recipe run person-term-count --video clip.mp4 --voice-range 31-38.5 --voice-consent "..." --terms 대박 ...
+gamst recipe run person-term-count --video clip.mp4 --voice-wav me.wav --voice-consent "..." --terms 대박 ...
+# a recording with nothing marked: the "main speaker" (speaks alone longest in the first 15 s, pyannoteAI, hosted)
+gamst recipe run person-term-count --video clip.mp4 --voice-consent "..." --allow-remote-diarization --terms 대박 ...
+```
+
+The report says where the sample came from (`voice_sample`, with `excluded_s`): words inside it hold the sample's own
+sound and are not fairly scored. `gamst recipe enroll --kind voice --main-speaker` saves the main speaker's voice alone.
+
 ## The recognizer
 
 The words come from a streaming recognizer with word times: by default ElevenLabs Scribe v3 Live

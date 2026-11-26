@@ -50,6 +50,19 @@ def revisions(rows):
     return found
 
 
+def revision_history(rows):
+    """``{event_id: [(revision event, record), ...]}``: every revision of each event in ``rows``, oldest first (the last
+    one decides, :func:`revisions`). An event may be revised more than once (uncertain, then final)."""
+    found = {}
+    for record in rows:
+        value = (record.get('observation') or {}).get('value')
+        for item in (value.get('events') if isinstance(value, dict) else None) or ():
+            if isinstance(item, dict) and event_name(item) == REVISION and isinstance(item.get('revises'), str) \
+                    and item.get('state') in STATES[1:]:
+                found.setdefault(item['revises'], []).append((item, record))
+    return found
+
+
 def state_of(item, revised):
     """(state, (revision event, its record) or None) of one event under ``revised`` (:func:`revisions`)."""
     found = revised.get(item.get('event_id')) if isinstance(item.get('event_id'), str) else None

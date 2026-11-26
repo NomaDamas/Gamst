@@ -75,6 +75,10 @@ async def _speaker_verify(options, context):
         audio = [source for source in consumes if source in (context.get('inputs') or {})]
         if audio:
             arguments['audio_memory'] = audio[0]
+    decision = context.get('speaker_decision') or {}
+    if decision.get('l1') is not None and arguments.get('words') and not arguments.get('sources') \
+            and not arguments.get('turns'):     # speaker decision v2 at the live lane (per-word scores only)
+        arguments.update(relative=decision['l1'], bank=decision.get('bank'))
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
                            **arguments)
@@ -131,7 +135,9 @@ async def _word_verify(options, context):
                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
                               audio=audio, rule=rule, voice=dict(
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
-                                  is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
+                                  is not None else {}, **(options.get('voice') or {}),
+                                  **((context.get('speaker_decision') or {}).get('l4') or {})),
+                              bank=(context.get('speaker_decision') or {}).get('bank'), windows=options.get('windows'),
                               **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
     return dict(module=module, spec=module.spec)
 

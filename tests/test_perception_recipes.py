@@ -80,7 +80,9 @@ class SpeechRecipeTest(unittest.TestCase):
                           str(self.tmp / 'no.json'), '--profile', str(self.profile)])
         path = self.enroll_voice()
         saved = json.loads(path.read_text())
-        self.assertEqual(set(saved), {'kind', 'model', 'dim', 'embeddings', 'recipe', 'seconds', 'consent'})
+        self.assertEqual(set(saved), {'kind', 'model', 'dim', 'embeddings', 'recipe', 'seconds', 'consent',
+                                      'enrolled_from'})    # where the sample is (seconds), never its sound
+        self.assertEqual(saved['enrolled_from']['kind'], 'range')
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertGreaterEqual(Embedder.closed, 1)
         del saved['consent']

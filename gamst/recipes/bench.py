@@ -98,24 +98,42 @@ def _voice(clip, extra, work, run):
 
 
 def _labels(truth):
-    """(points, ranges): points ``(end_ms, by, excluded)``, ranges ``(from_ms, to_ms, by)``."""
+    """(points, ranges): points ``(end_ms, by, excluded)``, ranges ``(from_ms, to_ms, by)``.
+
+    A word with ``count`` (a repeated sound word, "달달달달달": 5) is that many points at its end. A word inside a range
+    of ``truth["exclude"]`` (``[{from_s, to_s, why}]``, e.g. the voice reference) is excluded."""
     points, ranges = [], []
+    out = [(round(1000 * item['from_s']), round(1000 * item['to_s'])) for item in truth.get('exclude') or ()]
     for word in truth.get('words') or ():
         if 'end_s' in word:
-            points.append((round(1000 * word['end_s']), word['by'], bool(word.get('exclude'))))
+            end = round(1000 * word['end_s'])
+            inside = any(low <= end <= high for low, high in out)
+            points += [(end, word['by'], bool(word.get('exclude')) or inside)] * max(1, int(word.get('count') or 1))
         else:
             ranges.append((round(1000 * word['from_s']), round(1000 * word['to_s']), word['by']))
     return points, ranges
 
 
+def _end(event):
+    """Where an event is matched: the end of the whole recogniser word for a repetition inside it, else its end."""
+    if 'word_end_ms' in event:
+        return event['word_end_ms']
+    part = event.get('repetition')     # an older report: repetitions share the word's time evenly
+    if part and type(event.get('start_ms')) in (int, float):
+        return event['end_ms'] + (part[1] - 1 - part[0]) * (event['end_ms'] - event['start_ms'])
+    return event['end_ms']
+
+
 def match(truth, events, start_ms):
     """Each event (``end_ms``) paired with a truth word by end time, nearest first: ``[(event, label, truth index)]``.
 
-    ``label``: the truth word's ``by``, ``excluded``, the ``by`` of a stretch it ends in, or ``unlabelled``.
+    ``label``: the truth word's ``by``, ``excluded``, the ``by`` of a stretch it ends in, or ``unlabelled``. An event
+    that ends inside an excluded range of ``truth["exclude"]`` is ``excluded`` too.
     """
     points, ranges = _labels(truth)
+    out = [(round(1000 * item['from_s']), round(1000 * item['to_s'])) for item in truth.get('exclude') or ()]
     tolerance = round(1000 * float(truth.get('tolerance_s', .5)))
-    ends = [event['end_ms'] - start_ms for event in events]
+    ends = [_end(event) - start_ms for event in events]
     pairs = sorted((abs(end - point[0]), index, slot) for index, end in enumerate(ends)
                    for slot, point in enumerate(points) if abs(end - point[0]) <= tolerance)
     taken, used = {}, set()
@@ -129,9 +147,49 @@ def match(truth, events, start_ms):
             point = points[taken[index]]
             found.append((event, 'excluded' if point[2] else point[1], taken[index]))
             continue
+        if any(low <= ends[index] <= high for low, high in out):
+            found.append((event, 'excluded', None))
+            continue
         stretch = next((by for low, high, by in ranges if low <= ends[index] <= high), 'unlabelled')
         found.append((event, stretch, None))
     return found
+
+
+def error_types(truth, report, capability='speech.term_events'):
+    """Where the person's words were lost or others' were counted, by kind: ``person`` (the person's words scored),
+    ``heard`` (any recogniser wrote it: a term event of any state was reported there), ``counted_right``,
+    ``person_to_other`` (heard, given to another voice or revoked), ``uncertain`` (heard, left uncertain),
+    ``not_heard``, ``other_to_person`` (counted where another voice said it), ``nothing_to_person`` (counted where
+    nobody said it), ``unlabelled`` (counted where the truth says nothing)."""
+    start = report['start_ms']
+    stated = (report.get('event_states') or {}).get(capability) or []
+    replaced = {event['replaces']: event for event in stated if event.get('replaces')}
+    words = [event for event in stated if not event.get('replaces')]
+    now = lambda event: replaced.get(event.get('event_id'), event)
+    points, _ = _labels(truth)
+    person = {index for index, point in enumerate(points) if point[1] == 'person' and not point[2]}
+    result = dict(person=len(person), heard=0, counted_right=0, person_to_other=0, uncertain=0, not_heard=0,
+                  other_to_person=0, nothing_to_person=0, unlabelled=0)
+    seen = {}
+    for event, label, slot in match(truth, words, start):
+        state = now(event)
+        counted = state.get('event') == EVENT and state.get('state') in ('provisional', 'final')
+        if slot in person:
+            seen[slot] = 'counted' if counted else 'uncertain' if state.get('state') == 'uncertain' else 'other'
+        elif counted and label in ('other', 'none', 'unlabelled'):
+            result[dict(other='other_to_person', none='nothing_to_person', unlabelled='unlabelled')[label]] += 1
+    for slot in person:
+        kind = seen.get(slot)
+        result['heard'] += kind is not None
+        result[dict(counted='counted_right', uncertain='uncertain', other='person_to_other').get(kind, 'not_heard')] += 1
+    return result
+
+
+def live_events(report, capability='speech.term_events'):
+    """What L1 counted the moment it committed each word (the HUD's instant count before any correction)."""
+    stated = (report.get('event_states') or {}).get(capability) or []
+    return [event for event in stated if event.get('event') == EVENT and 'replaces' not in event
+            and event.get('decided_by') is None and event.get('committed_state', 'provisional') in ('provisional', 'final')]
 
 
 def _percentiles(values):

@@ -821,6 +821,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
+                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)),
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
@@ -938,6 +939,10 @@ async def run_pipeline(recipe, args):
     from .instructions import Instructions
     recipe = dict(recipe, records=list(recipe.get('records', ())))     # an instruction may add one
     report = dict(recipe=recipe['name'], frames=0, **({'paced': True} if getattr(args, 'as_live', False) else {}))
+    if getattr(args, 'voice_sample', None):     # where the person's voice sample came from (recipes/voice_sample.py)
+        report['voice_sample'] = {key: value for key, value in args.voice_sample.items() if key != 'segments_s'}
+        report['voice_sample']['excluded_s'] = args.voice_sample.get('segments_s') or (
+            [[args.voice_sample['from_s'], args.voice_sample['to_s']]] if 'from_s' in args.voice_sample else [])
     inputs, first = recipe['inputs'], recipe['inputs'][0]['id']    # several: "frames" are those of the first input
     if len(inputs) > 1:
         report['input_frames'] = {item['id']: 0 for item in inputs}
@@ -1030,7 +1035,9 @@ async def run_pipeline(recipe, args):
                 if counted.get('states'):   # provisional + final are counted; revoked ones are not
                     report.setdefault('states', {})[capability] = counted.get('group_states') or counted['states']
                     report.setdefault('event_states', {})[capability] = event_states(
-                        own, human.store.known_times([row['id'] for row in own]))
+                        own, human.store.known_times([row['id'] for row in own]), paced=bool(report.get('paced')))
+                    report['decision_clock'] = 'capture (paced as live: knowledge time)' if report.get('paced') else \
+                        'capture (record time: the run was not paced, knowledge times are on another clock)'
                 report['lost'][capability] = pipeline.lost(capability)
             # Complete: no frame the count depends on was lost, failed or captured while a module was off.
             report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
@@ -1080,15 +1087,28 @@ async def run_pipeline(recipe, args):
     return report
 
 
-def event_states(rows, known):
+def event_states(rows, known, *, paced=False):
     """Each event with a revision state as it stands now, and when it was committed and settled.
 
     ``committed_ms`` / ``settled_ms``: when the Store learned the event and its revision (``known``: record ID ->
     knowledge time); ``capture_ms`` / ``settled_capture_ms``: the capture times of those records; ``committed_state``:
     the state it was committed in (``final`` when it said none).
+
+    ``history``: every step of the event, oldest first: the commit, then each revision (an event may be revised more
+    than once: uncertain, later final). Each step has ``state``, ``capture_ms`` (the capture time of the record that
+    holds it) and ``decided_ms``: the moment it was decided on the capture clock, i.e. when it appears live. In a run
+    paced as live (``paced``, ``--as-live``) that is when the Store learned it (the capture clock is the wall clock);
+    in a run faster than real time the knowledge time is on another clock, so it is the record's capture time (the
+    frame whose arrival decided it). A revision step also says ``reason``, ``basis`` and ``by`` (the lane that settled
+    it, e.g. ``verification``, ``tse``) where it has them.
     """
-    from ..counting import REVISION, revisions, with_state
-    revised, found = revisions(rows), []
+    from ..counting import REVISION, revision_history, revisions, with_state
+    revised, history, found = revisions(rows), revision_history(rows), []
+
+    def decided(record):
+        at = known.get(record['id']) if paced else None
+        return record['timestamp_ms'] if at is None else at
+
     for row in rows:
         for item in row['observation']['value'].get('events') or ():
             if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
@@ -1099,6 +1119,12 @@ def event_states(rows, known):
             if revision is not None:
                 entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'],
                              **({'settled_slot_score': revision[0]['slot_score']} if 'slot_score' in revision[0] else {}))
+            steps = [dict(state=item.get('state', 'final'), capture_ms=row['timestamp_ms'], decided_ms=decided(row),
+                          **({'by': item['decided_by']} if item.get('decided_by') else {}))]
+            for change, record in history.get(item['event_id'], ()):
+                steps.append(dict(state=change['state'], capture_ms=record['timestamp_ms'], decided_ms=decided(record),
+                                  **{key: change[key] for key in ('reason', 'basis', 'by') if change.get(key)}))
+            entry['history'] = steps
             found.append(entry)
     return found
 
@@ -1119,7 +1145,8 @@ async def enroll(recipe, args):
         setattr(args, name, values[0] if values else None)
     args.start = args.start or 0.
     if args.seconds is None:     # a voice needs speech: a whole recording (bounded), or 20 s of a microphone
-        args.seconds = 1.5 if kind != 'voice' else 20. if getattr(args, 'microphone', False) else 300.
+        args.seconds = 1.5 if kind != 'voice' else 15. if getattr(args, 'main_speaker', False) else \
+            20. if getattr(args, 'microphone', False) else 300.
     return await _enroll_identity(recipe, args, kind)
 
 
@@ -1229,8 +1256,30 @@ def _movement_options(parser):
     parser.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
     parser.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
     parser.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
+    parser.add_argument('--speaker-decision', metavar='JSON|FILE',
+                        help='speaker decision v2: compare with the references AND the other voices present '
+                             '(gamst/providers/voice_bank.py; {"l1": {...}, "l4": {...}, "bank": {...}})')
     parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
     parser.add_argument('--exit', type=float, help='release threshold')
+
+
+def _speaker_decision(value):
+    """``--speaker-decision``: a JSON object or a file of one (speaker decision v2, gamst/providers/voice_bank.py)::
+
+        {"l1": {"floor": 0.4, "margin": 0.05},                 # the live lane: each word vs references and negatives
+         "l4": {"decision": "relative", "floor": 0.4, "margin": 0.05, "word_margin": 0.05,
+                "anchor_ms": [10000, 5000]},                    # verification: speakers by comparison, word-anchored
+         "bank": {"combine": "max", "grow": true}}              # references (+ final words), negatives
+    """
+    if not value:
+        return None
+    try:
+        found = json.loads(Path(value).read_text() if Path(value).is_file() else value)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'--speaker-decision is a JSON object or a file of one: {error}') from None
+    if not isinstance(found, dict) or set(found) - {'l1', 'l4', 'bank'}:
+        raise SystemExit('--speaker-decision has "l1", "l4" and "bank"')
+    return found
 
 
 def _max_rev_s(args):
@@ -1279,6 +1328,11 @@ def main(argv=None):
                        help='voice / person: save embeddings only (needs --consent); terms: the words said in example '
                             'clips, proposed first and saved when confirmed')
     learn.add_argument('--consent', help='who consented to being enrolled, and to what')
+    learn.add_argument('--main-speaker', action='store_true',
+                       help='--kind voice without a marked range: enroll the speaker who speaks alone longest in the '
+                            'window (default the first 15 s), by pyannoteAI Precision-3 (needs --allow-remote-diarization)')
+    learn.add_argument('--allow-remote-diarization', action='store_true',
+                       help="consent to sending the window to pyannoteAI's paid API (--main-speaker)")
     learn.add_argument('--language', help="spoken language of term clips, e.g. ko (default: the recipe's)")
     _asr_options(learn)
     learn.add_argument('--out', help='enrollment JSON to write')
@@ -1287,6 +1341,8 @@ def main(argv=None):
     _source_options(start)
     _speed_options(start)
     _movement_options(start)
+    from .voice_sample import options as voice_sample_options
+    voice_sample_options(start)
     start.add_argument('--terms', help='comma-separated words to count (re:PATTERN for a pattern, word:W for W only as a whole word, word:W* '
                             'for whole words made of W, each repetition counted), or a terms file')
     start.add_argument('--language', help="spoken language, e.g. ko (default: the recipe's)")
@@ -1415,4 +1471,9 @@ def main(argv=None):
         if verdict.get('ok') is False:
             raise SystemExit('; '.join(verdict['problems']))
         print(json.dumps(dict(recipe=recipe['name'], sampling=verdict)), flush=True)
-        return asyncio.run(run_pipeline(recipe, args))
+        from . import voice_sample
+        args.voice_sample = asyncio.run(voice_sample.prepare(recipe, args))
+        try:
+            return asyncio.run(run_pipeline(recipe, args))
+        finally:
+            voice_sample.cleanup(args)
