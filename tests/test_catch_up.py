@@ -329,6 +329,7 @@ class StreamingForkTest(unittest.TestCase):
                 self.assertEqual(state['pause_ms'], BASE + 2000)
                 self.assertEqual(state['context'], '뽀또')
                 other = module.fork()
+                self.assertNotEqual(other.name, module.name)              # utterance IDs never collide
                 other.restore(state)
                 await other.process(frames(1)[0])
                 await other.close()

@@ -112,3 +112,5 @@ would make attribution direct (each microphone is its own input); not configured
 
 **Terms that are sound words.** A term can be an onomatopoeic syllable such as "달" said alone or repeated ("달달달"): it is
 matched only as a whole word made of that syllable, never inside other words ("달라", "달걀"), and each repetition counts.
+
+How it is built (contracts, settings, status fields): [catch-up-verification.md](catch-up-verification.md).

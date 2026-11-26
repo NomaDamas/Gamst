@@ -1,7 +1,7 @@
 # Catch-up lanes and the verification lane (owner design, 2026-11-26)
 
-Extends [realtime-attribution-decisions.md](realtime-attribution-decisions.md) (decision 1: realtime first, then
-correction). Everything here is inside the existing Pipeline, records and revision states; nothing is specific to a
+Implements [realtime-attribution-decisions.md](realtime-attribution-decisions.md) (decision 1, and "Details agreed with
+the owner"). Everything here is inside the existing Pipeline, records and revision states; nothing is specific to a
 word or a clip, and every number below is a parameter.
 
 ```text
@@ -54,7 +54,7 @@ microphone ─┬─▶ L1 live lane (asr: any forkable module) ── words, pr
 
 ## Provisional words (L1/L2)
 
-With `--with verification`, `speaker_check` (the per-word CAM++ score against the owner's few-shot voice) gives each
+L1 is the recipe's `asr` (Scribe v3 Live, the counted words as `keyterms`: `"bias": "terms"`). With `--with verification`, `speaker_check` (the per-word CAM++ score against the owner's few-shot voice) gives each
 word a `word_id` and `state: "provisional"`; `terms` counts it at once (`provisional`). Live diarization slots are not
 used to decide who said a word (owner decision). Late words of a catch-up worker are scored on the kept audio.
 
@@ -65,7 +65,9 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
 `near_ms`, so a catch-up worker never changes a word after it was settled.
 
 - **Second recogniser**: `gpt-live-transcribe`, the counted words as `keywords`, Qwen3-ForcedAligner word times
-  (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete.
+  (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete, at most `feed_speed` (1.25) times real
+  time: it is a realtime API, and a little faster lets it catch up after a stall (`null`: as soon as complete, in
+  bursts).
 - **Diarization windows**: pyannoteAI Precision-3 (`"diarizer"`) on `[region - before_ms (15 s), region + after_ms
   (5 s)]` (windows overlap), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
   active) is cut in `piece_ms` pieces, embedded with CAM++ and its duration-weighted mean scored against the voice;

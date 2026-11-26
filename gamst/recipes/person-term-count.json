@@ -121,6 +121,7 @@
       "use": "stream-words",
       "candidate": "elevenlabs.scribe_v3_live.hosted",
       "language": "ko",
+      "bias": "terms",
       "consumes": [
         "voice"
       ],

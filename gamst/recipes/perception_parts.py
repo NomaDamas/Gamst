@@ -108,7 +108,7 @@ async def _word_verify(options, context):
                               audio=audio, rule=options.get('rule'), voice=dict(
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
                                   is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
-                              feed_speed=options.get('feed_speed'))
+                              **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
     return dict(module=module, spec=module.spec)
 
 

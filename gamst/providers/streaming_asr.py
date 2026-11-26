@@ -482,6 +482,8 @@ class StreamingWords:
         other = StreamingWords(self.session.fork(), aligner=self.aligner, endpointer=endpointer, **self._options)
         other.partials = False
         other._owns_aligner = False
+        self._forks = getattr(self, '_forks', 0) + 1
+        other.name = f'{self.name}.catch-up{self._forks}'     # its turns are other utterances than this session's
         return other
 
     def restore(self, state):
