@@ -68,7 +68,7 @@ from .term_events import parse_terms, term_occurrences
 SAMPLE_RATE = 16000
 RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True, keep_clear_voice=True, clear='either',
             clear_margin=.1, vote=False, vote_adds_once=True, decide='pair', keep_single=True,
-            contested='uncertain', contest_by='all', low_confidence=None, add='agreed')
+            contested='stand', contest_by='all', low_confidence=None, add='agreed')
 DECIDE = ('pair', 'majority', 'primary')
 CONTESTED = ('uncertain', 'stand')       # primary rule: a contested primary word that is not vetoed
 CONTEST_BY = ('all', 'any')              # primary rule: which other recognisers must have written other words there

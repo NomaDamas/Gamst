@@ -317,7 +317,7 @@ class VerificationTest(unittest.TestCase):
 
     def test_the_primary_recogniser_is_never_outvoted(self):
         # 6: only the first (primary) wrote it; the second wrote another word near it, the third (12) nothing near
-        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='primary'), votes=(12,))
+        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='primary', contested='uncertain'), votes=(12,))
         self.assertTrue(verdicts['u6#0']['match'])
         self.assertEqual(verdicts['u6#0']['basis'], 'primary+uncontested+person_speaker')
         self.assertEqual(verdicts['u26#0']['reason'], 'other_speaker')     # the voice still decides whose it is
@@ -327,7 +327,7 @@ class VerificationTest(unittest.TestCase):
         self.assertEqual(majority['u6#0']['reason'], 'heard_by_one')
 
     def test_a_contested_primary_word_is_uncertain_not_revoked(self):
-        counted, verdicts, _ = self.run_lane(dict(vote=True, decide='primary', contest_by='any'), votes=(12,))
+        counted, verdicts, _ = self.run_lane(dict(vote=True, decide='primary', contest_by='any', contested='uncertain'), votes=(12,))
         verdict = verdicts['u6#0']
         self.assertEqual((verdict['match'], verdict['reason'], verdict['uncertain']), (False, 'contested', True))
         self.assertEqual(verdict['basis'], 'primary+contested(second)+person_speaker')
@@ -337,7 +337,7 @@ class VerificationTest(unittest.TestCase):
         self.assertTrue(verdicts['u6#0']['match'])
 
     def test_a_contested_primary_word_is_vetoed_only_with_low_confidence_of_its_own(self):
-        rule = dict(vote=True, decide='primary', contest_by='any', low_confidence=.3)
+        rule = dict(vote=True, decide='primary', contest_by='any', low_confidence=.3, contested='uncertain')
         _, verdicts, _ = self.run_lane(rule, votes=(12,), logprob={6: -3.0, 4: -3.0})
         self.assertEqual((verdicts['u6#0']['reason'], verdicts['u6#0']['primary_confidence']), ('vetoed', .0498))
         self.assertTrue(verdicts['u4#0']['match'])                           # heard twice: never vetoed
