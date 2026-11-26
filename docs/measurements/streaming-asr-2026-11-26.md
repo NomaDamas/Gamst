@@ -123,6 +123,17 @@ List prices, read 2026-11-26. Silence is billed too.
 
 This work's hosted calls came to about $0.11 at list price: 7 OpenAI and 10 ElevenLabs sessions, including smoke tests.
 
+## Default
+
+The owner chose Scribe v3 Live with client commits (`elevenlabs.scribe_v3_live.hosted`) as the `audio.asr` default on
+every tier, and the `stream-words` part for `person-term-count`, `person-voice-style-count` and `scene` (Whisper's
+weights were removed; its candidates stay registered as choices). The choice rests on this one clip.
+- Setup installs only the WebSocket client.
+- A run without `--allow-remote-asr` stops before any input opens. The message names the flag and the local choices
+  (`--asr sherpa.zipformer_ko_streaming`, `--asr voxtral.mini_4b_realtime_2602.mlx`).
+- The recipe tests drive the real part against a local stand-in server (`ScribeStandIn` in
+  `tests/test_streaming_asr.py`).
+
 ## Not done
 
 - One clip only. The defaults (endpointer rules, commit strategy) were not tuned on it. The commit strategy default

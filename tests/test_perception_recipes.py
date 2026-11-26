@@ -14,12 +14,12 @@ import numpy as np
 from gamst import Gamst, recipes
 from gamst.pipeline import Derived, Pipeline
 from gamst.private_payload import PrivatePoses
-from gamst.providers.asr_words import words_capability
 from gamst.providers.streaming_semantic import OpenAIStreamingBackend
 from gamst.recipes.parts import PARTS
 from gamst.recipes.perception_parts import MATH
 from tests.test_recipes import HOST
 from tests.test_speaker_verify import ToneEmbedder, now, tone
+from tests.test_streaming_asr import ScribeStandIn
 
 try:
     import cv2  # noqa: F401
@@ -39,27 +39,13 @@ class Embedder(ToneEmbedder):
         type(self).closed += 1
 
 
-class Words:
-    """Stand-in for the ASR worker: one final utterance per second of non-silent audio."""
-    spec = words_capability('test')
-
-    def __init__(self):
-        self.heard, self.start = [], None
-
-    def process(self, frame):
-        self.start = frame.timestamp_ms - 100 if self.start is None else self.start
-        self.heard.append(frame.data)
-        return self._final(frame.timestamp_ms) if len(self.heard) == 10 else None
-
-    def _final(self, end):
-        loud, start = np.abs(np.concatenate(self.heard)).mean() > .05, self.start
-        self.heard, self.start = [], None
-        return self.spec.validate(dict(utterance_id=f'u{start}', status='final', text='대박이다', start_ms=start, end_ms=end,
-                                       words=[dict(text='대박이다', start_ms=start + 100, end_ms=end - 100)])) if loud else None
+def loud_seconds():
+    """Stand-in recogniser (``ScribeStandIn``): '대박이다' in each second of non-silent audio, 0.1 s from its edges."""
+    return lambda index, samples: ('대박이다', .1, .9) if np.abs(samples).mean() > .05 else None
 
 
 async def fake_open(client, entry):
-    return dict(RemoteEmbedder=Embedder, RemoteWhisper=Words)[client]()
+    return dict(RemoteEmbedder=Embedder)[client]()
 
 
 def write_wav(path, samples):
@@ -76,11 +62,11 @@ class SpeechRecipeTest(unittest.TestCase):
         self.profile.write_text(json.dumps(dict(version=1, roles={
             'audio.speaker_verify': dict(model='sherpa.campplus_zh_en', python=sys.executable,
                                          config=dict(backend='sherpa-onnx', path='/m.onnx', sha256='a' * 64)),
-            'audio.asr': dict(model='faster_whisper.small', python=sys.executable, config=dict(model_path='/m')),
             'audio.prosody': dict(model='dsp', python=sys.executable, config={})})))
         patcher = mock.patch('gamst.recipes.perception_parts._open', fake_open)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.scribe = ScribeStandIn(loud_seconds).start(self)     # the default recogniser, answered locally
 
     def enroll_voice(self):
         clip = write_wav(self.tmp / 'me.wav', tone(220, 4.))

@@ -212,9 +212,9 @@
     },
     {
       "name": "asr",
-      "use": "whisper-words",
+      "use": "stream-words",
+      "candidate": "elevenlabs.scribe_v3_live.hosted",
       "language": "ko",
-      "window_seconds": 3.0,
       "consumes": [
         "voice"
       ],

@@ -118,7 +118,8 @@
     },
     {
       "name": "asr",
-      "use": "whisper-words",
+      "use": "stream-words",
+      "candidate": "elevenlabs.scribe_v3_live.hosted",
       "language": "ko",
       "consumes": [
         "voice"
@@ -127,11 +128,7 @@
         "target_voice": [
           "microphone"
         ]
-      },
-      "segmentation": "phrases",
-      "hop_seconds": 4.0,
-      "margin_seconds": 3.0,
-      "max_seconds": 25.0
+      }
     },
     {
       "name": "diarization",
