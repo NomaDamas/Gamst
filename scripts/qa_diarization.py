@@ -25,6 +25,11 @@ PERSON = [(11.64, 12.04), (13.60, 14.00), (19.38, 19.74), (19.74, 20.14), (21.06
 OTHER = [(12.52, 12.64), (20.14, 20.34), (20.34, 20.74), (27.06, 27.44), (49.44, 49.86)]
 OTHER_REGION = (49.0, 52.0)
 EXCHANGE = (19.4, 20.8)
+# The owner's overlapped cases (person's word / another voice's word said over or right at it): 12.04/12.64,
+# 19.74-20.74, 27.44/28.10. Each region spans those words (Whisper-turbo spans with the owner's ends).
+OVERLAP_REGIONS = [(11.64, 12.64), (19.38, 20.74), (27.06, 28.10)]
+OVERLAP_WORDS = [('person', 11.64, 12.04), ('other', 12.52, 12.64), ('person', 19.38, 19.74), ('person', 19.74, 20.14),
+                 ('other', 20.14, 20.34), ('other', 20.34, 20.74), ('other', 27.06, 27.44), ('person', 27.98, 28.10)]
 
 
 def mb(value):
@@ -131,6 +136,34 @@ def score(path):
         compute_per_audio=round(result['compute_s'] / result['audio_s'], 2), peak_rss_mb=round(result['rss_peak_mb']))
 
 
+def overlap_intervals(active, min_ms=0):
+    """[(start_s, end_s)] where two or more slots are active at once, runs shorter than ``min_ms`` left out."""
+    both = active.sum(axis=0) >= 2
+    runs, start = [], None
+    for index, flag in enumerate(list(both) + [False]):
+        if flag and start is None:
+            start = index
+        elif not flag and start is not None:
+            if (index - start) * 10 >= min_ms:
+                runs.append((start / 100, index / 100))
+            start = None
+    return runs
+
+
+def overlap(path, margin_s=0.):
+    """Recall of the owner's overlapped cases by a candidate's overlap flags (two slots at once), and how much else it flags."""
+    result = json.load(open(path))
+    runs = overlap_intervals(grid(result))
+    hits = lambda begin, end: any(low - margin_s < end and high + margin_s > begin for low, high in runs)
+    person_alone = [span for span in PERSON if not any(span[0] < high and span[1] > low for low, high in OVERLAP_REGIONS)]
+    return dict(
+        regions=[hits(*region) for region in OVERLAP_REGIONS],
+        words=[f'{who}@{end:.2f}:{"yes" if hits(begin, end) else "no"}' for who, begin, end in OVERLAP_WORDS],
+        person_alone_flagged=[f'{end:.2f}' for begin, end in person_alone if hits(begin, end)],
+        flagged_s=round(sum(high - low for low, high in runs), 2), intervals=len(runs),
+        runs=' '.join(f'{low:.2f}-{high:.2f}' for low, high in runs))
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest='command', required=True)
@@ -143,9 +176,15 @@ def main():
     measure.add_argument('--block-ms', type=int, default=100)
     scoring = commands.add_parser('score')
     scoring.add_argument('paths', nargs='+')
+    flags = commands.add_parser('overlap')
+    flags.add_argument('paths', nargs='+')
+    flags.add_argument('--margin-s', type=float, default=0.)
     args = parser.parse_args()
     if args.command == 'run':
         run(args)
+    elif args.command == 'overlap':
+        for path in args.paths:
+            print(path, json.dumps(overlap(path, args.margin_s), ensure_ascii=False))
     else:
         for path in args.paths:
             print(path, json.dumps(score(path), ensure_ascii=False))

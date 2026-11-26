@@ -8,6 +8,9 @@ Two ways to condition on the person:
 
 1. **Enrollment audio** (:class:`TargetSpeech`): a target-speaker-extraction model takes the mixture
    and a clip of the enrolled voice.
+   - ``ps4``: PS4 (TaurenMountain/PS4, Apache-2.0), BSRNN + ECAPA-TDNN fine-tuned on real meeting recordings;
+     the best released system of the SLT 2026 REAL-TSE challenge (:class:`PS4Extractor`). The TSE lane
+     (:mod:`gamst.providers.overlap_tse`) runs it on the stretches where voices meet.
    - ``wesep``: WeSep BSRNN (``wesep_2024`` branch, pretrained English model ``bsrnn_ecapa_vox1``),
      Apache-2.0 code. ``wesep.load_model_local(dir)`` + ``extract_speech_from_pcm``. 16 kHz.
    - ``usef``: USEF-TFGridNet (ZBang/USEF-TSE). Best SI-SDRi in the research notes, but code and
@@ -185,7 +188,90 @@ class USEFExtractor:
         return _fit(resample(estimate, self.sample_rate, SAMPLE_RATE), len(mixture))
 
 
-EXTRACTORS = {'wesep': WeSepExtractor, 'usef': USEFExtractor}
+class PS4Extractor:
+    """PS4 (TaurenMountain/PS4, Apache-2.0): BSRNN + ECAPA-TDNN fine-tuned on real meeting recordings, 16 kHz.
+
+    Second on the SLT 2026 REAL-TSE leaderboard's offline track and the best released system there (arXiv
+    2607.08111, 2607.15198). The publisher's ``inference.py`` (pinned by sha256) defines the network; it is loaded
+    from the model directory by path. The model is not causal (bidirectional band and sequence RNNs, whole-window
+    normalisation), so it runs on windows. The enrolled voice is embedded once: the publisher's speaker encoder on
+    ``enroll_piece_s`` pieces of the enrollment clip (its training enrolments were at most 10 s), the mean of the
+    pieces' embeddings conditions every window.
+    """
+
+    sample_rate = SAMPLE_RATE
+    CODE_SHA256 = '172f22339c79c29e46b1e213e91f822fb46b13d95cd3c90bfc93b8b007ea004e'
+
+    def __init__(self, model, model_id, device, *, enroll_piece_s=10.):
+        self.model, self.model_id, self.device = model, model_id, device
+        self.enroll_piece_s = float(enroll_piece_s)
+        self._enrolled = None      # (id of the enrollment array, embedding)
+
+    @classmethod
+    def from_local(cls, directory, *, sha256=None, device='cpu', threads=None, enroll_piece_s=10.):
+        import importlib.util
+        import torch
+        directory = Path(directory)
+        code, checkpoint = directory / 'inference.py', directory / 'checkpoint_epoch037.pt'
+        if not code.is_file() or not checkpoint.is_file():
+            raise ValueError(f'{directory} needs inference.py and checkpoint_epoch037.pt (TaurenMountain/PS4)')
+        _verify(code, cls.CODE_SHA256)
+        digest = _verify(checkpoint, sha256)
+        if threads:
+            torch.set_num_threads(int(threads))
+        spec = importlib.util.spec_from_file_location('gamst_ps4_network', code)
+        network = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(network)
+        model = network.build_model(torch.device('cpu'))
+        saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
+        state = saved.get('model', saved.get('state_dict', saved)) if isinstance(saved, dict) else saved
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            raise ValueError(f'PS4 checkpoint does not fit the network: {len(missing)} missing, {len(unexpected)} unexpected keys')
+        model.eval().to(device)
+        return cls(model, f'ps4:{digest[:16]}', device, enroll_piece_s=enroll_piece_s)
+
+    def embedding(self, enrollment):
+        """The conditioning vector of one enrollment clip (mean over its pieces), computed once per clip."""
+        import torch
+        if self._enrolled is not None and self._enrolled[0] is enrollment:
+            return self._enrolled[1]
+        samples = mono_float(enrollment)
+        size = int(self.enroll_piece_s * SAMPLE_RATE)
+        pieces = [samples[i:i + size] for i in range(0, len(samples), size)]
+        pieces = [piece for piece in pieces if len(piece) >= SAMPLE_RATE] or [samples]
+        model, vectors = self.model, []
+        with torch.inference_mode():
+            for piece in pieces:
+                wav = torch.from_numpy(piece).unsqueeze(0).to(self.device)
+                feats = model.spk_encoder(model.preEmphasis(wav)) + 1e-8
+                feats = feats.log()
+                feats = (feats - feats.mean(dim=-1, keepdim=True)).permute(0, 2, 1)
+                vector = model.spk_model(feats)
+                vectors.append(vector[-1] if isinstance(vector, tuple) else vector)
+            vector = torch.stack(vectors).mean(dim=0)
+        self._enrolled = (enrollment, vector)
+        return vector
+
+    def extract(self, mixture, enrollment):
+        import torch
+        np = _np()
+        vector = self.embedding(enrollment)
+        samples = mono_float(mixture)
+        peak = float(np.abs(samples).max()) if len(samples) else 0.
+        if peak <= 0:
+            return np.zeros(len(samples), np.float32)
+        model = self.model
+        with torch.inference_mode():
+            model.joint_training = False      # the enrolled voice's vector is given: the encoder ran once
+            try:      # peak-normalised in, as the publisher's loader gives it; back at the mixture's level out
+                estimate, _ = model(torch.from_numpy(samples / peak).unsqueeze(0).to(self.device), vector)
+            finally:
+                model.joint_training = True
+        return _fit(estimate.detach().cpu().numpy().reshape(-1) * peak, len(samples))
+
+
+EXTRACTORS = {'wesep': WeSepExtractor, 'usef': USEFExtractor, 'ps4': PS4Extractor}
 
 
 def _fit(values, length):

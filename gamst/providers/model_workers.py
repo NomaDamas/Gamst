@@ -140,7 +140,8 @@ class _Extraction(_Worker):
 
     def query(self, frame, request):
         if (request or {}).get('role') == 'enrollment':
-            self.enrollment = frame.data
+            data = _numpy().asarray(frame.data)
+            self.enrollment = data.reshape(-1)[:int(request['samples'])] if 'samples' in request else data
             return _speech([])
         if self.enrollment is None:
             raise RuntimeError('no enrolled clip')
@@ -365,9 +366,18 @@ class RemoteExtractor(_Client):
         _, private = await self.worker.query(self._frame(samples, 'audio', sample_rate=SAMPLE_RATE), request)
         return private.take('waveform')
 
+    ROW = 16000
+
     async def extract(self, mixture, enrollment):
         if self._sent is not enrollment:
-            await self._query(enrollment, dict(role='enrollment'))
+            import numpy as np
+            samples = np.asarray(enrollment, dtype=np.float32).reshape(-1)
+            request, data = dict(role='enrollment'), samples
+            if len(samples) > self.ROW:      # rows of one second: a clip of any length fits the wire's per-dimension limit
+                data = np.zeros(-(-len(samples) // self.ROW) * self.ROW, np.float32)
+                data[:len(samples)] = samples
+                data, request['samples'] = data.reshape(-1, self.ROW), len(samples)
+            await self._query(data, request)
             self._sent = enrollment
         return await self._query(mixture, dict(role='mixture'))
 

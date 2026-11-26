@@ -577,6 +577,10 @@ def _role_config(selection, weight_paths, source_dir):
         config["path"] = str(Path(first["path"]).parents[len(Path(first["name"]).parts) - 1])
     elif model == "video_depth.large":
         config.update(path=first["path"], sha256=first["sha256"], source_dir=source_dir)
+    elif model == "ps4.bsrnn_real":
+        # The publisher's directory: inference.py (the network, pinned) next to the checkpoint.
+        weights = next(item for item in weight_paths if item["name"] == "checkpoint_epoch037.pt")
+        config.update(directory=str(Path(weights["path"]).parent), sha256=weights["sha256"])
     elif model.startswith("efficienttam."):
         config.update(checkpoint_path=first["path"], checkpoint_sha256=first["sha256"], source_dir=source_dir,
                       runtime_root=str(Path(first["path"]).parent / "runtime"))

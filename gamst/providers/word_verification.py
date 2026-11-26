@@ -31,8 +31,10 @@ never change a word after it was settled. For each stretch it has:
   added) unless ``keep_single`` and no other recogniser wrote anything near it and the voice is clear;
 - **the voice rule** (:data:`VOICE`) for each word that stays: the person's speaker active over the word and no other
   speaker over ``overlap_share`` of it -> the person; another speaker dominant -> another voice; both over
-  ``overlap_share`` (overlapped speech) -> the per-word voice score decides, and below ``threshold`` the word is
-  ``uncertain_overlap``: its verdict says ``uncertain: true``, :class:`gamst.providers.term_events.TermEvents` gives it
+  ``overlap_share`` (overlapped speech) -> the TSE lane's decision where the word carries one
+  (:mod:`gamst.providers.overlap_tse`: the person's voice extracted from the mixture, heard and scored; person ->
+  the person, not the person -> another voice, uncertain -> ``uncertain_overlap``), else the per-word voice score
+  decides, and below ``threshold`` the word is ``uncertain_overlap``: its verdict says ``uncertain: true``, :class:`gamst.providers.term_events.TermEvents` gives it
   the state ``uncertain`` (not counted, not revoked), and a later lane may still settle it with a verdict of its own. With no speaker active, or an unidentified one, the per-word score
   decides.
 
@@ -558,8 +560,20 @@ class WordVerification:
                 self._scores.pop(next(iter(self._scores)))
         return self._scores[key]
 
-    async def _voice_of(self, window, start, end):
-        """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window."""
+    def _tse_at(self, start, end, words=None):
+        """The TSE lane's decision (``tse`` on a provisional word, :mod:`gamst.providers.overlap_tse`) over [start, end),
+        from ``words`` or else from the open provisional words there; None where it decided none."""
+        if words is None:
+            words = [word for word in self._open.values() if type(word.get('start_ms')) is int
+                     and word['start_ms'] < max(end, start + 1) and word.get('end_ms', word['start_ms']) > start]
+        return next((word['tse'] for word in words if isinstance(word.get('tse'), dict)
+                     and word['tse'].get('decision') in ('person', 'other', 'uncertain')), None)
+
+    async def _voice_of(self, window, start, end, words=None):
+        """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window.
+
+        Overlapped speech (the person's speaker and another over ``overlap_share``): the TSE lane's decision where a
+        provisional word there carries one (``words``, else the open words over the span), else the per-word score."""
         shares = _share(window['turns'], start, end)
         active = {speaker: share for speaker, share in shares.items() if share >= self.voice['active_share']}
         person = max((share for speaker, share in active.items() if speaker in window['person']), default=0.)
@@ -568,6 +582,12 @@ class WordVerification:
         scores = {item['speaker']: item['score'] for item in window['speakers']}
         limit = self.voice['overlap_share']
         if person >= limit and other >= limit:
+            tse = self._tse_at(start, end, words)
+            if tse is not None:
+                decision = tse['decision']
+                reason = None if decision == 'person' else 'other_speaker' if decision == 'other' else 'uncertain_overlap'
+                return decision == 'person', f'overlap_tse_{decision}', reason, dominant, scores.get(dominant), \
+                    tse.get('score')
             score = await self._word_score(start, end)
             matched = score is not None and score >= self.voice['threshold']
             return matched, 'overlap_voice_score', None if matched else 'uncertain_overlap', dominant, \
