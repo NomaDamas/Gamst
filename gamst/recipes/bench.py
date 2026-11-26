@@ -159,7 +159,7 @@ def score_run(truth, report, *, finished_ms, duration_s, capability='speech.term
     """The table row of one run's report."""
     start = report['start_ms']
     stated = report.get('event_states', {}).get(capability)
-    if stated is None:      # nothing was provisional: as committed is final
+    if not stated:      # nothing was provisional: as committed is final
         stated = [dict(event, state='final') for event in report['events'].get(capability, ()) if event.get('event') == EVENT]
     spoken = [event for event in stated if event.get('event') == EVENT]
     final = [event for event in spoken if event['state'] != 'revoked']

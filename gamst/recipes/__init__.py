@@ -1026,8 +1026,6 @@ def event_states(rows, known):
         for item in row['observation']['value'].get('events') or ():
             if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
                 continue
-            if 'state' not in item and item['event_id'] not in revised:
-                continue
             entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'])
             revision = revised.get(item['event_id'])
             if revision is not None:
