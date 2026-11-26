@@ -114,3 +114,35 @@ Videos: `~/Desktop/홍명보/gamst/GAMST 카운트 결과/{뽀또/뽀또, 감스
 (11.78), 몇기야 2 (2.72, 12.26), 시발 0, 달 10 (7.94 x5, 9.3 x5) -> scored 9 / 4 / 7 / 13. Table helper (scratchpad,
 rewrite if lost): for each clip run `scripts/score_owner_clips.py <report> truth_owner.json --voice hud/m1.voice.json`.
 The v2 study cache of 뽀또 was rebuilt for the new label (old one kept as `testbed/v2/bbo.before-2213.json`).
+
+## Per-error-type table, final labels, enrolled main-speaker segments excluded (scored person words 9 / 4 / 7 / 13)
+Columns: person scored | heard | L1 instant right/counted | final right/counted | person→other | other→person
+(incl. nothing-said and unlabelled) | uncertain | not heard.
+current (voice from another recording; old runs r1, bbo r2):
+| 뽀또 | 9 | 8 | 4/4 | 6/7 | 1 | 1 | 1 | 1 |
+| 몇기야 | 4 | 4 | 0/0 | 0/0 | 4 | 0 | 0 | 0 |
+| 시발 | 7 | 7 | 0/0 | 0/0 | 7 | 0 | 0 | 0 |
+| 달 | 13 | 13 | 0/0 | 0/0 | 13 | 0 | 0 | 0 |
+same-clip reference only (m1: automatic main speaker of the first 15 s):
+| 뽀또 | 9 | 7 | 4/9 | 7/12 | 0 | 5 | 0 | 2 |
+| 몇기야 | 4 | 3 | 3/4 | 3/4 | 0 | 1 | 0 | 1 |
+| 시발 | 7 | 7 | 5/5 | 6/6 | 1 | 0 | 0 | 0 |
+| 달 | 13 | 12 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
+v2 live (v2: same voice, each clip with the parameters chosen on the other three; `try-it/hud/v2/<clip>.json`):
+| 뽀또 | 9 | 7 | 7/14 | 3/7 | 3 | 4 | 1 | 2 |
+| 몇기야 | 4 | 3 | 3/4 | 1/2 | 0 | 1 | 2 | 1 |
+| 시발 | 7 | 7 | 6/6 | 6/6 | 1 | 0 | 0 | 0 |
+| 달 | 13 | 12 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
+v2 latency: word-anchored diarization = one pyannoteAI job per word cluster (뽀또 34, 몇기야 23, 시발 10, 달 25 jobs;
+0.07 EUR together): provisional -> final p50 232-367 s (m1: about 20-45 s). Prefetch of a region's anchored windows
+together (commit after 뽀또/몇기야 started; 달 ran with it) did not bring it down enough (concurrency 2).
+Verdict: v2 as chosen by leave-one-clip-out is worse on 뽀또 and 몇기야, equal on 시발 and 달, and far slower. Not a
+default; it stays opt-in (`--speaker-decision`). The remaining errors are other voices that CAM++ scores like the person
+and that Precision-3 puts into the person's speaker; neither a margin nor negatives separate them on these clips.
+
+## Left
+- Wait for the rebuilt 뽀또 study cache and rerun `qa_speaker_decision_v2.py evaluate` (24.16 now other).
+- Full suite through guard (queued as hud-suite; log in the session scratchpad: rerun if lost) -> must be the 15 known
+  errors.
+- Not built: MCP/HUD hook for the voice-recording step; a running "main speaker so far" for live input without a
+  sample.
