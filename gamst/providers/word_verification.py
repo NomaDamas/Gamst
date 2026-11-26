@@ -60,7 +60,8 @@ RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True, keep_cle
 DECIDE = ('pair', 'majority')
 CLEAR = ('speaker', 'score', 'either', 'both')
 VOICE = dict(threshold=.5, min_speaker_ms=1000, piece_ms=2000, overlap_share=.3, active_share=.1, word_context_ms=1500,
-             min_dbfs=-45.)
+             min_dbfs=-45., decision='absolute', floor=None, margin=0., word_margin=0., anchor_ms=None, anchor_join_ms=1000)
+DECISIONS = ('absolute', 'relative')
 WINDOWS = dict(min_ms=10000, max_ms=20000, cap_ms=30000, pause_ms=500, before_ms=15000, after_ms=5000, concurrency=2,
                step_ms=None)
 
@@ -118,7 +119,7 @@ class WordVerification:
     owns_process = True
 
     def __init__(self, recogniser, diarizer, embedder, *, reference='voice', terms='terms', audio='microphone',
-                 rule=None, voice=None, windows=None, feed_speed=1.25, capability_id='speech.word_verdicts'):
+                 rule=None, voice=None, windows=None, feed_speed=1.25, capability_id='speech.word_verdicts', bank=None):
         self.recogniser, self.diarizer, self.embedder = recogniser, diarizer, embedder
         self.reference_name, self.terms_name, self.audio = reference, terms, audio
         self.rule, self.voice = _settings(RULE, rule, 'rule'), _settings(VOICE, voice, 'voice')
@@ -127,6 +128,19 @@ class WordVerification:
         if self.rule['clear'] not in CLEAR:
             raise ValueError(f"rule clear is one of {', '.join(CLEAR)}")
         self.windows = _settings(WINDOWS, windows, 'window')
+        # speaker decision v2 (voice ``decision: "relative"``, gamst/providers/voice_bank.py): the person's speaker in a
+        # window is the one closest to the references by ``margin`` (at least ``floor``); the window's other speakers
+        # become negatives; a word with no clear speaker counts when it is ``word_margin`` closer to the references than
+        # to every negative; ``anchor_ms: [before, after]`` diarizes a window around each word instead of the region's
+        if self.voice['decision'] not in DECISIONS:
+            raise ValueError(f"voice decision is one of {', '.join(DECISIONS)}")
+        if self.voice['floor'] is None:
+            self.voice['floor'] = self.voice['threshold']
+        anchor = self.voice['anchor_ms']
+        if anchor is not None and (len(anchor) != 2 or not 0 <= anchor[0] <= self.windows['before_ms']
+                                   or not 0 <= anchor[1] <= self.windows['after_ms']):
+            raise ValueError('anchor_ms is [before, after] within the windows before_ms / after_ms')
+        self.bank_settings, self.bank = bank, None
         # The second recogniser is a realtime API: it gets the complete audio at most ``feed_speed`` times real time,
         # evenly (a little faster than real time, so it catches up after a stall); None: as soon as it is complete
         self.feed_speed = None if feed_speed is None else float(feed_speed)
@@ -160,6 +174,9 @@ class WordVerification:
         if reference['value'].get('model') != self.embedder.model_id:
             raise ValueError('the voice reference was enrolled with another speaker model than verification runs')
         self.target = centroid(reference['value']['embeddings'])
+        if self.voice['decision'] == 'relative':
+            from .voice_bank import shared
+            self.bank = shared(pipeline, self.reference_name, reference['value']['embeddings'], self.bank_settings)
         words = pipeline.references.get(self.terms_name)
         if words is None or words['kind'] != 'terms':
             raise ValueError(f'verification needs the terms reference {self.terms_name!r}')
@@ -180,7 +197,7 @@ class WordVerification:
         self._decided = 0              # regions decided so far
         self._regions = []             # closed regions [{"start_ms", "end_ms", "reason"}], in capture order
         self._used = set()             # ids of second-hearing occurrences that confirmed or were added
-        self._outbox, self._scores = [], {}
+        self._outbox, self._scores, self._anchors = [], {}, {}
         self.stats = dict(regions=0, verdicts=0, added=0, late=0, windows=0, diarize_ms=[], decided_after_ms=[],
                           fed_ms=0, errors=[])
 
@@ -211,7 +228,8 @@ class WordVerification:
                     regions=[dict(item, end_ms=None if item['end_ms'] == float('inf') else item['end_ms'],
                                   length_ms=None if item['end_ms'] == float('inf') else item['end_ms'] - item['start_ms'])
                              for item in self._regions[-64:]], straddling=self._straddling(),
-                    diarize_jobs=self.stats.get('diarize_jobs', 0))
+                    diarize_jobs=self.stats.get('diarize_jobs', 0),
+                    **({'voice_bank': self.bank.status()} if self.bank is not None else {}))
 
     # ------------------------------------------------------------------ frames
 
@@ -494,25 +512,9 @@ class WordVerification:
 
     async def _identify(self, index, low, high):
         """Diarization of one window, and which of its speakers is the person (each one's own sound vs the voice)."""
-        samples = self.memory.span(low, high, SAMPLE_RATE)
-        began = time.monotonic()
-        segments = await asyncio.to_thread(self.diarizer.diarize, samples) if len(samples) >= SAMPLE_RATE else []
-        self.stats['diarize_ms'].append(round(1000 * (time.monotonic() - began)))
-        self.stats['windows'] += 1
-        turns = [(low + int(round(1000 * start)), low + int(round(1000 * end)), str(speaker)[:40])
-                 for start, end, speaker in segments if end > start]
-        speakers = []
-        for speaker, pieces in exclusive(turns, low, high).items():
-            speech = sum(end - start for start, end in pieces)
-            score = await self._speaker_score(pieces) if speech >= self.voice['min_speaker_ms'] else None
-            speakers.append(dict(speaker=speaker, speech_ms=int(speech), score=score,
-                                 person=score is not None and score >= self.voice['threshold']))
-        for speaker in {turn[2] for turn in turns} - {item['speaker'] for item in speakers}:
-            speakers.append(dict(speaker=speaker, speech_ms=0, score=None, person=False))
+        result = await self._diarized(low, high)
+        speakers = result['speakers']
         region = self._regions[index] if index < len(self._regions) else {}
-        result = dict(turns=turns, speakers=speakers, low=low, high=high,
-                      person={item['speaker'] for item in speakers if item['person']},
-                      unknown={item['speaker'] for item in speakers if item['score'] is None})
         self._outbox.append(self.spec.validate(dict(
             kind='window', reference=self.reference_name, start_ms=int(low), end_ms=int(high),
             speakers=sorted(speakers, key=lambda item: -item['speech_ms']),
@@ -521,7 +523,65 @@ class WordVerification:
                         reason=region.get('reason')), model=self._model())))
         return result
 
+    async def _anchored(self, start, end):
+        """The diarized window anchored to one word (``anchor_ms`` before / after its end), shared by words whose ends
+        are within ``anchor_join_ms``; it does not depend on where a region begins or ends."""
+        before, after = self.voice['anchor_ms']
+        join = self.voice['anchor_join_ms']
+        key = next((key for key in self._anchors if abs(key - end) <= join), None)
+        if key is None:
+            low = max(end - before, int(self.memory.start_ms or 0))
+            high = min(end + after, int(self.memory.end_ms or end + after))
+            self._anchors[end] = await self._diarized(low, high)
+            self.stats['anchor_jobs'] = self.stats.get('anchor_jobs', 0) + 1
+            while len(self._anchors) > 64:
+                self._anchors.pop(next(iter(self._anchors)))
+            key = end
+        return self._anchors[key]
+
+    async def _diarized(self, low, high):
+        """Turns, speakers (each one's score and vector) and who of them is the person in [low, high)."""
+        samples = self.memory.span(low, high, SAMPLE_RATE)
+        began = time.monotonic()
+        segments = await asyncio.to_thread(self.diarizer.diarize, samples) if len(samples) >= SAMPLE_RATE else []
+        self.stats['diarize_ms'].append(round(1000 * (time.monotonic() - began)))
+        self.stats['windows'] += 1
+        turns = [(low + int(round(1000 * start)), low + int(round(1000 * end)), str(speaker)[:40])
+                 for start, end, speaker in segments if end > start]
+        speakers, vectors = [], {}
+        for speaker, pieces in exclusive(turns, low, high).items():
+            speech = sum(end - start for start, end in pieces)
+            vector = await self._speaker_vector(pieces) if speech >= self.voice['min_speaker_ms'] else None
+            score = None if vector is None else round(cosine(vector, self.target), 5)
+            if vector is not None:
+                vectors[speaker] = vector
+            speakers.append(dict(speaker=speaker, speech_ms=int(speech), score=score,
+                                 person=score is not None and score >= self.voice['threshold']))
+        if self.bank is not None:       # relative: the speaker closest to the person, by a margin over the others
+            close = {speaker: self.bank.pos(vector) for speaker, vector in vectors.items()}
+            best = max(close, key=close.get) if close else None
+            others = [value for speaker, value in close.items() if speaker != best]
+            clear = best is not None and close[best] >= self.voice['floor'] and (
+                not others or close[best] - max(others) >= self.voice['margin'])
+            for item in speakers:
+                item['person'] = clear and item['speaker'] == best
+                if item['speaker'] in close:
+                    item['score'] = round(close[item['speaker']], 5)
+            if clear:       # the other voices of this window are not the person: negatives, without labels
+                for speaker, vector in vectors.items():
+                    if speaker != best:
+                        self.bank.add_negative(vector, (low, high, speaker))
+        for speaker in {turn[2] for turn in turns} - {item['speaker'] for item in speakers}:
+            speakers.append(dict(speaker=speaker, speech_ms=0, score=None, person=False))
+        return dict(turns=turns, speakers=speakers, low=low, high=high, vectors=vectors,
+                    person={item['speaker'] for item in speakers if item['person']},
+                    unknown={item['speaker'] for item in speakers if item['score'] is None})
+
     async def _speaker_score(self, pieces):
+        vector = await self._speaker_vector(pieces)
+        return None if vector is None else round(cosine(vector, self.target), 5)
+
+    async def _speaker_vector(self, pieces):
         import numpy as np
         sound = [self.memory.span(start, end, SAMPLE_RATE) for start, end in pieces]
         sound = [part for part in sound if len(part)]
@@ -541,24 +601,42 @@ class WordVerification:
         if not vectors:
             return None
         weight = sum(count for _, count in vectors)
-        mean = [sum(vector[i] * count for vector, count in vectors) / weight for i in range(len(vectors[0][0]))]
-        return round(cosine(mean, self.target), 5)
+        return l2_normalize([sum(vector[i] * count for vector, count in vectors) / weight
+                             for i in range(len(vectors[0][0]))])
 
     async def _word_score(self, start, end):
+        vector = await self._word_vector(start, end)
+        return None if vector is None else round(cosine(vector, self.target), 5)
+
+    async def _word_vector(self, start, end):
         key = (start, end)
         if key not in self._scores:
             middle, half = (start + end) // 2, max(self.voice['word_context_ms'], end - start) // 2
             samples = self.memory.span(middle - half, middle + half, SAMPLE_RATE)
-            score = None
+            vector = None
             if len(samples) >= SAMPLE_RATE // 4 and rms_dbfs(samples) >= self.voice['min_dbfs']:
                 try:
-                    score = round(cosine(await embed(self.embedder, samples, SAMPLE_RATE), self.target), 5)
+                    vector = await embed(self.embedder, samples, SAMPLE_RATE)
                 except ValueError:
-                    score = None
-            self._scores[key] = score
+                    vector = None
+            self._scores[key] = vector
             while len(self._scores) > 4096:
                 self._scores.pop(next(iter(self._scores)))
         return self._scores[key]
+
+    async def _word_match(self, window, start, end):
+        """(matched, score) of one word's own sound: the threshold, or (relative) the references against the negatives
+        known now and the window's other speakers."""
+        vector = await self._word_vector(start, end)
+        if vector is None:
+            return False, None
+        if self.bank is None:
+            score = round(cosine(vector, self.target), 5)
+            return score >= self.voice['threshold'], score
+        extra = [value for speaker, value in (window.get('vectors') or {}).items() if speaker not in window['person']]
+        matched, pos, _ = self.bank.decide(vector, floor=self.voice['floor'], margin=self.voice['word_margin'],
+                                           extra=extra)
+        return matched, pos
 
     def _tse_at(self, start, end, words=None):
         """The TSE lane's decision (``tse`` on a provisional word, :mod:`gamst.providers.overlap_tse`) over [start, end),
@@ -573,7 +651,10 @@ class WordVerification:
         """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window.
 
         Overlapped speech (the person's speaker and another over ``overlap_share``): the TSE lane's decision where a
-        provisional word there carries one (``words``, else the open words over the span), else the per-word score."""
+        provisional word there carries one (``words``, else the open words over the span), else the per-word score.
+        With ``anchor_ms`` the window is the one diarized around this word (:meth:`_anchored`)."""
+        if self.voice['anchor_ms'] is not None:
+            window = await self._anchored(start, end)
         shares = _share(window['turns'], start, end)
         active = {speaker: share for speaker, share in shares.items() if share >= self.voice['active_share']}
         person = max((share for speaker, share in active.items() if speaker in window['person']), default=0.)
@@ -588,16 +669,18 @@ class WordVerification:
                 reason = None if decision == 'person' else 'other_speaker' if decision == 'other' else 'uncertain_overlap'
                 return decision == 'person', f'overlap_tse_{decision}', reason, dominant, scores.get(dominant), \
                     tse.get('score')
-            score = await self._word_score(start, end)
-            matched = score is not None and score >= self.voice['threshold']
+            matched, score = await self._word_match(window, start, end)
             return matched, 'overlap_voice_score', None if matched else 'uncertain_overlap', dominant, \
                 scores.get(dominant), score
         if active and person >= other:
+            if self.bank is not None:       # the person's own speech, decided final: one more reference
+                speaker = max((name for name in active if name in window['person']), key=active.get)
+                if speaker in (window.get('vectors') or {}):
+                    self.bank.add_person(window['vectors'][speaker], (window['low'], window['high'], speaker))
             return True, 'person_speaker', None, dominant, scores.get(dominant), None
         if active and dominant not in window['unknown']:
             return False, 'other_speaker', 'other_speaker', dominant, scores.get(dominant), None
-        score = await self._word_score(start, end)
-        matched = score is not None and score >= self.voice['threshold']
+        matched, score = await self._word_match(window, start, end)
         basis = 'speaker_unidentified' if active else 'no_speaker'
         return matched, f'{basis}_voice_score', None if matched else basis, dominant, scores.get(dominant), score
 

@@ -230,7 +230,13 @@ class SpeakerVerify:
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
                  segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
-                 source_gate_db=None, turns=False, provisional=False, audio_memory=None):
+                 source_gate_db=None, turns=False, provisional=False, audio_memory=None, relative=None, bank=None):
+        # speaker decision v2 (gamst/providers/voice_bank.py): each word against the person's references AND the
+        # voices known not to be the person, as the bank holds them when the word is committed
+        self.relative = None if relative is None else dict(dict(floor=float(threshold), margin=0.), **relative)
+        if self.relative is not None and set(self.relative) - {'floor', 'margin'}:
+            raise ValueError('relative is {floor, margin}')
+        self.bank_settings, self.bank = bank, None
         self.provisional = bool(provisional)    # a later module settles each word: give it an ID and say so
         self.audio_memory, self._memory = audio_memory, None   # an input whose kept audio covers what the ring lost
         if self.provisional and not words:
@@ -275,6 +281,11 @@ class SpeakerVerify:
         if reference is None or reference['kind'] != 'voice':
             raise ValueError(f'speaker_verify needs a voice reference named {self.reference_name!r}')
         self.set_reference(reference['value'])
+        if self.relative is not None:
+            from .voice_bank import shared
+            if 'embeddings' not in (reference['value'] or {}):
+                raise ValueError('a relative speaker decision needs an enrolled voice (embeddings)')
+            self.bank = shared(pipeline, self.reference_name, reference['value']['embeddings'], self.bank_settings)
         if self.audio_memory is not None:
             self._memory = pipeline.keep_audio(self.audio_memory)
 
@@ -320,6 +331,10 @@ class SpeakerVerify:
 
     async def score(self, samples):
         """Cosine score of samples against the enrolled centroid, None below the energy gate."""
+        return (await self._scored(samples))[0]
+
+    async def _scored(self, samples):
+        """(score, embedding) of :meth:`score`; (None, None) below the energy gate."""
         if self._samples is not None:
             try:
                 enrolled = await enroll(self.embedder, self._samples['samples'],
@@ -330,11 +345,11 @@ class SpeakerVerify:
         if self.target is None:
             raise RuntimeError('no voice reference bound')
         if rms_dbfs(samples) < self.min_dbfs:
-            return None
+            return None, None
         embedding = await embed(self.embedder, samples, SAMPLE_RATE)
         if len(embedding) != len(self.target):
             raise RuntimeError('the voice reference has another embedding size than this model')
-        return round(cosine(embedding, self.target), 5)
+        return round(cosine(embedding, self.target), 5), embedding
 
     async def close(self):
         close = getattr(self.embedder, 'close', None)
@@ -424,9 +439,13 @@ class SpeakerVerify:
             return item
         first, last = self._around(item['start_ms'], item['end_ms'])
         try:
-            score = await self.score(self._span(first, last)) if self._covers(first, last) else None
+            score, vector = await self._scored(self._span(first, last)) if self._covers(first, last) else (None, None)
         except ValueError:
-            score = None
+            score = vector = None
+        if self.bank is not None and vector is not None and not self._waits():
+            match, pos, neg = self.bank.decide(vector, **self.relative)
+            return dict(item, match=match, speaker_score=pos, decision='relative',
+                        **({} if neg is None else {'negative_score': neg}))
         if self._waits():   # decided once the separated sources / turns of this word are here
             return dict(item, **({} if score is None else {'mixture_score': score})), (first, last)
         return dict(item, match=score is not None and score >= self.threshold,

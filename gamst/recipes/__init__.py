@@ -821,6 +821,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
+                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)),
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
@@ -1255,8 +1256,30 @@ def _movement_options(parser):
     parser.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
     parser.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
     parser.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
+    parser.add_argument('--speaker-decision', metavar='JSON|FILE',
+                        help='speaker decision v2: compare with the references AND the other voices present '
+                             '(gamst/providers/voice_bank.py; {"l1": {...}, "l4": {...}, "bank": {...}})')
     parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
     parser.add_argument('--exit', type=float, help='release threshold')
+
+
+def _speaker_decision(value):
+    """``--speaker-decision``: a JSON object or a file of one (speaker decision v2, gamst/providers/voice_bank.py)::
+
+        {"l1": {"floor": 0.4, "margin": 0.05},                 # the live lane: each word vs references and negatives
+         "l4": {"decision": "relative", "floor": 0.4, "margin": 0.05, "word_margin": 0.05,
+                "anchor_ms": [10000, 5000]},                    # verification: speakers by comparison, word-anchored
+         "bank": {"combine": "max", "grow": true}}              # references (+ final words), negatives
+    """
+    if not value:
+        return None
+    try:
+        found = json.loads(Path(value).read_text() if Path(value).is_file() else value)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'--speaker-decision is a JSON object or a file of one: {error}') from None
+    if not isinstance(found, dict) or set(found) - {'l1', 'l4', 'bank'}:
+        raise SystemExit('--speaker-decision has "l1", "l4" and "bank"')
+    return found
 
 
 def _max_rev_s(args):
