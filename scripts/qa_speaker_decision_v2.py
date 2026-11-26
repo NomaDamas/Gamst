@@ -23,7 +23,7 @@ Rules (``evaluate``), all generic:
   at that moment (decided ``l4_delay_s`` after their word), ``pos - max(neg) >= l1_margin`` and ``pos >= l1_floor``.
 
 Leave-one-clip-out: for each clip, the parameters with the fewest errors (person->other + other->person) on the other
-three clips are applied to it. All four folds are printed.
+three clips are applied to it (ties: fewer L1 errors, then the smallest change from the plain rule). All four folds are printed.
 """
 import csv
 import itertools
@@ -127,8 +127,8 @@ def ref_score(e, refs, mode):
 def decide(clip, rule, p):
     """Per word: (person truth, L1 counted, final counted) under one rule and its parameters."""
     voice = json.load(open(f'{T}/{clip}/hud/m1.voice.json'))
-    window = (voice.get('enrolled_from') or {}).get('window_s') or [voice['enrolled_from']['from_s'],
-                                                                   voice['enrolled_from']['to_s']]
+    origin = voice.get('enrolled_from') or {}
+    inside_sample = origin.get('segments_s') or [[origin['from_s'], origin['to_s']]]   # decision 28: the segments
     base = [unit(e) for e in voice['embeddings']]
     data = json.load(open(f'{OUT}/{clip}.json'))['words']
     refs, negatives, out = [(-1e9, e) for e in base], [], []
@@ -169,7 +169,7 @@ def decide(clip, rule, p):
                 negatives += [(at, e) for s, e in speakers.items() if s != person]
                 if final and main == person:
                     refs.append((at, speakers[person]))
-        inside = window[0] <= word['end'] <= window[1]
+        inside = any(low <= word['end'] <= high for low, high in inside_sample)
         out.append(dict(end=word['end'], person=word['person'], l1=bool(l1), final=bool(final), excluded=inside))
     return out
 
@@ -184,6 +184,15 @@ def errors(rows, view):
 GRID = dict(context=['10/5', '4/2'], grow=[False, True], combine=['max', 'centroid'], floor=[.3, .4, .5],
             margin=[0., .05, .1], word_margin=[0., .05, .1], l1_floor=[.3, .4, .5], l1_margin=[0., .05, .1],
             l4_delay_s=[20.])
+
+
+NEUTRAL = dict(context='10/5', grow=False, combine='centroid', floor=.5, margin=0., word_margin=0., l1_floor=.5,
+               l1_margin=0.)
+
+
+def change(p):
+    """How far a setting is from the plain one (ties go to the smallest change: the data must ask for it)."""
+    return sum(abs(p[key] - value) if isinstance(value, float) else p[key] != value for key, value in NEUTRAL.items())
 
 
 def evaluate():
@@ -203,7 +212,8 @@ def evaluate():
     for held in clips:
         train = [clip for clip in clips if clip != held]
         cost = lambda i: (sum(cache[i, c][0]['person_to_other'] + cache[i, c][0]['other_to_person'] for c in train),
-                          sum(cache[i, c][1]['person_to_other'] + cache[i, c][1]['other_to_person'] for c in train))
+                          sum(cache[i, c][1]['person_to_other'] + cache[i, c][1]['other_to_person'] for c in train),
+                          change(grid[i]))
         best = min(range(len(grid)), key=cost)
         final, l1 = cache[best, held]
         for view, part in (('final', final), ('l1', l1)):
