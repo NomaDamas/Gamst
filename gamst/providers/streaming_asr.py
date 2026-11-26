@@ -279,7 +279,9 @@ class StreamingWords:
         await self._commit()
         await self.session.end()
         deadline = time.monotonic() + self.finish_timeout
-        while (self._waiting > 0 or not self.session.manual_commit and not self.session.ended) \
+        closes = getattr(self.session, 'closes_on_end', False)   # it answers what it holds, then closes
+        while ((not self.session.ended) if closes else (
+                self._waiting > 0 or not self.session.manual_commit and not self.session.ended)) \
                 and time.monotonic() < deadline and not self._pump.done():
             await asyncio.sleep(.05)
         if self._lane is not None:

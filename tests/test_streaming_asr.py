@@ -489,3 +489,131 @@ class AlignerTransportTest(unittest.TestCase):
         items = asyncio.run(client.align(samples, 16000, '뽀또', 'ko'))
         self.assertTrue(np.array_equal(seen['samples'], samples))
         self.assertAlmostEqual(items[0]['end_s'], 20 + 7 / 16000)
+
+
+@unittest.skipIf(np is None or websockets is None, 'numpy and websockets')
+class BinaryProvidersStandInTest(unittest.TestCase):
+    """AssemblyAI, Deepgram and Speechmatics: raw PCM16 frames in, word times from the stream start out."""
+
+    async def _run(self, api, protocol, **config):
+        from gamst.providers.streaming_asr import StreamingWords
+        from gamst.providers.streaming_hosted import session
+        seen = dict(samples=0, text=[], query=None)
+
+        async def handler(ws):
+            seen['query'] = ws.request.path
+            async for raw in ws:
+                if isinstance(raw, bytes):
+                    seen['samples'] += len(raw) // 2
+                    continue
+                message = json.loads(raw)
+                seen['text'].append(message)
+                for answer in protocol(message, seen):
+                    await asyncio.sleep(.2)          # late answers keep capture times
+                    await ws.send(json.dumps(answer))
+                if message.get('type') in ('Terminate', 'CloseStream') or message.get('message') == 'EndOfStream':
+                    await ws.close()
+                    return
+
+        import os
+        os.environ['GAMST_TEST_STREAM_KEY'] = 'k-1'
+        try:
+            async with _Stand(handler) as stand:
+                chosen = session(dict(api=api, endpoint=stand.url + '/live', terms=['뽀또'],
+                                      api_key_env='GAMST_TEST_STREAM_KEY', **config))
+                module = StreamingWords(chosen, language='ko', partials=True)
+                out = await feed(module, frames(3, loud=[(1, 2)]))
+        finally:
+            os.environ.pop('GAMST_TEST_STREAM_KEY')
+        headers = {key.lower(): value for key, value in stand.headers[0].items()}
+        self.assertNotIn('k-1', seen['query'])
+        return out, seen, headers
+
+    def _check(self, out):
+        finals = [value for value in out if value['status'] == 'final']
+        self.assertEqual(len(finals), 1)
+        self.assertEqual(finals[0]['words'][0]['text'], '뽀또')
+        self.assertEqual((finals[0]['words'][0]['start_ms'], finals[0]['words'][0]['end_ms']), (BASE + 1200, BASE + 1600))
+        self.assertTrue(any(value['status'] == 'partial' for value in out))
+        return finals[0]
+
+    def test_assemblyai_turns(self):
+        def protocol(message, seen):
+            if message.get('type') == 'Terminate':
+                words = [dict(text='뽀또', start=1200, end=1600, confidence=.9, word_is_final=True),
+                         dict(text='주세요.', start=1700, end=2100, confidence=.9, word_is_final=True)]
+                return [dict(type='Turn', turn_order=0, end_of_turn=False, transcript='뽀또', words=words[:1]),
+                        dict(type='Turn', turn_order=0, end_of_turn=True, transcript='뽀또 주세요.', words=words),
+                        dict(type='Termination', audio_duration_seconds=3)]
+            return []
+        out, seen, headers = asyncio.run(self._run('assemblyai', protocol))
+        final = self._check(out)
+        self.assertEqual(final['text'], '뽀또 주세요.')
+        self.assertEqual(seen['samples'], 3 * 16000)
+        self.assertIn('language_codes=%5B%22ko%22%5D', seen['query'])
+        self.assertIn('filter_profanity=false', seen['query'])
+        self.assertIn('keyterms_prompt=', seen['query'])
+        self.assertEqual(headers['authorization'], 'k-1')
+
+    def test_deepgram_results(self):
+        def protocol(message, seen):
+            if message.get('type') == 'CloseStream':
+                alternative = dict(transcript='뽀또 주세요', words=[
+                    dict(word='뽀또', punctuated_word='뽀또', start=1.2, end=1.6),
+                    dict(word='주세요', punctuated_word='주세요.', start=1.7, end=2.1)])
+                return [dict(type='Results', is_final=False, start=1.0, duration=1.2,
+                             channel=dict(alternatives=[dict(transcript='뽀또', words=[])])),
+                        dict(type='Results', is_final=True, speech_final=True, start=1.0, duration=1.2,
+                             channel=dict(alternatives=[alternative]))]
+            return []
+        out, seen, headers = asyncio.run(self._run('deepgram', protocol))
+        final = self._check(out)
+        self.assertEqual(final['words'][1]['text'], '주세요.')
+        self.assertIn('model=nova-3', seen['query'])
+        self.assertIn('language=ko', seen['query'])
+        self.assertIn('profanity_filter=false', seen['query'])
+        self.assertIn('keyterm=', seen['query'])
+        self.assertTrue(headers['authorization'].startswith('Token '))
+
+    def test_speechmatics_transcripts(self):
+        def protocol(message, seen):
+            if message.get('message') == 'StartRecognition':
+                return [dict(message='RecognitionStarted', id='x')]
+            if message.get('message') == 'EndOfStream':
+                result = lambda kind, text, a, b: dict(type=kind, start_time=a, end_time=b,
+                                                        alternatives=[dict(content=text, confidence=.9)])
+                return [dict(message='AddPartialTranscript', metadata=dict(transcript='뽀또', start_time=1.2, end_time=1.6),
+                             results=[result('word', '뽀또', 1.2, 1.6)]),
+                        dict(message='AddTranscript', metadata=dict(transcript='뽀또 주세요.', start_time=1.2, end_time=2.1),
+                             results=[result('word', '뽀또', 1.2, 1.6), result('word', '주세요', 1.7, 2.1),
+                                      result('punctuation', '.', 2.1, 2.1)]),
+                        dict(message='EndOfTranscript')]
+            return []
+        out, seen, headers = asyncio.run(self._run('speechmatics', protocol))
+        final = self._check(out)
+        self.assertEqual(final['words'][1]['text'], '주세요.')
+        start = seen['text'][0]
+        self.assertEqual(start['transcription_config']['language'], 'ko')
+        self.assertEqual(start['transcription_config']['additional_vocab'], [dict(content='뽀또')])
+        self.assertEqual(start['audio_format'], dict(type='raw', encoding='pcm_s16le', sample_rate=16000))
+        self.assertEqual(seen['text'][-1], dict(message='EndOfStream', last_seq_no=30))
+        self.assertTrue(headers['authorization'].startswith('Bearer '))
+
+    def test_client_commits_are_sent_when_asked(self):
+        from gamst.providers.streaming_hosted import session
+        for api in ('assemblyai', 'deepgram', 'speechmatics'):
+            self.assertTrue(session(dict(api=api, endpoint='ws://127.0.0.1:1/x', commit_strategy='manual')).manual_commit)
+            self.assertFalse(session(dict(api=api, endpoint='ws://127.0.0.1:1/x')).manual_commit)
+        with self.assertRaises(ValueError):
+            session(dict(api='deepgram', endpoint='ws://127.0.0.1:1/x', commit_strategy='vad'))
+
+    def test_the_new_candidates_never_send_by_default(self):
+        from gamst.crew.registry import ROLES
+        from gamst.providers.streaming_hosted import cost_line
+        for name in ('assemblyai.stt_3_7_realtime.hosted', 'deepgram.nova_3.hosted', 'speechmatics.enhanced.hosted'):
+            candidate = ROLES['audio.asr'].candidates[name]
+            self.assertFalse(candidate.automatic)
+            self.assertIs(candidate.config['allow_remote'], False)
+            self.assertIn('$', cost_line(candidate.config, 60))
+        self.assertIn('$0.366 per hour', cost_line(dict(ROLES['audio.asr'].candidates['deepgram.nova_3.hosted'].config,
+                                                        terms=['뽀또'])))
