@@ -28,10 +28,10 @@ PROTOCOL = 'gamst.private.v1'
 @dataclass(frozen=True)
 class Contract:
     """Shape and value bounds of one profile's private array (always little-endian float32)."""
-    kind: str                 # 'joints' | 'embedding' | 'waveform'
+    kind: str                 # 'joints' | 'embedding' | 'waveform' | 'sources'
     points: int = 0           # joints per person
     columns: tuple = ()       # joints: what each point carries
-    max_items: int = 0        # joints: people; embedding: vector length
+    max_items: int = 0        # joints: people; embedding: vector length; sources: speakers
     limit: float = 1e6        # largest absolute value
     private_only: bool = True # the profile has no use without its private payload
 
@@ -43,6 +43,9 @@ class Contract:
             valid = len(shape) == 3 and shape[0] <= self.max_items and shape[1:] == [self.points, len(self.columns)]
         elif self.kind == 'embedding':
             valid = len(shape) == 1 and (shape[0] == 0 or 16 <= shape[0] <= self.max_items)
+        elif self.kind == 'sources':  # one source per speaker of one block: none, or each as long as the block
+            samples = (frame['layout'].get('shape') or [0])[0] if frame else 0
+            valid = len(shape) == 2 and (shape == [0, 0] or 1 <= shape[0] <= self.max_items and shape[1] == samples)
         else:  # a waveform answers one block: nothing, or exactly as many samples
             samples = (frame['layout'].get('shape') or [0])[0] if frame else 0
             valid = len(shape) == 1 and shape[0] in (0, samples)
@@ -57,6 +60,8 @@ class Contract:
             consistent = public is not None and len(public['poses']) == shape[0]
         elif self.kind == 'embedding':
             consistent = public is not None and public['usable'] == (shape[0] > 0)
+        elif self.kind == 'sources':
+            consistent = public is not None and [public['sources'], public['samples_returned']] == list(shape)
         else:
             consistent = public is not None and public['samples_returned'] == shape[0]
         if not consistent:
@@ -70,6 +75,8 @@ CONTRACTS = {
     'face.embedding': Contract('embedding', max_items=4096),
     'body.embedding': Contract('embedding', max_items=4096),
     'target_speech.local': Contract('waveform', limit=1e3),
+    'pixit.sources': Contract('sources', max_items=8, limit=1e3),
+    'sepformer.sources': Contract('sources', max_items=8, limit=1e3),
 }
 PRIVATE_ONLY = frozenset(profile for profile, contract in CONTRACTS.items() if contract.private_only)
 

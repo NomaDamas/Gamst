@@ -44,7 +44,13 @@ async def _speaker_verify(options, context):
     from ..providers.speaker_verify import SpeakerVerify
     arguments = {name: options[name] for name in ('hysteresis', 'segment_ms', 'hop_ms', 'min_dbfs',
                                                   'min_utterance_ms', 'ring_seconds', 'segments',
-                                                  'capability_id', 'context_ms', 'words') if name in options}
+                                                  'capability_id', 'context_ms', 'words', 'source_gate_db')
+                 if name in options}
+    consumes = options.get('consumes') or ()
+    if options.get('sources') in consumes:      # separated sources of overlapping voices, when that part runs
+        arguments['sources'] = options['sources']
+    if options.get('turns') and any(item.split(':', 1)[0] == options['turns'] for item in consumes):
+        arguments['turns'] = True
     threshold = context.get('speaker_threshold')
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
@@ -74,6 +80,34 @@ async def _target_speech(options, context):
         return dict(module=SAMSpanSpeech(remote, **arguments))
     arguments.update({name: int(options[name]) for name in ('block_ms', 'context_ms') if name in options})
     return dict(module=TargetSpeech(remote, **arguments))
+
+
+async def _speaker_sources(options, context):
+    """Overlapping voices -> one source per speaker (PixIT or SepFormer), in the model's own environment."""
+    from ..providers.target_speech import SpeakerSources
+    config, python, _ = _entry(options, context, None)
+    profiles = {'pixit': 'pixit.sources', 'sepformer': 'sepformer.sources'}
+    if config.get('backend') not in profiles:
+        raise SystemExit(f"speaker-sources backend is one of {', '.join(profiles)}")
+    profile = profiles[config.pop('backend')]
+    from ..providers import model_workers
+    remote = await model_workers.RemoteSeparator.open(python, profile, config, inference_timeout=600)
+    arguments = {name: int(options[name]) for name in ('block_ms', 'context_ms') if name in options}
+    return dict(module=SpeakerSources(remote, emits=_emits(options), **arguments))
+
+
+async def _hosted_identify(options, context):
+    """pyannoteAI voiceprint + identification (hosted, billed, audio leaves the device: explicit opt-in)."""
+    from ..providers.pyannoteai import HostedIdentify, PyannoteAI
+    config, _, _ = _entry(options, context, None)
+    voiceprint_file = options.get('voiceprint_file') or config.pop('voiceprint_file', None)
+    try:
+        client = PyannoteAI(**config)
+    except PermissionError as error:
+        raise SystemExit(str(error)) from None
+    module = HostedIdentify(client, reference=options.get('reference', 'voice'),
+                            block_ms=int(options.get('block_ms', 60000)), voiceprint_file=voiceprint_file)
+    return dict(module=module, spec=module.spec)
 
 
 async def _whisper_words(options, context):
@@ -355,6 +389,10 @@ def parts(Part):
         'speaker-gate': Part('module', build=_speaker_gate),
         'target-speech': Part('module', role='audio.target_speech', candidate='wesep.bsrnn_ecapa',
                               build=_target_speech),
+        'speaker-sources': Part('module', role='audio.speaker_sources', candidate='pyannote.pixit_ami',
+                                build=_speaker_sources),
+        'hosted-identify': Part('module', role='audio.speaker_turns', candidate='pyannoteai.precision2',
+                                build=_hosted_identify),
         'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
                               transcribes=True),
         'qwen-words': Part('module', role='audio.word_alignment', candidate='qwen3.forced_aligner_0_6b',

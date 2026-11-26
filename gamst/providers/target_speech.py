@@ -18,7 +18,14 @@ Two ways to condition on the person:
    ``context_ms`` of preceding audio and keeps only the new block, so each output sample has left
    context and the latency is one block.
 
-2. **Speaker-match spans** (:class:`SAMSpanSpeech`): no enrollment audio at separation time. The spans
+2. **Per-speaker sources** (:class:`SpeakerSources`): no enrollment at separation time. A separation
+   model splits each block into one source per speaker (``pixit``: pyannote PixIT, which diarizes and
+   separates jointly; ``sepformer``: SpeechBrain SepFormer, two sources). The block goes on a derived
+   input as a :class:`SourceBlock`; :class:`gamst.providers.speaker_verify.SpeakerVerify` (``sources``)
+   scores each word on the sources that are active at that word, so overlapping voices are not embedded
+   as one mixture. Which source is the person is decided by the voice score, as before.
+
+3. **Speaker-match spans** (:class:`SAMSpanSpeech`): no enrollment audio at separation time. The spans
    where :class:`gamst.providers.speaker_verify.SpeakerVerify` matched the enrolled voice become
    SAM-Audio span anchors (``+`` for the person, ``-`` for scored speech that is someone else) on
    complete 48 kHz windows, using GAMST's existing SAM-Audio loader
@@ -238,6 +245,80 @@ def derived_chunks(name, samples, start_ms, chunk_ms=100):
     return [Derived(name, samples[i:i + size].copy(), 'audio', SAMPLE_RATE,
                     timestamp_ms=int(round(start_ms + 1000 * min(i + size, len(samples)) / SAMPLE_RATE)))
             for i in range(0, len(samples), size)]
+
+
+class SourceBlock:
+    """One separated window on a derived input: ``sources`` (speakers x samples, 16 kHz) from ``start_ms``.
+
+    ``keep_ms`` is where the new audio of this block begins (before it: left context). Raw media of
+    several people: it is read by modules only, and nothing copies or serializes it.
+    """
+    __slots__ = ('start_ms', 'keep_ms', 'end_ms', 'sources')
+
+    def __init__(self, start_ms, keep_ms, end_ms, sources):
+        self.start_ms, self.keep_ms, self.end_ms, self.sources = int(start_ms), int(keep_ms), int(end_ms), sources
+
+    def span(self, index, first_ms, last_ms):
+        """Samples of one source in [first_ms, last_ms) (clipped to the window)."""
+        offset = lambda ms: min(self.sources.shape[1], max(0, int(round((ms - self.start_ms) * SAMPLE_RATE / 1000))))
+        return self.sources[index, offset(first_ms):offset(last_ms)]
+
+    def covers(self, first_ms, last_ms):
+        return self.start_ms <= first_ms and last_ms <= self.end_ms
+
+    def __repr__(self):
+        return f'<separated sources: {self.sources.shape[0]} x {self.end_ms - self.start_ms} ms>'
+
+    def __reduce_ex__(self, *_):
+        raise TypeError('separated sources are not serialized or copied')
+
+    __reduce__ = __copy__ = __deepcopy__ = __reduce_ex__
+
+
+class SpeakerSources:
+    """Pipeline module: mixture audio in, ``Derived(emits, SourceBlock)`` out (no enrolled voice needed).
+
+    ``separator.separate(window) -> (speakers, samples)``, in this process or its worker
+    (:class:`gamst.providers.model_workers.RemoteSeparator`). Each block carries ``context_ms`` of the
+    audio before it, so a word near a block's start is scored with the sound around it.
+    """
+
+    owns_process = True
+
+    def __init__(self, separator, *, emits='sources', block_ms=8000, context_ms=2000):
+        self.separator, self.emits = separator, emits
+        self.blocks = Blocks(block_ms=block_ms, context_ms=context_ms)
+        self.name, self.version = 'speaker_sources', getattr(separator, 'model_id', 'unspecified')
+
+    def reset(self):
+        self.blocks.reset()
+
+    async def process(self, frame):
+        if frame.modality != 'audio' or frame.data is None or isinstance(frame.data, dict):
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('speaker_sources needs 16 kHz mono audio')
+        return await self._separate(self.blocks.push(frame.data, int(frame.timestamp_ms)))
+
+    async def finish(self):
+        return await self._separate(self.blocks.flush())
+
+    async def _separate(self, blocks):
+        from ..pipeline import Derived
+        np, output = _np(), []
+        for start_ms, end_ms, window, _ in blocks:
+            sources = np.asarray(await _call(self.separator.separate, window), dtype=np.float32)
+            if sources.ndim != 2 or sources.shape[1] != len(window):
+                raise ValueError('a separator returns (speakers, samples) for the whole window')
+            begin = end_ms - 1000 * len(window) / SAMPLE_RATE
+            output.append(Derived(self.emits, SourceBlock(round(begin), start_ms, end_ms, sources), 'audio',
+                                  SAMPLE_RATE, timestamp_ms=end_ms))
+        return output
+
+    async def close(self):
+        close = getattr(self.separator, 'close', None)
+        if callable(close):
+            await _call(close)
 
 
 class TargetSpeech:

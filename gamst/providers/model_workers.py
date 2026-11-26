@@ -14,6 +14,8 @@ profile                    worker (real model)                                  
 ``face.embedding``         LVFace ONNX                                          ``RemoteEmbedder``
 ``body.embedding``         SOLIDER-REID                                         ``RemoteEmbedder``
 ``target_speech.local``    WeSep / USEF-TFGridNet / SAM-Audio spans             ``RemoteExtractor``
+``pixit.sources``          pyannote PixIT (diarization + separation)            ``RemoteSeparator``
+``sepformer.sources``      SpeechBrain SepFormer (two sources)                  ``RemoteSeparator``
 ``qwen3.forced_aligner``   Qwen3-ForcedAligner                                  ``RemoteAligner``
 ``faster_whisper.words``   FasterWhisperPlugin with word times                  ``RemoteWhisper``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
@@ -34,11 +36,14 @@ from ..plugins import InputFrame
 
 SAMPLE_RATE = 16000
 EMBEDDING = (OutputField('usable', 'boolean'),)
+SOURCES = (OutputField('sources', 'integer'), OutputField('samples_returned', 'integer'))
 FIELDS = {
     'speaker.embedding': ('audio', EMBEDDING),
     'face.embedding': ('video', EMBEDDING),
     'body.embedding': ('video', EMBEDDING),
     'target_speech.local': ('audio', (OutputField('samples_returned', 'integer'),)),
+    'pixit.sources': ('audio', SOURCES),
+    'sepformer.sources': ('audio', SOURCES),
     'qwen3.forced_aligner': ('audio', (OutputField('items', 'array'),)),
     'faster_whisper.words': ('audio', (OutputField('transcripts', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
@@ -53,7 +58,8 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2'}.get(profile) or {
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'pixit.sources': 'pyannote-pixit',
+            'sepformer.sources': 'sepformer'}.get(profile) or {
         'usef': 'usef-tfgridnet', 'sam-span': 'sam-audio'}.get(config.get('backend'), config.get('backend'))
     return f'{name}:{digest[:16]}'
 
@@ -121,6 +127,19 @@ class _Extraction(_Worker):
 
     def close(self):
         self.enrollment = None
+
+
+class _Separation(_Worker):
+    """A mixture block in, one source per speaker out (speakers x samples)."""
+
+    def __init__(self, separator):
+        self.separator = separator
+
+    def query(self, frame, request):
+        sources = _numpy().asarray(self.separator.separate(frame.data), dtype='<f4')
+        if sources.shape[0] == 0:
+            sources = sources.reshape(0, 0)
+        return dict(sources=int(sources.shape[0]), samples_returned=int(sources.shape[1])), sources
 
 
 class _SpanExtraction(_Worker):
@@ -205,6 +224,13 @@ def load(profile, config):
             config.pop('sha256')
             return _SpanExtraction(SAMSpanBackend.from_local(config))
         return _Extraction(EXTRACTORS[backend].from_local(**config))
+    if profile == 'pixit.sources':
+        from .pixit import PixITSeparator
+        return _Separation(PixITSeparator.from_local(config.pop('config'), config.pop('separation'),
+                                                     config.pop('embedding'), **config))
+    if profile == 'sepformer.sources':
+        from .sepformer import SepFormerSeparator
+        return _Separation(SepFormerSeparator.from_local(config.pop('directory'), **config))
     if profile == 'qwen3.forced_aligner':
         from .asr_words import QwenForcedAligner
         return _Aligner(QwenForcedAligner.from_local(config.pop('path'), **config))
@@ -279,6 +305,16 @@ class RemoteExtractor(_Client):
 
     async def separate(self, window, anchors):
         return await self._query(window, dict(anchors=[list(anchor) for anchor in anchors]))
+
+
+class RemoteSeparator(_Client):
+    """``separate(window) -> (speakers, samples)`` answered by a separation worker."""
+
+    async def separate(self, window):
+        import numpy as np
+        result, private = await self.worker.query(self._frame(window, 'audio', sample_rate=SAMPLE_RATE), {})
+        sources = private.take('sources')
+        return sources if result['sources'] else np.zeros((0, len(window)), np.float32)
 
 
 class RemoteWhisper(_Client):

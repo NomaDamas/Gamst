@@ -29,6 +29,22 @@ Two kinds of output, one capability (``audio.speaker_match``):
   is scored and the transcript is passed through with a ``speaker`` object, so :class:`gamst.providers.term_events.TermEvents` downstream
   counts only what the enrolled person said.
 
+Overlapping voices (``sources``): one window of audio where two people talk at once embeds as a mixture
+of both. With ``sources`` naming the derived input of a
+:class:`gamst.providers.target_speech.SpeakerSources` module, each word is also scored on every separated
+source that is active at that word (its level over the word is above ``min_dbfs``; ``source_gate_db``
+optionally also drops sources that much quieter than the loudest, which drops a quiet person under a loud
+voice: off by default); the word's ``speaker_score`` is the best of those, so the
+enrolled voice decides as before, on the separated sound. ``mixture_score`` keeps the score on the room
+audio and ``sources_active`` how many sources spoke at the word (2 or more: overlap). A word with no
+active source keeps the mixture score (``scored_on: "mixture"``). Utterances wait (``pending_since_ms``)
+until the separated blocks that cover their words have arrived.
+
+Speaker turns (``turns``): ``audio.speaker_turns`` records of the same reference (for example hosted
+identification, :mod:`gamst.providers.pyannoteai`) add evidence to each word, not a decision:
+``turn_match`` (a turn matched to the enrolled voice overlaps the word, or the turns cover the word and
+none does), ``turn_speakers`` (how many turns overlap it) and ``turn_confidence``.
+
 Scores are uncalibrated cosine similarities. The threshold must be set on the owner's own audio
 (``gamst recipe run --truth``); the research notes report EER rising several-fold on 1-3 s segments.
 """
@@ -213,10 +229,16 @@ class SpeakerVerify:
 
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
-                 segments=True, capability_id='audio.speaker_match', context_ms=0, words=False):
+                 segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
+                 source_gate_db=None, turns=False):
         self.words = bool(words)     # also score each word, with the sound around it: people share a phrase
         if self.words and not context_ms:
             raise ValueError('word scores need context_ms')
+        if (sources is not None or turns) and not self.words:
+            raise ValueError('separated sources and speaker turns are read per word: set words')
+        self.turns = bool(turns)
+        self.sources = sources
+        self.source_gate_db = None if source_gate_db is None else float(source_gate_db)
         if type(context_ms) is not int or not 0 <= context_ms <= 5000:
             raise ValueError('context_ms must be integer milliseconds 0..5000')
         self.context_ms = context_ms     # an utterance shorter than this is scored with the sound around it
@@ -269,6 +291,8 @@ class SpeakerVerify:
         self.state = Hysteresis(self.threshold, self.threshold - self.hysteresis)
         self._next_segment_ms = None
         self._checked = {}
+        self._blocks, self._pending, self._sources_until = [], [], None
+        self._turns, self._turns_until = [], None
 
     async def score(self, samples):
         """Cosine score of samples against the enrolled centroid, None below the energy gate."""
@@ -297,9 +321,36 @@ class SpeakerVerify:
     def _model(self):
         return dict(id=self.embedder.model_id, threshold=self.threshold, hysteresis=self.hysteresis)
 
+    @property
+    def pending_since_ms(self):
+        """Utterances that wait for separated sources (not complete yet)."""
+        return min(item[0]['start_ms'] for item in self._pending) if self._pending else None
+
+    async def finish(self):
+        """End of input: score what still waits on whatever separated blocks arrived."""
+        return await self._release(final=True)
+
     async def process(self, frame):
+        from .target_speech import SourceBlock
+        if isinstance(frame.data, SourceBlock):
+            if self.sources is None:
+                return None
+            self._blocks = self._blocks[-63:] + [frame.data]
+            self._sources_until = max(frame.data.end_ms, self._sources_until or frame.data.end_ms)
+            return await self._release()
+        if isinstance(frame.data, dict) and frame.data.get('kind') == 'turns':
+            if not self.turns or frame.data.get('reference') != self.reference_name:
+                return None
+            self._turns = self._turns[-1023:] + list(frame.data.get('turns') or ())
+            self._turns_until = max(frame.data['end_ms'], self._turns_until or frame.data['end_ms'])
+            return await self._release()
         if isinstance(frame.data, dict):
-            return await self._utterance(frame)
+            result = await self._utterance(frame)
+            if not self._waits() or result is None:
+                return result
+            waiting = bool(self._pending) and self._pending[-1][0] is result
+            released = await self._release() or []
+            return released if waiting else [result, *released]
         if frame.modality != 'audio' or frame.data is None:
             return None
         if frame.sample_rate != SAMPLE_RATE:
@@ -349,8 +400,85 @@ class SpeakerVerify:
             score = await self.score(self.ring.span(first, last)) if self.ring.covers(first, last) else None
         except ValueError:
             score = None
+        if self._waits():   # decided once the separated sources / turns of this word are here
+            return dict(item, **({} if score is None else {'mixture_score': score})), (first, last)
         return dict(item, match=score is not None and score >= self.threshold,
                     **({} if score is None else {'speaker_score': score}))
+
+    def _waits(self):
+        return self.sources is not None or self.turns
+
+    def _on_turns(self, item):
+        if not self.turns or self._turns_until is None:
+            return item
+        start, end = item['start_ms'], max(item['end_ms'], item['start_ms'] + 1)
+        over = [turn for turn in self._turns if turn['start_ms'] < end and turn['end_ms'] > start]
+        matched = [turn for turn in over if turn.get('match')]
+        extra = dict(turn_match=bool(matched), turn_speakers=len({turn['speaker'] for turn in over}))
+        confidence = [turn['confidence'] for turn in matched if isinstance(turn.get('confidence'), (int, float))]
+        if confidence:
+            extra['turn_confidence'] = max(confidence)
+        return dict(item, **extra)
+
+    def _block(self, first, last):
+        """The held block whose window covers [first, last] with the most sound on both sides of it."""
+        covering = [block for block in self._blocks if block.covers(first, last)]
+        return max(covering, key=lambda block: min(first - block.start_ms, block.end_ms - last), default=None)
+
+    async def _on_sources(self, item, first, last):
+        """One word decided on the separated sources active at it (else on the mixture)."""
+        block, scores, active = self._block(first, last), [], 0
+        if block is not None:
+            levels = [rms_dbfs(block.span(index, item['start_ms'], max(item['end_ms'], item['start_ms'] + 1)))
+                      for index in range(block.sources.shape[0])]
+            loudest = max(levels, default=float('-inf'))
+            for index, level in enumerate(levels):
+                if level < self.min_dbfs or self.source_gate_db is not None and level < loudest - self.source_gate_db:
+                    continue
+                active += 1
+                try:
+                    score = await self.score(block.span(index, first, last))
+                except ValueError:
+                    score = None
+                if score is not None:
+                    scores.append(score)
+        if scores:
+            score, scored_on = max(scores), 'sources'
+        else:
+            score, scored_on = item.get('mixture_score'), 'mixture'
+        return dict(item, match=score is not None and score >= self.threshold, sources_active=active,
+                    scored_on=scored_on, **({} if score is None else {'speaker_score': score}))
+
+    async def _decide(self, item, first, last):
+        if self.sources is not None:
+            item = await self._on_sources(item, first, last)
+        else:
+            score = item.get('mixture_score')
+            item = dict({key: value for key, value in item.items() if key != 'mixture_score'},
+                        match=score is not None and score >= self.threshold,
+                        **({} if score is None else {'speaker_score': score}))
+        return self._on_turns(item)
+
+    async def _release(self, final=False):
+        """Utterances whose words the separated blocks now cover (all of them at the end)."""
+        outputs = []
+        while self._pending:
+            result, spans = self._pending[0]
+            needed = max((last for _, (_, last) in spans), default=result['end_ms'])
+            waiting = [until for bound, until in ((self.sources is not None, self._sources_until),
+                                                  (self.turns, self._turns_until)) if bound]
+            if not final and any(until is None or until < needed for until in waiting):
+                break
+            self._pending.pop(0)
+            words = list(result['words'])
+            for index, (first, last) in spans:
+                words[index] = await self._decide(words[index], first, last)
+            outputs.append(self.spec.validate(dict(result, words=words)))
+        oldest = min((first for _, spans in self._pending for _, (first, _) in spans), default=None)
+        if oldest is not None:
+            self._blocks = [block for block in self._blocks if block.end_ms > oldest]
+            self._turns = [turn for turn in self._turns if turn['end_ms'] > oldest]
+        return outputs or None
 
     async def _utterance(self, frame):
         value = frame.data
@@ -393,4 +521,9 @@ class SpeakerVerify:
             result['words'] = value['words'] if not self.words else [await self._word(item) for item in value['words']]
         if isinstance(value.get('language'), str):
             result['language'] = value['language']
+        if self._waits() and isinstance(value.get('words'), list):
+            spans = [(index, item[1]) for index, item in enumerate(result['words']) if isinstance(item, tuple)]
+            result['words'] = [item[0] if isinstance(item, tuple) else item for item in result['words']]
+            self._pending.append((result, spans))
+            return result
         return self.spec.validate(result)

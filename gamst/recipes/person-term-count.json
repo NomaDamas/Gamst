@@ -26,7 +26,8 @@
       "for": [
         "speaker",
         "target_voice",
-        "speaker_check"
+        "speaker_check",
+        "identify"
       ]
     },
     {
@@ -67,6 +68,37 @@
       ]
     },
     {
+      "name": "separation",
+      "use": "speaker-sources",
+      "consumes": [
+        "microphone"
+      ],
+      "emits": [
+        "sources"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "overlap"
+      ],
+      "block_ms": 8000,
+      "context_ms": 4000
+    },
+    {
+      "name": "identify",
+      "use": "hosted-identify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "hosted"
+      ],
+      "block_ms": 60000
+    },
+    {
       "name": "asr",
       "use": "whisper-words",
       "language": "ko",
@@ -99,7 +131,13 @@
         "voice"
       ],
       "context_ms": 1500,
-      "words": true
+      "words": true,
+      "sources": "sources",
+      "turns": "identify",
+      "consumes_optional": [
+        "sources",
+        "identify"
+      ]
     },
     {
       "name": "terms",
@@ -120,6 +158,6 @@
   "records": [
     "speech.term_events"
   ],
-  "limits": "overlapping voices are not separated by default (--with target_voice mutes other voices before the words are read; a separation model can replace it in a copy of this recipe); the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound)",
+  "limits": "overlapping voices are not separated by default: --with overlap scores each word on PixIT's separated per-speaker sources (pyannote, gated weights; slower than real time on a Mac CPU), --with target_voice mutes other voices before the words are read; --with hosted adds pyannoteAI identification as evidence beside each word (audio leaves the device, billed); the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound)",
   "measured": "one 54 s clip of several people in a noisy shop (2026-11-26): see docs/measurements/testbed-2026-11-26.md"
 }

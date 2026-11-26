@@ -55,6 +55,14 @@ word times -> speaker verification again on each utterance's own words -> term e
 - The gate does not separate voices that overlap. A separation model does (`target-speech` part, in a copy
   of the recipe): set `"use": "target-speech"` on `target_voice`, pass `--voice-wav`, and list local files in
   `"config"`. USEF-TFGridNet is CC BY-NC 4.0 and needs `allow_noncommercial`.
+- `--with overlap` (off by default) splits the sound into one source per speaker with pyannote PixIT and scores
+  each word on the sources active at it; `speaker_score` is the best of them, `mixture_score` the room sound.
+  Gated weights (accept `pyannote/speech-separation-ami-1.0` and `pyannote/separation-ami-1.0`), role
+  `audio.speaker_sources`; slower than real time on a Mac. On the one clip measured it did not count better
+  (docs/measurements/overlap-2026-11-26.md).
+- `--with hosted` (off by default) sends the sound to pyannoteAI (voiceprint + identification; billed, the audio
+  leaves the device; `allow_remote: true` and `PYANNOTEAI_API_KEY`). Each word gets `turn_match` beside its
+  voice score; it does not decide. A cost line is printed before each call.
 - An utterance too short or too quiet to score is not counted.
 - Whisper works in 3 s windows: a word cut by an edge can be missed.
 - Tone channels compare with the speaker's own recent median: give each example as a part of a longer recording
