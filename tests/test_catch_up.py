@@ -323,6 +323,22 @@ class UncertainTest(unittest.TestCase):
         self.assertEqual((later['count'], later['states']['final'], later['states'].get('uncertain', 0)), (1, 1, 0))
         self.assertEqual(records[-1]['observation']['value']['count'], 1)
 
+    def test_another_voices_word_that_becomes_uncertain_is_shown_as_an_uncertain_term_spoken(self):
+        from types import SimpleNamespace
+        terms = TermEvents(terms=['bbo'], report_others=True)
+        word = dict(text='bbo', start_ms=900, end_ms=1000, word_id='u#0', state='provisional', match=False)
+        terms.process(SimpleNamespace(data=dict(utterance_id='u', status='final', text='bbo', start_ms=900, end_ms=1000,
+                                                words=[word]), timestamp_ms=1000, subject_id='s'))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(
+            word_id='u#0', match=False, uncertain=True, reason='uncertain_overlap')]), timestamp_ms=2000, subject_id='s'))
+        revision, doubt = out['events']
+        self.assertEqual((revision['state'], revision['reason']), ('revoked', 'uncertain_overlap'))
+        self.assertEqual((doubt['event'], doubt['state'], out['count']), ('term.spoken', 'uncertain', 0))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(word_id='u#0', match=True)]),
+                                            timestamp_ms=3000, subject_id='s'))
+        self.assertEqual((out['events'][0]['revises'], out['events'][0]['state'], out['count']),
+                         (doubt['event_id'], 'final', 1))
+
     def test_a_word_added_uncertain_is_not_counted_until_settled(self):
         from types import SimpleNamespace
         terms = TermEvents(terms=['bbo'], report_others=True)

@@ -361,9 +361,9 @@ class TermEvents:
             uncertain = not match and any(item.get('uncertain') for item in found) and \
                 all(item['match'] or item.get('uncertain') for item in found)
             spoken = event['event'] == 'term.spoken'
-            state = 'uncertain' if uncertain else ('final' if match else 'revoked') if spoken else \
-                ('revoked' if match else 'final')
-            if uncertain:
+            state = 'uncertain' if uncertain and spoken else 'revoked' if uncertain else \
+                ('final' if match else 'revoked') if spoken else ('revoked' if match else 'final')
+            if uncertain and spoken:
                 self._open[key][2] = False
             else:
                 del self._open[key]
@@ -383,6 +383,13 @@ class TermEvents:
                 step = 1 if now else -1
                 words.total += step
                 words.counts[event['term']] = words.counts.get(event['term'], 0) + step
+            if uncertain and not spoken:   # not another voice's after all, nor surely the person's: uncertain words are
+                # always term.spoken in state uncertain (open: a later verdict for the same words settles it)
+                doubt = dict(event='term.spoken', state='uncertain', **{
+                    name: value for name, value in event.items() if name not in ('state', 'event', 'event_id')})
+                doubt.update(event_id=event_id(key, 'uncertain'), replaces=key, reason=revision['reason'])
+                self._open[doubt['event_id']] = [doubt, words, False]
+                added.append(doubt)
             if match and not spoken:       # the enrolled voice after all: counted from now on, as final
                 words.total += 1
                 words.counts[event['term']] = words.counts.get(event['term'], 0) + 1

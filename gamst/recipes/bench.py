@@ -189,8 +189,9 @@ def words_of(truth, report, capability='speech.term_events'):
     for event, label, slot in match(truth, events, start):
         seen.add(slot)
         later = promoted.get(event.get('event_id'))
-        final = 'counted' if (later is not None or event['event'] == EVENT and event['state'] in ('provisional', 'final')) \
-            else 'uncertain' if event['state'] == 'uncertain' else 'not counted'
+        now = later or event
+        final = 'counted' if now['event'] == EVENT and now['state'] in ('provisional', 'final') else 'uncertain' \
+            if now['state'] == 'uncertain' else 'not counted'
         settled = (later or event).get('settled_ms') if later is None else later.get('committed_ms')
         added = event.get('decided_by') == 'verification'
         revised = event.get('revised_by') or {}

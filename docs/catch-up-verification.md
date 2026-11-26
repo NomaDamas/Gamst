@@ -100,8 +100,9 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
   records (`final`, or `revoked` with the reason; `basis` is kept on the revision), only for provisional events.
 - **Uncertain** (`uncertain_overlap`): the verdict says `uncertain: true`; `terms` gives the event the revision state
   `uncertain`: not counted, not revoked (never "not said"), kept open, so a later lane's verdict for its `word_id`s
-  settles it (`final` / `revoked`; the newest revision decides). An added word that is uncertain is committed as
-  `term.spoken` with `state: "uncertain"` and a `word_id`. `count_events` gives `states.uncertain` beside the count and
+  settles it (`final` / `revoked`; the newest revision decides). An uncertain word is always a `term.spoken` in state
+  `uncertain`: a provisional `term.spoken` gets that revision; a provisional `term.other_voice` is revoked
+  (`uncertain_overlap`) and an uncertain `term.spoken` replaces it; an added word is committed so, with a `word_id`. `count_events` gives `states.uncertain` beside the count and
   `where={"state": "uncertain"}` lists them; `get_timeline` shows the state; the report's `states` has it; bench and
   scoring leave uncertain words out of what is counted.
 - Opt-in: `--with verification --allow-remote-asr --allow-remote-diarization` (the first for the second recogniser, the
