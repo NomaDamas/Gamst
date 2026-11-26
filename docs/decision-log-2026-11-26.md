@@ -42,6 +42,8 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 30 | The owner's labels saved by the labelling tool are the ground truth for the four clips (뽀또 10, 몇기야 6, 시발 7, 달 23; files `try-it/testbed/<clip>/truth_owner.json`, `truth_score.json`). |
 | 31 | State of the art first (owner, 2026-11-27): the best recogniser by published results (the live `asr`, today Scribe v3 Live) is never outvoted by weaker ones. Others may add words it missed; they may veto one of its words only with strong contrary evidence (its own word confidence low and the others heard speech there and wrote something else); a disputed word is `uncertain` (shown, not counted, never "not said"), not revoked. The majority of three (decision 22) stays an option (`decide: "majority"`). |
 | 32 | A word only the primary (state-of-the-art) recogniser heard is counted (`contested: "stand"`, default), even when the others heard other speech there: SOTA first. Measured from three runs: +7 right, +3 wrong (the invented 24.16 s in 뽀또). Scribe's own word confidence cannot separate invented from true words (24.16 s: 0.33; true 41.76 s: 0.02). |
+| 33 | Two modes: count (default, today's behaviour) and search (recall first: never miss the person; uncertain words become candidates with their reason). |
+| 34 | Wrap up, document all experiments and lessons, publish demo videos in a GitHub issue table, then merge PR #366 (owner, 2026-11-27). |
 
 ## 2. Technical decisions and their evidence
 
