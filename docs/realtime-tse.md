@@ -88,6 +88,14 @@ billed once more).
 - Best overall on real data: MERL's system (REAL-TSE offline track 1st, TER 0.462 vs PS4's 0.509) has no released
   weights; it cannot be registered. No released TSE model was trained on Korean.
 
+## Measured (one clip; [measurements/tse-2026-11-26.md](measurements/tse-2026-11-26.md))
+
+On the 54 s shop clip the lane ran live with one worker (extraction 0.63 x real time, the backlog of the overlap
+bursts caught up by the Pipeline, nothing given up) and decided 8 words, all `uncertain`: PS4 kept the other voices'
+words next to the person in the extracted sound and the extracted sound's voice score stayed under the threshold.
+Counts with and without `--with tse` were the same (final 4 / 4 of 10). Overlapped words are decided 10-21 s after
+they are said on this Mac's CPU (about 4 s without the lane). A second worker process on the same CPU did not help.
+
 ## Not decided here
 
 - `rule`, `context_ms`, `margin_ms`, `threshold` and `near_ms` are module defaults, not chosen on a clip; they need the

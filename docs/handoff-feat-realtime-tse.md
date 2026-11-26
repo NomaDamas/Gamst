@@ -57,14 +57,19 @@ overlapped words from the extracted audio.
   3 TODOs, TODO->done p50 18.8 s / p95 30.4 s, 0 gaps; up to 4 PS4 worker processes alive at once, 6.2 GB together,
   1.7 GB each at most; decision wait p50 9.4 s / p95 14.3 s. Recipe default set back to workers 1.
 
+- Final series (details: docs/measurements/tse-2026-11-26.md): v0 (verification only) and v1, v2 (tse +
+  verification): provisional 4/4, final 4/4 in all three, identical words. TSE: 8 words decided, all uncertain; PS4
+  leaks the other voices' words (12.64, 20.74, 27.44) into the extracted sound; g.wav enrollment (d5g) the same.
+  v2 lane: extraction 0.63 x real time with 1 worker, 4 catch-up TODOs (p50 9.2 s, p95 34.2 s), 0 gaps, worker
+  1.7 GB; overlapped words decided 10-21 s after being said. PS4 alone RTF 0.53-1.05 by threads/window.
+- Open issue: with --with tse the live Scribe session was closed by the server at the end of the input (51.84 s) in
+  4 of 5 runs; not isolated (4 concurrent sessions in a probe were fine).
+- Unit tests (try-it host interpreter, numpy + websockets): 1677 run, 3 errors, the same 3 as the base commit
+  (test_watch, test_streaming_semantic, test_yoloe bridge); the demo venv (15 errors) was not used.
+
 ## Left
 
-1. Series running (`try-it/tse-series.sh`, log `testbed/tse/runs/series1.log`): v1 = tse + verification, v0 =
-   verification only, d5g = tse with g.wav enrollment (disclosed: same clip).
-2. Runs with `--with verification` with and without `--with tse` (Scribe v3 Live L1, L4) -> totals table.
-3. Optional disclosed variant: `--voice-wav testbed/g.wav` (owner-marked 1.5 s of the same clip).
-4. Full unittest suite through `guard.sh tse` (expect exactly the 15 pre-existing errors).
-5. `docs/measurements/tse-2026-11-26.md`, role default -> ps4 if kept, final commit.
+- Nothing required. Possible next steps: the owner's clip set for thresholds/rule; a GPU worker; the Scribe close issue.
 
 ## Rerun
 
