@@ -86,6 +86,8 @@ from .capabilities import CapabilitySpec, OutputField, SensorMetadata, identifie
 from .plugins import InputFrame
 from .redact import public_error, public_text
 
+CATCH_UP = dict(lag_ms=2000, max_lookback_ms=10000, tail_ms=1500, workers=2, speed=None)
+
 GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipeline', '1',
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
 INSTRUCTIONS = CapabilitySpec('pipeline.instructions', 'pipeline.instructions', 'events', 'gamst.pipeline', '1',
@@ -121,6 +123,7 @@ class _Item:
     media: bool          # a frame of an input (not a record): audio media is never joined across a gap
     gap: bool = False    # frames were lost just before this one
     thinned: int = 0     # how often the frame next to it was given up (2 ** thinned: it stands for that many)
+    source: str | None = None    # the input (or module) the frame is of
 
 
 @dataclass
@@ -183,6 +186,7 @@ class Pipeline:
         self._gap_at: dict[str, float] = {}
         self._gap_sequence = 0
         self._pausable: dict[str, bool] = {}
+        self.memories: dict[str, Any] = {}   # input id -> AudioMemory: audio kept for catch-up and verification
         human.pipeline = self
 
     # ------------------------------------------------------------------ composition
@@ -337,11 +341,17 @@ class Pipeline:
         return dict(change, record_id=record['id'], effective_from_ms=reference['from_ms'])
 
     def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=(), queue=None,
-                   optional=False):
+                   optional=False, catch_up=None, slowdown=None):
         """``queue``: None (inline, or in the lane of the module it reads), a lane of N frames, or 'auto'.
 
         ``every_ms`` declares sampling (else every frame is processed). ``optional`` allows pausing the
         module while others are behind. A module with ``replicas`` > 1 gets a lane.
+
+        ``catch_up``: how a lane that falls behind its live audio catches up (:meth:`_skip`); None: the defaults
+        (:data:`CATCH_UP`) for a module in its own lane that can ``fork``, False: never (audio is given up as a
+        ``backlog`` gap instead), or a dict of :data:`CATCH_UP` keys. ``slowdown`` (a test and debug option):
+        ``{"ms": N, "spans_s": [[from, to], ...]}`` sleeps N ms before each frame captured in those seconds of the run,
+        so a live lane falls behind on purpose.
         """
         identifier(name, 'module name')
         if queue not in (None, 'auto') and (type(queue) is not int or not 1 <= queue <= 10000):
@@ -378,6 +388,10 @@ class Pipeline:
             self._lanes.append(lane)
         else:
             lane = self._upstream_lane(links)
+        catch_up = self._catch_up_config(name, module, catch_up, lane, width, every_ms)
+        if slowdown is not None and (not isinstance(slowdown, dict) or type(slowdown.get('ms')) not in (int, float)
+                                     or not all(len(span) == 2 for span in slowdown.get('spans_s') or ())):
+            raise ValueError('slowdown is {"ms": N, "spans_s": [[from_s, to_s], ...]}')
         self._pausable.clear()
         self.modules[name] = dict(module=module, consumes=consumes, links=links, spec=spec, enabled=bool(enabled),
                                   every_ms=every_ms, last_run_ms=None, processed=0, errors=0,
@@ -387,8 +401,227 @@ class Pipeline:
                                   off=None, failing=0, failed=None, skipped=0, gaps=0, gap_frames=0, gap_out=False, gap_log=deque(maxlen=LOG),
                                   from_ms=1 + max((value['last_ms'] for value in self.inputs.values()
                                                    if value['last_ms'] is not None), default=-1),
-                                  newest_ms=None, until=None, latency=deque(maxlen=LOG), lag=deque(maxlen=LOG))
+                                  newest_ms=None, until=None, latency=deque(maxlen=LOG), lag=deque(maxlen=LOG),
+                                  busy_ms=0., catch_up=catch_up, todos=deque(), claims=deque(maxlen=64), workers=[],
+                                  catch=dict(skips=0, skipped_ms=0, done=0, failed=0, max_pending=0, max_pending_ms=0,
+                                             heard_ms=0, busy_ms=0., wait_ms=deque(maxlen=LOG), todos=deque(maxlen=64)),
+                                  slowdown=slowdown)
+        if catch_up:
+            for source, _ in links:
+                if source in self.inputs and self.inputs[source]['modality'] == 'audio':
+                    self.keep_audio(source)
         return self
+
+    # ------------------------------------------------------------------ catch-up: a live lane that fell behind
+
+    @staticmethod
+    def _catch_up_config(name, module, catch_up, lane, width, every_ms):
+        if catch_up is False:
+            return None
+        forks = callable(getattr(module, 'fork', None)) and getattr(module, 'can_fork', True)
+        if catch_up is None and not forks:
+            return None
+        if not forks:
+            raise ValueError(f'{name!r} cannot catch up: its module has no fork()')
+        if lane is None or lane['name'] != name or width != 1 or every_ms:
+            if catch_up is None:
+                return None
+            raise ValueError(f'{name!r} catches up only in a lane of its own, one frame at a time, unsampled')
+        config = dict(CATCH_UP, **(catch_up if isinstance(catch_up, dict) else {}))
+        unknown = set(config) - set(CATCH_UP)
+        if unknown:
+            raise ValueError(f'unknown catch_up settings {sorted(unknown)}; known: {sorted(CATCH_UP)}')
+        if not 0 < config['lag_ms'] <= 600000 or not 0 <= config['max_lookback_ms'] <= 120000 \
+                or not 0 <= config['tail_ms'] <= 30000 or not 1 <= int(config['workers']) <= 16:
+            raise ValueError('catch_up needs 0 < lag_ms <= 600000, 0 <= max_lookback_ms <= 120000, '
+                             '0 <= tail_ms <= 30000 and 1 <= workers <= 16')
+        if config['speed'] is not None and not float(config['speed']) > 0:
+            raise ValueError('catch_up speed must be positive (None: as fast as the module goes)')
+        return config
+
+    def keep_audio(self, input_id, **options):
+        """Keep every audio frame of ``input_id`` until nobody holds it (:class:`gamst.providers.audio_memory.AudioMemory`)."""
+        if input_id not in self.inputs:
+            raise KeyError(f'unknown input {input_id!r}')
+        if input_id not in self.memories:
+            from .providers.audio_memory import AudioMemory
+            self.memories[input_id] = AudioMemory(**options)
+        return self.memories[input_id]
+
+    def audio_memory(self, input_id):
+        """The kept audio of ``input_id``, or None (nothing asked for it to be kept)."""
+        return self.memories.get(input_id)
+
+    def _lagging(self, lane):
+        """The leader of a live lane fell behind its audio by more than its ``lag_ms``: its waiting audio is skipped."""
+        entry = self.modules[lane['name']]
+        config = entry['catch_up']
+        if not config or self._paced or not lane['frames'] or not entry['enabled'] or entry['failed']:
+            return False
+        head = next((item for item in lane['frames'] if lane['name'] in item.names), None)
+        return head is not None and head.media and head.frame.modality == 'audio' and \
+            _now_ms() - head.frame.timestamp_ms > config['lag_ms']
+
+    async def _skip(self, lane):
+        """Skip the leader to now. The audio it did not hear becomes a TODO for a catch-up worker; nothing is lost.
+
+        The worker gets a copy of the module's state as it was at the TODO's start (``snapshot()`` / ``restore()``;
+        a module that cannot copy its state says where it last paused: ``snapshot()['pause_ms']``) and hears from
+        that pause (at most ``max_lookback_ms`` before the start) to ``tail_ms`` after the end. It owns what was said
+        from its first sample to the TODO's end: there its results are kept and the live module's are not
+        (``trim(value, keep)`` of the module, by capture time); elsewhere the live module's.
+        """
+        name, entry = lane['name'], self.modules[lane['name']]
+        config, module = entry['catch_up'], entry['module']
+        items = [item for item in lane['frames'] if name in item.names and item.media and item.frame.modality == 'audio']
+        if not items or items[0].source not in self.memories:
+            return
+        first, last = items[0].frame, items[-1].frame
+        start = int(first.timestamp_ms - (1000 * len(first.data) / first.sample_rate if first.sample_rate else 0))
+        snapshot = await _call(module.snapshot) if callable(getattr(module, 'snapshot', None)) else None
+        pause = snapshot.get('pause_ms') if isinstance(snapshot, dict) else None
+        begin = start if pause is None else max(start - config['max_lookback_ms'], min(int(pause), start))
+        memory = self.memories[items[0].source]
+        if memory.start_ms is not None:
+            begin = max(begin, int(memory.start_ms))
+        for item in items:
+            item.names.remove(name)
+            if not item.names:
+                lane['frames'].remove(item)
+                self._release(item)
+        catch = entry['catch']
+        catch['skips'] += 1
+        todo = dict(id=catch['skips'], source=items[0].source, start_ms=start, end_ms=int(last.timestamp_ms),
+                    from_ms=begin, frames=len(items), snapshot=snapshot, created=time.monotonic(), state='waiting')
+        catch['skipped_ms'] += todo['end_ms'] - start
+        entry['todos'].append(todo)
+        entry['claims'].append((begin, todo['end_ms']))
+        memory.hold(f"catch_up:{name}:{todo['id']}", begin)
+        pending = [item for item in entry['todos']]
+        catch['max_pending'] = max(catch['max_pending'], len(pending))
+        catch['max_pending_ms'] = max(catch['max_pending_ms'], sum(item['end_ms'] - item['from_ms'] for item in pending))
+        skipped = getattr(module, 'skipped', None)
+        if callable(skipped):
+            await _call(skipped, start, todo['end_ms'])
+        self._say(f"{name} fell {round(_now_ms() - first.timestamp_ms)} ms behind: skipped to now; "
+                  f"{todo['end_ms'] - start} ms of audio is caught up by a worker")
+        self._start_catch_up(name)
+
+    def _start_catch_up(self, name):
+        entry = self.modules[name]
+        entry['workers'] = [task for task in entry['workers'] if not task.done()]
+        width = min(int(entry['catch_up']['workers']), int(getattr(entry['module'], 'max_forks', 1) or 1))
+        for todo in entry['todos']:
+            if len(entry['workers']) >= width or self._closed:
+                return
+            if todo['state'] == 'waiting':
+                todo['state'] = 'running'
+                entry['workers'].append(asyncio.create_task(self._catch_up(name, entry, todo)))
+
+    async def _catch_up(self, name, entry, todo):
+        """One TODO: a fork of the module hears the kept audio and commits what it says at its capture times."""
+        from .capabilities import SensorMetadata as Sensor
+        config, memory, catch = entry['catch_up'], self.memories[todo['source']], entry['catch']
+        started, heard, sequence, fork, last = time.monotonic(), 0, 0, None, None
+        until = todo['end_ms'] + config['tail_ms']
+        low, high = todo['from_ms'], todo['end_ms']
+
+        def keep(start_ms, end_ms):
+            return low <= (start_ms + end_ms) / 2 <= high
+
+        context = _Context(entry['lane'])
+        try:
+            fork = await _call(entry['module'].fork)
+            if todo['snapshot'] is not None and callable(getattr(fork, 'restore', None)):
+                await _call(fork.restore, todo['snapshot'])
+            position, paced = todo['from_ms'], time.monotonic()
+            while not self._closed:
+                chunk = memory.after(position)
+                if chunk is None:
+                    if self.inputs[todo['source']]['ended'] or self._stop is None and not self._running:
+                        break
+                    await asyncio.sleep(.02)
+                    continue
+                end_ms, samples, rate, subject = chunk
+                begin = end_ms - 1000. * len(samples) / rate
+                if begin >= until:
+                    break
+                if begin < position:      # the first frame starts before the TODO's first sample
+                    samples = samples[int(round((position - begin) * rate / 1000)):]
+                if len(samples):
+                    sequence += 1
+                    last = InputFrame(samples, 'audio', end_ms, subject, rate, Sensor(
+                        source_id=self.name, sensor_id=todo['source'], sequence=sequence,
+                        stream_epoch=f"catch-up.{name}.{todo['id']}", channels=('mono',)))
+                    output = await _call(fork.process, last)
+                    await self._commit(name, entry, last, output, context, keep=keep)
+                    heard += 1000. * len(samples) / rate
+                position = end_ms
+                if config['speed']:
+                    wait = paced + heard / 1000. / float(config['speed']) - time.monotonic()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+            if callable(getattr(fork, 'finish', None)) and last is not None:
+                output = await _call(fork.finish)
+                await self._commit(name, entry, last, output, context, keep=keep)
+            todo['state'] = 'done'
+            catch['done'] += 1
+        except asyncio.CancelledError:
+            todo['state'] = 'cancelled'
+            raise
+        except Exception as exc:
+            todo['state'], todo['error'] = 'failed', public_text(f'{type(exc).__name__}: {exc}')[:300]
+            catch['failed'] += 1
+            entry['errors'] += 1
+            entry['last_error'] = todo['error']
+            self._gap(name, [name], todo['from_ms'], todo['end_ms'], todo['frames'], 'error')
+        finally:
+            if fork is not None and callable(getattr(fork, 'close', None)):
+                try:
+                    await _call(fork.close)
+                except Exception:
+                    pass
+            took = time.monotonic() - started
+            catch['busy_ms'] += 1000 * took
+            catch['heard_ms'] += round(heard)
+            catch['wait_ms'].append(round(1000 * (time.monotonic() - todo['created'])))
+            catch['todos'].append(dict(id=todo['id'], start_ms=todo['start_ms'], end_ms=todo['end_ms'],
+                                       from_ms=todo['from_ms'], state=todo['state'], heard_ms=round(heard),
+                                       took_ms=round(1000 * took), **({'error': todo['error']} if 'error' in todo else {})))
+            if todo in entry['todos']:
+                entry['todos'].remove(todo)
+            memory.hold(f"catch_up:{name}:{todo['id']}", None)
+            if not self._closed:
+                self._start_catch_up(name)
+            if context.failures:
+                errors = getattr(self.human, 'plugin_errors', None)
+                if isinstance(errors, list):
+                    errors.extend(dict(plugin=f'{self.name}:{key}', error=str(exc)) for key, exc in context.failures)
+                    del errors[:-100]
+
+    def _trim(self, entry, output, keep):
+        """What of ``output`` was said where ``keep(start_ms, end_ms)`` holds (the module's ``trim``, else by record times)."""
+        if output is None or keep is None:
+            return output
+        trim = getattr(entry['module'], 'trim', None)
+        kept = []
+        for item in output if isinstance(output, list) else [output]:
+            if isinstance(item, Derived):
+                at = item.timestamp_ms
+                if at is None or keep(at, at):
+                    kept.append(item)
+            elif callable(trim):
+                item = trim(item, keep)
+                if item is not None:
+                    kept.append(item)
+            else:
+                value = item.get('value', item) if isinstance(item, dict) else item
+                times = [value.get(key) for key in ('start_ms', 'end_ms')] if isinstance(value, dict) else []
+                if len(times) != 2 or not all(type(at) in (int, float) for at in times) or keep(*times):
+                    kept.append(item)
+        if not isinstance(output, list):
+            return kept[0] if kept else None
+        return kept
 
     def _upstream_lane(self, links):
         """The lane of a module this one reads: both then see each capture in the same order."""
@@ -529,7 +762,7 @@ class Pipeline:
             entry['last_admit_ms'] = frame.timestamp_ms
             item = next((item for lane, item in queued if lane is entry['lane']), None)
             if item is None:
-                item = _Item([], frame, media, gap)
+                item = _Item([], frame, media, gap, source=source)
                 queued.append((entry['lane'], item))
             item.names.append(name)
         for lane, item in queued:
