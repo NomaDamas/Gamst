@@ -421,9 +421,10 @@ class SpeakerVerify:
         return dict(item, **extra)
 
     def _block(self, first, last):
-        """The held block whose window covers [first, last] with the most sound on both sides of it."""
-        covering = [block for block in self._blocks if block.covers(first, last)]
-        return max(covering, key=lambda block: min(first - block.start_ms, block.end_ms - last), default=None)
+        """The first block whose window covers [first, last]: the same one whatever arrived since, so the
+        verdict does not depend on how far separation ran ahead of the transcript."""
+        return next((block for block in sorted(self._blocks, key=lambda block: block.end_ms)
+                     if block.covers(first, last)), None)
 
     async def _on_sources(self, item, first, last):
         """One word decided on the separated sources active at it (else on the mixture)."""
