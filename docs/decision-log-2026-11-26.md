@@ -110,3 +110,4 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 
 Thresholds and margins; verification region length (latency vs pyannoteAI cost, 20 s minimum per job); third-recogniser vote;
 which TSE model; whether the live recogniser should change after the AssemblyAI / Deepgram / Speechmatics comparison.
+- Lessons learned (kept up to date): [lessons-2026-11-26.md](lessons-2026-11-26.md)

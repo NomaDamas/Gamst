@@ -1,6 +1,6 @@
 # Handoff 2026-11-26: realtime word counting by one person (temporary, keep updated)
 
-Read this first when resuming. Then `docs/decision-log-2026-11-26.md` (every owner decision, technical decision with
+Read this first when resuming (also `docs/lessons-2026-11-26.md`). Then `docs/decision-log-2026-11-26.md` (every owner decision, technical decision with
 evidence, and answer), `docs/realtime-attribution-decisions.md` (design and lanes), `docs/catch-up-verification.md`
 (catch-up and verification contracts), `docs/speaker-tracks.md`, `docs/measurements/*-2026-11-26.md`.
 
