@@ -40,6 +40,30 @@ HOLD_S = .55
 HOLD_MAX_S = 30.
 
 
+EN_PHRASES = [
+    ('영상 끝 · 검증이 마지막 말을 정하는 중', 'Video ended · verifying the last words'),
+    ('들림 즉시 · 잠정 L1 · 정정은 결정된 순간에', 'Heard at once · L1 provisional · corrections when decided'),
+    ('말한 순간 기준 · 최종 결과', 'Shown when said · final result'),
+    ('원본 속도', 'Original speed'), ('지금까지', 'Count so far'), ('배 느리게', 'x slower'),
+    ('부분 인식 철회', 'partial withdrawn'), ('다른 사람 목소리', "another person's voice"), ('다시 들어서 찾음', 'found on re-listening'),
+    ('감스트 목소리로 정정', "corrected to Gamst's voice"), ('불확실에서 확정', 'uncertain → final'), ('검증 결정', 'verified'),
+    ('검증 통과', 'verified'), ('부분 인식', 'partial'), ('실시간', 'live'), ('목소리 점수', 'voice score'),
+    ('+1 들림', '+1 heard'), ('+1 추가', '+1 added'), ('-1 취소', '-1 revoked'), ('-1 보류', '-1 held'),
+    ('확정', 'Final'), ('잠정', 'Provisional'), ('들림', 'Heard'), ('취소', 'Revoked'), ('불확실', 'Uncertain'), ('제외', 'Excluded'),
+]
+
+
+def to_english(text):
+    """The HUD's Korean words in English (for an English version of a video); numbers and names are kept."""
+    import re
+    text = re.sub(r'(\d+(?:\.\d+)?)초에 한 말', r'said at \1 s', str(text))
+    text = re.sub(r'외 (\d+)건', r'+\1 more', text)
+    for korean, english in EN_PHRASES:
+        text = text.replace(korean, english)
+    text = re.sub(r'(\d+(?:\.\d+)?)초', r'\1 s', text)
+    return re.sub(r'(\d+)번', r'#\1', text)
+
+
 class KoreanText(Text):
     def _font(self, family, size, weight):
         key = (family, size, weight)
@@ -49,6 +73,13 @@ class KoreanText(Text):
             except OSError:
                 return super()._font(family, size, weight)
         return self._fonts[key]
+
+
+class EnglishText(KoreanText):
+    """The same HUD with its Korean words in English; given strings (title, labels, note) are used as they are."""
+
+    def put(self, image, text, *args, **kwargs):
+        return super().put(image, to_english(text), *args, **kwargs)
 
 
 def event_time(event):
@@ -235,7 +266,7 @@ CHANGE_COLOR = {'revoked': REC, 'uncertain': UNCERTAIN, 'added': GOOD, 'final': 
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
-           note='', slow=1, points=None, start=0., end=None, hold_settled=False, at_spoken=False):
+           note='', slow=1, points=None, start=0., end=None, hold_settled=False, at_spoken=False, lang='ko'):
     import cv2
     import numpy as np
     hud = hud_timeline(report, count, other, at_spoken=at_spoken)
@@ -269,7 +300,7 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         hold_until = min(max(end, last_change + CHANGE_S), end + HOLD_MAX_S)
     from .voice_quality import hud_line
     warning = None if at_spoken else hud_line(report.get('voice_quality'))     # the voice reference is not one person's voice for sure
-    text, trail = KoreanText(), deque(maxlen=max(2, round(.25 * fps)))
+    text, trail = (EnglishText() if lang == 'en' else KoreanText()), deque(maxlen=max(2, round(.25 * fps)))
     last = None
     marks = [(event, True) for event in counted] + [(event, False) for event in others]
     index = -1
@@ -503,6 +534,7 @@ def main(argv=None):
     parser.add_argument('--slow', type=int, default=1)
     parser.add_argument('--start', type=float, default=0.)
     parser.add_argument('--end', type=float)
+    parser.add_argument('--lang', choices=('ko', 'en'), default='ko', help='language of the HUD words')
     parser.add_argument('--at-spoken', action='store_true',
                         help='presentation replay: each word\'s final result drawn when it was said (not live timing; the video says so)')
     parser.add_argument('--hold-settled', action='store_true',
