@@ -107,3 +107,10 @@ Videos: `~/Desktop/홍명보/gamst/GAMST 카운트 결과/{뽀또/뽀또, 감스
    per-error-type table (current / same-clip only / v2). Optionally v6 videos.
 4. Full suite through guard (15 known errors), handoff, final report (what changed, per-clip table L1/final, voice
    reference per clip, cost, video paths, D result, v2 folds).
+
+## Labels are final (owner, 22:13)
+`try-it/testbed/<clip>/truth_owner.json` (bbo re-saved 22:13: 24.16 is now "other", was "none"); totals 뽀또 10, 몇기야 6,
+시발 7, 달 23. Never score with labels_bbo.md / truth_bbo.json. Words inside the main-speaker segments excluded: 뽀또 1
+(11.78), 몇기야 2 (2.72, 12.26), 시발 0, 달 10 (7.94 x5, 9.3 x5) -> scored 9 / 4 / 7 / 13. Table helper (scratchpad,
+rewrite if lost): for each clip run `scripts/score_owner_clips.py <report> truth_owner.json --voice hud/m1.voice.json`.
+The v2 study cache of 뽀또 was rebuilt for the new label (old one kept as `testbed/v2/bbo.before-2213.json`).
