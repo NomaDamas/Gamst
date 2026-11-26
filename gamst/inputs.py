@@ -692,6 +692,40 @@ class AudioFileInput:
                 await asyncio.sleep(0)
 
 
+class Paced:
+    """A recording replayed at its own speed (``speed`` 1: as it was captured), as a live capture would arrive.
+
+    Frames keep their capture times; each is released no earlier than its time after the first, so a module that
+    measures how long an answer takes (a streaming recogniser) sees what a microphone would give it. The source stays
+    a recording (``live`` False): a module that falls behind still gets every frame.
+    """
+
+    def __init__(self, source, speed=1.):
+        if not float(speed) > 0:
+            raise ValueError('speed must be positive')
+        self.source, self.speed = source, float(speed)
+        self.modality = getattr(source, 'modality', None)
+        self.live = False
+
+    def __getattr__(self, name):
+        return getattr(self.source, name)
+
+    async def frames(self):
+        first, start = None, None
+        async for frame in self.source.frames():
+            if first is None:
+                first, start = frame.timestamp_ms, time.monotonic()
+            wait = start + (frame.timestamp_ms - first) / 1000. / self.speed - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            yield frame
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        if callable(close):
+            close()
+
+
 def _media_tool(name):
     found = shutil.which(name)
     if found is None:

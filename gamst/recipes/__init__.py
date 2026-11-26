@@ -223,6 +223,39 @@ def read_recipe(name):
     return path, json.loads(path.read_text())
 
 
+PART_SETTINGS = ('segmentation', 'hop_seconds', 'margin_seconds', 'max_seconds', 'beam_size', 'window_seconds',
+                 'pause_seconds', 'config', 'python')
+
+
+def asr_part(candidate):
+    """The transcribing part that builds an ``audio.asr`` candidate (``Part.serves``)."""
+    from ..crew.registry import ROLES
+    chosen = ROLES['audio.asr'].candidates.get(candidate)
+    if chosen is None:
+        raise SystemExit(f"--asr: no audio.asr candidate {candidate!r}; candidates: "
+                         f"{', '.join(sorted(ROLES['audio.asr'].candidates))}")
+    key = chosen.in_process or chosen.provider_profile
+    found = [name for name, part in PARTS.items() if part.transcribes and key in part.serves]
+    if not found:
+        raise SystemExit(f'--asr: no recipe part builds {candidate} yet')
+    return found[0]
+
+
+def with_asr(recipe, candidate):
+    """The recipe with its transcribing module built from ``candidate``; what it reads and emits stays."""
+    part = asr_part(candidate)
+    modules, changed = [], False
+    for item in recipe['modules']:
+        if PARTS[item['use']].transcribes:
+            if item['use'] != part:     # the old part's own settings (phrase buffer, windows) do not carry over
+                item = {key: value for key, value in item.items() if key not in PART_SETTINGS}
+            item, changed = dict(item, use=part, candidate=candidate), True
+        modules.append(item)
+    if not changed:
+        raise SystemExit(f"--asr: {recipe['name']} has no module that transcribes")
+    return dict(recipe, modules=modules)
+
+
 def load(name, include=(), exclude=(), with_roles=(), keep=None):
     """A built-in recipe by name, or a recipe file path; validated, optional modules resolved.
 
@@ -633,6 +666,9 @@ def open_inputs(recipe, args, inputs):
             if kind == 'camera' and getattr(args, 'camera_max_side', None):
                 options['max_side'] = args.camera_max_side
             source = sources[item['id']] = open_source(kind, None if value is True else value, **options)
+            if getattr(args, 'realtime', None) and kind not in LIVE:
+                from ..inputs import Paced
+                sources[item['id']] = Paced(source, args.realtime)
             if clock is not None:
                 if kind not in ('video', 'sound'):
                     length = source.duration_s()
@@ -1213,6 +1249,12 @@ def main(argv=None):
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
     start.add_argument('--allow-remote-asr', action='store_true',
                        help="consent to sending the sound to a hosted ASR module's paid API (hosted-words)")
+    start.add_argument('--asr', metavar='CANDIDATE',
+                       help='the audio.asr candidate that transcribes (e.g. openai.gpt_live_transcribe.hosted, '
+                            'elevenlabs.scribe_v2_realtime.hosted, sherpa.zipformer_ko_streaming, '
+                            'voxtral.mini_4b_realtime_2602.mlx); the part that builds it replaces the recipe\'s')
+    start.add_argument('--realtime', nargs='?', type=float, const=1., metavar='SPEED',
+                       help='replay a recording at its own speed (or SPEED times it), as a live capture arrives')
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
     _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
@@ -1293,6 +1335,8 @@ def main(argv=None):
         return getattr(movement, args.action)(args)
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
                   _kept(args) if args.action == 'run' else None)
+    if getattr(args, 'asr', None):
+        recipe = with_asr(recipe, args.asr)
     if len(recipe['inputs']) == 1 and args.action in ('run', 'enroll', 'find') and len(_given(args)) > 1:
         unread = [name for name in _given(args) if name not in recipe['inputs'][0]['sources']]
         if unread and len(read_recipe(args.recipe)[1]['inputs']) > 1:

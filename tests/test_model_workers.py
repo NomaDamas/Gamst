@@ -138,6 +138,7 @@ LOADERS = {
     'qwen3.asr.words': 'qwen_words', 'hosted.asr.words': None,   # a hosted API loads no package
     'sortformer.diarization': 'sortformer', 'pyannoteai.live.diarization': None, 'pyannoteai.offline.diarization': None,
     'offline.diarization': None,   # slot_sources.py checks DiariZen's and community-1's pins in their own environments
+    'streaming.asr.words': None, 'faster_whisper.align': None,
     'pg.physical.local': None, 'opencv': None, 'sounddevice': None, 'pillow': None,   # no version check in a provider file
 }
 VERSION = re.compile(r'\d+(\.\d+)+')

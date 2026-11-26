@@ -275,6 +275,86 @@ async def _hosted_words(options, context):
     return dict(module=module, spec=module.spec)
 
 
+ENDPOINT_KEYS = ('pause_ms', 'short_pause_ms', 'min_seconds', 'soft_max_seconds', 'max_seconds', 'margin_db')
+
+
+def _registry_config(role, candidate):
+    from ..crew.registry import ROLES
+    chosen = ROLES[role].candidates.get(candidate)
+    return None if chosen is None else dict(chosen.config or {})
+
+
+async def _stream_words(options, context):
+    """A streaming recogniser with capture-time word times (owner decision: the product path is streaming).
+
+    Hosted (``openai.*.hosted``, ``elevenlabs.*.hosted``): a WebSocket session in this process. Audio leaves the device
+    and is billed by the second: the config's ``allow_remote`` (or ``--allow-remote-asr``) is the owner's opt-in and the
+    cost line is printed first; nothing needs setting up (the key comes from the environment). A recogniser that returns
+    no word times (OpenAI) gets them from the ``audio.word_alignment`` candidate in its own lane (``"aligner"``, default
+    ``qwen3.forced_aligner_0_6b``; ``faster_whisper.align_large_v3_turbo`` is a non-default baseline); the text stays the
+    recogniser's.
+
+    Local (``sherpa.*``, ``voxtral.*``): the recogniser in its worker, set up by role. ``"partials": true`` also emits
+    partial records. ``"bias": "terms"`` gives the counted words as key terms / keywords where the API has them.
+    """
+    from ..providers import model_workers
+    candidate = options.get('candidate', 'openai.gpt_live_transcribe.hosted')
+    registry = _registry_config('audio.asr', candidate) or {}
+    language = context.get('language') or options.get('language') or 'ko'
+    if 'api' in registry or 'api' in (options.get('config') or {}):
+        from ..providers.streaming_asr import Endpointer, StreamingWords
+        from ..providers.streaming_hosted import check_config, cost_line, session
+        config = dict(registry, **(options.get('config') or {}))
+        if context.get('allow_remote_asr'):
+            config['allow_remote'] = True
+        for key in ('endpoint', 'api_key_env', 'model', 'commit_strategy', 'delay', 'prompt', 'time_base'):
+            if options.get(key):
+                config[key] = options[key]
+        config['language'] = language
+        terms = bias_terms(options, context)
+        if terms:
+            config['terms'] = terms
+        try:
+            check_config(config)
+            chosen = session(config)
+        except (ValueError, PermissionError) as error:
+            raise SystemExit(f"{options.get('name')}: {error}") from error
+        seconds = None
+        for source in (context.get('inputs') or {}).values():
+            duration = getattr(source, 'duration_s', None)
+            try:
+                seconds = float(duration()) if callable(duration) else seconds
+            except Exception:
+                pass
+        print('note: ' + cost_line(config, seconds), file=sys.stderr)
+        aligner = None
+        if not chosen.word_times:
+            if isinstance(options.get('aligner_config'), dict):
+                entry = dict(config=options['aligner_config'], python=options.get('aligner_python'))
+            else:
+                entry = context['installed'](dict(use='role', role='audio.word_alignment',
+                                                  candidate=options.get('aligner', 'qwen3.forced_aligner_0_6b')))
+            aligned = dict(entry['config'])
+            profile = 'faster_whisper.align' if 'model_path' in aligned else 'qwen3.forced_aligner'
+            aligner = await model_workers.RemoteAligner.open(
+                context.get('worker_python') or entry.get('python') or sys.executable, profile, aligned,
+                startup_timeout=300, inference_timeout=120)
+        endpointer = None
+        if chosen.manual_commit:
+            endpointer = Endpointer(**{key: float(options[key]) for key in ENDPOINT_KEYS if key in options})
+        module = StreamingWords(chosen, aligner=aligner, language=language, partials=bool(options.get('partials')),
+                                endpointer=endpointer)
+        return dict(module=module, spec=module.spec)
+    config, python, profile = _entry(options, context, 'streaming.asr.words')
+    config = dict(config, language=language, partials=bool(options.get('partials')))
+    settings = {'voxtral-mlx': ('delay_ms', 'pause_seconds', 'max_seconds'),
+                'sherpa-zipformer': ('num_threads', 'decoding_method')}.get(config.get('backend'), ())
+    config.update({key: options[key] for key in settings if key in options})
+    module = await model_workers.RemoteStreamingWords.open(python, profile, config, startup_timeout=600,
+                                                           inference_timeout=120)
+    return dict(module=module, spec=module.spec)
+
+
 async def _prosody(options, context):
     from ..providers.prosody import AudioProsody
     module = AudioProsody()
@@ -566,12 +646,15 @@ def parts(Part):
         'track-verify': Part('module', build=_track_verify),
         'transcript-replay': Part('module', build=_transcript_replay, transcribes=True),
         'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
-                              transcribes=True),
+                              transcribes=True, serves=(None,)),
         'qwen-words': Part('module', role='audio.asr', candidate='qwen3.asr_1_7b.transformers',
-                           build=_qwen_words, transcribes=True,
+                           build=_qwen_words, transcribes=True, serves=('qwen3.asr.words',),
                            extra_roles=(('aligner', 'audio.word_alignment', 'qwen3.forced_aligner_0_6b'),)),
         'hosted-words': Part('module', role='audio.asr', candidate='elevenlabs.scribe_v2.hosted', build=_hosted_words,
-                             transcribes=True),
+                             transcribes=True, serves=('hosted.asr.words',)),
+        'stream-words': Part('module', role='audio.asr', candidate='openai.gpt_live_transcribe.hosted',
+                             build=_stream_words, transcribes=True,
+                             serves=('streaming.asr.words', 'gamst.providers.streaming_asr:StreamingWords')),
         'prosody': Part('module', role='audio.prosody', candidate='dsp', build=_prosody),
         'audio-onsets': Part('module', build=_audio_onsets),
         'coincidence': Part('module', build=_coincidence),
