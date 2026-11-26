@@ -35,5 +35,19 @@ at L1), leave-one-clip-out on the four clips. Not pushed.
 | 시발 | 7 | 7 | 0/0 | 0/0 | 7 | 0 | 0 |
 | 달 | 23 | 23 | 0/0 | 0/0 | 23 | 0 | 0 |
 
+## C: four clips, same-clip voice (run m1, 21:49-21:56; no owner range marked -> main speaker of the first 15 s)
+Main speaker: 뽀또 SPEAKER_00 of 2 (6.1 s alone), 몇기야 SPEAKER_00 of 2 (8.9 s), 시발 1 speaker (7.1 s), 달 1 speaker
+(9.5 s). Scored with the window 0-15 s excluded (strict: a live run has this voice only after 15 s):
+| clip | person (scored) | heard | L1 instant right/counted | final right/counted | person→other | other→person | not heard |
+|---|---|---|---|---|---|---|---|
+| 뽀또 | 8 | 7 | 4/8 | 7/11 | 0 | 4 | 1 (28.1) |
+| 몇기야 | 4 | 3 | 3/4 | 3/4 | 0 | 1 | 1 (39.24) |
+| 시발 | 7 | 7 | 5/5 | 6/6 | 1 | 0 | 0 |
+| 달 | 7 | 7 | 7/7 | 7/7 | 0 | 0 | 0 |
+Excluding only the enrolled segments: 뽀또 9 person, L1 4/9, final 7/12; 몇기야 4, 3/4, 3/4; 시발 same; 달 13, 12/12, 12/12.
+Videos: `~/Desktop/홍명보/gamst/GAMST 카운트 결과/{뽀또,감스트의 해병대식 내리갈굼,감스트 피파 억까,애교쟁이 인디깅}/
+<term>_카운트_v5_즉시.mp4` (`try-it/hud/video.sh SHORT m1 NOTE`), frames checked.
+
 ## Next
-C runs + videos (`<term>_카운트_v5_즉시.mp4`), D aligner per repetition, then v2.
+D aligner per repetition (`scripts/qa_repetition_times.py`, queued), v2 study (`scripts/qa_speaker_decision_v2.py
+prepare|evaluate`, data in `try-it/testbed/v2/`), then implement v2 in GAMST and rerun with leave-one-clip-out params.
