@@ -284,7 +284,7 @@ class TargetSpeechWords:
                                   answer_timeout_s=self.answer_timeout_s, capability_id=self.spec.id,
                                   detector=self.detector, records=self.records)
         other._owns_extractor, other._parent = self.open_extractor is not None, self
-        other.spec = self.spec
+        other.spec, other.stats = self.spec, self.stats       # one account of the lane's work, forks included
         other.pipeline, other.memory, other.enrollment, other.target, other.terms = \
             self.pipeline, self.memory, self.enrollment, self.target, self.terms
         return other
@@ -300,10 +300,16 @@ class TargetSpeechWords:
         """Sound whose stretch is not decided yet: an open stretch, or a closed one this module still owes."""
         if self._heard_until is None:
             return None
+        if self.detector.known_until_ms is None:       # no slot activity yet: nothing heard can be called clear
+            return int(self._heard_from)
         closed, opened, _ = self.detector.scan(self._done_until)
         bounds = [low for low, high in closed if self._owns(low, high)] + ([opened] if opened is not None else []) + \
             [low for low, _ in list(self._inflight)]
-        return min(bounds) - self.window['margin_ms'] if bounds else None
+        # The diarization says who is active later than it says it heard the sound: what it has not covered (plus the
+        # reach of the rule) may still turn out to be a stretch.
+        unknown = self.detector.known_until_ms - self.detector.reach_ms
+        held = min(bounds) - self.window['margin_ms'] if bounds else None
+        return unknown if held is None else min(held, unknown)
 
     # ------------------------------------------------------------------ frames
 
