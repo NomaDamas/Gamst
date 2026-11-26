@@ -406,7 +406,9 @@ async def _stream_words(options, context):
         config = dict(registry, **(options.get('config') or {}))
         if context.get('allow_remote_asr'):
             config['allow_remote'] = True
-        for key in ('endpoint', 'api_key_env', 'model', 'commit_strategy', 'delay', 'prompt', 'time_base'):
+        for key in ('endpoint', 'api_key_env', 'model', 'commit_strategy', 'delay', 'prompt', 'time_base', 'max_delay',
+                    'endpointing', 'mode', 'min_turn_silence', 'max_turn_silence', 'vad_threshold',
+                    'end_of_utterance_silence_trigger'):
             if options.get(key):
                 config[key] = options[key]
         config['language'] = language

@@ -111,7 +111,8 @@ class CaptureClock:
         for _, _, end_ms, wall in self.pieces:
             if end_ms >= capture_ms - 1:
                 return wall
-        return None
+        # a recogniser may place the last word a little after the last sample it was sent
+        return self.pieces[-1][3] if self.pieces and capture_ms - self.pieces[-1][2] <= 1000 else None
 
 
 class StreamResampler:
@@ -295,7 +296,9 @@ class StreamingWords:
         await self._commit()
         await self.session.end()
         deadline = time.monotonic() + self.finish_timeout
-        while (self._waiting > 0 or not self.session.manual_commit and not self.session.ended) \
+        closes = getattr(self.session, 'closes_on_end', False)   # it answers what it holds, then closes
+        while ((not self.session.ended) if closes else (
+                self._waiting > 0 or not self.session.manual_commit and not self.session.ended)) \
                 and time.monotonic() < deadline and not self._pump.done():
             await asyncio.sleep(.05)
         if self._lane is not None:

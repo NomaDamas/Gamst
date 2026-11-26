@@ -25,6 +25,24 @@ APIs (read from the official documentation on 2026-11-26):
   ``committed_transcript_with_timestamps``), ``keyterms``. Audio goes as ``input_audio_chunk`` with
   ``audio_base_64``, ``commit``, ``sample_rate``. $0.22 per hour of audio, keyterms +$0.05 per hour (pricing page).
   https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime
+- ``assemblyai``: AssemblyAI-STT-3.7-Realtime (``assemblyai-stt-3-7-realtime``, 32 languages incl. ``ko``) over
+  ``wss://streaming.assemblyai.com/v3/ws`` with ``Authorization: <key>``; binary PCM16 frames; ``Turn`` messages with
+  ``words[].start/end`` in milliseconds from the stream start, ``end_of_turn`` marks the final; ``ForceEndpoint`` ends a
+  turn, ``Terminate`` the session; ``language_codes``, ``keyterms_prompt`` (JSON lists). Billed by session time,
+  $0.30 per hour, keyterms included (pricing page). https://www.assemblyai.com/docs/streaming/message-sequence
+- ``deepgram``: Nova-3 monolingual Korean (``model=nova-3&language=ko``) over ``wss://api.deepgram.com/v1/listen`` with
+  ``Authorization: Token <key>``; binary PCM16; ``Results`` with ``is_final`` and ``words[].start/end`` in seconds from
+  the stream start; ``Finalize`` flushes, ``CloseStream`` ends; ``keyterm`` (repeated). $0.0048 per minute, keyterm
+  prompting +$0.0013 per minute (pricing page). https://developers.deepgram.com/docs/live-streaming-audio
+- ``speechmatics``: Realtime ``enhanced`` with ``language: ko`` over ``wss://eu2.rt.speechmatics.com/v2`` with
+  ``Authorization: Bearer <key>``; ``StartRecognition``, binary ``AddAudio``, ``AddPartialTranscript`` /
+  ``AddTranscript`` with ``results[].start_time/end_time`` in seconds from the stream start; ``ForceEndOfUtterance``,
+  ``EndOfStream``; ``additional_vocab``; ``max_delay`` (0.7-4 s, default 4; the quickstart's 0.7 here).
+  $0.40 per hour (pricing page). https://docs.speechmatics.com/api-ref/realtime-transcription-websocket
+
+Profanity: none of them masks by default for Korean. AssemblyAI ``filter_profanity`` and Deepgram ``profanity_filter``
+default to false and are sent as false; Speechmatics only tags (English, Spanish, Italian); ElevenLabs redacts only
+with ``entity_redaction``; OpenAI documents no filter. Measured: docs/measurements/streaming-asr-2026-11-26.md.
 """
 from __future__ import annotations
 
@@ -34,12 +52,18 @@ import json
 import os
 from urllib.parse import urlencode, urlparse
 
-APIS = ('openai', 'elevenlabs')
+APIS = ('openai', 'elevenlabs', 'assemblyai', 'deepgram', 'speechmatics')
 DEFAULTS = {
     'openai': dict(endpoint='wss://api.openai.com/v1/realtime?intent=transcription', model='gpt-live-transcribe',
                    api_key_env='OPENAI_API_KEY', usd_per_hour=1.02),
     'elevenlabs': dict(endpoint='wss://api.elevenlabs.io/v1/speech-to-text/realtime', model='scribe_v2_realtime',
                        api_key_env='ELEVENLABS_API_KEY', usd_per_hour=.22, usd_per_hour_keyterms=.05),
+    'assemblyai': dict(endpoint='wss://streaming.assemblyai.com/v3/ws', model='assemblyai-stt-3-7-realtime',
+                       api_key_env='ASSEMBLYAI_API_KEY', usd_per_hour=.30, usd_per_hour_keyterms=0.),
+    'deepgram': dict(endpoint='wss://api.deepgram.com/v1/listen', model='nova-3', api_key_env='DEEPGRAM_API_KEY',
+                     usd_per_hour=.288, usd_per_hour_keyterms=.078),
+    'speechmatics': dict(endpoint='wss://eu2.rt.speechmatics.com/v2', model='enhanced',
+                         api_key_env='SPEECHMATICS_API_KEY', usd_per_hour=.40, usd_per_hour_keyterms=0.),
 }
 
 
@@ -73,8 +97,8 @@ def cost_line(config, seconds=None):
     endpoint = config.get('endpoint') or DEFAULTS[api]['endpoint']
     where = 'a local endpoint' if is_local(endpoint) else urlparse(endpoint).hostname
     rate = float(config.get('usd_per_hour', DEFAULTS[api]['usd_per_hour']))
-    if api == 'elevenlabs' and config.get('terms'):
-        rate += float(config.get('usd_per_hour_keyterms', DEFAULTS[api]['usd_per_hour_keyterms']))
+    if config.get('terms'):
+        rate += float(config.get('usd_per_hour_keyterms', DEFAULTS[api].get('usd_per_hour_keyterms', 0.)))
     model = config.get('model') or DEFAULTS[api]['model']
     expected = f'; this input ({seconds:.0f} s) about ${rate * seconds / 3600:.4f}' if seconds else ''
     return (f'streaming ASR: every second of sound (silence too) goes to {where} ({model}) as it is captured; '
@@ -271,7 +295,153 @@ class ElevenLabsSession(Session):
         return []
 
 
-SESSIONS = {'openai': OpenAISession, 'elevenlabs': ElevenLabsSession}
+class _BinarySession(Session):
+    """Sessions that take raw PCM16 as binary frames and close the socket themselves after ``end``."""
+    rate, manual_commit, word_times, closes_on_end = 16000, False, True, True
+
+    async def send(self, pcm):
+        if pcm:
+            self.seconds_sent += len(pcm) / 2 / self.rate
+            self.sent_chunks = getattr(self, 'sent_chunks', 0) + 1
+            await self.ws.send(pcm)
+
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
+        strategy = self.config.get('commit_strategy', 'server')
+        if strategy not in ('server', 'manual'):
+            raise ValueError('commit_strategy is server (the service ends turns) or manual (GAMST commits)')
+        self.manual_commit = strategy == 'manual'
+
+
+class AssemblyAISession(_BinarySession):
+    """AssemblyAI-STT-3.7-Realtime: turns with word times in ms from the stream start."""
+
+    async def open(self):
+        query = [('speech_model', self.model), ('sample_rate', str(self.rate)), ('encoding', 'pcm_s16le'),
+                 ('language_codes', json.dumps([self.language])), ('filter_profanity', 'false')]
+        if self.terms:
+            query.append(('keyterms_prompt', json.dumps(self.terms, ensure_ascii=False)))
+        for key in ('mode', 'min_turn_silence', 'max_turn_silence', 'vad_threshold', 'prompt'):
+            if key in self.config:
+                query.append((key, str(self.config[key])))
+        separator = '&' if '?' in self.endpoint else '?'
+        self.ws = await self._open_socket(self.endpoint + separator + urlencode(query),
+                                          {'Authorization': self.key} if self.key else {})
+        self.reader = asyncio.ensure_future(self._read())
+
+    async def commit(self):
+        await self._send(dict(type='ForceEndpoint'))
+
+    async def end(self):
+        await self._send(dict(type='Terminate'))
+
+    def translate(self, message):
+        kind = message.get('type', '')
+        if kind == 'Turn':
+            key = str(message.get('turn_order'))
+            if not message.get('end_of_turn'):
+                return [dict(kind='partial', key=key, text=str(message.get('transcript', '')))]
+            words = [(str(word.get('text', '')).strip(), word['start'] / 1000, word['end'] / 1000)
+                     for word in message.get('words') or () if str(word.get('text', '')).strip()
+                     and type(word.get('start')) in (int, float) and type(word.get('end')) in (int, float)]
+            return [dict(kind='final', key=key, text=str(message.get('transcript', '')), words=words or None,
+                         base='session')]
+        if kind == 'Error' or 'error' in message:
+            return [dict(kind='error', message=str(message.get('error') or message))]
+        return []
+
+
+class DeepgramSession(_BinarySession):
+    """Deepgram Nova-3: interim and final results with word times in seconds from the stream start."""
+
+    async def open(self):
+        query = [('model', self.model), ('language', self.language), ('encoding', 'linear16'),
+                 ('sample_rate', str(self.rate)), ('channels', '1'), ('interim_results', 'true'), ('punctuate', 'true'),
+                 ('profanity_filter', 'false'), ('endpointing', str(self.config.get('endpointing', 300)))]
+        query += [('keyterm', term) for term in self.terms]
+        separator = '&' if '?' in self.endpoint else '?'
+        self.ws = await self._open_socket(self.endpoint + separator + urlencode(query),
+                                          {'Authorization': 'Token ' + self.key} if self.key else {})
+        self.reader = asyncio.ensure_future(self._read())
+
+    async def commit(self):
+        await self._send(dict(type='Finalize'))
+
+    async def end(self):
+        await self._send(dict(type='CloseStream'))
+
+    def translate(self, message):
+        kind = message.get('type', '')
+        if kind == 'Results':
+            alternative = ((message.get('channel') or {}).get('alternatives') or [{}])[0]
+            key = str(round(1000 * float(message.get('start', 0))))
+            text = str(alternative.get('transcript', ''))
+            if not message.get('is_final'):
+                return [dict(kind='partial', key=key, text=text)]
+            words = [(str(word.get('punctuated_word') or word.get('word') or '').strip(), float(word['start']),
+                      float(word['end'])) for word in alternative.get('words') or ()
+                     if str(word.get('word', '')).strip() and word.get('start') is not None and word.get('end') is not None]
+            return [dict(kind='final', key=key, text=text, words=words or None, base='session')]
+        if kind == 'Error' or message.get('err_code'):
+            return [dict(kind='error', message=str(message.get('description') or message.get('err_msg') or message))]
+        return []
+
+
+class SpeechmaticsSession(_BinarySession):
+    """Speechmatics Realtime: final segments with word times in seconds from the stream start."""
+
+    async def open(self):
+        self.ws = await self._open_socket(self.endpoint, {'Authorization': 'Bearer ' + self.key} if self.key else {})
+        config = dict(language=self.language, model=self.model, enable_partials=True,
+                      max_delay=float(self.config.get('max_delay', .7)))
+        if self.terms:
+            config['additional_vocab'] = [dict(content=term) for term in self.terms]
+        if 'end_of_utterance_silence_trigger' in self.config:
+            config['conversation_config'] = dict(
+                end_of_utterance_silence_trigger=float(self.config['end_of_utterance_silence_trigger']))
+        await self._send(dict(message='StartRecognition', transcription_config=config,
+                              audio_format=dict(type='raw', encoding='pcm_s16le', sample_rate=self.rate)))
+        self.reader = asyncio.ensure_future(self._read())
+
+    async def commit(self):
+        await self._send(dict(message='ForceEndOfUtterance'))
+
+    async def end(self):
+        await self._send(dict(message='EndOfStream', last_seq_no=getattr(self, 'sent_chunks', 0)))
+
+    @staticmethod
+    def words(results):
+        words = []
+        for item in results or ():
+            content = str(((item.get('alternatives') or [{}])[0]).get('content', '')).strip()
+            if not content or item.get('start_time') is None:
+                continue
+            if item.get('type') == 'punctuation' and words:
+                words[-1][0] += content
+            elif item.get('type') != 'punctuation':
+                words.append([content, float(item['start_time']), float(item['end_time'])])
+        return [tuple(word) for word in words]
+
+    def translate(self, message):
+        kind = message.get('message', '')
+        if kind in ('AddPartialTranscript', 'AddTranscript'):
+            metadata = message.get('metadata') or {}
+            self._segment = getattr(self, '_segment', 0)
+            key, text = str(self._segment), str(metadata.get('transcript', '')).strip()
+            if kind == 'AddPartialTranscript':
+                return [dict(kind='partial', key=key, text=text)]
+            self._segment += 1
+            words = self.words(message.get('results'))
+            return [dict(kind='final', key=key, text=text, words=words or None, base='session')]
+        if kind == 'EndOfTranscript':
+            self.ended = True
+        if kind == 'Error':
+            return [dict(kind='error', message=f"{message.get('type')}: {message.get('reason')}")]
+        return []
+
+
+SESSIONS = {'openai': OpenAISession, 'elevenlabs': ElevenLabsSession, 'assemblyai': AssemblyAISession,
+            'deepgram': DeepgramSession, 'speechmatics': SpeechmaticsSession}
 
 
 def session(config, **kwargs):
