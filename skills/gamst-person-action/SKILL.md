@@ -95,6 +95,9 @@ gamst recipe enroll person-action-count --kind person --video me.mp4 --seconds 1
 
 Only frames that show exactly one person are used; only face embeddings are saved (file mode 0600).
 `--without target_person` counts the most visible person instead and needs no person file.
+`--mode search` (owner decision 33: never lose the person, over-count rather than miss): a face that does not clearly
+contradict the enrolled one (score >= `face_reject`) selects the person's track, and a body match counts from a lower
+score (0.45); `--mode count` (default) is unchanged. Over MCP: `set_count_mode`.
 `--with semantic` adds the 1 fps scene description lane (an OpenAI-compatible endpoint you host).
 
 ## Run, find, export

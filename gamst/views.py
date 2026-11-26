@@ -160,7 +160,8 @@ class CountView(_Window):
             record = self.latest.get(capability)
             value = record['observation']['value'] if record else {}
             lines.append((capability, None))
-            lines.append((f"  count {value.get('count', 0)}   {value.get('status', 'waiting')}", (255, 255, 255)))
+            lines.append((f"  count {value.get('count', 0)}   {value.get('status', '' if record else 'waiting')}",
+                          (255, 255, 255)))
             states = count_events(self.rows.get(capability, ()), max_evidence=0).get('states') or {}
             if any(states.values()):
                 tallies.append((len(lines), [(name, states.get(name, 0)) for name in STATES]))
