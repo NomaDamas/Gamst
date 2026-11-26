@@ -106,7 +106,7 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
             if any(key in item for key in IDENTITY):
                 reference, which = _about(item)
                 if not is_current(item, newest):
-                    others[reference, *which] = others.get((reference, *which), 0) + 1
+                    others[(reference, *which)] = others.get((reference, *which), 0) + 1
                     continue
                 of.add((reference, *which))
             count += 1

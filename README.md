@@ -133,6 +133,26 @@ asynchronous modalities, care about short-lived events, and must change an
 agent's action from that evidence. A single-image caption, one-shot transcript,
 or ordinary chatbot is intentionally outside this target.
 
+#### Why not let an LLM watch the video?
+
+A coding agent that can read images can count from a video: it cuts frames into timestamped contact sheets,
+looks at them, and zooms into doubtful moments. It did so on the two test-bed clips
+([docs/measurements/testbed-2026-11-26.md](docs/measurements/testbed-2026-11-26.md)), but it found *where* to look
+from what perception modules had measured (impact sounds, wrist heights, transcripts, voice scores), and it cannot hear.
+
+| | An LLM looks at frames | GAMST |
+| --- | --- | --- |
+| **Delay** | tens of seconds to minutes per question | per frame; measured: pose 31 ms/frame on a Mac CPU (keeps up with 30 fps, not with 60 fps: the 11.9 s 60 fps clip took 28.5 s) |
+| **One hour of video** | 108,000 frames at 30 fps; at 20 fps in sheets of 48, about 1,500 images, millions of input tokens (estimate) | on the device, no API cost |
+| **Always on** | not practical | what it is for |
+| **Same answer twice** | may differ between looks | same input, same count (three reruns gave the same 15) |
+| **Time resolution** | the spacing of the frames looked at (0.05 s) | every frame; sound onsets every 0.01 s |
+| **Privacy** | the frames are sent to the model provider | stays on the device unless a cloud module is chosen |
+| **Sound** | cannot hear | hears |
+
+The two work together: GAMST counts everything, continuously; an LLM looks only at the few events GAMST marks as
+doubtful, through bounded evidence.
+
 The reusable boundary is the common temporal contract, not a list of sensors:
 
 ```text
