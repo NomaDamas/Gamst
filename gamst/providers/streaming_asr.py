@@ -102,7 +102,8 @@ class CaptureClock:
         for _, _, end_ms, wall in self.pieces:
             if end_ms >= capture_ms - 1:
                 return wall
-        return None
+        # a recogniser may place the last word a little after the last sample it was sent
+        return self.pieces[-1][3] if self.pieces and capture_ms - self.pieces[-1][2] <= 1000 else None
 
 
 class StreamResampler:
