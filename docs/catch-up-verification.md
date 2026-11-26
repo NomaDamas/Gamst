@@ -161,6 +161,12 @@ the majority revoked: 뽀또 28.10 0.11, 달 12.28 0.35. Lower confidence goes w
 that vetoes 24.16 (> 0.33) also vetoes 41.76, 28.10, 몇기야 17.34 (0.15), 시발 23.18 / 29.50 (0.30) and 달 7.94 (0.18).
 So condition (a) cannot separate them on these clips and `low_confidence` defaults to `null` (no veto).
 
+Measured live (4 clips x 3 runs, v7 base; table in docs/handoff-feat-sota-first-rule.md): no word is revoked by the
+recognisers any more; the contested words were 24.16 (another voice) and 28.10, 41.76 (the person) in every run and
+27.10 (the person) in one: all `uncertain`. Final right/counted is the same as the majority (v7) on every clip, the
+person words the majority revoked are now shown as uncertain instead of "not said". `contested: "stand"` would have
+counted 7 more right words and 3 wrong ones (24.16) over the three runs: the owner's choice.
+
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
