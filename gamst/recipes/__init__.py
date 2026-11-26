@@ -1030,7 +1030,9 @@ async def run_pipeline(recipe, args):
                 if counted.get('states'):   # provisional + final are counted; revoked ones are not
                     report.setdefault('states', {})[capability] = counted.get('group_states') or counted['states']
                     report.setdefault('event_states', {})[capability] = event_states(
-                        own, human.store.known_times([row['id'] for row in own]))
+                        own, human.store.known_times([row['id'] for row in own]), paced=bool(report.get('paced')))
+                    report['decision_clock'] = 'capture (paced as live: knowledge time)' if report.get('paced') else \
+                        'capture (record time: the run was not paced, knowledge times are on another clock)'
                 report['lost'][capability] = pipeline.lost(capability)
             # Complete: no frame the count depends on was lost, failed or captured while a module was off.
             report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
@@ -1080,15 +1082,28 @@ async def run_pipeline(recipe, args):
     return report
 
 
-def event_states(rows, known):
+def event_states(rows, known, *, paced=False):
     """Each event with a revision state as it stands now, and when it was committed and settled.
 
     ``committed_ms`` / ``settled_ms``: when the Store learned the event and its revision (``known``: record ID ->
     knowledge time); ``capture_ms`` / ``settled_capture_ms``: the capture times of those records; ``committed_state``:
     the state it was committed in (``final`` when it said none).
+
+    ``history``: every step of the event, oldest first: the commit, then each revision (an event may be revised more
+    than once: uncertain, later final). Each step has ``state``, ``capture_ms`` (the capture time of the record that
+    holds it) and ``decided_ms``: the moment it was decided on the capture clock, i.e. when it appears live. In a run
+    paced as live (``paced``, ``--as-live``) that is when the Store learned it (the capture clock is the wall clock);
+    in a run faster than real time the knowledge time is on another clock, so it is the record's capture time (the
+    frame whose arrival decided it). A revision step also says ``reason``, ``basis`` and ``by`` (the lane that settled
+    it, e.g. ``verification``, ``tse``) where it has them.
     """
-    from ..counting import REVISION, revisions, with_state
-    revised, found = revisions(rows), []
+    from ..counting import REVISION, revision_history, revisions, with_state
+    revised, history, found = revisions(rows), revision_history(rows), []
+
+    def decided(record):
+        at = known.get(record['id']) if paced else None
+        return record['timestamp_ms'] if at is None else at
+
     for row in rows:
         for item in row['observation']['value'].get('events') or ():
             if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
@@ -1099,6 +1114,12 @@ def event_states(rows, known):
             if revision is not None:
                 entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'],
                              **({'settled_slot_score': revision[0]['slot_score']} if 'slot_score' in revision[0] else {}))
+            steps = [dict(state=item.get('state', 'final'), capture_ms=row['timestamp_ms'], decided_ms=decided(row),
+                          **({'by': item['decided_by']} if item.get('decided_by') else {}))]
+            for change, record in history.get(item['event_id'], ()):
+                steps.append(dict(state=change['state'], capture_ms=record['timestamp_ms'], decided_ms=decided(record),
+                                  **{key: change[key] for key in ('reason', 'basis', 'by') if change.get(key)}))
+            entry['history'] = steps
             found.append(entry)
     return found
 

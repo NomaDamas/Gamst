@@ -500,7 +500,8 @@ class TermEvents:
             revision = dict(event='event.revision', state=state, revises=key,
                             revised_event=event['event'], term=event['term'], start_ms=event['start_ms'],
                             end_ms=event['end_ms'], **words.identity,
-                            **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]})
+                            **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]},
+                            **({'by': found[0]['settled_by']} if isinstance(found[0].get('settled_by'), str) else {}))
             if state == 'revoked' or uncertain:
                 revision['reason'] = reason or ('another_voice' if spoken else 'enrolled_voice')
             elif reason:        # unchanged, and the verdict says why (e.g. another voice's word)

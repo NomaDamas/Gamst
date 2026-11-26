@@ -96,15 +96,134 @@ REASON_WORD = {'other_speaker': '다른 사람 목소리', 'another_voice': '다
 FLAG_WORD = {'may_be_number': '숫자일 수 있음'}
 
 
+
+CHANGE_S = 2.4      # how long a correction stays on the screen after it was decided
+L1_BY = (None, 'live')
+
+
+def _steps(event, start_ms, known):
+    """``[(at_s, state, step)]`` of one stated event: its ``history`` (``decided_ms``), else the older fields."""
+    at = lambda value: None if value is None else (value - start_ms) / 1000
+    history = event.get('history')
+    if history:
+        return [(at(step.get('decided_ms', step.get('capture_ms'))), step['state'], step) for step in history
+                if at(step.get('decided_ms', step.get('capture_ms'))) is not None]
+    seen = at(event.get('committed_ms' if known else 'capture_ms'))
+    first = event.get('committed_state') or ('final' if 'replaces' in event else 'provisional')
+    steps = [(seen if seen is not None else 0, first, {})]
+    settled = at(event.get('settled_ms' if known else 'settled_capture_ms'))
+    if settled is not None:
+        steps.append((settled, event['state'], dict(event.get('revised_by') or {})))
+    return steps
+
+
+def hud_timeline(report, count, other=None):
+    """What the HUD knows at each moment, from a report's ``event_states`` (None without them).
+
+    One item per word: ``t`` (its end, seconds), ``steps`` ``[(at_s, state, step)]`` with ``state`` one of provisional,
+    final, revoked, uncertain or ``other`` (another voice's word: shown, never counted), each at the moment it was
+    decided on the capture clock (when it appears live), and ``number`` (the order in which words entered the count).
+    A word another voice was first given that a later lane gives to the person (an event that ``replaces`` it) is one
+    item: shown as another voice's, then added. ``changes``: every moment a word's count or state changed after it was
+    first shown, ``(at_s, delta, kind, item)`` with ``kind`` one of ``live`` (L1 counted it), ``added``, ``final``,
+    ``revoked``, ``uncertain``; nothing is applied before it was decided.
+    """
+    capability, _, name = count.partition(':')
+    stated = (report.get('event_states') or {}).get(capability)
+    if not stated:
+        return None
+    other_name = other.partition(':')[2] if other and other.partition(':')[0] == capability else None
+    known, start = bool(report.get('paced')), report['start_ms']
+    replaced = {event['replaces']: event for event in stated if event.get('replaces')}
+    items = []
+    for event in stated:
+        if event.get('replaces') or not event_time(event) or event.get('event') not in (name, other_name):
+            continue
+        t = (event_time(event) - start) / 1000
+        steps = []
+        for at, state, step in _steps(event, start, known):
+            if event['event'] == other_name:
+                if event['event_id'] in replaced and len(steps):
+                    continue      # what replaced it carries on
+                state = 'other'
+            steps.append((max(at, t), state, step))
+        later = replaced.get(event['event_id'])
+        if later is not None:
+            steps += [(max(at, t), state, step) for at, state, step in _steps(later, start, known)]
+        if not steps:
+            continue
+        items.append(dict(event, t=t, steps=sorted(steps, key=lambda item: item[0]), now=later or event))
+    items.sort(key=lambda item: (item['steps'][0][0], item['t']))
+    changes, number = [], 0
+    for item in sorted(items, key=lambda item: item['t']):
+        item['number'] = None
+    moments = sorted(((at, item['t'], index, position) for position, item in enumerate(items)
+                      for index, (at, _, _) in enumerate(item['steps'])))
+    for at, _, index, position in moments:
+        item = items[position]
+        state, step = item['steps'][index][1:]
+        before = item['steps'][index - 1][1] if index else None
+        was, now = before in COUNTED_STATES, state in COUNTED_STATES
+        if now and item['number'] is None:
+            number += 1
+            item['number'] = number
+        if index == 0:
+            if now:
+                changes.append((at, 1, 'live' if state == 'provisional' and step.get('by') in L1_BY else 'added', item))
+            continue
+        if state == before:
+            continue
+        kind = 'added' if now and not was else 'final' if state == 'final' else state if was else None
+        if kind is not None:
+            changes.append((at, int(now) - int(was), kind, item))
+    return dict(items=items, changes=changes)
+
+
+COUNTED_STATES = ('provisional', 'final')
+
+
+def item_state(item, t):
+    """The item's state at video time ``t`` (None before anything was known of it)."""
+    found = None
+    for at, state, _ in item['steps']:
+        if at > t:
+            break
+        found = state
+    return found
+
+
+def change_line(kind, item):
+    """(headline, why) of one correction in Korean, e.g. ``("−1 취소 #9", "다른 사람 목소리")``."""
+    reason = None
+    for _, state, step in item['steps']:
+        if state in ('revoked', 'uncertain') and step.get('reason'):
+            reason = step['reason']
+    reason = REASON_WORD.get(reason, reason)
+    number = f" #{item['number']}" if item.get('number') else ''
+    if kind == 'revoked':
+        return f"−1 취소{number}", reason or ''
+    if kind == 'uncertain':
+        return f"−1 보류{number}", '불확실' + (f': {reason}' if reason else '')
+    if kind == 'added':
+        first = item['steps'][0][1]
+        return f"+1 추가{number}", '다시 들어서 찾음' if first in COUNTED_STATES else '감스트 목소리로 정정' \
+            if first == 'other' else '불확실에서 확정' if first == 'uncertain' else '검증 결정'
+    if kind == 'final':
+        return f"확정{number}", '검증 통과'
+    return f"+1{number}", '실시간'
+
+
+CHANGE_COLOR = {'revoked': REC, 'uncertain': UNCERTAIN, 'added': GOOD, 'final': GOOD, 'live': GOOD}
+
+
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
            note='', slow=1, points=None, start=0., end=None, hold_settled=False):
     import cv2
     import numpy as np
+    hud = hud_timeline(report, count, other)
     counted, others = load_events(report, count), load_events(report, other)
-    stated = load_states(report, count)
-    if stated is not None:
-        counted = stated
-        others = [event for event in others if not any(item.get('replaces') == event.get('event_id') for item in stated)]
+    if hud is not None:
+        counted, others = [], []
     if support:     # another module's word on each counted event (e.g. whether it made a sound)
         notes = [event for event in report['events'].get(support, ()) if event_time(event)]
         for event in counted:
@@ -127,12 +246,9 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
                              '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
                              str(out)], stdin=subprocess.PIPE)
     hold_until = end
-    if hold_settled and stated is not None:     # the last stretch is decided after the input ends: show it settle
-        known = bool(report.get('paced'))
-        settled = [(event.get('settled_ms' if known else 'settled_capture_ms') or 0) - report['start_ms']
-                   for event in (report.get('event_states') or {}).get(count.partition(':')[0], ())]
-        hold_until = max([end, *(value / 1000 + 1 for value in settled if value > 0)])
-        hold_until = min(hold_until, end + HOLD_MAX_S)
+    if hold_settled and hud is not None:     # the last stretch is decided after the input ends: show it settle
+        last_change = max((at for item in hud['items'] for at, _, _ in item['steps']), default=0)
+        hold_until = min(max(end, last_change + CHANGE_S), end + HOLD_MAX_S)
     text, trail = KoreanText(), deque(maxlen=max(2, round(.25 * fps)))
     last = None
     marks = [(event, True) for event in counted] + [(event, False) for event in others]
@@ -161,79 +277,150 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         canvas = np.full((HEIGHT, WIDTH, 3), BG, np.uint8)
         x0, y0 = 32 + (VIEW_W - view.shape[1]) // 2, 104 + (VIEW_H - view.shape[0]) // 2
         canvas[y0:y0 + view.shape[0], x0:x0 + view.shape[1]] = view
-        if stated is None:
-            now = [event for event in counted if event['t'] <= t]
-            since = t - now[-1]['t'] if now else 9
-        else:
-            states = [(event, state_at(event, t)) for event in counted]
-            now = [event for event, state in states if state in ('provisional', 'final')]
-            since = t - max((event['seen'] for event in now), default=-9)
-            tally = {name: sum(state == name for _, state in states) for name in STATE_WORD}
-        rejected = [event for event in others if 0 <= t - event['t'] < HOLD_S]
-        flash = since < HOLD_S
-        if flash:
-            cv2.rectangle(canvas, (x0, y0), (x0 + view.shape[1] - 1, y0 + view.shape[0] - 1), GOOD,
-                          max(2, round(14 * (1 - since / HOLD_S))))
-            grow = round(60 * max(0, 1 - since / .2))
-            text.put(canvas, f'{len(now)}', x0 + view.shape[1] - 40, y0 + 24, 150 + grow, GOOD, 'bold', anchor='right')
-        elif rejected:
-            cv2.rectangle(canvas, (x0, y0), (x0 + view.shape[1] - 1, y0 + view.shape[0] - 1), DIM, 6)
         text.put(canvas, f'GAMST  ·  {title}', 32, 40, 34, WHITE, 'bold')
         text.put(canvas, '영상 끝 · 검증이 마지막 말을 정하는 중' if holding else (f'{slow}배 느리게' if slow != 1 else '원본 속도'),
                  VIEW_W + 32, 46, 24, WARN if holding else MUTED, anchor='right')
         cv2.rectangle(canvas, (SIDE, 104), (WIDTH - 32, 104 + VIEW_H), PANEL, -1)
-        text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
-        text.put(canvas, str(len(now)), SIDE + 32, 180, 230, GOOD if flash else WHITE, 'bold')
-        text.put(canvas, count_label, SIDE + 32, 420, 28, GOOD, 'bold')
-        if stated is not None:
-            x = SIDE + 32
-            for name in ('final', 'provisional', 'revoked', 'uncertain'):
-                if name == 'uncertain' and not tally['uncertain']:
-                    continue
-                label = f"{STATE_WORD[name]} {tally[name]}"
-                x += text.put(canvas, label, x, 452, 22, STATE_COLOR[name], 'bold') + 22
         text.put(canvas, f'{t:5.2f}초', WIDTH - 64, 136, 28, MUTED, anchor='right')
-        appeared = (lambda event: event['seen']) if stated is not None else (lambda event: event['t'])
-        feed = sorted(((event, kind) for event, kind in marks if (appeared(event) if kind else event['t']) <= t),
-                      key=lambda item: item[0]['t'])[-7:]
-        for row, (event, kind) in enumerate(reversed(feed)):
-            y = 486 + 52 * row
-            state = state_at(event, t) if kind and stated is not None else None
-            if state is not None:
-                color = STATE_COLOR[state]
-                text.put(canvas, STATE_WORD[state], SIDE + 32, y, 28, color, 'bold')
-                text.put(canvas, f"{event['t']:.2f}초", SIDE + 130, y, 28, WHITE if state != 'revoked' else DIM)
-                if state == 'revoked':
-                    cv2.line(canvas, (SIDE + 128, y + 16), (SIDE + 236, y + 16), REC, 3, cv2.LINE_AA)
-                text.put(canvas, count_detail(event, state), SIDE + 260, y + 3, 22, MUTED)
-                continue
-            number = sum(1 for item in counted if item['t'] <= event['t'])
-            text.put(canvas, f'{number}번' if kind else '제외', SIDE + 32, y, 28, GOOD if kind else DIM, 'bold')
-            text.put(canvas, f"{event['t']:.2f}초", SIDE + 130, y, 28, WHITE if kind else DIM)
-            detail = count_detail(event) if kind else other_label
-            text.put(canvas, detail, SIDE + 260, y + 3, 22, MUTED if kind else DIM)
         bar_y, bar_w = 940, WIDTH - 64
         cv2.rectangle(canvas, (32, bar_y - 34), (32 + bar_w, bar_y + 34), PANEL, -1)
         place = lambda at: 32 + round(bar_w * min(max((at - start) / (end - start), 0), 1))
-        for event, kind in marks:
-            if start <= event['t'] < end:
-                state = state_at(event, t) if kind and stated is not None else None
-                shown = event['t'] <= t if state is None and not (kind and stated is not None) else state is not None
-                color = STATE_COLOR[state] if state is not None else (GOOD if kind else DIM) if shown else LINE
-                cv2.line(canvas, (place(event['t']), bar_y - (30 if kind else 14)),
-                         (place(event['t']), bar_y + (30 if kind else 14)), color, 5 if kind else 3, cv2.LINE_AA)
+        if hud is not None:
+            _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, place, bar_y, start, end)
+        else:
+            _draw_plain(canvas, text, counted, others, marks, t, x0, y0, view, count_label, other_label, place, bar_y,
+                        start, end)
         cv2.line(canvas, (place(t), bar_y - 34), (place(t), bar_y + 34), WARN, 2)
         text.put(canvas, note, 32, 1000, 24, MUTED)
         sink.stdin.write(canvas.tobytes())
     sink.stdin.close()
     if sink.wait():
         raise SystemExit('ffmpeg failed')
+    if hud is not None:
+        final = sum(item_state(item, 1e9) in COUNTED_STATES for item in hud['items'])
+        return dict(out=str(out), counted=final, not_counted=len(hud['items']) - final, changes=len(hud['changes']))
     return dict(out=str(out), counted=len(counted), not_counted=len(others))
 
 
-def count_detail(event, state=None):
+def _flash_border(canvas, x0, y0, view, color, since, span=HOLD_S):
+    import cv2
+    cv2.rectangle(canvas, (x0, y0), (x0 + view.shape[1] - 1, y0 + view.shape[0] - 1), color,
+                  max(2, round(14 * (1 - since / span))))
+
+
+def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, place, bar_y, start, end):
+    """The count as it was known at ``t``: L1's words at once, every later correction at the moment it was decided."""
+    import cv2
+    states = [(item, item_state(item, t)) for item in hud['items']]
+    now = sum(state in COUNTED_STATES for _, state in states)
+    recent = [change for change in hud['changes'] if 0 <= t - change[0] < CHANGE_S]
+    live = [change for change in recent if change[2] == 'live' and t - change[0] < HOLD_S]
+    corrections = [change for change in recent if change[2] != 'live']
+    if live:
+        since = t - max(change[0] for change in live)
+        _flash_border(canvas, x0, y0, view, GOOD, since)
+        grow = round(60 * max(0, 1 - since / .2))
+        text.put(canvas, f'{now}', x0 + view.shape[1] - 40, y0 + 24, 150 + grow, GOOD, 'bold', anchor='right')
+    elif corrections:
+        newest = max(corrections, key=lambda change: change[0])
+        since = t - newest[0]
+        if since < HOLD_S * 1.5:
+            _flash_border(canvas, x0, y0, view, CHANGE_COLOR[newest[2]], since, HOLD_S * 1.5)
+    text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
+    text.put(canvas, '실시간(L1) 즉시 · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
+    big = GOOD if live else WHITE
+    dropping = [change for change in corrections if change[1] < 0 and t - change[0] < .8]
+    if dropping:      # the number that was there, struck out, for a moment: then the corrected one
+        before = now - sum(change[1] for change in dropping)
+        width = text.put(canvas, str(before), SIDE + 32, 196, 200, REC, 'bold')
+        cv2.line(canvas, (SIDE + 24, 300), (SIDE + 40 + width, 300), REC, 10, cv2.LINE_AA)
+        text.put(canvas, f'→ {now}', SIDE + 64 + width, 250, 110, WHITE, 'bold')
+    else:
+        rising = [change for change in corrections if change[1] > 0 and t - change[0] < .8]
+        text.put(canvas, str(now), SIDE + 32, 196, 200, GOOD if rising else big, 'bold')
+    text.put(canvas, count_label, SIDE + 32, 404, 26, GOOD, 'bold')
+    tally = {name: sum(state == name for _, state in states) for name in STATE_WORD}
+    x = SIDE + 32
+    for name in ('final', 'provisional', 'revoked', 'uncertain'):
+        if name == 'uncertain' and not tally['uncertain']:
+            continue
+        x += text.put(canvas, f"{STATE_WORD[name]} {tally[name]}", x, 438, 22, STATE_COLOR[name], 'bold') + 22
+    y = 474
+    shown = sorted(corrections, key=lambda change: -change[0])
+    for at, _, kind, item in shown[:3]:       # the corrections decided just now, newest first
+        fade = 1 - max(0., t - at - (CHANGE_S - .6)) / .6
+        color = tuple(round(c * fade + b * (1 - fade)) for c, b in zip(CHANGE_COLOR[kind], PANEL))
+        cv2.rectangle(canvas, (SIDE + 24, y - 6), (WIDTH - 56, y + 54), tuple(round(c * .3 + b * .7) for c, b in zip(
+            color, PANEL)), -1)
+        headline, why = change_line(kind, item)
+        text.put(canvas, headline, SIDE + 36, y, 24, color, 'bold')
+        text.put(canvas, f"{item['t']:.2f}초에 한 말", WIDTH - 68, y + 2, 20, MUTED, anchor='right')
+        text.put(canvas, why, SIDE + 36, y + 30, 18, WHITE)
+        y += 66
+    if len(shown) > 3:
+        text.put(canvas, f'외 {len(shown) - 3}건', SIDE + 36, y, 20, MUTED)
+        y += 30
+    y = max(y + 8, 700) if shown else 520
+    feed = sorted((item for item, state in states if state is not None), key=lambda item: item['t'])[-max(1, (870 - y) // 44):]
+    for row, item in enumerate(reversed(feed)):
+        top = y + 44 * row
+        state = item_state(item, t)
+        if state == 'other':
+            text.put(canvas, '제외', SIDE + 32, top, 24, DIM, 'bold')
+            text.put(canvas, f"{item['t']:.2f}초", SIDE + 112, top, 24, DIM)
+            text.put(canvas, other_label, SIDE + 232, top + 3, 20, DIM)
+            continue
+        color = STATE_COLOR[state]
+        text.put(canvas, STATE_WORD[state], SIDE + 32, top, 24, color, 'bold')
+        text.put(canvas, f"{item['t']:.2f}초", SIDE + 112, top, 24, WHITE if state != 'revoked' else DIM)
+        if state == 'revoked':
+            cv2.line(canvas, (SIDE + 110, top + 14), (SIDE + 206, top + 14), REC, 3, cv2.LINE_AA)
+        label = f"#{item['number']}" if item.get('number') else ''
+        detail = count_detail(item['now'], state, step=next((step for at, name, step in reversed(item['steps'])
+                                                              if at <= t and name == state), None))
+        text.put(canvas, '  '.join(part for part in (label, detail) if part), SIDE + 232, top + 3, 20, MUTED)
+    for item, state in states:
+        if state is None or not start <= item['t'] < end:
+            continue
+        kind = state != 'other'
+        color = DIM if state == 'other' else STATE_COLOR[state]
+        cv2.line(canvas, (place(item['t']), bar_y - (30 if kind else 14)), (place(item['t']), bar_y + (30 if kind else 14)),
+                 color, 5 if kind else 3, cv2.LINE_AA)
+
+
+def _draw_plain(canvas, text, counted, others, marks, t, x0, y0, view, count_label, other_label, place, bar_y, start, end):
+    """A report without revision states: each event counts at its capture time."""
+    import cv2
+    now = [event for event in counted if event['t'] <= t]
+    since = t - now[-1]['t'] if now else 9
+    rejected = [event for event in others if 0 <= t - event['t'] < HOLD_S]
+    flash = since < HOLD_S
+    if flash:
+        _flash_border(canvas, x0, y0, view, GOOD, since)
+        grow = round(60 * max(0, 1 - since / .2))
+        text.put(canvas, f'{len(now)}', x0 + view.shape[1] - 40, y0 + 24, 150 + grow, GOOD, 'bold', anchor='right')
+    elif rejected:
+        cv2.rectangle(canvas, (x0, y0), (x0 + view.shape[1] - 1, y0 + view.shape[0] - 1), DIM, 6)
+    text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
+    text.put(canvas, str(len(now)), SIDE + 32, 180, 230, GOOD if flash else WHITE, 'bold')
+    text.put(canvas, count_label, SIDE + 32, 420, 28, GOOD, 'bold')
+    feed = sorted(((event, kind) for event, kind in marks if event['t'] <= t), key=lambda item: item[0]['t'])[-7:]
+    for row, (event, kind) in enumerate(reversed(feed)):
+        y = 486 + 52 * row
+        number = sum(1 for item in counted if item['t'] <= event['t'])
+        text.put(canvas, f'{number}번' if kind else '제외', SIDE + 32, y, 28, GOOD if kind else DIM, 'bold')
+        text.put(canvas, f"{event['t']:.2f}초", SIDE + 130, y, 28, WHITE if kind else DIM)
+        text.put(canvas, count_detail(event) if kind else other_label, SIDE + 260, y + 3, 22, MUTED if kind else DIM)
+    for event, kind in marks:
+        if start <= event['t'] < end:
+            color = (GOOD if kind else DIM) if event['t'] <= t else LINE
+            cv2.line(canvas, (place(event['t']), bar_y - (30 if kind else 14)),
+                     (place(event['t']), bar_y + (30 if kind else 14)), color, 5 if kind else 3, cv2.LINE_AA)
+
+
+def count_detail(event, state=None, step=None):
     if state is not None:
-        reason = (event.get('revised_by') or {}).get('reason') or event.get('reason') \
+        reason = (step or {}).get('reason') or (event.get('revised_by') or {}).get('reason') or event.get('reason') \
             if state in ('revoked', 'uncertain') else None
         score = f"슬롯 {event.get('slot')} 점수 {event['slot_score']:.2f}" if event.get('slot_score') is not None else ''
         spoken = f"“{event['spoken']}”" if event.get('spoken') and event.get('spoken') != event.get('term') else ''
