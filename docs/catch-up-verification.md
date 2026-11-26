@@ -89,6 +89,12 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
   heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
   occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
   `"rule": {"vote": true}`.
+- **Majority** (`decide: "majority"`; the recipe sets it, with `vote`, when the item reads another recogniser: `--with
+  vote` adds `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary): an occurrence is **said** when at
+  least two of the recognisers (the first hearing, the second one, the voters) wrote the same word within `near_ms`
+  (paired one to one, nearest first); the voice rule then decides who. An occurrence only one of them wrote is revoked
+  (`heard_by_one`), or not added, unless `keep_single` (on) and no other recogniser wrote anything within `near_ms` of it
+  and the voice is clear (`clear`, as above); where nobody spoke it is `no_speech`; unclear overlap stays `uncertain`.
 - **Voice rule** (`VOICE`) on the word's span (the second hearing's): person speaker over `overlap_share` (0.3) and
   another one too -> overlapped: the per-word CAM++ score (1.5 s around the word) decides, below threshold it is
   `uncertain_overlap`; person dominant -> the person; another identified speaker dominant ->

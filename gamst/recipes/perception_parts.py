@@ -105,9 +105,17 @@ async def _word_verify(options, context):
           f"complete; list price {client.eur_per_hour} EUR per hour of audio, 20 s minimum per job", file=sys.stderr)
     diarizer = HostedBatch(client)
     diarizer.name = f'pyannoteai:{client.model}'
+    from . import PARTS
+    items = {item['name']: item for item in context.get('modules') or ()}
+    voters = [source for source in consumes if source.split(':', 1)[0] in items
+              and PARTS[items[source.split(':', 1)[0]]['use']].transcribes]
+    rule = dict(options.get('rule') or {})
+    if voters:      # another recogniser is read: it votes, and a word is said when two of the three wrote it
+        rule.setdefault('vote', True)
+        rule.setdefault('decide', 'majority')
     module = WordVerification(recogniser, diarizer, await speaker_embedder(options, context),
                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
-                              audio=audio, rule=options.get('rule'), voice=dict(
+                              audio=audio, rule=rule, voice=dict(
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
                                   is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
                               **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))

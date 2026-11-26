@@ -298,6 +298,21 @@ class VerificationTest(unittest.TestCase):
         self.assertEqual(verdicts['u6#0']['reason'], 'not_heard')
 
 
+    def test_by_majority_a_word_is_said_when_two_of_the_three_wrote_it(self):
+        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='majority'), votes=(6, 12))
+        self.assertTrue(verdicts['u4#0']['match'])                                  # first + second
+        self.assertEqual(verdicts['u6#0']['basis'], 'heard_by_2(first+third)+person_speaker')
+        self.assertEqual(verdicts['u24#0']['reason'], 'other_speaker')               # said, by another voice
+        self.assertEqual(verdicts['u26#0']['basis'], 'heard_by_one+others_heard_speech')
+        self.assertEqual(verdicts['u35#0']['reason'], 'no_speech')
+        # second only: 0 (nobody else wrote anything there, the person's speaker alone: kept), 8 and 28 (others wrote
+        # words there: dropped), 20 (alone, another voice: dropped); second + third: 12 (said)
+        self.assertEqual(stats['added'], 2)
+        self.assertEqual(counted['count'], 4)                                       # 4, 6, 0, 12
+        counted, _, stats = self.run_lane(dict(vote=True, decide='majority', keep_single=False), votes=(6, 12))
+        self.assertEqual((counted['count'], stats['added']), (3, 1))                 # 0 dropped too
+
+
 class UncertainTest(unittest.TestCase):
     def test_an_uncertain_word_is_shown_not_counted_and_a_later_verdict_settles_it(self):
         from types import SimpleNamespace
