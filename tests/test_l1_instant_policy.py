@@ -132,6 +132,16 @@ class VoiceQualityTest(unittest.TestCase):
         self.assertEqual(consent, dict(statement='a + b', recorded_ms=2))
         self.assertTrue(hud_line(report).startswith('목소리 기준 품질 낮음 (0.40 < 0.50)'))
 
+    def test_one_off_piece_of_three_is_left_out_not_replaced(self):
+        pieces = [[1., .1, 0.], [.95, .2, 0.], [0., .3, 1.]]       # the third: music under the voice, say
+        value, consent, report = choose(self.value(pieces), 'a', [('o', self.value(self.person, kind='file'), 'b')])
+        self.assertEqual((report['used'], report['kept'], report['dropped'], consent), ('cleaned', 2, 1, 'a'))
+        self.assertEqual(value['embeddings'], pieces[:2])
+        self.assertEqual(hud_line(report).split(' · ')[1], '어긋난 조각 1개 빼고 씀')
+        from gamst.voice_quality import consistent_majority
+        self.assertIsNone(consistent_majority(self.mixed))       # two pieces: no majority
+        self.assertIsNone(consistent_majority([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]))    # nobody agrees
+
     def test_replace_mode_and_unusable_fallbacks(self):
         other = self.value(self.person, kind='file')
         value, consent, report = choose(self.value(self.mixed), 'a', [('o', other, 'b')], mode='replace')

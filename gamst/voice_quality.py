@@ -7,16 +7,18 @@ voices into its main speaker), they do not, and everything decided against it in
 
 - **quality** (:func:`self_consistency`): the mean pairwise cosine similarity of the reference's embeddings (and the
   lowest pair). One embedding cannot be checked: its quality is ``None`` (unmeasured), never "low".
-- **check** (:func:`choose`): a reference below ``min_quality`` is not used alone. In order: the run's own sample of
+- **check** (:func:`choose`): a reference below ``min_quality`` is not used as it is. In order: the run's own sample of
   the person (``--voice FILE``, ``--voice-range``, ``--voice-wav``, ``--record-voice-first``) is already preferred over
-  the automatic main speaker (:mod:`gamst.recipes.voice_sample`); then the first other reference of the same person the
-  owner provided (``--voice-fallback FILE``, same speaker model) whose own quality passes, either ``combined`` with the
+  the automatic main speaker (:mod:`gamst.recipes.voice_sample`); then the same reference without its disagreeing
+  pieces when more than half of them agree (:func:`consistent_majority`, ``used: cleaned``: one off piece, e.g. music
+  under the voice, is not a second person); then the first other reference of the same person the owner provided (``--voice-fallback FILE``, same speaker model) whose own quality passes, either ``combined`` with the
   low one (default: both with equal weight, the centroid of the two centroids) or ``replace``-ing it. Without a usable
   fallback the low reference is kept and flagged. Either way the run report says so (``voice_quality``) and the HUD
   shows "목소리 기준 품질 낮음".
 
 Measured (owner's four clips, CAM++, automatic main speaker of the first 15 s): 뽀또 0.42 (two pieces; the reference
-mixes the two men), 시발 0.45 (one of three pieces is off), 몇기야 0.63, 달 0.68; the person's 2-minute sample from
+mixes the two men: no majority, so it falls back), 시발 0.45 (one of three pieces is off: the other two agree 0.67,
+so it is cleaned, not replaced), 몇기야 0.63, 달 0.68; the person's 2-minute sample from
 another recording 0.52 (40 pieces, so 0.5 is close to its own level: a parameter, not a learnt value). Offline on the owner's labelled words (v2 study cache), the other recording
 alone loses every person word of 몇기야 (3 of 5) and 시발 (7 of 7) through the microphone change, while both combined keep
 them all and cut 뽀또's other-voice words given to the person from 6 to 2: hence ``combined`` by default.
@@ -36,6 +38,22 @@ def self_consistency(embeddings):
     pairs = [cosine(vectors[i], vectors[j]) for i in range(len(vectors)) for j in range(i + 1, len(vectors))]
     return dict(pieces=len(vectors), mean=round(sum(pairs) / len(pairs), 3) if pairs else None,
                 min=round(min(pairs), 3) if pairs else None)
+
+
+def consistent_majority(embeddings, min_quality=MIN_QUALITY):
+    """Indices of more than half of the pieces that agree (mean pairwise >= ``min_quality``) once the pieces that
+    disagree most with the others are left out, one at a time; None when no such majority exists (two pieces never
+    have one: which of them would be the person?)."""
+    from .providers.speaker_verify import cosine, l2_normalize
+    vectors = [l2_normalize(item) for item in embeddings or ()]
+    keep = list(range(len(vectors)))
+    if len(keep) < 3:
+        return None
+    similar = {(i, j): cosine(vectors[i], vectors[j]) for i in keep for j in keep if i != j}
+    mean = lambda items: sum(similar[i, j] for i in items for j in items if i < j) / (len(items) * (len(items) - 1) / 2)
+    while len(keep) - 1 > len(vectors) / 2 and mean(keep) < min_quality:
+        keep.remove(min(keep, key=lambda i: sum(similar[i, j] for j in keep if j != i)))
+    return keep if mean(keep) >= min_quality and len(keep) < len(vectors) else None
 
 
 def is_low(quality, min_quality=MIN_QUALITY):
@@ -69,7 +87,8 @@ def choose(value, consent, fallbacks=(), *, min_quality=None, mode=None, origin=
 
     ``fallbacks``: ``[(name, value, consent)]`` of other references of the same person, in the order given.
     ``report``: ``{quality, min_quality, low, used, fallback?}`` with ``used`` one of ``reference`` (the reference alone),
-    ``combined``, ``replaced`` or ``reference_low`` (low, nothing better to use).
+    ``cleaned`` (without its disagreeing pieces: ``kept``, ``dropped``, ``cleaned_quality``), ``combined``, ``replaced``
+    or ``reference_low`` (low, nothing better to use).
     """
     min_quality = MIN_QUALITY if min_quality is None else float(min_quality)
     mode = mode or 'combined'
@@ -82,6 +101,11 @@ def choose(value, consent, fallbacks=(), *, min_quality=None, mode=None, origin=
                   **({'origin': origin} if origin else {}))
     if not report['low']:
         return value, consent, report
+    keep = consistent_majority(value['embeddings'], min_quality)
+    if keep is not None:      # most pieces agree: the person's own sample without the pieces that do not
+        report.update(used='cleaned', kept=len(keep), dropped=quality['pieces'] - len(keep),
+                      cleaned_quality=self_consistency([value['embeddings'][i] for i in keep]))
+        return dict(value, embeddings=[value['embeddings'][i] for i in keep]), consent, report
     report['used'] = 'reference_low'
     tried = []
     for name, other, other_consent in fallbacks:
@@ -114,7 +138,8 @@ def from_args(value, consent, args):
 
 
 HUD_LOW = '목소리 기준 품질 낮음'
-USED_WORD = {'combined': '다른 녹음 샘플과 합쳐 씀', 'replaced': '다른 녹음 샘플로 바꿈', 'reference_low': '대신 쓸 샘플 없음'}
+USED_WORD = {'combined': '다른 녹음 샘플과 합쳐 씀', 'replaced': '다른 녹음 샘플로 바꿈', 'reference_low': '대신 쓸 샘플 없음',
+             'cleaned': '어긋난 조각 빼고 씀'}
 
 
 def hud_line(report):
@@ -122,4 +147,7 @@ def hud_line(report):
     if not isinstance(report, dict) or not report.get('low'):
         return None
     mean = (report.get('quality') or {}).get('mean')
-    return f"{HUD_LOW} ({mean:.2f} < {report['min_quality']:.2f}) · {USED_WORD.get(report.get('used'), '')}".rstrip(' ·')
+    used = USED_WORD.get(report.get('used'), '')
+    if report.get('used') == 'cleaned':
+        used = f"어긋난 조각 {report['dropped']}개 빼고 씀"
+    return f"{HUD_LOW} ({mean:.2f} < {report['min_quality']:.2f}) · {used}".rstrip(' ·')

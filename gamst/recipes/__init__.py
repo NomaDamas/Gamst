@@ -1275,7 +1275,7 @@ def _movement_options(parser):
                              'word at once only when its voice score reaches --speaker-threshold (the old behaviour)')
     parser.add_argument('--l1-clear-other', type=float, metavar='SCORE',
                         help="with --l1 instant: a word whose voice score is below this is another person's at once "
-                             '(default 0.2)')
+                             '(default 0.1)')
     parser.add_argument('--l1-clear-margin', type=float, metavar='COSINE',
                         help='with --l1 instant and speaker decision v2: excluded at once when a known other voice is '
                              'this much closer than the person (default: off)')

@@ -48,12 +48,13 @@ none does), ``turn_speakers`` (how many turns overlap it) and ``turn_confidence`
 L1 policy (``l1``, only for ``provisional`` words, i.e. when a verification lane settles them later; owner decision
 26). ``{"policy": "threshold"}`` (the old behaviour): a word counts at once when its score reaches ``threshold``, else it
 is another voice's (shown, not counted) until verification gives it to the person. ``{"policy": "instant",
-"clear_other": 0.2, "clear_margin": null}``: every heard word counts at once, also without a score, and is excluded
+"clear_other": 0.1, "clear_margin": null}``: every heard word counts at once, also without a score, and is excluded
 only when its voice is *clearly* someone else's: its score is below ``clear_other`` (a low floor, far under
 ``threshold``), or (with speaker decision v2's bank of negatives) a voice known not to be the person is closer than
 the person by ``clear_margin``. Verification revokes the rest later, visibly. Measured on the owner's four clips
 (run m1, CAM++ against the same-clip reference): the person's words scored 0.26-0.82 at L1, other voices 0.36-0.79,
-so a threshold cannot separate them at L1 and 0.2 drops none of the person's words.
+so a threshold cannot separate them at L1; one of the person's words under game sound scored 0.15 against a cleaned
+reference (offline), so the default floor 0.1 is far below anything of the person's seen so far.
 
 Scores are uncalibrated cosine similarities. The threshold must be set on the owner's own audio
 (``gamst recipe run --truth``); the research notes report EER rising several-fold on 1-3 s segments.
@@ -68,7 +69,7 @@ from ..capabilities import CapabilitySpec, OutputField
 from .audio_ring import AudioRing, mono_float, rms_dbfs
 
 SAMPLE_RATE = 16000
-L1 = dict(policy='threshold', clear_other=.2, clear_margin=None)
+L1 = dict(policy='threshold', clear_other=.1, clear_margin=None)
 L1_POLICIES = ('threshold', 'instant')
 
 

@@ -212,7 +212,7 @@
       "words": true,
       "l1": {
         "policy": "instant",
-        "clear_other": 0.2
+        "clear_other": 0.1
       },
       "sources": "sources",
       "turns": "identify",
