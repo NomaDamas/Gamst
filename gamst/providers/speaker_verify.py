@@ -56,6 +56,13 @@ the person by ``clear_margin``. Verification revokes the rest later, visibly. Me
 so a threshold cannot separate them at L1; one of the person's words under game sound scored 0.15 against a cleaned
 reference (offline), so the default floor 0.1 is far below anything of the person's seen so far.
 
+Heard words (``partials``: ``{terms, min_revisions, min_ms, lag_ms, ms_per_char}``, only with ``words``). The streaming
+recogniser's partial records are read too: :class:`gamst.providers.partial_terms.PartialSpotter` says which counted words
+just became stable in them, and each is scored like a word (``context_ms`` of the sound held so far, ending
+``HEARD_TAIL_MS`` after its estimated end) under the same L1 policy, then passed on as a ``status: "partial"`` record whose
+words say ``state: "heard"`` (only the counted words, never the partial's other text). :class:`gamst.providers.term_events.
+TermEvents` counts them at once and reconciles them with the final. :meth:`status` says what the spotter saw (counts only).
+
 Scores are uncalibrated cosine similarities. The threshold must be set on the owner's own audio
 (``gamst recipe run --truth``); the research notes report EER rising several-fold on 1-3 s segments.
 """
