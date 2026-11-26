@@ -114,8 +114,8 @@ async def _word_verify(options, context):
     and the few-shot voice settle the words counted at once. Hosted by default (OpenAI gpt-live-transcribe with the
     counted words as keywords + Qwen3-ForcedAligner here; pyannoteAI Precision-3): ``--allow-remote-asr`` is the
     owner's opt-in for the recogniser and ``--allow-remote-diarization`` for pyannoteAI, and each says its price first.
-    More recognisers vote when the item reads their ``speech.transcript_words`` and its ``"rule"`` says ``"vote": true``
-    (off by default)."""
+    More recognisers are read when the item consumes their ``speech.transcript_words``: then ``"rule"`` defaults to
+    ``"vote": true, "decide": "primary"`` (the live recogniser is never outvoted; ``"majority"`` stays an option)."""
     from ..providers.pyannoteai import PyannoteAI
     from ..providers.slot_sources import HostedBatch
     from ..providers.word_verification import WordVerification
@@ -149,9 +149,9 @@ async def _word_verify(options, context):
     voters = [source for source in consumes if source.split(':', 1)[0] in items
               and PARTS[items[source.split(':', 1)[0]]['use']].transcribes]
     rule = dict(options.get('rule') or {})
-    if voters:      # another recogniser is read: it votes, and a word is said when two of the three wrote it
+    if voters:      # another recogniser is read: it adds words and may contest the primary's, never outvote it
         rule.setdefault('vote', True)
-        rule.setdefault('decide', 'majority')
+        rule.setdefault('decide', 'primary')     # owner decision 31; "majority" (two of the three) stays an option
     module = WordVerification(recogniser, diarizer, await speaker_embedder(options, context),
                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
                               audio=audio, rule=rule, voice=dict(

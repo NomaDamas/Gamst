@@ -98,8 +98,24 @@ unanswered turn, no queued record there) by `near_ms`, so a catch-up worker neve
   heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
   occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
   `"rule": {"vote": true}`.
-- **Majority** (`decide: "majority"`; the recipe sets it, with `vote`, when the item reads another recogniser: `--with
-  vote` adds `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary): an occurrence is **said** when at
+- **Primary first** (`decide: "primary"`, owner decision 31: "the state of the art comes first; weaker models must not
+  win by a vote"; the recipe sets it, with `vote`, when the item reads another recogniser: `--with vote` adds
+  `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary). The first hearing is the **primary**
+  recogniser: the recipe's live `asr` item, i.e. the registry's `audio.asr` default, chosen by published results (today
+  ElevenLabs Scribe v3 Live). A primary word another recogniser also wrote within `near_ms` is said (the voice rule
+  decides who). A word only the primary wrote **stands** (the voice rule decides who) unless it is **contested**: the
+  other recognisers (`contest_by: "all"` of those the item reads, default, or `"any"`) wrote other words within
+  `near_ms` of it, i.e. heard speech there and wrote something else. A contested word is **vetoed** (revoked, reason
+  `vetoed`) only when the primary's own confidence in it is low too (`low_confidence`, a probability: the lowest
+  `confidence` or `exp(logprob)` of its words; default `null` = no veto, because on the owner clips the primary's
+  confidence does not separate its invented word from true ones, see "Primary confidence" below); otherwise it is
+  `uncertain` (`contested: "uncertain"`, default: reason `contested`, shown, not counted, never "not said") or stands
+  (`contested: "stand"`). A contested word the voice gives to another speaker stays that speaker's (`other_speaker`).
+  Words only the other recognisers wrote are added as under majority (`add: "agreed"`: two of them, or one alone with a
+  clear voice) or whenever one wrote it (`add: "any"`). Verdict bases: `primary+uncontested+<voice>`,
+  `primary+contested(second+third)+<voice>`, `...+low_confidence`; the verdict carries `primary_confidence` when the
+  recogniser gave one.
+- **Majority** (`decide: "majority"`, an option since decision 31; before, the recipe default with voters): an occurrence is **said** when at
   least two of the recognisers (the first hearing, the second one, the voters) wrote the same word within `near_ms`
   (paired one to one, nearest first); the voice rule then decides who. An occurrence only one of them wrote is revoked
   (`heard_by_one`), or not added, unless `keep_single` (on) and no other recogniser wrote anything within `near_ms` of it
@@ -123,6 +139,34 @@ unanswered turn, no queued record there) by `near_ms`, so a catch-up worker neve
   scoring leave uncertain words out of what is counted.
 - Opt-in: `--with verification --allow-remote-asr --allow-remote-diarization` (the first for the second recogniser, the
   second for pyannoteAI; each prints its price before audio is sent).
+
+## Primary confidence (measured 2026-11-27, decides `low_confidence`)
+
+Scribe v3 Live gives every committed word a `logprob` (raw WebSocket, `committed_transcript_with_timestamps.words[]` =
+`{text, start, end, type, speaker_id, logprob, characters, channel_index}`; checked with the real API on the four owner
+clips, one pass each, VAD commits, the counted word as keyterm). The live adapter (`streaming_hosted.ElevenLabsSession`)
+does not pass it on yet (out of this branch's scope); the rule reads `confidence` / `logprob` on the primary's words
+whenever an adapter gives them, so with today's adapter `low_confidence` has nothing to read and no word is vetoed.
+
+The counted word's confidence (p = exp(logprob)) against the owner's labels:
+
+| | n | min | median | max |
+|---|---|---|---|---|
+| the person's words (true) | 23 | 0.02 | 0.47 | 0.63 |
+| another voice's words | 7 | 0.33 | 0.57 | 0.67 |
+
+The two words the vote was about: 뽀또 24.16 s (Scribe's word where the owner hears nothing / now labelled another
+voice) **0.33** (logprob -1.11); 피파 clip 41.76 s (the person said it) **0.02** (logprob -3.84). The other true words
+the majority revoked: 뽀또 28.10 0.11, 달 12.28 0.35. Lower confidence goes with the *true* words here: any threshold
+that vetoes 24.16 (> 0.33) also vetoes 41.76, 28.10, 몇기야 17.34 (0.15), 시발 23.18 / 29.50 (0.30) and 달 7.94 (0.18).
+So condition (a) cannot separate them on these clips and `low_confidence` defaults to `null` (no veto).
+
+Measured live (4 clips x 3 runs, v7 base; table in docs/handoff-feat-sota-first-rule.md): no word is revoked by the
+recognisers any more; the contested words were 24.16 (another voice) and 28.10, 41.76 (the person) in every run and
+27.10 (the person) in one: all `uncertain`. Final right/counted is the same as the majority (v7) on every clip and run except 몇기야 p1 (2/3: 27.10 contested this time,
+uncertain; v7 had it confirmed by the second recogniser); the
+person words the majority revoked are now shown as uncertain instead of "not said". `contested: "stand"` would have
+counted 7 more right words and 3 wrong ones (24.16) over the three runs: the owner's choice.
 
 ## Not decided here
 

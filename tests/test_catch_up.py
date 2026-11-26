@@ -218,7 +218,7 @@ class FakeRecogniser:
 @unittest.skipIf(np is None, 'numpy is needed')
 class VerificationTest(unittest.TestCase):
     @staticmethod
-    def run_lane(rule, votes=()):
+    def run_lane(rule, votes=(), logprob=None):
         """First hearing: 'bbo' at frames 4 (person, heard twice too), 6 (person, heard once), 24 (another voice, heard
         twice), 26 (another voice, heard once, counted at once by mistake), 35 (silence: invented). The second hearing
         also writes 0, 8, 12 (person) and 20, 28 (another voice). ``votes``: frames a third recogniser wrote."""
@@ -253,7 +253,8 @@ class VerificationTest(unittest.TestCase):
                 for index in (4, 6, 24, 26, 35):
                     end = base + (index + 1) * 100
                     word = dict(text='bbo', start_ms=end - 100, end_ms=end, word_id=f'u{index}#0', state='provisional',
-                                match=index < 20 or index == 26, speaker_score=.9 if index < 20 else .1)
+                                match=index < 20 or index == 26, speaker_score=.9 if index < 20 else .1,
+                                **({'logprob': logprob[index]} if index in (logprob or {}) else {}))
                     value = dict(kind='utterance', reference='voice', utterance_id=f'u{index}', status='final',
                                  text='bbo', start_ms=word['start_ms'], end_ms=end, words=[word],
                                  speaker=dict(match=word['match']))
@@ -312,6 +313,44 @@ class VerificationTest(unittest.TestCase):
         self.assertEqual(counted['count'], 4)                                       # 4, 6, 0, 12
         counted, _, stats = self.run_lane(dict(vote=True, decide='majority', keep_single=False), votes=(6, 12))
         self.assertEqual((counted['count'], stats['added']), (3, 1))                 # 0 dropped too
+
+
+    def test_the_primary_recogniser_is_never_outvoted(self):
+        # 6: only the first (primary) wrote it; the second wrote another word near it, the third (12) nothing near
+        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='primary'), votes=(12,))
+        self.assertTrue(verdicts['u6#0']['match'])
+        self.assertEqual(verdicts['u6#0']['basis'], 'primary+uncontested+person_speaker')
+        self.assertEqual(verdicts['u26#0']['reason'], 'other_speaker')     # the voice still decides whose it is
+        self.assertNotEqual(verdicts['u35#0'].get('reason'), 'heard_by_one')
+        # under majority the same 6 would be dropped: heard by one, others heard speech
+        _, majority, _ = self.run_lane(dict(vote=True, decide='majority', keep_single=False), votes=(12,))
+        self.assertEqual(majority['u6#0']['reason'], 'heard_by_one')
+
+    def test_a_contested_primary_word_is_uncertain_not_revoked(self):
+        counted, verdicts, _ = self.run_lane(dict(vote=True, decide='primary', contest_by='any'), votes=(12,))
+        verdict = verdicts['u6#0']
+        self.assertEqual((verdict['match'], verdict['reason'], verdict['uncertain']), (False, 'contested', True))
+        self.assertEqual(verdict['basis'], 'primary+contested(second)+person_speaker')
+        self.assertEqual(counted['states'].get('revoked', 0), 1)              # 26 only (another voice); 6 is not revoked
+        counted, verdicts, _ = self.run_lane(dict(vote=True, decide='primary', contest_by='any', contested='stand'),
+                                             votes=(12,))
+        self.assertTrue(verdicts['u6#0']['match'])
+
+    def test_a_contested_primary_word_is_vetoed_only_with_low_confidence_of_its_own(self):
+        rule = dict(vote=True, decide='primary', contest_by='any', low_confidence=.3)
+        _, verdicts, _ = self.run_lane(rule, votes=(12,), logprob={6: -3.0, 4: -3.0})
+        self.assertEqual((verdicts['u6#0']['reason'], verdicts['u6#0']['primary_confidence']), ('vetoed', .0498))
+        self.assertTrue(verdicts['u4#0']['match'])                           # heard twice: never vetoed
+        _, verdicts, _ = self.run_lane(rule, votes=(12,), logprob={6: -.5})
+        self.assertEqual(verdicts['u6#0']['reason'], 'contested')            # confident: uncertain, not vetoed
+        _, verdicts, _ = self.run_lane(rule, votes=(12,))
+        self.assertEqual(verdicts['u6#0']['reason'], 'contested')            # no confidence given: never vetoed
+        self.assertNotIn('primary_confidence', verdicts['u6#0'])
+
+    def test_the_primary_rule_settings_are_checked(self):
+        for rule in (dict(contested='drop'), dict(contest_by='most'), dict(add='some'), dict(low_confidence=1.5)):
+            with self.assertRaises(ValueError):
+                WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder(), rule=dict(rule, decide='primary'))
 
 
 class RegionTest(unittest.TestCase):
