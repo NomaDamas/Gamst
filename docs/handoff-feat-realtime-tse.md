@@ -52,9 +52,15 @@ overlapped words from the extracted audio.
   extracted audio, hearing ~4 s per stretch (serial then; now concurrent), 3 catch-up TODOs all done, 0 gaps;
   provisional latency added p50 12.1 s / p95 17 s (fixed since: words with no possible stretch pass at once).
 
+- Run d4 (hearing concurrent, early release, workers 2): 9 stretches, 8 words decided, all `uncertain`; extraction
+  in the live module 27.2 s for 23.3 s of audio (CPU contention: live + fork PS4 workers at 4 threads + Nemotron);
+  3 TODOs, TODO->done p50 18.8 s / p95 30.4 s, 0 gaps; up to 4 PS4 worker processes alive at once, 6.2 GB together,
+  1.7 GB each at most; decision wait p50 9.4 s / p95 14.3 s. Recipe default set back to workers 1.
+
 ## Left
 
-1. d4 (concurrent hearing + early release) result -> latency, RTF, memory (`*.rss`).
+1. Series running (`try-it/tse-series.sh`, log `testbed/tse/runs/series1.log`): v1 = tse + verification, v0 =
+   verification only, d5g = tse with g.wav enrollment (disclosed: same clip).
 2. Runs with `--with verification` with and without `--with tse` (Scribe v3 Live L1, L4) -> totals table.
 3. Optional disclosed variant: `--voice-wav testbed/g.wav` (owner-marked 1.5 s of the same clip).
 4. Full unittest suite through `guard.sh tse` (expect exactly the 15 pre-existing errors).

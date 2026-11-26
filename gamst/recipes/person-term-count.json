@@ -159,7 +159,7 @@
       "parts": [
         "tse"
       ],
-      "workers": 2
+      "workers": 1
     },
     {
       "name": "tracks",
