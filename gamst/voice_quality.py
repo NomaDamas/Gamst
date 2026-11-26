@@ -11,24 +11,29 @@ voices into its main speaker), they do not, and everything decided against it in
   the person (``--voice FILE``, ``--voice-range``, ``--voice-wav``, ``--record-voice-first``) is already preferred over
   the automatic main speaker (:mod:`gamst.recipes.voice_sample`); then the same reference without its disagreeing
   pieces when more than half of them agree (:func:`consistent_majority`, ``used: cleaned``: one off piece, e.g. music
-  under the voice, is not a second person); then the first other reference of the same person the owner provided (``--voice-fallback FILE``, same speaker model) whose own quality passes, either ``combined`` with the
-  low one (default: both with equal weight, the centroid of the two centroids) or ``replace``-ing it. Without a usable
-  fallback the low reference is kept and flagged. Either way the run report says so (``voice_quality``) and the HUD
-  shows "목소리 기준 품질 낮음".
+  under the voice, is not a second person); then the first other reference of the same person the owner provided
+  (``--voice-fallback FILE``, same speaker model) whose own quality passes, ``replace``-ing it (default) or
+  ``combined`` with it (both with equal weight: the centroid of the two centroids). Without a usable fallback the low
+  reference is kept and flagged. Either way the run report says so (``voice_quality``) and the HUD shows
+  "목소리 기준 품질 낮음".
 
 Measured (owner's four clips, CAM++, automatic main speaker of the first 15 s): 뽀또 0.42 (two pieces; the reference
-mixes the two men: no majority, so it falls back), 시발 0.45 (one of three pieces is off: the other two agree 0.67,
-so it is cleaned, not replaced), 몇기야 0.63, 달 0.68; the person's 2-minute sample from
-another recording 0.52 (40 pieces, so 0.5 is close to its own level: a parameter, not a learnt value). Offline on the owner's labelled words (v2 study cache), the other recording
-alone loses every person word of 몇기야 (3 of 5) and 시발 (7 of 7) through the microphone change, while both combined keep
-them all and cut 뽀또's other-voice words given to the person from 6 to 2: hence ``combined`` by default.
+mixes the two men: no majority, so it falls back), 시발 0.45 (one of three pieces is off: the other two agree 0.67, so it
+is cleaned), 몇기야 0.63, 달 0.68; the person's 2-minute sample from another recording 0.52 (40 pieces, so 0.5 is close
+to its own level: a parameter, not a learnt value). Live (v6 runs, 2026-11-26) 뽀또 is the only clip that reaches the
+fallback: with ``replace`` the final count was 6 right of 7 (the other man's 49-54 s words revoked: he scores 0.19-0.22
+against the other recording, the person about 0.5), with ``combined`` 7 right of 13 (he scores about 0.45-0.50 against
+the mix, at the verification threshold). Caveat, offline (v2 cache): the other recording alone scores the person low
+where the microphone differs (몇기야 3 of 5 and 시발 7 of 7 person words would be lost if they fell back to it;
+``combined`` keeps them), but those clips pass or are cleaned and never reach the fallback. Hence ``replace`` by
+default, ``combined`` as the option.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 MIN_QUALITY = .5
-MODES = ('combined', 'replace')
+MODES = ('replace', 'combined')
 
 
 def self_consistency(embeddings):
@@ -91,7 +96,7 @@ def choose(value, consent, fallbacks=(), *, min_quality=None, mode=None, origin=
     or ``reference_low`` (low, nothing better to use).
     """
     min_quality = MIN_QUALITY if min_quality is None else float(min_quality)
-    mode = mode or 'combined'
+    mode = mode or 'replace'
     if mode not in MODES:
         raise ValueError(f"voice fallback mode is one of {', '.join(MODES)}")
     if 'embeddings' not in (value or {}):        # samples embedded later: nothing to measure here

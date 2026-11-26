@@ -1285,9 +1285,9 @@ def _movement_options(parser):
     parser.add_argument('--voice-min-quality', type=float, metavar='COSINE',
                         help='least self-consistency (mean pairwise similarity of its pieces) of a voice reference '
                              'used alone (default 0.5)')
-    parser.add_argument('--voice-fallback-mode', choices=['combined', 'replace'],
-                        help="a low-quality reference with a --voice-fallback: 'combined' (default: both, equal weight) "
-                             "or 'replace' (the fallback alone)")
+    parser.add_argument('--voice-fallback-mode', choices=['replace', 'combined'],
+                        help="a low-quality reference with a --voice-fallback: 'replace' (default: the fallback alone) "
+                             "or 'combined' (both, equal weight)")
     parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
     parser.add_argument('--exit', type=float, help='release threshold')
 

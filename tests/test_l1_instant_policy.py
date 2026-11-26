@@ -121,10 +121,10 @@ class VoiceQualityTest(unittest.TestCase):
         self.assertEqual((report['used'], report['low'], consent), ('reference', False, 'c'))
         self.assertIsNone(hud_line(report))
 
-    def test_a_mixed_reference_is_combined_with_another_provided_reference_by_default(self):
+    def test_a_mixed_reference_can_be_combined_with_another_provided_reference(self):
         other = self.value([[.9, .3, 0.], [.95, .25, 0.]], kind='file')
         value, consent, report = choose(self.value(self.mixed), dict(statement='a', recorded_ms=1),
-                                        [('owner.json', other, dict(statement='b', recorded_ms=2))])
+                                        [('owner.json', other, dict(statement='b', recorded_ms=2))], mode='combined')
         self.assertEqual((report['used'], report['fallback']['name']), ('combined', 'owner.json'))
         self.assertEqual(len(value['embeddings']), 2)       # equal weight: one centroid each
         expected = centroid([centroid(self.mixed), centroid(other['embeddings'])])
@@ -142,9 +142,9 @@ class VoiceQualityTest(unittest.TestCase):
         self.assertIsNone(consistent_majority(self.mixed))       # two pieces: no majority
         self.assertIsNone(consistent_majority([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]))    # nobody agrees
 
-    def test_replace_mode_and_unusable_fallbacks(self):
+    def test_a_mixed_reference_is_replaced_by_default_and_unusable_fallbacks_are_skipped(self):
         other = self.value(self.person, kind='file')
-        value, consent, report = choose(self.value(self.mixed), 'a', [('o', other, 'b')], mode='replace')
+        value, consent, report = choose(self.value(self.mixed), 'a', [('o', other, 'b')])
         self.assertEqual((report['used'], value['embeddings'], consent), ('replaced', self.person, 'b'))
         value, _, report = choose(self.value(self.mixed), 'a', [('m', self.value(self.person, model='x'), 'b'),
                                                                ('low', self.value(self.mixed), 'b')])
@@ -162,10 +162,10 @@ class VoiceQualityTest(unittest.TestCase):
             args = argparse.Namespace(voice=str(main), voice_fallback=[str(owner)], voice_min_quality=None,
                                       voice_fallback_mode=None, voice_wav=None)
             value, consent = _reference_value(dict(kind='voice', name='voice'), args)
-        self.assertEqual(args.voice_quality['used'], 'combined')
+        self.assertEqual(args.voice_quality['used'], 'replaced')
         self.assertEqual(args.voice_quality['origin'], 'main_speaker')
-        self.assertEqual(len(value['embeddings']), 2)
-        self.assertEqual(consent['statement'], 'a + b')
+        self.assertEqual(value['embeddings'], self.person)
+        self.assertEqual(consent, dict(statement='b'))
 
 
 if __name__ == '__main__':
