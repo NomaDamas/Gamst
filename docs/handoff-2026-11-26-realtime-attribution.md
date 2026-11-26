@@ -128,3 +128,12 @@ final words identical. Shotgun movement clip: 16/16 (text rule, collision = sudd
 - Left: MCP/HUD hook for the voice-recording step; running main speaker for live input without a sample; remaining errors are
   other voices that CAM++ and Precision-3 confuse with the person (better sample = owner sample on the same input; stronger
   speaker model or TSE did not help so far).
+
+
+## 10. Update (v6 merged)
+
+L1 counts every heard word at once (`l1.policy instant`, default), excluded only below `clear_other` 0.1. Voice reference
+quality check (`gamst/voice_quality.py`, `--voice-min-quality` 0.5, fallback order: owner sample → clean pieces → `--voice-fallback FILE`
+replace → flag). v6 vs owner labels (L1 / final, right/counted): 뽀또 7/14 / 6/7; 몇기야 4/5 / 3/4; 시발 7/7 / 6/6; 달 13/13 / 8/8
+(another run 12/12 — hosted recognisers vary). Latency word→HUD p50 1.8-6.9 s (turn commits); short-turn variant
+`try-it/hud/l1/person-term-count-short-turns.json` is faster but lost words — owner decision. Videos `<term>_카운트_v6.mp4`.
