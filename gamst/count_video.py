@@ -4,7 +4,8 @@
         --count speech.term_events:term.spoken --other speech.term_events:term.other_voice
 
 Only events of the report are drawn, each at the capture time it happened; no model runs here.
-``--slow 4`` writes every frame that many times as long (no sound). ``--points`` is an optional JSON list, one
+``--slow 4`` writes every frame that many times as long (no sound). ``--hold-settled`` keeps the last picture (silent)
+after the video until every word has settled: the verification lane decides the last stretch only after the input ends. ``--points`` is an optional JSON list, one
 ``[[x, y], ...]`` (pixels, or null) per frame, drawn as a trail.
 
 Revision states (a report with ``event_states``, e.g. ``--with tracks``): a counted word appears when it was committed
@@ -28,6 +29,7 @@ from .halo import ACCENT, BG, DIM, GOOD, LINE, MUTED, PANEL, REC, WARN, WHITE, T
 KOREAN = '/System/Library/Fonts/AppleSDGothicNeo.ttc'
 WIDTH, HEIGHT, VIEW_W, VIEW_H, SIDE = 1920, 1080, 1376, 774, 1440
 HOLD_S = .55
+HOLD_MAX_S = 30.
 
 
 class KoreanText(Text):
@@ -95,7 +97,7 @@ FLAG_WORD = {'may_be_number': '숫자일 수 있음'}
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
-           note='', slow=1, points=None, start=0., end=None):
+           note='', slow=1, points=None, start=0., end=None, hold_settled=False):
     import cv2
     import numpy as np
     counted, others = load_events(report, count), load_events(report, other)
@@ -124,15 +126,28 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
                              f'{WIDTH}x{HEIGHT}', '-r', f'{fps / slow:.6f}', '-i', '-', *sound, '-c:v', 'libx264',
                              '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
                              str(out)], stdin=subprocess.PIPE)
+    hold_until = end
+    if hold_settled and stated is not None:     # the last stretch is decided after the input ends: show it settle
+        known = bool(report.get('paced'))
+        settled = [(event.get('settled_ms' if known else 'settled_capture_ms') or 0) - report['start_ms']
+                   for event in (report.get('event_states') or {}).get(count.partition(':')[0], ())]
+        hold_until = max([end, *(value / 1000 + 1 for value in settled if value > 0)])
+        hold_until = min(hold_until, end + HOLD_MAX_S)
     text, trail = KoreanText(), deque(maxlen=max(2, round(.25 * fps)))
+    last = None
     marks = [(event, True) for event in counted] + [(event, False) for event in others]
     index = -1
     while True:
         ok, frame = capture.read()
         index += 1
         t = index / fps
-        if not ok or t >= end:
-            break
+        holding = not ok or t >= end
+        if holding:
+            if last is None or t >= hold_until:
+                break
+            frame = last.copy()     # the last picture, no sound, while the last words settle
+        elif t >= start:
+            last = frame
         if t < start:
             continue
         h, w = frame.shape[:2]
@@ -164,7 +179,8 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         elif rejected:
             cv2.rectangle(canvas, (x0, y0), (x0 + view.shape[1] - 1, y0 + view.shape[0] - 1), DIM, 6)
         text.put(canvas, f'GAMST  ·  {title}', 32, 40, 34, WHITE, 'bold')
-        text.put(canvas, (f'{slow}배 느리게' if slow != 1 else '원본 속도'), VIEW_W + 32, 46, 24, MUTED, anchor='right')
+        text.put(canvas, '영상 끝 · 검증이 마지막 말을 정하는 중' if holding else (f'{slow}배 느리게' if slow != 1 else '원본 속도'),
+                 VIEW_W + 32, 46, 24, WARN if holding else MUTED, anchor='right')
         cv2.rectangle(canvas, (SIDE, 104), (WIDTH - 32, 104 + VIEW_H), PANEL, -1)
         text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
         text.put(canvas, str(len(now)), SIDE + 32, 180, 230, GOOD if flash else WHITE, 'bold')
@@ -249,6 +265,8 @@ def main(argv=None):
     parser.add_argument('--slow', type=int, default=1)
     parser.add_argument('--start', type=float, default=0.)
     parser.add_argument('--end', type=float)
+    parser.add_argument('--hold-settled', action='store_true',
+                        help='after the video, keep its last picture (silent) until every word has settled (at most 30 s)')
     args = vars(parser.parse_args(argv))
     report = json.loads(Path(args.pop('report')).read_text())
     points = json.loads(Path(args['points']).read_text()) if args['points'] else None
