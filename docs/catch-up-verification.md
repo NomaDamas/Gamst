@@ -64,14 +64,15 @@ Consumes the microphone (as ticks), `speaker_check` and any voter. Its own work 
 that follow speech** (owner decision 21), each decided only when `inputs_complete_until` has passed it (no TODO, no
 unanswered turn, no queued record there) by `near_ms`, so a catch-up worker never changes a word after it was settled.
 
-- **Regions** (`WINDOWS`): a region closes at the middle of a pause of at least `pause_ms` (500, the endpointer's pause)
-  in which no recogniser (first hearing, second, voters) wrote anything, once it is `min_ms` (10 s) long and at most
-  `max_ms` (20 s). Without such a pause by `max_ms` it closes at the next one up to `cap_ms` (30 s, reason
-  `max_extended`); by `cap_ms` at any point between two utterances (`cap_short_pause`); only when one utterance runs
-  past `cap_ms` is it cut there (`cap_split`, the only case that splits an utterance, and the region record says so).
-  A pause counts only once every recogniser is complete past it. The last region runs to the end of the input
-  (`end`). Each region's reason and length are in the `window` record (`region`) and in the lane's status
-  (`regions`, `straddling`: utterances a boundary cuts, `diarize_jobs`). `step_ms` gives the old fixed regions.
+- **Regions** (`WINDOWS`): a region closes at a speech pause once it is `min_ms` (10 s) long and at most `max_ms`
+  (20 s): the middle of a gap between two utterances (an utterance of some recogniser ended there and none was going
+  on), or, after the last utterance, `pause_ms / 2` into a silence of at least `pause_ms` (500 ms, the endpointer's
+  pause). Without one by `max_ms` it closes at the next one up to `cap_ms` (30 s, reason `max_extended`); only when
+  speech runs on past `cap_ms` is it cut there (`cap_split`, the only case that splits an utterance, and the region
+  record says so). A pause counts only once every recogniser (first hearing, second, voters) is complete past it. The
+  last region runs to the end of the input (`end`). Each region's reason and length are in the `window` record
+  (`region`) and in the lane's status (`regions`, `straddling`: utterances a boundary cuts, `diarize_jobs`).
+  `step_ms` gives the old fixed regions.
 - **Second recogniser**: `gpt-live-transcribe`, the counted words as `keywords`, Qwen3-ForcedAligner word times
   (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete, at most `feed_speed` (1.25) times real
   time: it is a realtime API, and a little faster lets it catch up after a stall (`null`: as soon as complete, in

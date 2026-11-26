@@ -293,10 +293,10 @@ class WordVerification:
         return merged
 
     def _close_regions(self, complete):
-        """Close regions where speech pauses: at the middle of a pause of at least ``pause_ms`` that no recogniser
-        wrote anything in, once the region is ``min_ms`` long; by ``max_ms`` the next such pause closes it
-        (``max_extended``); at ``cap_ms`` any point between utterances does (``cap_short_pause``), else the cap itself
-        (``cap_split``, the only case in which an utterance is split, and said so). ``step_ms``: fixed regions."""
+        """Close regions where speech pauses (between two utterances of any recogniser, or ``pause_ms`` into the
+        silence after the last one), once the region is ``min_ms`` long and at most ``max_ms``; past ``max_ms`` the next
+        pause closes it (``max_extended``); at ``cap_ms`` the cap itself does (``cap_split``, the only case in which an
+        utterance is split, and said so). ``step_ms``: fixed regions."""
         w, end = self.windows, self.memory.end_ms
         if end is None or self._origin is None:
             return False
@@ -334,16 +334,19 @@ class WordVerification:
             gaps.append((at, limit))             # silence up to what is known
         gaps = [(low, high) for low, high in gaps if high > low]
 
-        def first(low, high, wide=True):
-            """The first point in [low, high] inside a pause: with at least half a pause of silence on each side
-            (``wide``), else the middle of any gap; in a gap that is still open, as early as allowed."""
+        def first(low, high):
+            """The first pause point in [low, high]: the middle of a gap between two utterances (an utterance ended
+            there), or, in the silence after the last one, ``pause_ms / 2`` into it once ``pause_ms`` of it is known."""
             for gap_low, gap_high in gaps:
-                if wide and gap_high - gap_low < w['pause_ms']:
-                    continue
-                pad = w['pause_ms'] / 2 if wide else (gap_high - gap_low) / 2
-                earliest, latest = gap_low + pad, gap_high - pad
-                target = earliest if gap_high >= limit and not self._final else (gap_low + gap_high) / 2
-                point = min(max(target, low), high)
+                if gap_high >= limit and not self._final:
+                    if gap_high - gap_low < w['pause_ms']:
+                        continue
+                    earliest, latest = gap_low + w['pause_ms'] / 2, gap_high - w['pause_ms'] / 2
+                    point = min(max(earliest, low), high)
+                else:
+                    earliest = latest = point = (gap_low + gap_high) / 2
+                    if not low <= point <= high:
+                        continue
                 if earliest <= point <= latest:
                     return int(point)
             return None
@@ -359,9 +362,6 @@ class WordVerification:
             return found, 'max_extended'
         if limit < start + w['cap_ms']:
             return (float('inf'), 'end') if self._final else (None, None)
-        found = first(start + w['min_ms'], start + w['cap_ms'], wide=False)
-        if found is not None:
-            return found, 'cap_short_pause'
         return start + w['cap_ms'], 'cap_split'
 
     def _straddling(self):

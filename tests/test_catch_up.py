@@ -323,11 +323,11 @@ class RegionTest(unittest.TestCase):
 
     def test_a_region_closes_in_a_pause_after_its_minimum_and_never_inside_an_utterance(self):
         lane = self.lane([(0, 3000), (3200, 9500), (9900, 10600), (11000, 11800), (12400, 25000), (25200, 40000)])
-        self.assertEqual(lane._boundary(0, 50000, 50000), (12100, 'pause'))      # 9500-9900 is before the minimum
+        self.assertEqual(lane._boundary(0, 50000, 50000), (10800, 'pause'))      # 9500-9900 is before the minimum
         lane = self.lane([(0, 3000), (3200, 12000), (12100, 25000), (25600, 40000)])
-        self.assertEqual(lane._boundary(0, 50000, 50000), (25300, 'max_extended'))
+        self.assertEqual(lane._boundary(0, 50000, 50000), (12050, 'pause'))      # an utterance ends: a pause
         lane = self.lane([(0, 21000), (21100, 40000)])
-        self.assertEqual(lane._boundary(0, 50000, 50000), (21050, 'cap_short_pause'))
+        self.assertEqual(lane._boundary(0, 50000, 50000), (21050, 'max_extended'))
         lane = self.lane([(0, 40000)])
         self.assertEqual(lane._boundary(0, 50000, 50000), (30000, 'cap_split'))   # said, the only split
         lane = self.lane([(0, 3000), (3200, 9000)])
