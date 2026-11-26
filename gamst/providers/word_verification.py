@@ -28,7 +28,17 @@ never change a word after it was settled. For each stretch it has:
   ``vote_adds_once: false`` a second-hearing word is added only when a voter heard it too. ``decide: "majority"``
   (with voters) replaces the pairing rule: a word is said when at least two of the recognisers (the first hearing,
   the second one and the voters) wrote it within ``near_ms``; a word only one of them wrote is dropped (revoked, or not
-  added) unless ``keep_single`` and no other recogniser wrote anything near it and the voice is clear;
+  added) unless ``keep_single`` and no other recogniser wrote anything near it and the voice is clear.
+  ``decide: "primary"`` (owner decision 31, the default when voters are read: the best recogniser is never outvoted):
+  the first hearing is the primary recogniser (the recipe's live ``asr`` item, the registry's ``audio.asr`` default,
+  today ElevenLabs Scribe v3 Live). A word it wrote that another recogniser also wrote is said (the voice decides who);
+  a word only it wrote stands unless it is *contested* (the other recognisers, ``contest_by: "all"`` or ``"any"``,
+  heard speech there and wrote other words): a contested word is vetoed (revoked, ``vetoed``) only when the primary's
+  own word confidence (``confidence`` or ``exp(logprob)`` on its words, when the recogniser gives one) is below
+  ``low_confidence`` (None, the default: no veto, measured not to separate invented from true words), else it is
+  ``uncertain`` (``contested: "uncertain"``, the default: shown, not counted, never "not said") or stands
+  (``contested: "stand"``). Words only the others wrote are added as by majority (``add: "agreed"``) or when any of
+  them wrote it (``add: "any"``);
 - **the voice rule** (:data:`VOICE`) for each word that stays: the person's speaker active over the word and no other
   speaker over ``overlap_share`` of it -> the person; another speaker dominant -> another voice; both over
   ``overlap_share`` (overlapped speech) -> the TSE lane's decision where the word carries one
@@ -47,6 +57,7 @@ a clip; every setting is a parameter.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 
 from ..capabilities import CapabilitySpec, OutputField
@@ -56,8 +67,13 @@ from .term_events import parse_terms, term_occurrences
 
 SAMPLE_RATE = 16000
 RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True, keep_clear_voice=True, clear='either',
-            clear_margin=.1, vote=False, vote_adds_once=True, decide='pair', keep_single=True)
-DECIDE = ('pair', 'majority')
+            clear_margin=.1, vote=False, vote_adds_once=True, decide='pair', keep_single=True,
+            contested='uncertain', contest_by='all', low_confidence=None, add='agreed')
+DECIDE = ('pair', 'majority', 'primary')
+CONTESTED = ('uncertain', 'stand')       # primary rule: a contested primary word that is not vetoed
+CONTEST_BY = ('all', 'any')              # primary rule: which other recognisers must have written other words there
+ADD = ('agreed', 'any')                  # primary rule: words only the others wrote (as majority / as pair)
+UNCERTAIN = ('uncertain_overlap', 'contested')   # reasons that leave a word uncertain (shown, not counted, not revoked)
 CLEAR = ('speaker', 'score', 'either', 'both')
 VOICE = dict(threshold=.5, min_speaker_ms=1000, piece_ms=2000, overlap_share=.3, active_share=.1, word_context_ms=1500,
              min_dbfs=-45., decision='absolute', floor=None, margin=0., word_margin=0., anchor_ms=None, anchor_join_ms=1000)
@@ -127,6 +143,12 @@ class WordVerification:
             raise ValueError(f"rule decide is one of {', '.join(DECIDE)}")
         if self.rule['clear'] not in CLEAR:
             raise ValueError(f"rule clear is one of {', '.join(CLEAR)}")
+        for key, known in (('contested', CONTESTED), ('contest_by', CONTEST_BY), ('add', ADD)):
+            if self.rule[key] not in known:
+                raise ValueError(f"rule {key} is one of {', '.join(known)}")
+        low = self.rule['low_confidence']
+        if low is not None and not (type(low) in (int, float) and 0 < low < 1):
+            raise ValueError('rule low_confidence is None (no veto) or a probability between 0 and 1')
         self.windows = _settings(WINDOWS, windows, 'window')
         # speaker decision v2 (voice ``decision: "relative"``, gamst/providers/voice_bank.py): the person's speaker in a
         # window is the one closest to the references by ``margin`` (at least ``floor``); the window's other speakers
@@ -750,8 +772,8 @@ class WordVerification:
 
     async def _settle(self, window, low, high):
         await self._prefetch(low, high)
-        if self.rule['decide'] == 'majority':
-            return await self._settle_majority(window, low, high)
+        if self.rule['decide'] in ('majority', 'primary'):
+            return await self._settle_majority(window, low, high, primary=self.rule['decide'] == 'primary')
         near = self.rule['near_ms']
         first = self._first_occurrences(low, high)
         second = self._second_occurrences(low - near, high + near)
@@ -819,9 +841,13 @@ class WordVerification:
             self.rule['clear']]
         return clear, decided[:5] + (score,)
 
-    async def _settle_majority(self, window, low, high):
+    async def _settle_majority(self, window, low, high, primary=False):
         """At least two of the recognisers wrote it -> said (the voice decides who); one -> dropped, unless
-        ``keep_single``, nobody else wrote anything there and the voice is clearly the person's."""
+        ``keep_single``, nobody else wrote anything there and the voice is clearly the person's.
+
+        ``primary``: the first hearing (the live recogniser, the best one by published results) is never outvoted: a
+        word only it wrote stands unless the others contest it (:meth:`_primary_alone`). Words only the others wrote
+        are added as by majority (``add: "agreed"``) or whenever one of them wrote it (``add: "any"``)."""
         near = self.rule['near_ms']
         first = self._first_occurrences(low, high)
         second = self._second_occurrences(low - near, high + near)
@@ -857,11 +883,15 @@ class WordVerification:
                 match, basis, reason, speaker, speaker_score, score = await self._voice_of(
                     window, span['start_ms'], span['end_ms'])
                 basis = f"heard_by_{1 + len(heard)}({'+'.join(['first', *heard])})+" + basis
+            elif primary:
+                match, basis, reason, speaker, speaker_score, score = await self._primary_alone(window, item)
             else:
                 match, basis, reason, speaker, speaker_score, score = await single(item, 'first')
+            confidence = self._confidence(item) if primary else None
             for word_id in item['word_ids']:
                 verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score,
-                                              heard='+'.join(['first', *heard])))
+                                              heard='+'.join(['first', *heard]),
+                                              extra=None if confidence is None else dict(primary_confidence=confidence)))
                 words_done.add(word_id)
         for word_id, word in list(self._open.items()):     # the other words: by the voice alone
             if word_id in words_done or not (low <= word['end_ms'] < high):
@@ -888,12 +918,51 @@ class WordVerification:
                 match, basis, reason, speaker, speaker_score, score = await self._voice_of(
                     window, item['start_ms'], item['end_ms'])
                 basis = 'heard_by_2(second+third)+' + basis
+            elif primary and self.rule['add'] == 'any':      # one other recogniser is enough to add a word
+                match, basis, reason, speaker, speaker_score, score = await self._voice_of(
+                    window, item['start_ms'], item['end_ms'])
+                basis = f'heard_by_1({own})+' + basis
             else:
                 match, basis, reason, speaker, speaker_score, score = await single(item, own)
                 if not match and reason != 'uncertain_overlap':
                     self.stats['dropped'] = self.stats.get('dropped', 0) + 1
                     continue       # one recogniser only, not kept: nothing is added
             self._add(item, match, basis, reason, score)
+
+    @staticmethod
+    def _confidence(item):
+        """The primary recogniser's own confidence (0-1) in an occurrence: the lowest of its words' ``confidence``
+        or ``exp(logprob)``; None when the recogniser gave none."""
+        found = []
+        for word in item.get('words') or ():
+            if type(word.get('confidence')) in (int, float):
+                found.append(float(word['confidence']))
+            elif type(word.get('logprob')) in (int, float):
+                found.append(math.exp(float(word['logprob'])))
+        return round(min(found), 4) if found else None
+
+    async def _primary_alone(self, window, item):
+        """A word only the primary (first) recogniser wrote. The others never remove it by outnumbering it: it stands
+        (the voice decides whose it is) unless it is *contested*, i.e. the other recognisers (``contest_by``: ``all``
+        of those that are read, or ``any``) wrote other words within ``near_ms`` of it (they heard speech there and
+        wrote something else). A contested word is vetoed (revoked, ``vetoed``) only when the primary's own
+        confidence is under ``low_confidence`` too; else it is ``uncertain`` (``contested: "uncertain"``: shown, not
+        counted, never "not said") or stands (``contested: "stand"``). A recogniser that gives no word confidence is
+        never vetoed. A word the voice gives to another speaker stays that speaker's."""
+        start, end = item['start_ms'], item['end_ms']
+        others = dict(second=self._heard, **({'third': self._voted} if self._voted else {}))
+        wrote = [name for name, values in others.items() if self._words_near(values, start, end)]
+        contested = len(wrote) == len(others) if self.rule['contest_by'] == 'all' else bool(wrote)
+        match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, start, end)
+        if not contested:
+            return match, 'primary+uncontested+' + basis, reason, speaker, speaker_score, score
+        tag = f"primary+contested({'+'.join(wrote)})"
+        confidence, low = self._confidence(item), self.rule['low_confidence']
+        if low is not None and confidence is not None and confidence < low:
+            return False, f'{tag}+low_confidence', 'vetoed', speaker, speaker_score, score
+        if self.rule['contested'] == 'stand' or not match and reason not in UNCERTAIN:
+            return match, f'{tag}+{basis}', reason, speaker, speaker_score, score
+        return False, f'{tag}+{basis}', 'contested', speaker, speaker_score, score
 
     def _add(self, item, match, basis, reason, score):
         self.stats['added'] += 1
@@ -939,7 +1008,7 @@ class WordVerification:
                     found.append(dict(item, source=str(value.get('utterance_id', '')).rsplit(':', 1)[0]))
         return found
 
-    def _verdict(self, word_id, match, basis, reason, speaker, speaker_score, score, *, heard):
+    def _verdict(self, word_id, match, basis, reason, speaker, speaker_score, score, *, heard, extra=None):
         word = self._open.pop(word_id)
         provisional = bool(word.get('match'))
         verdict = dict(word_id=word_id, utterance_id=word.get('utterance_id'), start_ms=word['start_ms'],
@@ -947,8 +1016,9 @@ class WordVerification:
                        settled_by='verification', basis=basis)
         if reason and not match:
             verdict['reason'] = reason
-            if reason == 'uncertain_overlap':
-                verdict['uncertain'] = True        # neither the person's nor another's: a later lane may settle it
+            if reason in UNCERTAIN:
+                verdict['uncertain'] = True        # neither surely the person's nor another's: a later lane may settle it
+        verdict.update(extra or {})
         for key, value in (('heard', heard), ('speaker', speaker), ('speaker_score', speaker_score), ('word_score', score)):
             if value is not None:
                 verdict[key] = value
