@@ -371,13 +371,15 @@ class StreamingWords:
             await previous
         value = dict(value)
         if len(samples):
+            started = time.monotonic()
             items = await _call(self.aligner.align, samples, RATE, value['text'], self.language)
+            took = round(1000 * (time.monotonic() - started))
             words = offset_words(items, value['start_ms'])
             if spelled(words) == spelled_text(value['text']):
                 value.update(words=words, aligned=True, start_ms=words[0]['start_ms'] if words else value['start_ms'])
             else:
                 value['align_error'] = 'aligned words do not spell the transcript; kept without word times'
-            value['aligner'] = dict(id=getattr(self.aligner, 'model_id', 'aligner'))
+            value['aligner'] = dict(id=getattr(self.aligner, 'model_id', 'aligner'), ms=took, seconds=round(len(samples) / RATE, 2))
             value['final_after_ms'] = max(0, _wall_ms() - (self.clock.arrival_ms(value['end_ms']) or _wall_ms()))
         self._deliver(key, self.spec.validate(value))
 

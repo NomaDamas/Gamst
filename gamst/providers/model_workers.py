@@ -181,7 +181,10 @@ class _Aligner(_Worker):
         self.aligner = aligner
 
     def process_regions(self, frame, evidence):
-        return dict(items=self.aligner.align(frame.data, frame.sample_rate, evidence['text'], evidence['language']))
+        samples = frame.data
+        if getattr(samples, 'ndim', 1) == 2:     # a long segment travels as rows (the wire limits each dimension)
+            samples = samples.reshape(-1)[:int(evidence['samples'])]
+        return dict(items=self.aligner.align(samples, frame.sample_rate, evidence['text'], evidence['language']))
 
 
 class _Whisper(_Worker):
@@ -340,9 +343,18 @@ class RemoteEmbedder(_Client):
 
 
 class RemoteAligner(_Client):
+    ROW = 16000
+
     async def align(self, samples, sample_rate, text, language):
-        result = await self.worker.process_regions(self._frame(samples, 'audio', sample_rate=sample_rate),
-                                                   dict(text=text, language=language))
+        import numpy as np
+        samples = np.asarray(samples, dtype=np.float32).reshape(-1)
+        request = dict(text=text, language=language)
+        data = samples
+        if len(samples) > self.ROW:      # rows of one second: any length fits the wire's per-dimension limit
+            data = np.zeros(-(-len(samples) // self.ROW) * self.ROW, np.float32)
+            data[:len(samples)] = samples
+            data, request['samples'] = data.reshape(-1, self.ROW), len(samples)
+        result = await self.worker.process_regions(self._frame(data, 'audio', sample_rate=sample_rate), request)
         return result['items']
 
 

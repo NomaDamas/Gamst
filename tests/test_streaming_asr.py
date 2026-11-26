@@ -359,3 +359,30 @@ class RecipeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipIf(np is None, 'numpy')
+class AlignerTransportTest(unittest.TestCase):
+    def test_a_long_segment_reaches_the_aligner_whole(self):
+        from gamst.providers.model_workers import RemoteAligner, _Aligner
+        seen = {}
+
+        class Aligner:
+            def align(self, samples, rate, text, language):
+                seen['samples'] = samples
+                return [dict(text=text, start_s=0., end_s=len(samples) / rate)]
+
+        worker = _Aligner(Aligner())
+
+        class Worker:
+            async def process_regions(self, frame, request):
+                from gamst.provider_wire import array_size
+                array_size(frame.data.dtype.str, list(frame.data.shape))     # what the wire would refuse
+                return worker.process_regions(frame, request)
+
+        client = RemoteAligner.__new__(RemoteAligner)
+        client.worker, client._sequence = Worker(), 0
+        samples = np.arange(16000 * 20 + 7, dtype=np.float32)
+        items = asyncio.run(client.align(samples, 16000, '뽀또', 'ko'))
+        self.assertTrue(np.array_equal(seen['samples'], samples))
+        self.assertAlmostEqual(items[0]['end_s'], 20 + 7 / 16000)
