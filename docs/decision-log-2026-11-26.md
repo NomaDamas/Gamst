@@ -50,6 +50,9 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | Catch-up by worker pool with state copy | keeps "now" and loses nothing | forced slowdown: 0 audio dropped, final words identical, gaps filled in ~2.1 s (catch-up doc) |
 | Verification after catch-up only | prevents an earlier lane overwriting a final | completeness watermarks; test in tests/test_catch_up.py |
 | Combination result | precision first, recall next | final 6 counted, 6 right (precision 1.00 in 5 runs), recall 0.6 (catch-up doc) |
+| Clear-voice keep for words one recogniser heard (decision of the owner, measured) | recall without a third hearing | final 8 counted, 7 right in 4 runs: 21.46 recovered, the invented 24.16 kept too (verify-recall doc) |
+| Majority of three recognisers (Speechmatics voter, decision 22, measured) | two independent hearings before a word counts | fixed regions: final 7 counted, 7 right, recall 0.70 in 6 runs (keep_single on and off the same); 24.16 refused, 20.14/21.46/22.30 confirmed by Speechmatics (verify-vote doc) |
+| Speech-aligned regions (decision 21, measured) | no utterance split between regions | boundaries cut 0 utterances (fixed 15 s cut 5 per run); regions 10.0 / 13.6 / 11.7 s; same 4 pyannoteAI jobs; provisional -> final p50 21-24 s, p95 37-41 s (fixed: 15-20 / 22-24 s); the moved window gave 27.44 s (another voice) to the person in 2 of 3 runs (verify-vote doc) |
 | Dropped approaches | measured no gain here | PixIT separation (unstable), lips (0 fixes 0 breaks), Qwen3-ASR (worse), larger voice model, Sortformer (slower than real time, merged everyone) |
 
 ## 3. Answers to the owner's questions

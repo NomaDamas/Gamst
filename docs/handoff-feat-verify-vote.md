@@ -21,12 +21,16 @@
   (fixed 15 s: 5 per run), 4 pyannoteAI jobs (as fixed). Final 8 counted / 7 right (27.44, another voice, counted:
   its window's Precision-3 labels gave the person's speaker), uncertain 2. Provisional->final p50 46-50 s, p95 63-68 s
   (fixed: 15-20 / 22-24 s): with no 500 ms gap shared by all recognisers the region waited for the 30 s cap.
-- Fix committed: an utterance end is a pause too (cap_short_pause removed). H1-H3 running with it.
+- Fix committed: an utterance end is a pause too (cap_short_pause removed).
+
+## Measured, speech-aligned regions (H1-H3, committed version)
+- Same boundaries 10.0 / 23.64 / 35.39 s, all `pause`; 0 utterances straddled; 4 jobs; final 8/7 (H1, H3: 27.44 counted)
+  and 7/7 (H2); uncertain 2; provisional->final p50 21.0-23.9 s, p95 36.8-41.0 s.
+- Written up: docs/measurements/verify-vote-2026-11-26.md; decision-log technical rows added.
 
 ## Left
-- Speech-aligned runs H1-H3 (after the fix): region lengths min/median/max, straddling (must be 0),
-  latency, jobs vs fixed; then `docs/measurements/verify-vote-2026-11-26.md` and the results line in
-  `docs/decision-log-2026-11-26.md` (add results/links only; rows 21-24 are the coordinator's).
+- Nothing of this task; open for the owner: region latency (last region waits for the end), 27.44 attribution with the
+  moved window, defaults on the 4-clip set.
 
 ## Rerun
 ```
