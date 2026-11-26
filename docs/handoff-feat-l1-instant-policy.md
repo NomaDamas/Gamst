@@ -78,4 +78,8 @@ v1 (owner's first look, coordinator's figure): 뽀또 8 counted / 6 right.
   caused by this branch (L1 scores identical; L4's word rule).
 - 뽀또 o→p stays 5-6: with the combined reference the other man's diarized speaker scores ~0.50 (offline anchored
   windows 0.45-0.50, person 0.68-0.78), right at L4's absolute 0.5, so 49.86 / 50.4 (and 52.2 in v6) are still given
-  to the person. Offline the relative rule (v2) does not do better with the checked reference (5 errors vs 5).
+  to the person. Offline (v2 cache) with the checked references the plain rule makes 5 final errors over the four
+  clips (p→o 2, o→p 3) and the relative rule (floor 0.4-0.5, margin 0.05-0.1) 6-7: no reason to switch.
+
+## Full suite (23:12-23:16, through guard)
+1722 tests: exactly the 15 known errors (test_stereo_context 7, test_stereo_metric 6, test_sam_audio_native 2).
