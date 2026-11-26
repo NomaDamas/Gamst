@@ -69,3 +69,46 @@ said within a second of the person's.
 - **Recognisers:** live = ElevenLabs Scribe v3 Live (best published error rate; best recall here), verification =
   gpt-live-transcribe with keyword hints (wrote no invented word here; the owner confirmed by ear that nothing is said at
   23.8-24.2 s where Scribe wrote the word). Non-commercial state-of-the-art models are registered as opt-in only.
+
+## Details agreed with the owner (2026-11-26)
+
+**Where it lives.** Catch-up and the verification lane are part of the GAMST **Pipeline** (lanes, a to-do queue of capture
+ranges, completeness watermarks). Models stay **swappable**: each one is a registry candidate chosen per recipe item
+(`"candidate"`), on the command line (`--asr CANDIDATE`, `--with-role audio.diarization=CANDIDATE`) or in a profile. The
+default of each role is whatever measured best on the owner's clips (state of the art first); today: ASR live =
+`elevenlabs.scribe_v3_live.hosted` (Whisper is no longer the default; it stays a selectable candidate).
+
+**Lanes.**
+
+```text
+capture  ─────────────────────────────────────────────▶  (all audio kept; nothing dropped)
+L1 live          recogniser + per-word voice score ─▶ provisional counts; on lag > lag_ms jump to "now"
+L2 catch-up      worker pool takes skipped ranges; state copied from L1 at the range start; listens from the last
+                 speech pause before it (bounded look-back); hosted recognisers get the preceding text instead
+L4 verification  serial, in capture order, only over complete ranges: second recogniser, Precision-3 windows,
+                 few-shot voice on each speaker's segments ─▶ final / revoked only where something changes
+Context / MCP    ranges still being caught up show as pending, then final
+```
+
+**Order and conflicts.** A range is verified only after L1/L2 have finished it (watermark), so catch-up can never overwrite
+a final; every result is a versioned record and the newest revision wins.
+
+**Worker count.** L2 needs at least one worker to catch up; more only shorten how long a range stays pending (a waiting item is
+queued, never dropped). The cap follows resources: 1 on a laptop (memory guard), the provider's concurrency for hosted
+recognisers, free GPU memory on a server. Processes running at once: L1 + L2 workers + L4.
+
+**Voice decision.** A speaker-embedding model (CAM++) turns sound into a vector; the decision compares it with the vector of
+the owner's few-shot sample of the person. L1/L2 use the sound around each word (provisional); L4 uses the whole segments
+Precision-3 attributes to one speaker (longer, cleaner: final).
+
+**Two recognisers.** L1 = Scribe v3 Live (keyterms = the words to count); L4 = gpt-live-transcribe with keyword hints (the
+words to count, passed to OpenAI as hints — not Scribe's transcript) and Qwen3-ForcedAligner timestamps. Rule (to be chosen on
+the clip set): both heard → final; only L1 heard → revoked; only L4 heard → final added.
+
+**Diarization.** Precision-3 handles more than two speakers and marks overlapped speech; what no model here does reliably is
+splitting one microphone's overlapped sound into separate voices. Live diarization models have speaker caps (Sortformer 4,
+pyannoteAI Live-1 8); they do not decide who said a word, so the caps do not limit counting. Separate microphones per person
+would make attribution direct (each microphone is its own input); not configured now.
+
+**Terms that are sound words.** A term can be an onomatopoeic syllable such as "달" said alone or repeated ("달달달"): it is
+matched only as a whole word made of that syllable, never inside other words ("달라", "달걀"), and each repetition counts.
