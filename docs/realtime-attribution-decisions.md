@@ -114,3 +114,4 @@ would make attribution direct (each microphone is its own input); not configured
 matched only as a whole word made of that syllable, never inside other words ("달라", "달걀"), and each repetition counts.
 
 How it is built (contracts, settings, status fields): [catch-up-verification.md](catch-up-verification.md).
+- Full decision log with evidence and Q&A: [decision-log-2026-11-26.md](decision-log-2026-11-26.md)
