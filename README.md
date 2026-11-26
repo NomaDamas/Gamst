@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/gamst-banner.png" alt="GAMST — Fast. Loud. GAMST." width="100%">
+<img src="docs/images/gamst-banner.png" alt="GAMST — Reflexes for AI" width="100%">
 
 ### Continuous multimodal observation and decision context for agents.
 
