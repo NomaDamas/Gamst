@@ -91,7 +91,8 @@ def _listed(value):
 def choose(recipe, include=(), exclude=()):
     """Resolve ``"optional": "on" | "off"`` modules (``--with`` / ``--without``, by module or part name).
 
-    A module may name what it reads when an optional one is absent (``consumes_without``), and a
+    A module may name what it reads when an optional one is absent (``consumes_without``), what it reads
+    only while an optional one is present (``consumes_optional``), and a
     reference or record what it is for (``for``); both follow the choice.
     """
     optional = {item['name']: item for item in recipe.get('modules', ()) if item.get('optional')}
@@ -116,6 +117,11 @@ def choose(recipe, include=(), exclude=()):
             continue
         for name in [name for name in item.get('consumes_without', {}) if name in absent]:
             item = dict(item, consumes=item['consumes_without'][name])
+        if item.get('consumes_optional'):    # read only while the optional module that gives it is in the run
+            present = [source for source in item['consumes_optional'] if not any(
+                other['name'] in absent and (source.split(':', 1)[0] == other['name'] or source in other.get('emits', ()))
+                for other in recipe['modules'])]
+            item = dict(item, consumes=[*item.get('consumes', ()), *present])
         modules.append(item)
     for item in modules:
         for source in item.get('consumes', ()):

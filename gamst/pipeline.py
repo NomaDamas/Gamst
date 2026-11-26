@@ -362,6 +362,8 @@ class Pipeline:
                  for item in consumes]
         if spec is not None:
             self.human.register_capability(spec)
+        if name in emits:
+            raise ValueError(f'{name!r} cannot emit an input of its own name: name the derived input otherwise')
         for derived in emits:
             self.add_input(derived, derived_from=name)
         bind = getattr(module, 'bind', None)

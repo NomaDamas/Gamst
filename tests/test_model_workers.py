@@ -29,6 +29,9 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
             class Extractor:
                 def extract(self, mixture, enrollment):
                     return mixture * float(enrollment[0])
+            class Separator:
+                def separate(self, window):
+                    return [window, -window, window * 0] if len(window) else []
             class Aligner:
                 def align(self, samples, rate, text, language):
                     return [dict(text=text, start_s=0.0, end_s=len(samples) / rate)]
@@ -44,7 +47,8 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
             def load(profile, config):
                 return {'speaker.embedding': lambda: m._Embedding(embed), 'sapiens2.pose': lambda: m._Pose(Pose()),
                         'qwen3.forced_aligner': lambda: m._Aligner(Aligner()),
-                        'target_speech.local': lambda: m._Extraction(Extractor())}[profile]()
+                        'target_speech.local': lambda: m._Extraction(Extractor()),
+                        'pixit.sources': lambda: m._Separation(Separator())}[profile]()
             m.load = load
             from gamst.provider_worker import main
             main()
@@ -76,6 +80,16 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
                 np.testing.assert_allclose(await extractor.extract(mixture[:500], clip), mixture[:500] / 2)
             finally:
                 await extractor.close()
+            separator = await model_workers.RemoteSeparator.open(python, 'pixit.sources', dict(
+                config='/c', separation='/s', embedding='/e', sha256=SHA))
+            try:
+                self.assertEqual(separator.model_id, f'pyannote-pixit:{SHA[:16]}')
+                mixture = np.arange(16000, dtype=np.float32) / 1e5
+                sources = await separator.separate(mixture)   # speakers x samples cross as a private payload
+                self.assertEqual(sources.shape, (3, 16000))
+                np.testing.assert_allclose(sources[1], -mixture)
+            finally:
+                await separator.close()
             aligner = await model_workers.RemoteAligner.open(python, 'qwen3.forced_aligner', dict(path='/m', sha256=SHA))
             try:
                 self.assertEqual(await aligner.align(np.zeros(16000, np.float32), 16000, '대박', 'ko'),
@@ -118,6 +132,7 @@ LOADERS = {
     'emotion2vec.seed.onnx': 'vocal_expression', 'factorizephys.local': 'factorizephys_context',
     'silero.activity': 'vad', 'qwen3.forced_aligner': 'asr_words', 'speaker.embedding': 'speaker_verify',
     'face.embedding': 'person_match', 'body.embedding': 'person_match', 'target_speech.local': 'target_speech',
+    'pixit.sources': 'pixit', 'sepformer.sources': 'sepformer',
     'sapiens2.pose': 'sapiens2_pose', 'active_speaker.lightasd': 'active_speaker', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None, 'faster_whisper.large_v3_turbo': None,
     'qwen3.asr.words': 'qwen_words', 'hosted.asr.words': None,   # a hosted API loads no package
