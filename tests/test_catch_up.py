@@ -108,13 +108,14 @@ class Collect:
         return None
 
 
-async def run(slowdown=None, frames=60):
+async def run(slowdown=None, frames=60, catch_up=True):
     async with Gamst(consent=True) as human:
         pipeline = Pipeline(human, 'catch')
         pipeline.add_input('microphone', Paced(frames), modality='audio')
         hearer, collect = Hearer(), Collect()
         pipeline.add_module('asr', hearer, consumes='microphone', spec=WORDS, queue=500,
-                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1), slowdown=slowdown)
+                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1) if catch_up else False,
+                            slowdown=slowdown)
         pipeline.add_module('words', collect, consumes='asr')
         await pipeline.run()
         status = pipeline.status()
@@ -125,7 +126,7 @@ async def run(slowdown=None, frames=60):
 @unittest.skipIf(np is None, 'numpy is needed')
 class CatchUpTest(unittest.TestCase):
     def test_a_lane_that_falls_behind_skips_to_now_and_a_worker_hears_what_it_skipped(self):
-        steady, _ = asyncio.run(run())
+        steady, _ = asyncio.run(run(catch_up=False))     # a loaded machine must not make the reference catch up
         slowed, status = asyncio.run(run(dict(ms=120, spans_s=[[.4, .9], [1.6, 2.1]])))
         asr = status['modules']['asr']
         self.assertEqual(sorted(steady, key=lambda word: int(word[1:])), [f'w{index}' for index in range(60) if pattern(index)])
