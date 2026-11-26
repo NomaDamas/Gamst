@@ -8,12 +8,17 @@ Only events of the report are drawn, each at the capture time it happened; no mo
 after the video until every word has settled: the verification lane decides the last stretch only after the input ends. ``--points`` is an optional JSON list, one
 ``[[x, y], ...]`` (pixels, or null) per frame, drawn as a trail.
 
-Revision states (a report with ``event_states``, e.g. ``--with tracks``): a counted word appears when it was committed
-(a run ``--as-live``: when it was known; otherwise the capture time of its record), orange while it is provisional,
-green once final, red and struck out once revoked (it leaves the count then), violet while uncertain (shown, not
-counted). The panel says how many are final, provisional, revoked and uncertain at that moment, each in its colour; a
-word shows its spelling where the term has several, why it was revoked or is uncertain, and its flags (a numeral
-that may be the number).
+Revision states (a report with ``event_states``, e.g. ``--with verification``; owner decision 26). At video time t the
+HUD shows exactly what was known at t: each event's ``history`` says when every step was decided on the capture clock
+(a run ``--as-live``: when it was known live; otherwise the capture time of its record). The big number is the count
+as it stood then: a word the live recogniser (L1) counted enters it the moment L1 committed it (orange, provisional);
+a later lane's decision (catch-up, TSE, verification) changes it only at the moment it was decided, with a visible
+correction in Korean: "+1 추가 #12" (a word given to the person later: another voice's at first, or heard again),
+"−1 취소 #9" with the reason (red, struck out), "−1 보류" (violet, uncertain: shown, not counted), "확정" (green).
+The number that drops is shown struck out for a moment, then the new one. Words are numbered in the order they
+entered the count. The panel says how many are final, provisional, revoked and uncertain at that moment, each in its
+colour; another voice's words are listed as "제외". ``--hold-settled`` keeps the last picture until the last
+decision has been shown.
 """
 from __future__ import annotations
 
