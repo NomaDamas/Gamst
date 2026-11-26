@@ -95,6 +95,7 @@ bursts caught up by the Pipeline, nothing given up) and decided 8 words, all `un
 words next to the person in the extracted sound and the extracted sound's voice score stayed under the threshold.
 Counts with and without `--with tse` were the same (final 4 / 4 of 10). Overlapped words are decided 10-21 s after
 they are said on this Mac's CPU (about 4 s without the lane). A second worker process on the same CPU did not help.
+So `--with tse` stays opt-in (off by default): on this clip it changed no count and adds 10-21 s of latency here.
 
 ## Not decided here
 

@@ -67,6 +67,13 @@ overlapped words from the extracted audio.
 - Unit tests (try-it host interpreter, numpy + websockets): 1677 run, 3 errors, the same 3 as the base commit
   (test_watch, test_streaming_semantic, test_yoloe bridge); the demo venv (15 errors) was not used.
 
+- Merged integration 72c4e93 (verify-recall, verify-vote) in 42d03ae: L4 overlapped words take the TSE decision
+  where present (`_tse_at`: from the word or the open provisional words over the span), else the per-word score ->
+  uncertain; recipe keeps `vote_asr` and `tse`/`tse_decision`; verification `consumes_optional` vote_asr and
+  `consumes_with` tse_decision. Demo-venv suite: 1687 tests, exactly the 15 known errors (sam_audio_native,
+  stereo_context, stereo_metric). Run m1 (verification + vote + tse): final 8/7, 2 uncertain, 24.16 refused = vote
+  doc's speech-aligned H1/H3; TSE changed no verdict. `tse-run.sh` now passes --allow-remote-diarization.
+
 ## Left
 
 - Nothing required. Possible next steps: the owner's clip set for thresholds/rule; a GPU worker; the Scribe close issue.
