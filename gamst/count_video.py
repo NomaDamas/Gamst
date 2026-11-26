@@ -127,7 +127,7 @@ def _steps(event, start_ms, known):
     return steps
 
 
-def hud_timeline(report, count, other=None):
+def hud_timeline(report, count, other=None, at_spoken=False):
     """What the HUD knows at each moment, from a report's ``event_states`` (None without them).
 
     One item per word: ``t`` (its end, seconds), ``steps`` ``[(at_s, state, step)]`` with ``state`` one of provisional,
@@ -137,6 +137,9 @@ def hud_timeline(report, count, other=None):
     item: shown as another voice's, then added. ``changes``: every moment a word's count or state changed after it was
     first shown, ``(at_s, delta, kind, item)`` with ``kind`` one of ``live`` (L1 counted it), ``added``, ``final``,
     ``revoked``, ``uncertain``; nothing is applied before it was decided.
+
+    ``at_spoken``: a replay for presentation, not what was known live: each word shows only its final state, at the moment
+    it was said (the video must say so; ``render`` writes a line).
     """
     capability, _, name = count.partition(':')
     stated = (report.get('event_states') or {}).get(capability)
@@ -162,6 +165,8 @@ def hud_timeline(report, count, other=None):
             steps += [(max(at, t), state, step) for at, state, step in _steps(later, start, known)]
         if not steps:
             continue
+        if at_spoken:      # presentation replay: the settled state, drawn when the word was said
+            steps = [(t, sorted(steps, key=lambda item: item[0])[-1][1], sorted(steps, key=lambda item: item[0])[-1][2])]
         items.append(dict(event, t=t, steps=sorted(steps, key=lambda item: item[0]), now=later or event))
     items.sort(key=lambda item: (item['steps'][0][0], item['t']))
     changes, number = [], 0
@@ -179,15 +184,15 @@ def hud_timeline(report, count, other=None):
             item['number'] = number
         if index == 0:
             if now:
-                changes.append((at, 1, 'heard' if state == 'heard' else 'live' if state == 'provisional'
-                                and step.get('by') in L1_BY else 'added', item))
+                changes.append((at, 1, 'live' if at_spoken else 'heard' if state == 'heard' else 'live'
+                                if state == 'provisional' and step.get('by') in L1_BY else 'added', item))
             continue
         if state == before or before == 'heard' and state == 'provisional':
             continue      # a heard word L1 committed: the same word, already counted
         kind = 'added' if now and not was else 'final' if state == 'final' else state if was else None
         if kind is not None:
             changes.append((at, int(now) - int(was), kind, item))
-    return dict(items=items, changes=changes)
+    return dict(items=items, changes=changes, presentation=at_spoken)
 
 
 COUNTED_STATES = ('heard', 'provisional', 'final')
@@ -230,10 +235,10 @@ CHANGE_COLOR = {'revoked': REC, 'uncertain': UNCERTAIN, 'added': GOOD, 'final': 
 
 
 def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
-           note='', slow=1, points=None, start=0., end=None, hold_settled=False):
+           note='', slow=1, points=None, start=0., end=None, hold_settled=False, at_spoken=False):
     import cv2
     import numpy as np
-    hud = hud_timeline(report, count, other)
+    hud = hud_timeline(report, count, other, at_spoken=at_spoken)
     counted, others = load_events(report, count), load_events(report, other)
     if hud is not None:
         counted, others = [], []
@@ -263,7 +268,7 @@ def render(report, video, out, *, title, count, other=None, support=None, count_
         last_change = max((at for item in hud['items'] for at, _, _ in item['steps']), default=0)
         hold_until = min(max(end, last_change + CHANGE_S), end + HOLD_MAX_S)
     from .voice_quality import hud_line
-    warning = hud_line(report.get('voice_quality'))     # the voice reference is not one person's voice for sure
+    warning = None if at_spoken else hud_line(report.get('voice_quality'))     # the voice reference is not one person's voice for sure
     text, trail = KoreanText(), deque(maxlen=max(2, round(.25 * fps)))
     last = None
     marks = [(event, True) for event in counted] + [(event, False) for event in others]
@@ -362,7 +367,8 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
         if since < HOLD_S * 1.5:
             _flash_border(canvas, x0, y0, view, CHANGE_COLOR[newest[2]], since, HOLD_S * 1.5)
     text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
-    text.put(canvas, '들리는 즉시(들림) · L1 확인(잠정) · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
+    text.put(canvas, '말한 순간 기준 · 최종 결과' if hud.get('presentation') else
+             '들리는 즉시(들림) · L1 확인(잠정) · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
     big = (GOOD if newest[2] == 'live' else HEARD) if live else WHITE
     dropping = [change for change in corrections if change[1] < 0 and t - change[0] < .8]
     if dropping:      # the number that was there, struck out, for a moment: then the corrected one
@@ -375,9 +381,11 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
         text.put(canvas, str(now), SIDE + 32, 196, 200, GOOD if rising else big, 'bold')
     text.put(canvas, count_label, SIDE + 32, 404, 26, GOOD, 'bold')
     tally = {name: sum(state == name for _, state in states) for name in STATE_WORD}
+    if hud.get('presentation'):      # a replay for presentation: only what was counted
+        tally = {name: n for name, n in tally.items() if name in COUNTED_STATES}
     x = SIDE + 32
     for name in ('final', 'provisional', 'heard', 'revoked', 'uncertain'):
-        if name in ('uncertain', 'heard') and not tally[name]:
+        if name not in tally or name in ('uncertain', 'heard') and not tally[name]:
             continue
         x += text.put(canvas, f"{STATE_WORD[name]} {tally[name]}", x, 438, 22, STATE_COLOR[name], 'bold') + 22
     y = 474
@@ -396,7 +404,8 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
         text.put(canvas, f'외 {len(shown) - 3}건', SIDE + 36, y, 20, MUTED)
         y += 30
     y = max(y + 8, 700) if shown else 520
-    feed = sorted((item for item, state in states if state is not None), key=lambda item: item['t'])[-max(1, (870 - y) // 44):]
+    feed = sorted((item for item, state in states if state is not None and (not hud.get('presentation') or state in COUNTED_STATES)),
+                  key=lambda item: item['t'])[-max(1, (870 - y) // 44):]
     for row, item in enumerate(reversed(feed)):
         top = y + 44 * row
         state = item_state(item, t)
@@ -494,6 +503,8 @@ def main(argv=None):
     parser.add_argument('--slow', type=int, default=1)
     parser.add_argument('--start', type=float, default=0.)
     parser.add_argument('--end', type=float)
+    parser.add_argument('--at-spoken', action='store_true',
+                        help='presentation replay: each word\'s final result drawn when it was said (not live timing; the video says so)')
     parser.add_argument('--hold-settled', action='store_true',
                         help='after the video, keep its last picture (silent) until every word has settled (at most 30 s)')
     args = vars(parser.parse_args(argv))

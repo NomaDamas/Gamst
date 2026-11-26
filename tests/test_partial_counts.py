@@ -146,6 +146,9 @@ class StatesTest(unittest.TestCase):
         self.assertEqual([item_state(hud['items'][0], t) for t in (1.8, 2., 4.1)], [None, 'heard', 'provisional'])
         self.assertEqual(len(live_events(report)), 1)
         self.assertEqual(len(heard_events(report)), 1)
+        replay = hud_timeline(report, 'speech.term_events:term.spoken', at_spoken=True)     # presentation mode
+        self.assertEqual([(at, delta, kind) for at, delta, kind, _ in replay['changes']], [(1.4, 1, 'live')])
+        self.assertEqual(item_state(replay['items'][0], 1.5), 'provisional')
 
 
 class Embedder:
