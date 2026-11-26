@@ -80,7 +80,8 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
   occurrence of the second hearing -> added, final (a `kind: "utterance"` value with `decided_by: "verification"`).
 - **Voice rule** (`VOICE`) on the word's span (the second hearing's): person speaker over `overlap_share` (0.3) and
   another one too -> overlapped: the per-word CAM++ score (1.5 s around the word) decides, below threshold it is
-  `uncertain_overlap` (not counted, said so); person dominant -> the person; another identified speaker dominant ->
+  `uncertain_overlap` (not counted, said so); with `--with tse` the TSE lane's decision on the extracted voice
+  replaces that per-word score for such a word ([realtime-tse.md](realtime-tse.md)); person dominant -> the person; another identified speaker dominant ->
   `other_speaker`; no speaker or an unidentified one -> the per-word score (`no_speaker`, `speaker_unidentified`).
   `active_share` 0.1: a speaker over less of the word is not active there.
 - Outputs (`speech.word_verdicts`): `verdicts` (every provisional word: `match`, `provisional`, `changed`, `basis`,

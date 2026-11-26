@@ -22,8 +22,9 @@ never change a word after it was settled. For each stretch it has:
   an occurrence only the second recogniser heard is added, final;
 - **the voice rule** (:data:`VOICE`) for each word that stays: the person's speaker active over the word and no other
   speaker over ``overlap_share`` of it -> the person; another speaker dominant -> another voice; both over
-  ``overlap_share`` (overlapped speech) -> the per-word voice score decides, and below ``threshold`` the word is
-  ``uncertain_overlap``: not counted, and said so. With no speaker active, or an unidentified one, the per-word score
+  ``overlap_share`` (overlapped speech) -> the TSE lane's decision where the word carries one
+  (:mod:`gamst.providers.overlap_tse`: the person's voice extracted from the mixture, heard and scored), else the
+  per-word voice score decides, and below ``threshold`` the word is ``uncertain_overlap``: not counted, and said so. With no speaker active, or an unidentified one, the per-word score
   decides.
 
 Outputs (capability ``speech.word_verdicts``): ``kind: "verdicts"`` (``[{word_id, match, provisional, changed, basis,
@@ -407,8 +408,11 @@ class WordVerification:
                 self._scores.pop(next(iter(self._scores)))
         return self._scores[key]
 
-    async def _voice_of(self, window, start, end):
-        """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window."""
+    async def _voice_of(self, window, start, end, words=()):
+        """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window.
+
+        ``words``: the provisional words there; where they carry the TSE lane's decision (``tse``,
+        :mod:`gamst.providers.overlap_tse`), that decides an overlapped word instead of the score on the mixture."""
         shares = _share(window['turns'], start, end)
         active = {speaker: share for speaker, share in shares.items() if share >= self.voice['active_share']}
         person = max((share for speaker, share in active.items() if speaker in window['person']), default=0.)
@@ -417,6 +421,12 @@ class WordVerification:
         scores = {item['speaker']: item['score'] for item in window['speakers']}
         limit = self.voice['overlap_share']
         if person >= limit and other >= limit:
+            tse = next((word['tse'] for word in words if isinstance(word.get('tse'), dict)), None)
+            if tse is not None:
+                decision = tse.get('decision')
+                reason = None if decision == 'person' else 'other_speaker' if decision == 'other' else 'uncertain_overlap'
+                return decision == 'person', f'overlap_tse_{decision}', reason, dominant, scores.get(dominant), \
+                    tse.get('score')
             score = await self._word_score(start, end)
             matched = score is not None and score >= self.voice['threshold']
             return matched, 'overlap_voice_score', None if matched else 'uncertain_overlap', dominant, \
@@ -489,7 +499,7 @@ class WordVerification:
                 heard = second[pairs[index]]
                 self._used.add(heard['key'])
                 match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                    window, heard['start_ms'], heard['end_ms'])
+                    window, heard['start_ms'], heard['end_ms'], [self._open[key] for key in item['word_ids']])
                 basis = 'heard_twice+' + basis
             else:
                 speech = self._speech_near(window, item['start_ms'], item['end_ms'])
@@ -499,7 +509,7 @@ class WordVerification:
                     match, basis, speaker, speaker_score, score = False, reason, None, None, None
                 else:
                     match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                        window, item['start_ms'], item['end_ms'])
+                        window, item['start_ms'], item['end_ms'], [self._open[key] for key in item['word_ids']])
                     basis = 'heard_once+' + basis
             for word_id in item['word_ids']:
                 verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score,
@@ -508,7 +518,8 @@ class WordVerification:
         for word_id, word in list(self._open.items()):     # the other words: by the voice alone
             if word_id in words_done or not (low <= word['end_ms'] < high):
                 continue
-            match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, word['start_ms'], word['end_ms'])
+            match, basis, reason, speaker, speaker_score, score = await self._voice_of(
+                window, word['start_ms'], word['end_ms'], [word])
             verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score, heard=None))
         if verdicts:
             self.stats['verdicts'] += len(verdicts)

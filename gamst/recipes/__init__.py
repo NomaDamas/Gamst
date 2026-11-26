@@ -93,7 +93,8 @@ def choose(recipe, include=(), exclude=()):
 
     A module may name what it reads when an optional one is absent (``consumes_without``), what it reads
     only while an optional one is present (``consumes_optional``), what it reads instead while an optional one is
-    present (``consumes_with``), and a reference or record what it is for (``for``); both follow the choice. An
+    present (``consumes_with``; a key ``"a+b"`` while all of them are present, applied after single keys in the order
+    given), and a reference or record what it is for (``for``); both follow the choice. An
     optional module that does the work of others (``replaces``) leaves them out while it runs, unless they are
     asked for by name too.
     """
@@ -122,7 +123,8 @@ def choose(recipe, include=(), exclude=()):
             continue
         for name in [name for name in item.get('consumes_without', {}) if name in absent]:
             item = dict(item, consumes=item['consumes_without'][name])
-        for name in [name for name in item.get('consumes_with', {}) if name in optional and name not in absent]:
+        for name in [name for name in item.get('consumes_with', {})     # "a+b": while all of them are present
+                     if all(part in optional and part not in absent for part in name.split('+'))]:
             item = dict(item, consumes=item['consumes_with'][name])
         if item.get('consumes_optional'):    # read only while the optional module that gives it is in the run
             present = [source for source in item['consumes_optional'] if not any(

@@ -40,6 +40,22 @@ async def speaker_embedder(options, context):
     return cache[key]
 
 
+def _verified(name, modules):
+    """A verification lane reads ``name``'s words, directly or through modules that pass them on (the TSE decision)."""
+    readers = {item['name']: [source.split(':', 1)[0] for source in item.get('consumes', ())] for item in modules}
+    seen, todo = set(), [name]
+    while todo:
+        current = todo.pop()
+        for item in modules:
+            if current in readers[item['name']] and item['name'] not in seen:
+                if item.get('use') == 'word-verify':
+                    return True
+                if item.get('use') == 'tse-decide':
+                    seen.add(item['name'])
+                    todo.append(item['name'])
+    return False
+
+
 async def _speaker_verify(options, context):
     from ..providers.speaker_verify import SpeakerVerify
     arguments = {name: options[name] for name in ('hysteresis', 'segment_ms', 'hop_ms', 'min_dbfs',
@@ -52,9 +68,7 @@ async def _speaker_verify(options, context):
     if options.get('turns') and any(item.split(':', 1)[0] == options['turns'] for item in consumes):
         arguments['turns'] = True
     threshold = context.get('speaker_threshold')
-    if any(item.get('use') == 'word-verify' and options.get('name') in [source.split(':', 1)[0] for source in
-                                                                        item.get('consumes', ())]
-           for item in context.get('modules') or ()):
+    if _verified(options.get('name'), context.get('modules') or ()):
         # A verification lane settles these words later: each is counted at once as provisional, and the late words
         # of a catch-up worker are scored on the input's kept audio.
         arguments['provisional'] = True
@@ -109,6 +123,44 @@ async def _word_verify(options, context):
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
                                   is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
                               **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
+    return dict(module=module, spec=module.spec)
+
+
+async def _tse_words(options, context):
+    """The TSE lane (:mod:`gamst.providers.overlap_tse`): where the live diarization's slots say voices meet, the enrolled
+    person's voice is extracted (``audio.target_speech``, default PS4), heard by a fork of the live recogniser and scored.
+    ``"workers"``: extraction workers for catch-up (each its own model process)."""
+    from ..providers.overlap_tse import TargetSpeechWords
+    entry = _entry(options, context, 'target_speech.local')
+    if entry[0].get('backend') not in ('ps4', 'wesep', 'usef'):
+        raise SystemExit(f"{options.get('name')}: the TSE lane needs an enrollment-conditioned extractor (ps4, wesep, usef)")
+    consumes = options.get('consumes') or ()
+    audio = next((source for source in consumes if source in (context.get('inputs') or {})), None)
+    if audio is None:
+        raise SystemExit(f"{options.get('name')}: the TSE lane reads the audio input and the speaker slots")
+    workers = int(options.get('workers', 1))
+
+    async def open_extractor():
+        return await _open('RemoteExtractor', entry)
+
+    module = TargetSpeechWords(await open_extractor(), await speaker_embedder(dict(name=options.get('name'), use='speaker-verify'),
+                                                                     context),
+                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
+                               audio=audio, asr=options.get('asr', 'asr'), detect=options.get('detect'),
+                               window=options.get('window'), rule=dict(
+                                   {'threshold': float(context['speaker_threshold'])}
+                                   if context.get('speaker_threshold') is not None else {}, **(options.get('rule') or {})),
+                               workers=workers, open_extractor=open_extractor if workers > 1 else None)
+    return dict(module=module, spec=module.spec)
+
+
+async def _tse_decide(options, context):
+    """The words of ``speaker_check`` inside a TSE stretch, decided from the extracted voice (math, no model)."""
+    from ..providers.overlap_tse import TSEDecision
+    module = TSEDecision(tse=options.get('tse', 'tse'), reference=options.get('reference', 'voice'),
+                         terms=options.get('terms', 'terms'), rule=dict(
+                             {'threshold': float(context['speaker_threshold'])}
+                             if context.get('speaker_threshold') is not None else {}, **(options.get('rule') or {})))
     return dict(module=module, spec=module.spec)
 
 
@@ -746,6 +798,9 @@ def parts(Part):
         'speaker-slots': Part('module', role='audio.diarization', candidate='nemotron3', build=_speaker_slots),
         'speaker-tracks': Part('module', **speech, build=_speaker_tracks),
         'track-verify': Part('module', build=_track_verify),
+        'tse-words': Part('module', role='audio.target_speech', candidate='ps4.bsrnn_real', build=_tse_words,
+                          extra_roles=(('speaker', 'audio.speaker_verify', 'sherpa.campplus_zh_en'),)),
+        'tse-decide': Part('module', build=_tse_decide),
         'word-verify': Part('module', **speech, build=_word_verify,
                             extra_roles=(('aligner', 'audio.word_alignment', 'qwen3.forced_aligner_0_6b'),)),
         'transcript-replay': Part('module', build=_transcript_replay, transcribes=True),
