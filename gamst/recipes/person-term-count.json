@@ -206,6 +206,7 @@
       "candidate": "speechmatics.enhanced.hosted",
       "language": "ko",
       "bias": "terms",
+      "capability_id": "speech.vote_words",
       "consumes": [
         "microphone"
       ],

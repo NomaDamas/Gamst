@@ -457,7 +457,9 @@ async def _stream_words(options, context):
         if chosen.manual_commit:
             endpointer = Endpointer(**{key: float(options[key]) for key in ENDPOINT_KEYS if key in options})
         module = StreamingWords(chosen, aligner=aligner, language=language, partials=bool(options.get('partials')),
-                                endpointer=endpointer)
+                                endpointer=endpointer,
+                                # a second recogniser of the run (a voter) commits under a capability of its own
+                                **({'capability_id': options['capability_id']} if options.get('capability_id') else {}))
         return dict(module=module, spec=module.spec)
     config, python, profile = _entry(options, context, 'streaming.asr.words')
     config = dict(config, language=language, partials=bool(options.get('partials')))
