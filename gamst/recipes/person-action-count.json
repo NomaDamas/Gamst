@@ -29,6 +29,12 @@
       "kind": "person",
       "label": "the enrolled person",
       "for": "target_person"
+    },
+    {
+      "name": "verify_exemplar",
+      "kind": "exemplar",
+      "label": "the movement as the verification lane's pose model sees it (default: the exemplar)",
+      "for": "verify_exemplar"
     }
   ],
   "modules": [
@@ -44,7 +50,8 @@
       "joints": "pose_joints",
       "emits": [
         "pose_joints"
-      ]
+      ],
+      "sample": "newest"
     },
     {
       "name": "target_person",
@@ -95,6 +102,76 @@
       "max_reps_s": 2,
       "consumes": [
         "pose_channels"
+      ]
+    },
+    {
+      "name": "verify_pose",
+      "use": "rtmw-pose",
+      "candidate": "rtmw.l_384x288",
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "verification"
+      ],
+      "verifies": "pose",
+      "backlog": "spill",
+      "max_poses": 4,
+      "tracker": "ocsort",
+      "consumes": [
+        "camera"
+      ],
+      "joints": "verify_joints",
+      "emits": [
+        "verify_joints"
+      ],
+      "det_every_ms": 500
+    },
+    {
+      "name": "verify_channels",
+      "use": "pose-channels",
+      "source": "rtmw",
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "verification"
+      ],
+      "consumes": [
+        "verify_joints"
+      ],
+      "capability_id": "vision.pose_channels.verification"
+    },
+    {
+      "name": "verify_exemplar",
+      "use": "exemplar",
+      "source": "rtmw",
+      "reference": "verify_exemplar",
+      "capability_id": "temporal.exemplar_events.verification",
+      "mode": "hold",
+      "max_reps_s": 2,
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "verification"
+      ],
+      "consumes": [
+        "verify_channels",
+        "verify_joints"
+      ]
+    },
+    {
+      "name": "verification",
+      "use": "count-verify",
+      "verifies": "exemplar",
+      "verifier": "verify_exemplar",
+      "near_ms": 150,
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "verification"
+      ],
+      "consumes": [
+        "exemplar",
+        "verify_exemplar"
       ]
     },
     {

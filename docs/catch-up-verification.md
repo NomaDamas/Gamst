@@ -171,3 +171,39 @@ counted 7 more right words and 3 wrong ones (24.16) over the three runs: the own
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
+
+## Video: a live lane that samples, a verification lane over every frame (2026-11-27)
+
+The same design for a movement counter (`person-action-count --with verification`). Measured on the owner's shotgun clip:
+[testbed-2026-11-26.md](measurements/testbed-2026-11-26.md), "Real time".
+
+```text
+camera ─┬─▶ L1 pose (MediaPipe, sample="newest") ── exemplar: counts at once, provisional ──┐
+        │        busy: only the newest frame waits; the others are skipped by choice        │
+        │                                                                                    ▼
+        └─▶ video memory ─▶ verify_pose (RTMW, backlog="spill", every frame, behind) ─▶ verify_exemplar ─▶ verification
+             (256 MB in memory, then an unnamed spill file, 8 GB bound)          final / revoked / uncertain / added
+```
+
+- `add_module(..., sample="newest")` (recipe item `"sample"`): the lane holds one waiting frame; while the module is busy a
+  newer frame replaces it. Skipped frames are `status()['modules'][name]['sampled']['skipped']` (`choice: "newest"`), never a
+  gap, so the count stays `complete`. Rates in rules use capture times (`movement_rule.RATE_MS`), so fewer frames per second
+  give the same units. The person-action-count recipe's `pose` item samples by default; a recording that is not paced
+  still gets every frame.
+- `add_module(..., backlog="spill")` (recipe item `"backlog"`): the lane never thins or gives up frames. Its waiting video
+  frames live in `Pipeline.video_memory()` (`gamst/providers/video_memory.py`): the camera's arrays up to `memory_bytes`, the
+  rest in an unnamed temporary file, read back when the lane gets there; the file starts over whenever nothing is spilled.
+  Only beyond `disk_bytes` is a frame not kept, and that is declared (`backlog` gap). `status()['video_memory']` has the
+  peaks. A lane that is slower than the camera on average grows this backlog without end; the bound is what stops it.
+- `--realtime` (a recording at its own pace) waits for neither kind of lane while frames arrive, as a camera would not.
+- `verification` (`gamst/providers/count_verification.py`, part `count-verify`): reads the live counter (`verifies`) and the
+  verification counter (`verifier`) in capture order. Once the verifier has seen `near_ms` (150) past a live count it commits,
+  under the live counter's capability, `final` (the verifier counted it too, ends within `near_ms`, one to one),
+  `revoked` (`not_seen_by_verifier`: it had the person and did not count), `uncertain` (`verifier_saw_no_pose`), or adds a
+  `final` count of its own (`decided_by: "verification"`). The live counter commits every count as `provisional` with an
+  `event_id` when a `count-verify` item verifies it.
+- The verifier's movement: `--verify-exemplar FILE` (enrolled with `--pose` of the verifier's model), default `--exemplar`. A
+  text rule needs no second file.
+- `--pose CANDIDATE` replaces the live pose model (and how its joints are read); `--set MODULE.KEY=VALUE` changes one item
+  setting (`pose.delegate=gpu`, `verify_pose.det_every_ms=0`, `verify_pose.device=cpu`). The verifier's model is set up
+  beside the role's default under the profile's `"candidates"`.

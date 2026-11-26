@@ -133,7 +133,7 @@ LOADERS = {
     'silero.activity': 'vad', 'qwen3.forced_aligner': 'asr_words', 'speaker.embedding': 'speaker_verify',
     'face.embedding': 'person_match', 'body.embedding': 'person_match', 'target_speech.local': 'target_speech',
     'pixit.sources': 'pixit', 'sepformer.sources': 'sepformer',
-    'sapiens2.pose': 'sapiens2_pose', 'active_speaker.lightasd': 'active_speaker', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
+    'sapiens2.pose': 'sapiens2_pose', 'rtmw.pose': 'rtmw_pose', 'active_speaker.lightasd': 'active_speaker', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None, 'faster_whisper.large_v3_turbo': None,
     'qwen3.asr.words': 'qwen_words', 'hosted.asr.words': None,   # a hosted API loads no package
     'sortformer.diarization': 'sortformer', 'pyannoteai.live.diarization': None, 'pyannoteai.offline.diarization': None,

@@ -94,6 +94,10 @@ class MediaPipeBodyContext:
         """(public geometry, joint rows) for the module that owns this worker (``gamst.private_payload``)."""
         return self._infer(frame)
 
+    def _image(self, data):
+        """The MediaPipe image of a BGR frame (a GPU delegate replaces this with a 4-channel one)."""
+        return self.image_api.Image(image_format=self.image_api.ImageFormat.SRGB,data=data[:,:,::-1].copy())
+
     def _infer(self, frame):
         if self.closed: raise RuntimeError('body provider is closed')
         try:
@@ -106,7 +110,7 @@ class MediaPipeBodyContext:
                 not 1<=data.shape[1]<=3840 or data.shape[0]*data.shape[1]>1920*1080):
             raise ValueError('supply a uint8 BGR image, at most 1920*1080 pixels and 3840x2160 dimensions')
         height,width=data.shape[:2]
-        image=self.image_api.Image(image_format=self.image_api.ImageFormat.SRGB,data=data[:,:,::-1].copy())
+        image=self._image(data)
         result=self.detector.detect(image)
         raw=result.pose_landmarks
         if not isinstance(raw,(list,tuple)) or len(raw)>self.max_poses:

@@ -23,6 +23,7 @@ profile                    worker (real model)                                  
 ``streaming.asr.words``     a local streaming recogniser (sherpa-onnx, Voxtral)  ``RemoteStreamingWords``
 ``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
+``rtmw.pose``              RTMW whole-body + YOLOX (rtmlib ONNX)                ``RemoteRTMW``
 =========================  ==================================================  ====================
 
 ``active_speaker.lightasd`` (Light-ASD: face crops and sound -> speaking logits) answers ``RemoteActiveSpeaker``.
@@ -58,6 +59,8 @@ FIELDS = {
     'faster_whisper.align': ('audio', (OutputField('items', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
+    'rtmw.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
+                            OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
@@ -69,7 +72,7 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'qwen3.asr.words': 'qwen3-asr',
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'rtmw.pose': 'rtmw', 'qwen3.asr.words': 'qwen3-asr',
             'hosted.asr.words': 'hosted-asr', 'active_speaker.lightasd': 'lightasd', 'pixit.sources': 'pyannote-pixit',
             'sepformer.sources': 'sepformer', 'faster_whisper.align': 'whisper-align',
             'streaming.asr.words': config.get('backend')}.get(profile) or {
@@ -84,6 +87,9 @@ def capability(profile, config):
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
     if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
         raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
+    if profile == 'rtmw.pose':
+        from .rtmw_pose import check_config as check_rtmw
+        check_rtmw(config)
     if profile == 'active_speaker.lightasd':
         from .active_speaker import check_weights
         check_weights(config.get('sha256'), config.get('allow_noncommercial', False))
@@ -225,6 +231,32 @@ class _Pose(_Worker):
                     image_width=int(width), image_height=int(height)), joints
 
 
+class _RTMW(_Worker):
+    """One frame (``request["timestamp_ms"]``: its capture time, for the detection interval) -> boxes and joints."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def query(self, frame, request):
+        np = _numpy()
+        height, width = frame.data.shape[:2]
+        boxes, keypoints, scores = self.models.infer(frame.data, (request or {}).get('timestamp_ms'))
+        joints = np.zeros((len(boxes), keypoints.shape[1] if len(boxes) else 133, 3), dtype='<f4')
+        if len(boxes):
+            joints[..., 0], joints[..., 1] = keypoints[..., 0] / width, keypoints[..., 1] / height
+            joints[..., 2] = np.clip(scores, 0., 1.)
+        public = []
+        for box in boxes:
+            box = [float(value) for value in box]
+            x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
+            x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
+            public.append(dict(bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0) if x1 > x0 and y1 > y0 else None))
+        return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height)), joints
+
+    def reset(self):
+        self.models.reset()
+
+
 class _ActiveSpeaker(_Worker):
     """One window of one face: ``frame.data`` is ``active_speaker.pack_window``, the request says how many frames."""
 
@@ -304,6 +336,9 @@ def load(profile, config):
         from .whisper_phrases import PhraseWorker, Phrases
         phrases = config.pop('phrases', None) or {}
         return _Whisper(PhraseWorker(Phrases(load_decoder(config), **phrases)))
+    if profile == 'rtmw.pose':
+        from .rtmw_pose import RTMWModels
+        return _RTMW(RTMWModels(**config))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))
@@ -466,6 +501,25 @@ class RemotePose(_Client):
                      image_width=result['image_width'], image_height=result['image_height'],
                      landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
                 for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
+
+
+class RemoteRTMW(_Client):
+    """Async stand-in for :class:`gamst.providers.rtmw_pose.RTMWModels`; tracking stays in this process."""
+
+    async def infer(self, image, timestamp_ms):
+        from ..crew.modules import bounded_image
+        from ..private_payload import CONTRACTS, landmarks
+        result, private = await self.worker.query(self._frame(bounded_image(image), 'video', timestamp_ms=timestamp_ms),
+                                                  {'timestamp_ms': int(timestamp_ms)})
+        columns = CONTRACTS['rtmw.pose'].columns
+        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='coco_wholebody133', track_id=None,
+                     association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
+                     image_width=result['image_width'], image_height=result['image_height'],
+                     landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
+                for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
+
+    async def reset(self):
+        await self.worker.reset()
 
 
 class RemoteActiveSpeaker(_Client):

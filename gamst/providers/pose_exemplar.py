@@ -132,10 +132,12 @@ class PoseChannels:
     ``image_aspect``.
     """
 
-    def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5):
+    def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5,
+                 capability_id='vision.pose_channels'):
+        """``capability_id``: another one for a second pose model's channels in the same run (a verification lane)."""
         self.mapping, self.min_visibility = mapping, min_visibility
         self.spec = CapabilitySpec(
-            'vision.pose_channels', 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
+            capability_id, 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
             (OutputField('channels', 'array'), OutputField('mask', 'array'), OutputField('visible', 'integer'),
              OutputField('pose_index', 'integer', required=False),
              OutputField('image_aspect', 'number', unit='width/height', required=False)),
@@ -195,9 +197,12 @@ class ExemplarEvents:
 
     def __init__(self, *, reference='exemplar', mode=None, enter=.12, exit=.18, min_hold_ms=200,
                  refractory_ms=None, max_gap_ms=1000, modality='video', capability_id='temporal.exemplar_events',
-                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5, contract=None, speaker_bound=True):
+                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5, contract=None, speaker_bound=True,
+                 provisional=False):
         """``contract``: what a sensor's channels are; a movement learned from others is refused.
-        ``speaker_bound=False``: the sound is not tied to an enrolled voice; every event says so."""
+        ``speaker_bound=False``: the sound is not tied to an enrolled voice; every event says so.
+        ``provisional``: a later lane settles each count (:mod:`gamst.providers.count_verification`): every
+        ``exemplar.matched`` is committed as ``state: "provisional"`` with an ``event_id``."""
         if mode not in (None, 'hold', 'sequence'):
             raise ValueError("mode must be 'hold' or 'sequence'")
         if not 0 < enter <= exit:
@@ -207,7 +212,7 @@ class ExemplarEvents:
         self.fixed_thresholds = fixed_thresholds     # the caller's enter / exit win over the reference's
         self.refractory_ms, self.max_gap_ms = refractory_ms, max_gap_ms
         self.contract, self.speaker_bound = contract, bool(speaker_bound)
-        self.mapping, self.min_visibility = mapping, min_visibility
+        self.mapping, self.min_visibility, self.provisional = mapping, min_visibility, bool(provisional)
         self.label, self.scorer, self.rule, self.info = reference, None, None, {}
         self.identity, self.from_ms, self._methods, self._next = {}, 0, [], []
         self._defaults = dict(enter=enter, exit=exit)
@@ -239,7 +244,7 @@ class ExemplarEvents:
                            refractory_ms=self.refractory_ms, max_gap_ms=self.max_gap_ms, modality=self.spec.modality,
                            capability_id=self.spec.id, fixed_thresholds=self.fixed_thresholds, mapping=self.mapping,
                            min_visibility=self.min_visibility, contract=self.contract, speaker_bound=self.speaker_bound,
-                           **self._defaults)
+                           provisional=self.provisional, **self._defaults)
         ready.set_exemplar(reference['value'])
         ready.label = reference['label']
         ready.identity = {f'reference_{key}': reference[key] for key in ('id', 'revision') if reference.get(key) is not None}
@@ -432,6 +437,8 @@ class ExemplarEvents:
         self._inside, self._started_ms, self._last_match_ms = True, start, ts
         self._best, self._end_ms, self._method = current, ts, self._methods[index or 0]
         extra = {} if index is None else dict(example=index)
+        if self.provisional:
+            extra.update(state='provisional', event_id=f'{self.spec.id}:{start}:{ts}:{self._count}')
         return self._event('exemplar.matched', start_ms=start, end_ms=ts, distance=round(current, 5), **extra)
 
     def _hold(self, ts, current, index, start, rival, events):

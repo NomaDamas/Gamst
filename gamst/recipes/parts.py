@@ -103,7 +103,8 @@ async def _mediapipe_pose(options, context):
     worker = await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
                                        entry['provider_profile'],
                                        dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
-                                            allow_skips=True))
+                                            allow_skips=True,
+                                            **({'delegate': options['delegate']} if options.get('delegate') else {})))
     # allow_skips: a frame lost on a loaded machine must not rebuild the detector (docs/landmarker-video.md).
     return dict(module=PoseWorkerPlugin(worker, joints=options.get('joints'),
                                         tracker=options.get('tracker', 'iou')))
@@ -119,6 +120,9 @@ async def _mediapipe_graph(options, context):
 
 def _pose_source(options):
     """How to read the joints of the item's pose model (``"source"``; default MediaPipe Pose)."""
+    if options.get('source') == 'rtmw':
+        from ..providers.rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return dict(mapping=COCO_WHOLEBODY_BODY, min_visibility=MIN_VISIBILITY)
     if options.get('source') != 'sapiens2':
         return {}
     from ..providers.sapiens2_pose import GOLIATH_BODY
@@ -127,7 +131,8 @@ def _pose_source(options):
 
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
-    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **_pose_source(options))
+    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **_pose_source(options),
+                          capability_id=options.get('capability_id', 'vision.pose_channels'))
     return dict(module=module, spec=module.spec)
 
 
@@ -191,8 +196,27 @@ async def _exemplar(options, context):
                             modality=modality, contract=None if sensor is None else sensor.contract,
                             speaker_bound=modality != 'audio' or speaker_bound(context['modules'], options['name']),
                             capability_id=options.get('capability_id', 'temporal.exemplar_events'),
+                            provisional=any(item.get('use') == 'count-verify' and item.get('verifies') == options['name']
+                                            for item in context.get('modules') or ()),
                             **_pose_source(options))
     return dict(module=module, spec=module.spec)
+
+
+async def _count_verify(options, context):
+    """Settles the counts of the module it ``verifies`` by a verification counter (``verifier``), see
+    :mod:`gamst.providers.count_verification`; commits under the verified module's capability."""
+    from ..providers.count_verification import CountVerification
+    from ..providers.pose_exemplar import ExemplarEvents
+    items = {item['name']: item for item in context.get('modules') or ()}
+    live, verifier = options.get('verifies'), options.get('verifier')
+    if live not in items or verifier not in items:
+        raise SystemExit(f"{options['name']}: \"verifies\" and \"verifier\" name two counters of the recipe")
+    counted = items[live]
+    spec = ExemplarEvents(capability_id=counted.get('capability_id', 'temporal.exemplar_events'),
+                          modality=counted.get('modality', 'video')).spec    # the same contract: its revisions
+    module = CountVerification(spec, live=live, verifier=verifier, event=options.get('event', 'exemplar.matched'),
+                               near_ms=int(options.get('near_ms', 150)))
+    return dict(module=module, spec=spec)
 
 
 async def _terms(options, context):
@@ -342,6 +366,7 @@ PARTS = {
     'pose-channels': Part('module', build=_pose_channels),
     'repetition': Part('module', build=_repetition, sampling=movement_sampling),
     'exemplar': Part('module', build=_exemplar, sampling=movement_sampling),
+    'count-verify': Part('module', build=_count_verify),
     'terms': Part('module', build=_terms),
     # views
     'count': Part('view'),

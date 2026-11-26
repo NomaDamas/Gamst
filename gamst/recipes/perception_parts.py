@@ -648,6 +648,17 @@ async def _sapiens2_pose(options, context):
                                           tracker=options.get('tracker', 'ocsort')))
 
 
+async def _rtmw_pose(options, context):
+    """RTMW whole-body pose (rtmlib ONNX) in its own environment; joints on the derived ``joints`` input."""
+    from ..providers.rtmw_pose import RTMWPosePlugin
+    config, python, profile = _entry(options, context, 'rtmw.pose')
+    for key in ('device', 'compute_units', 'det_every_ms', 'max_poses'):   # the item's own settings win
+        if key in options:
+            config[key] = options[key]
+    remote = await _open('RemoteRTMW', (config, python, profile))
+    return dict(module=RTMWPosePlugin(remote, joints=options.get('joints'), tracker=options.get('tracker', 'ocsort')))
+
+
 TRANSCRIPTS = ('speech.transcript_words', 'speech.transcript_update')    # signal names of utterances
 CONTEXT = ('transcript', 'counts')
 
@@ -868,6 +879,7 @@ def parts(Part):
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
         'sapiens2-pose': Part('module', role='vision.pose', candidate='sapiens2.1b', build=_sapiens2_pose),
+        'rtmw-pose': Part('module', role='vision.pose', candidate='rtmw.l_384x288', build=_rtmw_pose),
         'active-speaker': Part('module', role='vision.active_speaker', candidate='lightasd.ava', build=_active_speaker),
         'face-points': Part('module', role='vision.face', candidate='mediapipe.face'),        # a stage of active-speaker
         'face-identity': Part('module', role='vision.face_identity', candidate='lvface.b'),   # a stage of active-speaker

@@ -102,6 +102,9 @@ INSTRUCTIONS = CapabilitySpec('pipeline.instructions', 'pipeline.instructions', 
 INSTRUCTABLE = ('terms', 'exemplar')     # reference kinds that may change while a run goes on; the others identify a person
 BACKLOG = 900                            # frames a lane holds (30 s of 30 fps video) ...
 BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline hold together
+SPILL_FRAMES = 1_000_000                 # frames a ``backlog="spill"`` lane may hold (bounded by its video memory)
+SAMPLES = ('newest',)                    # ``sample``: how a lane that is busy takes frames (declared, not lost)
+BACKLOGS = ('spill',)                    # ``backlog``: how a lane keeps the frames it has not processed
 MAX_OFFSET_MS = 600_000                  # an input's declared clock correction
 LOG = 512                                # gap intervals and timings kept per module
 GAP_RECORD_S = 1.                        # at most one gap record per place and second; merged in between
@@ -131,6 +134,7 @@ class _Item:
     gap: bool = False    # frames were lost just before this one
     thinned: int = 0     # how often the frame next to it was given up (2 ** thinned: it stands for that many)
     source: str | None = None    # the input (or module) the frame is of
+    kept: Any = None     # in the video memory (a ``backlog="spill"`` lane): the frame's data is there until it runs
 
 
 @dataclass
@@ -195,6 +199,8 @@ class Pipeline:
         self._gap_sequence = 0
         self._pausable: dict[str, bool] = {}
         self.memories: dict[str, Any] = {}   # input id -> AudioMemory: audio kept for catch-up and verification
+        self._video_memory = None            # VideoMemory of the ``backlog="spill"`` lanes (created by the first one)
+        self._keeping_up = False             # a recording replayed at its pace: sampling and spilling lanes are not waited for
         human.pipeline = self
 
     # ------------------------------------------------------------------ composition
@@ -349,7 +355,7 @@ class Pipeline:
         return dict(change, record_id=record['id'], effective_from_ms=reference['from_ms'])
 
     def add_module(self, name, module, *, consumes, spec=None, enabled=True, every_ms=None, emits=(), queue=None,
-                   optional=False, catch_up=None, slowdown=None):
+                   optional=False, catch_up=None, slowdown=None, sample=None, backlog=None):
         """``queue``: None (inline, or in the lane of the module it reads), a lane of N frames, or 'auto'.
 
         ``every_ms`` declares sampling (else every frame is processed). ``optional`` allows pausing the
@@ -360,6 +366,14 @@ class Pipeline:
         ``backlog`` gap instead), or a dict of :data:`CATCH_UP` keys. ``slowdown`` (a test and debug option):
         ``{"ms": N, "spans_s": [[from, to], ...]}`` sleeps N ms before each frame captured in those seconds of the run,
         so a live lane falls behind on purpose.
+
+        ``sample="newest"``: the module gets a lane of its own that, while it is busy, keeps only the newest frame;
+        the frames it does not take are a declared choice (``status()['modules'][name]['sampled']['skipped']``), not
+        lost, and the frames it takes are spread evenly over time. Its modules see real capture times, so rates stay
+        right at the lower frame rate. ``backlog="spill"``: a lane of its own that never gives a frame up: waiting
+        video frames are kept in the Pipeline's :class:`gamst.providers.video_memory.VideoMemory` (memory, then a
+        spill file), so a slower module behind a live input (a verification lane) still processes every frame. A
+        recording replayed at its own pace (``--realtime``) does not wait for either kind of lane.
         """
         identifier(name, 'module name')
         if queue not in (None, 'auto') and (type(queue) is not int or not 1 <= queue <= 10000):
@@ -373,6 +387,10 @@ class Pipeline:
         consumes = [consumes] if isinstance(consumes, str) else list(consumes)
         if not consumes:
             raise ValueError('a module consumes at least one input or module')
+        if sample not in (None, *SAMPLES) or backlog not in (None, *BACKLOGS):
+            raise ValueError(f'sample is None or one of {SAMPLES}; backlog is None or one of {BACKLOGS}')
+        if sample and backlog:
+            raise ValueError('a lane either samples the newest frame or keeps every frame, not both')
         width = int(getattr(module, 'replicas', 1))
         if width > 1 and (spec is None or spec.stateful):
             raise ValueError(f'{name!r} cannot run in replicas: only a module whose spec is stateless may')
@@ -390,9 +408,11 @@ class Pipeline:
         reference = self.references.get(getattr(module, 'reference_name', None), {})
         if queue == 'auto' or queue is None and width > 1:
             queue = None if width == 1 and not getattr(module, 'owns_process', False) else 1 if every_ms else BACKLOG
+        if sample or backlog:
+            queue = 1 if sample else SPILL_FRAMES
         if queue is not None:
-            lane = dict(name=name, sampled=bool(every_ms), frames=deque(), busy=[], capacity=queue, task=None,
-                        dropped=0, lost=False, width=width, max_backlog_ms=0)
+            lane = dict(name=name, sampled=bool(every_ms) or bool(sample), frames=deque(), busy=[], capacity=queue,
+                        task=None, dropped=0, lost=False, width=width, max_backlog_ms=0, sample=sample, backlog=backlog)
             self._lanes.append(lane)
         else:
             lane = self._upstream_lane(links)
@@ -823,6 +843,19 @@ class Pipeline:
     def _enqueue(self, lane, item):
         if item.media and lane['lost']:
             item.gap, lane['lost'] = True, False
+        if lane.get('backlog') == 'spill' and item.media and item.frame.modality == 'video' and item.frame.data is not None:
+            item.kept = self.video_memory().keep(item.frame.data)
+            if item.kept is None:      # beyond the memory's disk bound: declared, as a frame the lane could not take
+                lane['lost'] = True
+                lane['dropped'] += 1
+                frame = item.frame
+                self._gap(lane['name'], list(item.names), frame.timestamp_ms, frame.timestamp_ms, 1, 'backlog',
+                          subject_id=frame.subject_id, extend=True)
+                return
+            item.frame = replace(item.frame, data=None)
+            lane['frames'].append(item)
+            self._start(lane)
+            return
         data = id(item.frame.data)
         if data not in self._held:
             self._held[data] = [0, _size(item.frame)]
@@ -832,6 +865,8 @@ class Pipeline:
         if not self._paced:
             if not lane['sampled']:
                 self._relieve()
+            self._fit(lane)
+        elif self._keeping_up and lane.get('sample'):
             self._fit(lane)
         self._start(lane)
 
@@ -898,7 +933,19 @@ class Pipeline:
         if lane['frames'] and (lane['task'] is None or lane['task'].done()) and not self._closed:
             lane['task'] = asyncio.create_task(self._drain_lane(lane))
 
+    def video_memory(self, **options):
+        """The memory that keeps the waiting frames of ``backlog="spill"`` lanes (created on first use)."""
+        if self._video_memory is None:
+            from .providers.video_memory import VideoMemory
+            self._video_memory = VideoMemory(**options)
+        return self._video_memory
+
     def _release(self, item):
+        if item.kept is not None:   # a frame of the video memory (False: already given back): never in ``_held``
+            if item.kept is not False:
+                self._video_memory.release(item.kept)
+            item.kept = False
+            return
         held = self._held[id(item.frame.data)]
         held[0] -= 1
         if not held[0]:
@@ -934,7 +981,9 @@ class Pipeline:
         return self._pausable[name]
 
     def _needed(self):
-        return [lane for lane in self._lanes if not lane['sampled'] and not self._is_pausable(lane['name'])]
+        """Lanes that must not fall behind (a spilling lane may: its frames are kept)."""
+        return [lane for lane in self._lanes if not lane['sampled'] and not lane.get('backlog')
+                and not self._is_pausable(lane['name'])]
 
     def _relieve(self):
         """Half of a bound is used by a module that is needed: pause the optional ones."""
@@ -963,6 +1012,8 @@ class Pipeline:
                 while lane['frames'] and len(running) < lane['width'] and not all(
                         self.modules[name]['paused'] for name in lane['frames'][0].names):
                     item = lane['frames'].popleft()
+                    if item.kept:     # back from the video memory, for as long as the lane runs it
+                        item.frame = replace(item.frame, data=self._video_memory.take(item.kept))
                     lane['busy'].append(item)
                     parallel = lane['width'] > 1 and lane['name'] in item.names and leader['enabled']
                     running.append((item, asyncio.create_task(self._process(leader, item.frame)) if parallel else None))
@@ -1310,10 +1361,12 @@ class Pipeline:
         held = getattr(entry['module'], 'pending_since_ms', None)
         return None if held is None else int(held)
 
-    async def drain(self):
-        """Wait until every queued module has processed what it was given."""
+    async def drain(self, *, keep_up=False):
+        """Wait until every queued module has processed what it was given (``keep_up``: but not for a lane that samples
+        the newest frame or keeps its backlog in the video memory)."""
         while True:
-            tasks = [lane['task'] for lane in self._lanes if lane['task'] is not None and not lane['task'].done()]
+            tasks = [lane['task'] for lane in self._lanes if lane['task'] is not None and not lane['task'].done()
+                     and not (keep_up and (lane.get('sample') or lane.get('backlog')))]
             tasks += [task for entry in self.modules.values() for task in entry['workers'] if not task.done()]
             if not tasks:
                 return
@@ -1459,6 +1512,8 @@ class Pipeline:
         if any(live) and not all(live):
             raise ValueError('live and recorded inputs have no common capture clock; run them separately')
         self._paced = self._recorded = bool(sources) and not any(live)
+        from .inputs import Paced
+        self._keeping_up = self._paced and any(isinstance(source, Paced) for source in sources)
         self._collected = None if on_frame is None else []
         self._running, self._failure = True, None
 
@@ -1489,7 +1544,7 @@ class Pipeline:
             if self._stop_on_failure and context.failures:
                 raise context.failures[0][1]
             if self._paced:
-                await self.drain()
+                await self.drain(keep_up=self._keeping_up)
             check()
             if self._collected:
                 records, self._collected = self._collected + records, []
@@ -1593,6 +1648,7 @@ class Pipeline:
             if tasks:
                 await asyncio.gather(*tasks)
             self._paced = True          # nothing arrives any more: what waits is worked off, not given up
+            self._keeping_up = False
             self._resume(force=True)
             await self.drain()
             check()
@@ -1600,7 +1656,7 @@ class Pipeline:
             for task in (*tasks, stopping):
                 task.cancel()
             await asyncio.gather(*tasks, stopping, return_exceptions=True)
-            self._running = self._paced = False
+            self._running = self._paced = self._keeping_up = False
         try:
             records = await self.finish()
         finally:
@@ -1659,6 +1715,8 @@ class Pipeline:
                 await _call(close)
         for memory in self.memories.values():
             memory.close()
+        if self._video_memory is not None:
+            self._video_memory.close()
         if getattr(self.human, 'pipeline', None) is self:
             self.human.pipeline = None
 
@@ -1668,6 +1726,8 @@ class Pipeline:
         waiting = [*lane['busy'], *lane['frames']]
         age = None if self._recorded else max((_now_ms() - item.frame.timestamp_ms for item in waiting), default=0)
         return dict(lane=lane['name'], queue=lane['capacity'], queued=len(lane['frames']), backlog=len(waiting),
+                    **({'sample': lane['sample']} if lane.get('sample') else {}),
+                    **({'keeps': lane['backlog']} if lane.get('backlog') else {}),
                     backlog_ms=age, max_backlog_ms=None if self._recorded else lane['max_backlog_ms'],
                     dropped=lane['dropped'])
 
@@ -1697,6 +1757,7 @@ class Pipeline:
             **({'mode_changes': [dict(item) for item in self.mode_changes]} if self.mode_changes else {}),
             backlog_bytes=self._held_bytes, max_backlog_bytes=self.max_backlog_bytes,
             **({'audio_memory': {key: memory.status() for key, memory in self.memories.items()}} if self.memories else {}),
+            **({'video_memory': self._video_memory.status()} if self._video_memory is not None else {}),
             inputs={key: dict(modality=value['modality'], frames=value['frames'], last_ms=value['last_ms'],
                               derived_from=value['derived_from'], host_fed=value['source'] is None,
                               missed=value['missed'], gaps=value['gaps'],
@@ -1727,8 +1788,10 @@ class Pipeline:
                                   if value['asked'] not in ([], [[0, None]]) else {}),
                                replicas=int(getattr(value['module'], 'replicas', 1)),
                                optional=value['optional'], paused=value['paused'], pauses=value['pauses'],
-                               **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'])}
-                                  if value['every_ms'] else {}),
+                               **({'sampled': dict(every_ms=value['every_ms'], skipped=value['skipped'],
+                                                   **({'choice': value['lane']['sample']} if value['lane'] is not None
+                                                      and value['lane'].get('sample') else {}))}
+                                  if value['every_ms'] or value['lane'] is not None and value['lane'].get('sample') else {}),
                                **self._backlog(value['lane']), busy_ms=round(value['busy_ms']),
                                **({'catch_up': self._catch_status(value)} if value['catch_up'] else {}),
                                **({'state': value['module'].status()}

@@ -235,6 +235,9 @@ def main():
                         result['private_protocol'] = PRIVATE_PROTOCOL
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
+                    from .provider_wire import FRAME_MEMORY
+                    if request.get('frame_memory') == FRAME_MEMORY and separation_protocol is None:
+                        result['frame_memory'] = FRAME_MEMORY
                 elif operation == 'query' and provider is not None and private is not None:
                     from .private_payload import pack
                     public, value = provider.query(decode_frame(request['frame'], payload), request.get('request'))
