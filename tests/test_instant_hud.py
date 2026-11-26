@@ -83,3 +83,27 @@ class HudTimelineTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SameClipVoiceTest(unittest.TestCase):
+    def test_the_main_speaker_is_who_speaks_alone_longest(self):
+        from gamst.recipes.enrollment import choose_main_speaker
+        turns = [(0., 4., 'A'), (3., 9., 'B'), (10., 12., 'A')]
+        speaker, pieces, seconds = choose_main_speaker(turns, 0., 15.)
+        self.assertEqual((speaker, pieces, seconds), ('B', [(4., 9.)], 5.))
+        self.assertIsNone(choose_main_speaker([], 0., 15.))
+
+    def test_owner_scores_count_repetitions_and_leave_out_the_voice_reference(self):
+        from gamst.recipes.bench import error_types, match, view
+        truth = dict(tolerance_s=.6, exclude=[dict(from_s=0., to_s=5.)],
+                     words=[dict(end_s=3., by='person'), dict(end_s=8., by='person', count=3), dict(end_s=12., by='other')])
+        reps = [dict(event='term.spoken', event_id=f'r{i}', state='final', start_ms=1000 + 6500 + 500 * i,
+                     end_ms=1000 + 7000 + 500 * i, repetition=[i, 3], word_end_ms=1000 + 8000) for i in range(3)]
+        events = [dict(event='term.spoken', event_id='x', state='final', end_ms=1000 + 3000), *reps,
+                  dict(event='term.spoken', event_id='o', state='final', end_ms=1000 + 12000)]
+        self.assertEqual([label for _, label, _ in match(truth, events, 1000)],
+                         ['excluded', 'person', 'person', 'person', 'other'])
+        result = view(truth, events, 1000)
+        self.assertEqual((result['counted'], result['right'], result['other'], result['recall']), (4, 3, 1, 1.))
+        errors = error_types(truth, dict(start_ms=1000, event_states={'speech.term_events': events}))
+        self.assertEqual((errors['person'], errors['counted_right'], errors['other_to_person']), (3, 3, 1))

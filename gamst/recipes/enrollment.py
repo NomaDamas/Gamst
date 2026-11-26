@@ -40,8 +40,58 @@ def _item(recipe, use):
     return found
 
 
+MAIN_SPEAKER_S = 15.    # --main-speaker: the first seconds whose most-speaking voice is enrolled
+
+
+def choose_main_speaker(turns, start, end):
+    """(speaker, [(start, end)] where that speaker alone speaks, seconds) of the speaker who speaks alone longest in
+    [start, end): the "main speaker" of a recording. ``turns``: ``[(start, end, speaker)]``. None without speech."""
+    from ..providers.word_verification import exclusive
+    alone = exclusive(turns, start, end)
+    if not alone:
+        return None
+    speaker = max(alone, key=lambda name: sum(high - low for low, high in alone[name]))
+    return speaker, alone[speaker], round(sum(high - low for low, high in alone[speaker]), 2)
+
+
+def _main_speaker(audio, args, offset_s):
+    """Diarize the window with the verification lane's hosted diarizer (pyannoteAI Precision-3, its own consent) and
+    keep the main speaker's own sound: (samples, enrolled_from)."""
+    import numpy as np
+    from ..providers.pyannoteai import PyannoteAI
+    from ..providers.slot_sources import HostedBatch
+    from ..providers.speaker_verify import SAMPLE_RATE
+    from .perception_parts import VERIFY_DIARIZER, _registry_config
+    config = dict(_registry_config('audio.diarization', VERIFY_DIARIZER) or {})
+    config.pop('exclusive', None)
+    if getattr(args, 'allow_remote_diarization', False):
+        config['allow_remote'] = True
+    try:
+        client = PyannoteAI(**config)
+    except PermissionError:
+        raise SystemExit('--main-speaker sends the window to pyannoteAI (it leaves this device and is billed, 20 s '
+                         'minimum): add --allow-remote-diarization to consent') from None
+    turns = HostedBatch(client).diarize(audio)
+    found = choose_main_speaker(turns, 0., len(audio) / SAMPLE_RATE)
+    if found is None:
+        raise SystemExit('--main-speaker: nobody speaks alone in the window')
+    speaker, pieces, seconds = found
+    sound = np.concatenate([audio[int(low * SAMPLE_RATE):int(high * SAMPLE_RATE)] for low, high in pieces])
+    speakers = sorted({name for _, _, name in turns})
+    return sound, dict(kind='main_speaker', diarizer=f'pyannoteai:{client.model}', speaker=speaker, speakers=len(speakers),
+                       window_s=[round(offset_s, 2), round(offset_s + len(audio) / SAMPLE_RATE, 2)], speech_s=seconds,
+                       segments_s=[[round(offset_s + low, 2), round(offset_s + high, 2)] for low, high in pieces],
+                       cost_eur=round(client.spent_eur, 6))
+
+
 async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
-    """Embeddings of the owner's voice in [start, start + seconds] of the input, one per ``clip_s``."""
+    """Embeddings of the owner's voice in [start, start + seconds] of the input, one per ``clip_s``.
+
+    ``--main-speaker``: not all of that window, only the sound of the speaker who speaks alone longest in it (pyannoteAI
+    Precision-3; ``--allow-remote-diarization``), for a recording where nobody marked the person: the "main speaker"
+    option (default window: the first 15 s). The saved voice says where it came from (``enrolled_from``: the range, or
+    the main speaker's segments), so a score can leave out the words that are inside the reference.
+    """
     import numpy as np
     from ..providers.audio_ring import mono_float, resample
     from ..providers.speaker_verify import SAMPLE_RATE, enroll
@@ -56,7 +106,9 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
             if begin >= args.start + args.seconds:
                 break
             if seconds > args.start:
-                chunks.append((samples, frame.sample_rate))
+                low = max(0, int((args.start - begin) * frame.sample_rate))
+                high = min(len(samples), int((args.start + args.seconds - begin) * frame.sample_rate))
+                chunks.append((samples[low:high], frame.sample_rate))
     finally:
         close = getattr(source, 'close', None)
         if callable(close):
@@ -66,6 +118,9 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
     rate = chunks[0][1]
     audio = np.concatenate([samples for samples, _ in chunks])
     audio = resample(audio, rate, SAMPLE_RATE) if rate != SAMPLE_RATE else audio
+    origin = dict(kind='range', from_s=round(args.start, 2), to_s=round(args.start + len(audio) / SAMPLE_RATE, 2))
+    if getattr(args, 'main_speaker', False):
+        audio, origin = _main_speaker(audio, args, args.start)
     size = int(clip_s * SAMPLE_RATE)
     clips = [audio[i:i + size] for i in range(0, len(audio), size)]
     clips = [clip for clip in clips if len(clip) >= SAMPLE_RATE] or [audio]
@@ -75,9 +130,11 @@ async def enroll_voice(recipe, args, *, source, context, clip_s=3.):
         raise SystemExit(f'voice enrollment: {error}') from error
     finally:
         await _close(embedder)
-    saved.update(recipe=recipe['name'], seconds=round(len(audio) / SAMPLE_RATE, 2), consent=consent)
+    saved.update(recipe=recipe['name'], seconds=round(len(audio) / SAMPLE_RATE, 2), consent=consent,
+                 enrolled_from=origin)
     _save(args.out, saved)
-    print(json.dumps(dict(out=args.out, kind='voice', clips=len(saved['embeddings']), model=saved['model'])), flush=True)
+    print(json.dumps(dict(out=args.out, kind='voice', clips=len(saved['embeddings']), model=saved['model'],
+                          enrolled_from={key: value for key, value in origin.items() if key != 'segments_s'})), flush=True)
     return saved
 
 

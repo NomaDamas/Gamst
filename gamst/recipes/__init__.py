@@ -1140,7 +1140,8 @@ async def enroll(recipe, args):
         setattr(args, name, values[0] if values else None)
     args.start = args.start or 0.
     if args.seconds is None:     # a voice needs speech: a whole recording (bounded), or 20 s of a microphone
-        args.seconds = 1.5 if kind != 'voice' else 20. if getattr(args, 'microphone', False) else 300.
+        args.seconds = 1.5 if kind != 'voice' else 15. if getattr(args, 'main_speaker', False) else \
+            20. if getattr(args, 'microphone', False) else 300.
     return await _enroll_identity(recipe, args, kind)
 
 
@@ -1300,6 +1301,11 @@ def main(argv=None):
                        help='voice / person: save embeddings only (needs --consent); terms: the words said in example '
                             'clips, proposed first and saved when confirmed')
     learn.add_argument('--consent', help='who consented to being enrolled, and to what')
+    learn.add_argument('--main-speaker', action='store_true',
+                       help='--kind voice without a marked range: enroll the speaker who speaks alone longest in the '
+                            'window (default the first 15 s), by pyannoteAI Precision-3 (needs --allow-remote-diarization)')
+    learn.add_argument('--allow-remote-diarization', action='store_true',
+                       help="consent to sending the window to pyannoteAI's paid API (--main-speaker)")
     learn.add_argument('--language', help="spoken language of term clips, e.g. ko (default: the recipe's)")
     _asr_options(learn)
     learn.add_argument('--out', help='enrollment JSON to write')
