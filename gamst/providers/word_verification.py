@@ -529,15 +529,30 @@ class WordVerification:
         before, after = self.voice['anchor_ms']
         join = self.voice['anchor_join_ms']
         key = next((key for key in self._anchors if abs(key - end) <= join), None)
-        if key is None:
+        if key is None:     # a task: words of one region ask at once (:meth:`_prefetch`), each window once
             low = max(end - before, int(self.memory.start_ms or 0))
             high = min(end + after, int(self.memory.end_ms or end + after))
-            self._anchors[end] = await self._diarized(low, high)
+            self._anchors[end] = asyncio.ensure_future(self._diarized(low, high))
             self.stats['anchor_jobs'] = self.stats.get('anchor_jobs', 0) + 1
             while len(self._anchors) > 64:
                 self._anchors.pop(next(iter(self._anchors)))
             key = end
-        return self._anchors[key]
+        return await asyncio.shield(self._anchors[key])
+
+    async def _prefetch(self, low, high):
+        """Diarize the anchored windows of every word of a region together (at most ``concurrency`` at once)."""
+        if self.voice['anchor_ms'] is None:
+            return
+        near = self.rule['near_ms']
+        ends = sorted({item['end_ms'] for item in (*self._first_occurrences(low, high),
+                                                    *self._second_occurrences(low - near, high + near))}
+                      | {word['end_ms'] for word in self._open.values() if low <= word['end_ms'] < high})
+        limit = asyncio.Semaphore(self.windows['concurrency'])
+
+        async def one(end):
+            async with limit:
+                await self._anchored(end, end)
+        await asyncio.gather(*(one(end) for end in ends))
 
     async def _diarized(self, low, high):
         """Turns, speakers (each one's score and vector) and who of them is the person in [low, high)."""
@@ -734,6 +749,7 @@ class WordVerification:
         return decided
 
     async def _settle(self, window, low, high):
+        await self._prefetch(low, high)
         if self.rule['decide'] == 'majority':
             return await self._settle_majority(window, low, high)
         near = self.rule['near_ms']
