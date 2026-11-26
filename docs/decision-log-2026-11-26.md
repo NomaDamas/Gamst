@@ -27,6 +27,8 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 15 | Sound-word terms: "달" counts only as a whole word made of that syllable ("달", "달달달"), once per repetition, never inside other words. |
 | 16 | Keys live only in `~/.config/gamst/keys.env` (mode 600); hosted calls print their price first. |
 | 17 | Never touch anything outside GAMST (other projects, other agents' files). |
+| 19 | Clip "감스트 피파 억까": count 시발, 씨발, 씨팔, 십팔 as one term (owner); "18" written as digits is not counted. Risk noted: 십팔 is also the number eighteen read aloud. |
+| 20 | Clips and terms: 뽀또 (감스트 뽀또), 몇기야 (해병대식 내리갈굼), 시발/씨발/씨팔/십팔 (피파 억까), 달 as a sound word (애교쟁이 인디깅). |
 | 18 | Heavy local runs go one at a time through `try-it/guard.sh` (memory guard) after an out-of-memory crash. |
 
 ## 2. Technical decisions and their evidence
