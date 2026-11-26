@@ -45,6 +45,17 @@ identification, :mod:`gamst.providers.pyannoteai`) add evidence to each word, no
 ``turn_match`` (a turn matched to the enrolled voice overlaps the word, or the turns cover the word and
 none does), ``turn_speakers`` (how many turns overlap it) and ``turn_confidence``.
 
+L1 policy (``l1``, only for ``provisional`` words, i.e. when a verification lane settles them later; owner decision
+26). ``{"policy": "threshold"}`` (the old behaviour): a word counts at once when its score reaches ``threshold``, else it
+is another voice's (shown, not counted) until verification gives it to the person. ``{"policy": "instant",
+"clear_other": 0.1, "clear_margin": null}``: every heard word counts at once, also without a score, and is excluded
+only when its voice is *clearly* someone else's: its score is below ``clear_other`` (a low floor, far under
+``threshold``), or (with speaker decision v2's bank of negatives) a voice known not to be the person is closer than
+the person by ``clear_margin``. Verification revokes the rest later, visibly. Measured on the owner's four clips
+(run m1, CAM++ against the same-clip reference): the person's words scored 0.26-0.82 at L1, other voices 0.36-0.79,
+so a threshold cannot separate them at L1; one of the person's words under game sound scored 0.15 against a cleaned
+reference (offline), so the default floor 0.1 is far below anything of the person's seen so far.
+
 Scores are uncalibrated cosine similarities. The threshold must be set on the owner's own audio
 (``gamst recipe run --truth``); the research notes report EER rising several-fold on 1-3 s segments.
 """
@@ -58,6 +69,8 @@ from ..capabilities import CapabilitySpec, OutputField
 from .audio_ring import AudioRing, mono_float, rms_dbfs
 
 SAMPLE_RATE = 16000
+L1 = dict(policy='threshold', clear_other=.1, clear_margin=None)
+L1_POLICIES = ('threshold', 'instant')
 
 
 # ---------------------------------------------------------------- math
@@ -230,13 +243,19 @@ class SpeakerVerify:
     def __init__(self, embedder, *, reference='voice', threshold=.5, hysteresis=.05, segment_ms=1500,
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
                  segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
-                 source_gate_db=None, turns=False, provisional=False, audio_memory=None, relative=None, bank=None):
+                 source_gate_db=None, turns=False, provisional=False, audio_memory=None, relative=None, bank=None,
+                 l1=None):
         # speaker decision v2 (gamst/providers/voice_bank.py): each word against the person's references AND the
         # voices known not to be the person, as the bank holds them when the word is committed
         self.relative = None if relative is None else dict(dict(floor=float(threshold), margin=0.), **relative)
         if self.relative is not None and set(self.relative) - {'floor', 'margin'}:
             raise ValueError('relative is {floor, margin}')
         self.bank_settings, self.bank = bank, None
+        self.l1 = dict(L1, **(l1 or {}))
+        if set(self.l1) - set(L1) or self.l1['policy'] not in L1_POLICIES:
+            raise ValueError(f"l1 is {{policy: {' | '.join(L1_POLICIES)}, clear_other, clear_margin}}")
+        if self.l1['policy'] == 'instant' and not provisional:
+            raise ValueError('the instant L1 policy counts words a later lane settles: it needs provisional words')
         self.provisional = bool(provisional)    # a later module settles each word: give it an ID and say so
         self.audio_memory, self._memory = audio_memory, None   # an input whose kept audio covers what the ring lost
         if self.provisional and not words:
@@ -358,7 +377,8 @@ class SpeakerVerify:
             await value
 
     def _model(self):
-        return dict(id=self.embedder.model_id, threshold=self.threshold, hysteresis=self.hysteresis)
+        return dict(id=self.embedder.model_id, threshold=self.threshold, hysteresis=self.hysteresis,
+                    **({'l1': dict(self.l1)} if self.l1['policy'] != 'threshold' else {}))
 
     @property
     def pending_since_ms(self):
@@ -444,15 +464,28 @@ class SpeakerVerify:
             score = vector = None
         if self.bank is not None and vector is not None and not self._waits():
             match, pos, neg = self.bank.decide(vector, **self.relative)
-            return dict(item, match=match, speaker_score=pos, decision='relative',
+            if self.l1['policy'] == 'instant':     # excluded only when clearly another voice
+                margin = self.l1['clear_margin']
+                match = pos >= self.l1['clear_other'] and not (
+                    margin is not None and neg is not None and neg - pos >= margin)
+            return dict(item, match=match, speaker_score=pos, decision='relative', **self._l1_fields(),
                         **({} if neg is None else {'negative_score': neg}))
         if self._waits():   # decided once the separated sources / turns of this word are here
             return dict(item, **({} if score is None else {'mixture_score': score})), (first, last)
-        return dict(item, match=score is not None and score >= self.threshold,
+        return dict(item, match=self._l1_match(score), **self._l1_fields(),
                     **({} if score is None else {'speaker_score': score}))
 
     def _waits(self):
         return self.sources is not None or self.turns
+
+    def _l1_match(self, score):
+        """Whether a word counts at once (see the module doc, L1 policy)."""
+        if self.l1['policy'] == 'instant':
+            return score is None or score >= self.l1['clear_other']
+        return score is not None and score >= self.threshold
+
+    def _l1_fields(self):
+        return {'l1': 'instant'} if self.l1['policy'] == 'instant' else {}
 
     def _on_turns(self, item):
         if not self.turns or self._turns_until is None:
@@ -493,7 +526,7 @@ class SpeakerVerify:
             score, scored_on = max(scores), 'sources'
         else:
             score, scored_on = item.get('mixture_score'), 'mixture'
-        return dict(item, match=score is not None and score >= self.threshold, sources_active=active,
+        return dict(item, match=self._l1_match(score), sources_active=active, **self._l1_fields(),
                     scored_on=scored_on, **({} if score is None else {'speaker_score': score}))
 
     async def _decide(self, item, first, last):
@@ -502,7 +535,7 @@ class SpeakerVerify:
         else:
             score = item.get('mixture_score')
             item = dict({key: value for key, value in item.items() if key != 'mixture_score'},
-                        match=score is not None and score >= self.threshold,
+                        match=self._l1_match(score), **self._l1_fields(),
                         **({} if score is None else {'speaker_score': score}))
         return self._on_turns(item)
 

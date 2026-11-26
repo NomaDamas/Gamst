@@ -75,6 +75,10 @@ async def _speaker_verify(options, context):
         audio = [source for source in consumes if source in (context.get('inputs') or {})]
         if audio:
             arguments['audio_memory'] = audio[0]
+        if arguments.get('words'):      # L1 policy of these words: the item's, then the command line's (--l1 ...)
+            l1 = dict(options.get('l1') or {}, **(context.get('l1') or {}))
+            if l1:
+                arguments['l1'] = l1
     decision = context.get('speaker_decision') or {}
     if decision.get('l1') is not None and arguments.get('words') and not arguments.get('sources') \
             and not arguments.get('turns'):     # speaker decision v2 at the live lane (per-word scores only)

@@ -71,6 +71,9 @@ class CountView(_Window):
         image = frame.data
         panel = np.full((image.shape[0], 460, 3), 24, np.uint8)
         lines = [f'GAMST  {self.pipeline.name}', '']
+        quality = getattr(self.pipeline, 'voice_quality', None)
+        if isinstance(quality, dict) and quality.get('low'):      # gamst/voice_quality.py (ASCII: cv2 text)
+            lines += [f"VOICE REFERENCE QUALITY LOW {quality['quality']['mean']:.2f} -> {quality['used']}", '']
         for capability in self.capabilities:
             record = self.latest.get(capability)
             value = record['observation']['value'] if record else {}

@@ -210,6 +210,10 @@
       ],
       "context_ms": 1500,
       "words": true,
+      "l1": {
+        "policy": "instant",
+        "clear_other": 0.1
+      },
       "sources": "sources",
       "turns": "identify",
       "consumes_optional": [
