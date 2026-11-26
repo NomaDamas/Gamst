@@ -302,27 +302,31 @@ class TermEvents:
                         other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
                         decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason')
                                    if key in checked[0]}
+                    ids = [word['word_id'] for word in (times[2] if times else ()) if isinstance(word.get('word_id'), str)]
+                    provisional = bool(ids) and any(word.get('state') == 'provisional' for word in times[2])
+                    uncertain = bool(ids) and not provisional and any(word.get('state') == 'uncertain' for word in times[2])
+                    if uncertain:       # neither the person's nor another's yet: shown, not counted, settled later
+                        other = False
                     if other and not self.report_others:
                         continue
-                    if not other:
+                    if not other and not uncertain:
                         words.total += 1
                         words.counts[term] = words.counts.get(term, 0) + 1
                     spoken = normalize(value['text'])[offset:offset + size] if spelling.startswith('re:') else spelling
-                    ids = [word['word_id'] for word in (times[2] if times else ()) if isinstance(word.get('word_id'), str)]
-                    provisional = bool(ids) and any(word.get('state') == 'provisional' for word in times[2])
                     slot = {key: checked[0][key] for key in ('slot', 'slot_score') if checked and key in checked[0]}
                     event = dict(event='term.other_voice' if other else 'term.spoken',
-                                 **({'state': 'provisional'} if provisional else {}), term=term,
+                                 **({'state': 'provisional'} if provisional else {'state': 'uncertain'} if uncertain
+                                    else {}), term=term,
                                  event_id=event_id(value.get('utterance_id'), offset, term, *words.identity.values()),
                                  spoken=spoken, reference=self.reference_name,
                                  **words.identity, utterance_id=value.get('utterance_id'), start_ms=start_ms,
                                  end_ms=end_ms, word_timed=times is not None, **words.origin,
                                  **({'across_change': True} if across else {}),
                                  **({} if score is None else {'speaker_score': score}), **decided, **slot,
-                                 **({'word_ids': ids} if provisional else {}),
+                                 **({'word_ids': ids} if provisional or uncertain else {}),
                                  **({} if self.speaker_bound else {'speaker': 'not_bound'}))
-                    if provisional:
-                        self._open[event['event_id']] = event, words
+                    if provisional or uncertain:     # [event, words, counted in the total now]
+                        self._open[event['event_id']] = [event, words, provisional and not other]
                         while len(self._open) > OPEN:
                             self._open.popitem(last=False)
                     events.append(event)
@@ -331,34 +335,62 @@ class TermEvents:
         return self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
 
     def _settle(self, verdicts):
-        """Revisions of the provisional events whose words all have a verdict now, one record per revision of the words."""
+        """Revisions of the open events whose words all have a verdict now (one record per revision of the words).
+
+        A verdict with ``uncertain: true`` (overlapped speech whose voice is unclear) gives the event the state
+        ``uncertain``: it is not counted, not revoked, and stays open, so a later verdict for its words (another lane's)
+        settles it as ``final`` or ``revoked``; the newest revision decides.
+        """
+        received = set()
         for verdict in verdicts:
             if isinstance(verdict, dict) and isinstance(verdict.get('word_id'), str) and type(verdict.get('match')) is bool:
                 self._verdicts[verdict['word_id']] = verdict
                 self._verdicts.move_to_end(verdict['word_id'])
+                received.add(verdict['word_id'])
         while len(self._verdicts) > OPEN:
             self._verdicts.popitem(last=False)
         changed = OrderedDict()
         for key in list(self._open):
-            event, words = self._open[key]
+            event, words, in_total = self._open[key]
+            if not received & set(event['word_ids']):
+                continue
             found = [self._verdicts.get(word) for word in event['word_ids']]
             if None in found:
                 continue
-            del self._open[key]
             match = all(item['match'] for item in found)
-            counted = event['event'] == 'term.spoken'
+            uncertain = not match and any(item.get('uncertain') for item in found) and \
+                all(item['match'] or item.get('uncertain') for item in found)
+            spoken = event['event'] == 'term.spoken'
+            state = 'uncertain' if uncertain and spoken else 'revoked' if uncertain else \
+                ('final' if match else 'revoked') if spoken else ('revoked' if match else 'final')
+            if uncertain and spoken:
+                self._open[key][2] = False
+            else:
+                del self._open[key]
             reason = next((item.get('reason') for item in found if item.get('reason')), None)
-            revision = dict(event='event.revision', state='final' if match == counted else 'revoked', revises=key,
+            revision = dict(event='event.revision', state=state, revises=key,
                             revised_event=event['event'], term=event['term'], start_ms=event['start_ms'],
                             end_ms=event['end_ms'], **words.identity,
                             **{name: found[0][name] for name in ('slot', 'slot_score', 'basis') if name in found[0]})
-            if match != counted:
-                revision['reason'] = reason or ('another_voice' if counted else 'enrolled_voice')
-            elif reason:        # unchanged, and the verdict says why (e.g. another voice's word, overlapped speech)
+            if state == 'revoked' or uncertain:
+                revision['reason'] = reason or ('another_voice' if spoken else 'enrolled_voice')
+            elif reason:        # unchanged, and the verdict says why (e.g. another voice's word)
                 revision['reason'] = reason
             added = changed.setdefault(id(words), (words, []))[1]
             added.append(revision)
-            if match and not counted:       # the enrolled voice after all: counted from now on, as final
+            now = spoken and state == 'final'
+            if now != in_total:
+                step = 1 if now else -1
+                words.total += step
+                words.counts[event['term']] = words.counts.get(event['term'], 0) + step
+            if uncertain and not spoken:   # not another voice's after all, nor surely the person's: uncertain words are
+                # always term.spoken in state uncertain (open: a later verdict for the same words settles it)
+                doubt = dict(event='term.spoken', state='uncertain', **{
+                    name: value for name, value in event.items() if name not in ('state', 'event', 'event_id')})
+                doubt.update(event_id=event_id(key, 'uncertain'), replaces=key, reason=revision['reason'])
+                self._open[doubt['event_id']] = [doubt, words, False]
+                added.append(doubt)
+            if match and not spoken:       # the enrolled voice after all: counted from now on, as final
                 words.total += 1
                 words.counts[event['term']] = words.counts.get(event['term'], 0) + 1
                 promoted = dict(event='term.spoken', state='final', **{
@@ -368,9 +400,6 @@ class TermEvents:
                 if 'slot_score' in found[0]:
                     promoted['speaker_score'] = found[0]['slot_score']
                 added.append(promoted)
-            elif counted and not match:
-                words.total -= 1
-                words.counts[event['term']] = words.counts.get(event['term'], 0) - 1
         records = [self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
                    for words, events in changed.values()]
         return None if not records else records[0] if len(records) == 1 else records

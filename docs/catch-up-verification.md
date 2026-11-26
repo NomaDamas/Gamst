@@ -60,38 +60,70 @@ used to decide who said a word (owner decision). Late words of a catch-up worker
 
 ## L4: the verification lane (`gamst/providers/word_verification.py`, part `word-verify`, item `verification`)
 
-Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in capture order, in regions of `step_ms`
-(15 s), each only when `inputs_complete_until` has passed it (no TODO, no unanswered turn, no queued record there) by
-`near_ms`, so a catch-up worker never changes a word after it was settled.
+Consumes the microphone (as ticks), `speaker_check` and any voter. Its own work runs in capture order, in **regions
+that follow speech** (owner decision 21), each decided only when `inputs_complete_until` has passed it (no TODO, no
+unanswered turn, no queued record there) by `near_ms`, so a catch-up worker never changes a word after it was settled.
 
+- **Regions** (`WINDOWS`): a region closes at a speech pause once it is `min_ms` (10 s) long and at most `max_ms`
+  (20 s): the middle of a gap between two utterances (an utterance of some recogniser ended there and none was going
+  on), or, after the last utterance, `pause_ms / 2` into a silence of at least `pause_ms` (500 ms, the endpointer's
+  pause). Without one by `max_ms` it closes at the next one up to `cap_ms` (30 s, reason `max_extended`); only when
+  speech runs on past `cap_ms` is it cut there (`cap_split`, the only case that splits an utterance, and the region
+  record says so). A pause counts only once every recogniser (first hearing, second, voters) is complete past it. The
+  last region runs to the end of the input (`end`). Each region's reason and length are in the `window` record
+  (`region`) and in the lane's status (`regions`, `straddling`: utterances a boundary cuts, `diarize_jobs`).
+  `step_ms` gives the old fixed regions.
 - **Second recogniser**: `gpt-live-transcribe`, the counted words as `keywords`, Qwen3-ForcedAligner word times
   (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete, at most `feed_speed` (1.25) times real
   time: it is a realtime API, and a little faster lets it catch up after a stall (`null`: as soon as complete, in
   bursts).
 - **Diarization windows**: pyannoteAI Precision-3 (`"diarizer"`) on `[region - before_ms (15 s), region + after_ms
-  (5 s)]` (windows overlap), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
+  (5 s)]` (windows overlap, so speaker labels have context; speakers are re-identified in each window by the voice), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
   active) is cut in `piece_ms` pieces, embedded with CAM++ and its duration-weighted mean scored against the voice;
   speakers at or above `threshold` (0.5, the module default everywhere) are the person; under `min_speaker_ms` of own
   sound a speaker is unidentified.
 - **Word rule** (`RULE`, a parameter set): an occurrence of a counted word in the first hearing is paired one to one,
   nearest first, with an occurrence of the same word in the second hearing whose end is within `near_ms` (1000);
-  paired -> the voice rule decides; unpaired and the second recogniser or a speaker was active there -> revoked
-  `not_heard` (`revoke_not_heard`); unpaired and nobody was -> revoked `no_speech` (`revoke_no_speech`); an unpaired
-  occurrence of the second hearing -> added, final (a `kind: "utterance"` value with `decided_by: "verification"`).
+  paired -> the voice rule decides. Unpaired, and the second recogniser or a speaker was active there:
+  - kept (final) when the voice evidence for the person is **clear** (`keep_clear_voice`, on): `clear` = `speaker` (the
+    person's diarized speaker is active at the word and no other speaker over `overlap_share`), `score` (the per-word
+    CAM++ score is at least `threshold + clear_margin`, margin 0.1), `either` (default) or `both`;
+  - `uncertain` (`uncertain_overlap`) when the person's speaker overlaps another one and the score is not clear;
+  - revoked `not_heard` when the voice points elsewhere or is absent.
+
+  Unpaired and nobody spoke there -> revoked `no_speech` (`revoke_no_speech`). An unpaired occurrence of the second
+  hearing -> added, final (a `kind: "utterance"` value with `decided_by: "verification"`).
+- **Vote** (off: `vote: false`): any `speech.transcript_words` source the item also reads (another recogniser's module,
+  e.g. AssemblyAI / Deepgram / Speechmatics adapters once registered) votes. A first-hearing occurrence that a voter also
+  heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
+  occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
+  `"rule": {"vote": true}`.
+- **Majority** (`decide: "majority"`; the recipe sets it, with `vote`, when the item reads another recogniser: `--with
+  vote` adds `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary): an occurrence is **said** when at
+  least two of the recognisers (the first hearing, the second one, the voters) wrote the same word within `near_ms`
+  (paired one to one, nearest first); the voice rule then decides who. An occurrence only one of them wrote is revoked
+  (`heard_by_one`), or not added, unless `keep_single` (on) and no other recogniser wrote anything within `near_ms` of it
+  and the voice is clear (`clear`, as above); where nobody spoke it is `no_speech`; unclear overlap stays `uncertain`.
 - **Voice rule** (`VOICE`) on the word's span (the second hearing's): person speaker over `overlap_share` (0.3) and
   another one too -> overlapped: the per-word CAM++ score (1.5 s around the word) decides, below threshold it is
-  `uncertain_overlap` (not counted, said so); with `--with tse` the TSE lane's decision on the extracted voice
-  replaces that per-word score for such a word ([realtime-tse.md](realtime-tse.md)); person dominant -> the person; another identified speaker dominant ->
+  `uncertain_overlap`; with `--with tse` the TSE lane's decision on the extracted voice replaces that per-word
+  score for such a word ([realtime-tse.md](realtime-tse.md)); person dominant -> the person; another identified speaker dominant ->
   `other_speaker`; no speaker or an unidentified one -> the per-word score (`no_speaker`, `speaker_unidentified`).
   `active_share` 0.1: a speaker over less of the word is not active there.
 - Outputs (`speech.word_verdicts`): `verdicts` (every provisional word: `match`, `provisional`, `changed`, `basis`,
   `reason`, `heard`, `speaker`, `speaker_score`, `word_score`), added `utterance`s, and one `window` record per window
   (speakers, their own speech in ms and score; no audio, no embedding). `terms` turns verdicts into `event.revision`
   records (`final`, or `revoked` with the reason; `basis` is kept on the revision), only for provisional events.
-- Opt-in: `--with verification --allow-remote-asr` (the consent covers the second recogniser and pyannoteAI; both
-  print their price before audio is sent).
+- **Uncertain** (`uncertain_overlap`): the verdict says `uncertain: true`; `terms` gives the event the revision state
+  `uncertain`: not counted, not revoked (never "not said"), kept open, so a later lane's verdict for its `word_id`s
+  settles it (`final` / `revoked`; the newest revision decides). An uncertain word is always a `term.spoken` in state
+  `uncertain`: a provisional `term.spoken` gets that revision; a provisional `term.other_voice` is revoked
+  (`uncertain_overlap`) and an uncertain `term.spoken` replaces it; an added word is committed so, with a `word_id`. `count_events` gives `states.uncertain` beside the count and
+  `where={"state": "uncertain"}` lists them; `get_timeline` shows the state; the report's `states` has it; bench and
+  scoring leave uncertain words out of what is counted.
+- Opt-in: `--with verification --allow-remote-asr --allow-remote-diarization` (the first for the second recogniser, the
+  second for pyannoteAI; each prints its price before audio is sent).
 
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
-- Whether `--allow-remote-asr` should also be the consent for pyannoteAI in the verification lane, or a flag of its own.

@@ -248,7 +248,7 @@ def with_asr(recipe, candidate):
     part = asr_part(candidate)
     modules, changed = [], False
     for item in recipe['modules']:
-        if PARTS[item['use']].transcribes:
+        if PARTS[item['use']].transcribes and not item.get('votes_for'):     # a voter keeps its own recogniser
             if item['use'] != part:     # the old part's own settings (phrase buffer, windows) do not carry over
                 item = {key: value for key, value in item.items() if key not in PART_SETTINGS}
             item, changed = dict(item, use=part, candidate=candidate), True
@@ -393,6 +393,10 @@ def roles(recipe):
     from ..crew.registry import ROLES
     selected, open_choice = {}, []
     for item, part in _items(recipe):
+        role, model = _role(item)
+        chosen = ROLES[role].candidates.get(model) if role in ROLES and model else None
+        if item.get('votes_for') and chosen is not None and 'api' in (chosen.config or {}):
+            continue        # a hosted voter: nothing to set up, and its role keeps the recipe's own recogniser
         for role, model in [_role(item)] + [(role, item.get(key, default)) for key, role, default in part.extra_roles]:
             if role is None:
                 continue
@@ -821,6 +825,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
                    allow_remote_asr=getattr(args, 'allow_remote_asr', False),
+                   allow_remote_diarization=getattr(args, 'allow_remote_diarization', False),
                    record_dir=getattr(args, 'record_dir', None), replay=replay,
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
@@ -1043,7 +1048,8 @@ async def run_pipeline(recipe, args):
                 found = [event for row in own for event in row['observation']['value']['events']
                          if is_current(event, newest) and event.get('event') != REVISION]
                 revised = revisions(own)
-                current = [event for event in (with_state(item, revised) for item in found) if event.get('state') != 'revoked']
+                current = [event for event in (with_state(item, revised) for item in found)
+                           if event.get('state') not in ('revoked', 'uncertain')]
                 report['score'] = dict(score(truth, current, start_ms=report.get('start_ms', 0)),
                                        complete=not pipeline.lost(truth['capability'])['gaps'])
                 if revised or any('state' in event for event in found):     # what was counted at once, before revisions
@@ -1286,6 +1292,9 @@ def main(argv=None):
     start.add_argument('--vlm-remote-context', action='store_true',
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
     _asr_options(start)
+    start.add_argument('--allow-remote-diarization', action='store_true',
+                       help="consent to sending the sound to a hosted diarization service's paid API (the verification "
+                            "lane's pyannoteAI Precision-3 windows); separate from --allow-remote-asr")
     start.add_argument('--debug-slowdown', action='append', metavar='MODULE=MS@FROM-TO[,FROM-TO]',
                        help='test and debug: sleep MS before each audio frame of MODULE captured in those seconds of the '
                             'run, so its live lane falls behind on purpose (it catches up without losing audio)')

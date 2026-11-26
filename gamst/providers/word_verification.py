@@ -17,14 +17,25 @@ never change a word after it was settled. For each stretch it has:
   few-shot voice with the speaker model (CAM++): speakers whose score reaches ``threshold`` are the person. Windows
   overlap (``before_ms`` of earlier sound, ``after_ms`` of later sound around each ``step_ms`` decided);
 - **the word rule** between the two recognisers (:data:`RULE`): a provisional occurrence of a counted word is
-  confirmed when the second recogniser heard the same word within ``near_ms`` of it (one to one, nearest first),
-  revoked (``not_heard``) when it heard speech there but not the word, revoked (``no_speech``) when nobody spoke there;
-  an occurrence only the second recogniser heard is added, final;
+  confirmed when the second recogniser heard the same word within ``near_ms`` of it (one to one, nearest first). When
+  only the first hearing has it and someone spoke there, it stays when the voice evidence for the person is *clear*
+  (``keep_clear_voice``; ``clear``: ``speaker`` = the person's diarized speaker alone is active at the word,
+  ``score`` = the per-word score is at least ``threshold + clear_margin``, ``either`` or ``both``), is ``uncertain``
+  when the person's speaker overlaps another one and the score is not clear, and is revoked (``not_heard``) when the
+  voice points elsewhere or is absent; revoked (``no_speech``) when nobody spoke there. An occurrence only the second
+  recogniser heard is added, final. ``vote``: more ``speech.transcript_words`` sources (any recogniser the item also
+  reads) vote; a first-hearing word that one of them also heard counts as heard twice, and with
+  ``vote_adds_once: false`` a second-hearing word is added only when a voter heard it too. ``decide: "majority"``
+  (with voters) replaces the pairing rule: a word is said when at least two of the recognisers (the first hearing,
+  the second one and the voters) wrote it within ``near_ms``; a word only one of them wrote is dropped (revoked, or not
+  added) unless ``keep_single`` and no other recogniser wrote anything near it and the voice is clear;
 - **the voice rule** (:data:`VOICE`) for each word that stays: the person's speaker active over the word and no other
   speaker over ``overlap_share`` of it -> the person; another speaker dominant -> another voice; both over
   ``overlap_share`` (overlapped speech) -> the TSE lane's decision where the word carries one
-  (:mod:`gamst.providers.overlap_tse`: the person's voice extracted from the mixture, heard and scored), else the
-  per-word voice score decides, and below ``threshold`` the word is ``uncertain_overlap``: not counted, and said so. With no speaker active, or an unidentified one, the per-word score
+  (:mod:`gamst.providers.overlap_tse`: the person's voice extracted from the mixture, heard and scored; person ->
+  the person, not the person -> another voice, uncertain -> ``uncertain_overlap``), else the per-word voice score
+  decides, and below ``threshold`` the word is ``uncertain_overlap``: its verdict says ``uncertain: true``, :class:`gamst.providers.term_events.TermEvents` gives it
+  the state ``uncertain`` (not counted, not revoked), and a later lane may still settle it with a verdict of its own. With no speaker active, or an unidentified one, the per-word score
   decides.
 
 Outputs (capability ``speech.word_verdicts``): ``kind: "verdicts"`` (``[{word_id, match, provisional, changed, basis,
@@ -44,10 +55,14 @@ from .speaker_verify import centroid, cosine, embed, l2_normalize
 from .term_events import parse_terms, term_occurrences
 
 SAMPLE_RATE = 16000
-RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True)
+RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True, keep_clear_voice=True, clear='either',
+            clear_margin=.1, vote=False, vote_adds_once=True, decide='pair', keep_single=True)
+DECIDE = ('pair', 'majority')
+CLEAR = ('speaker', 'score', 'either', 'both')
 VOICE = dict(threshold=.5, min_speaker_ms=1000, piece_ms=2000, overlap_share=.3, active_share=.1, word_context_ms=1500,
              min_dbfs=-45.)
-WINDOWS = dict(step_ms=15000, before_ms=15000, after_ms=5000, concurrency=2)
+WINDOWS = dict(min_ms=10000, max_ms=20000, cap_ms=30000, pause_ms=500, before_ms=15000, after_ms=5000, concurrency=2,
+               step_ms=None)
 
 
 def _settings(defaults, given, what):
@@ -107,12 +122,19 @@ class WordVerification:
         self.recogniser, self.diarizer, self.embedder = recogniser, diarizer, embedder
         self.reference_name, self.terms_name, self.audio = reference, terms, audio
         self.rule, self.voice = _settings(RULE, rule, 'rule'), _settings(VOICE, voice, 'voice')
+        if self.rule['decide'] not in DECIDE:
+            raise ValueError(f"rule decide is one of {', '.join(DECIDE)}")
+        if self.rule['clear'] not in CLEAR:
+            raise ValueError(f"rule clear is one of {', '.join(CLEAR)}")
         self.windows = _settings(WINDOWS, windows, 'window')
         # The second recogniser is a realtime API: it gets the complete audio at most ``feed_speed`` times real time,
         # evenly (a little faster than real time, so it catches up after a stall); None: as soon as it is complete
         self.feed_speed = None if feed_speed is None else float(feed_speed)
-        if not 0 < self.windows['step_ms'] <= 120000 or self.windows['before_ms'] < 0 or self.windows['after_ms'] < 0:
-            raise ValueError('windows need 0 < step_ms <= 120000 and non-negative before_ms, after_ms')
+        w = self.windows
+        if w['step_ms'] is not None and not 0 < w['step_ms'] <= 120000 or w['before_ms'] < 0 or w['after_ms'] < 0 \
+                or not 0 < w['min_ms'] <= w['max_ms'] <= w['cap_ms'] <= 300000 or not 0 < w['pause_ms'] <= 10000:
+            raise ValueError('windows need 0 < min_ms <= max_ms <= cap_ms <= 300000, 0 < pause_ms <= 10000, '
+                             'non-negative before_ms and after_ms (step_ms: None, or fixed regions 0 < step_ms <= 120000)')
         self.spec = CapabilitySpec(
             capability_id, capability_id, 'audio', 'gamst.word_verification', '1', (
                 OutputField('kind', 'string'), OutputField('reference', 'string'), OutputField('start_ms', 'integer'),
@@ -120,6 +142,7 @@ class WordVerification:
                 OutputField('utterance_id', 'string', required=False), OutputField('status', 'string', required=False),
                 OutputField('text', 'string', required=False), OutputField('words', 'array', required=False),
                 OutputField('speaker', 'object', required=False), OutputField('speakers', 'array', required=False),
+                OutputField('region', 'object', required=False),
                 OutputField('model', 'object')),
             'native', stateful=True, reset_on_gap=True, freshness_ms=120000, interpretation='estimate',
             devices=('cpu',), license='Apache-2.0 adapter; recogniser, diarization and speaker model per their terms')
@@ -152,8 +175,10 @@ class WordVerification:
         self._utterances = []          # first-hearing utterances with provisional words, in arrival order
         self._open = {}                # word_id -> provisional word, until its verdict
         self._heard = []               # the second recogniser's final utterances
+        self._voted = []               # final utterances of other recognisers this lane reads (votes)
         self._windows = {}             # index -> {"turns", "speakers", "person"} | asyncio task
         self._decided = 0              # regions decided so far
+        self._regions = []             # closed regions [{"start_ms", "end_ms", "reason"}], in capture order
         self._used = set()             # ids of second-hearing occurrences that confirmed or were added
         self._outbox, self._scores = [], {}
         self.stats = dict(regions=0, verdicts=0, added=0, late=0, windows=0, diarize_ms=[], decided_after_ms=[],
@@ -175,17 +200,25 @@ class WordVerification:
                     heard_terms=[dict(end_ms=item['end_ms'], timed=item['timed'], aligned=bool(value.get('aligned')))
                                  for value in self._heard for item in term_occurrences(value, self.terms or {})][-64:],
                     diarize_ms=self.stats['diarize_ms'][-16:],
+                    voted_terms=[dict(end_ms=item['end_ms'], source=item['source'])
+                                 for item in self._vote_occurrences(float('-inf'), float('inf'))][-64:] if self.terms else [],
                     recogniser_errors=[str(item)[:200] for item in getattr(self.recogniser, 'errors', ())][-8:],
                     heard_turns=[dict(start_ms=value['start_ms'], end_ms=value['end_ms'], words=len(value.get('words') or ()),
                                       aligned=bool(value.get('aligned'))) for value in self._heard][-64:],
-                    fed_until_ms=self._fed, decided_until_ms=None if self._origin is None else
-                    self._origin + self._decided * self.windows['step_ms'])
+                    fed_until_ms=self._fed, decided_until_ms=None if self._origin is None else self._region(self._decided)[0],
+                    regions=[dict(item, end_ms=None if item['end_ms'] == float('inf') else item['end_ms'],
+                                  length_ms=None if item['end_ms'] == float('inf') else item['end_ms'] - item['start_ms'])
+                             for item in self._regions[-64:]], straddling=self._straddling(),
+                    diarize_jobs=self.stats.get('diarize_jobs', 0))
 
     # ------------------------------------------------------------------ frames
 
     def process(self, frame):
         value = frame.data
         if isinstance(value, dict):
+            if 'kind' not in value and value.get('status') == 'final' and value.get('words'):
+                self._voted.append(value)      # a recogniser's own words (speech.transcript_words): a vote
+                return self._take()
             if value.get('kind') == 'utterance' and value.get('status') == 'final' and \
                     value.get('reference', self.reference_name) == self.reference_name:
                 words = [word for word in value.get('words') or () if isinstance(word, dict)
@@ -238,23 +271,118 @@ class WordVerification:
         return float('-inf') if value is None else value
 
     def _region(self, index):
-        step = self.windows['step_ms']
-        return self._origin + index * step, self._origin + (index + 1) * step
+        """(start, end) of a closed region; past the closed ones: (where the next one starts, inf)."""
+        if index < len(self._regions):
+            return self._regions[index]['start_ms'], self._regions[index]['end_ms']
+        return (self._regions[-1]['end_ms'] if self._regions else self._origin), float('inf')
 
     def _window(self, index):
         low, high = self._region(index)
-        return max(self._origin, low - self.windows['before_ms']), high + self.windows['after_ms']
+        end = self.memory.end_ms if self.memory is not None and self.memory.end_ms is not None else low
+        return max(self._origin, low - self.windows['before_ms']), min(high + self.windows['after_ms'], max(end, low))
+
+    def _spans(self, start):
+        """Merged [start, end] of every utterance of every recogniser that ends after ``start``."""
+        found = sorted((value['start_ms'], value['end_ms']) for values in (self._utterances, self._heard, self._voted)
+                       for value in values if type(value.get('start_ms')) is int and type(value.get('end_ms')) is int
+                       and value['end_ms'] > start)
+        merged = []
+        for low, high in found:
+            if merged and low <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], high)
+            else:
+                merged.append([low, high])
+        return merged
+
+    def _close_regions(self, complete):
+        """Close regions where speech pauses (between two utterances of any recogniser, or ``pause_ms`` into the
+        silence after the last one), once the region is ``min_ms`` long and at most ``max_ms``; past ``max_ms`` the next
+        pause closes it (``max_extended``); at ``cap_ms`` the cap itself does (``cap_split``, the only case in which an
+        utterance is split, and said so). ``step_ms``: fixed regions."""
+        w, end = self.windows, self.memory.end_ms
+        if end is None or self._origin is None:
+            return False
+        horizon = float('inf') if self._final else min(complete, self._heard_until())
+        closed = False
+        while True:
+            start = self._region(len(self._regions))[0]
+            if start >= end:
+                return closed
+            if w['step_ms'] is not None:
+                stop, reason = start + w['step_ms'], 'fixed'
+                if stop > horizon and not self._final:
+                    return closed
+                if self._final and stop >= end:
+                    stop, reason = float('inf'), 'end'
+            else:
+                stop, reason = self._boundary(start, horizon, end)
+                if stop is None:
+                    return closed
+            self._regions.append(dict(start_ms=start, end_ms=stop, reason=reason))
+            closed = True
+            if stop == float('inf'):
+                return closed
+
+    def _boundary(self, start, horizon, end):
+        w = self.windows
+        spans = self._spans(start)
+        limit = min(horizon, end) if not self._final else end
+        gaps, at = [], start
+        for low, high in spans:
+            if low > at:
+                gaps.append((at, min(low, limit)))
+            at = max(at, high)
+        if at < limit:
+            gaps.append((at, limit))             # silence up to what is known
+        gaps = [(low, high) for low, high in gaps if high > low]
+
+        def first(low, high):
+            """The first pause point in [low, high]: the middle of a gap between two utterances (an utterance ended
+            there), or, in the silence after the last one, ``pause_ms / 2`` into it once ``pause_ms`` of it is known."""
+            for gap_low, gap_high in gaps:
+                if gap_high >= limit and not self._final:
+                    if gap_high - gap_low < w['pause_ms']:
+                        continue
+                    earliest, latest = gap_low + w['pause_ms'] / 2, gap_high - w['pause_ms'] / 2
+                    point = min(max(earliest, low), high)
+                else:
+                    earliest = latest = point = (gap_low + gap_high) / 2
+                    if not low <= point <= high:
+                        continue
+                if earliest <= point <= latest:
+                    return int(point)
+            return None
+        if self._final and end - start <= w['max_ms']:
+            return float('inf'), 'end'
+        found = first(start + w['min_ms'], start + w['max_ms'])
+        if found is not None:
+            return found, 'pause'
+        if limit < start + w['max_ms']:
+            return (float('inf'), 'end') if self._final else (None, None)
+        found = first(start + w['max_ms'], start + w['cap_ms'])
+        if found is not None:
+            return found, 'max_extended'
+        if limit < start + w['cap_ms']:
+            return (float('inf'), 'end') if self._final else (None, None)
+        return start + w['cap_ms'], 'cap_split'
+
+    def _straddling(self):
+        """Utterances (of any recogniser) that a closed region boundary cuts: 0 unless a region says ``cap_split``."""
+        cuts = [item['end_ms'] for item in self._regions if item['end_ms'] != float('inf')]
+        return sum(1 for values in (self._utterances, self._heard, self._voted) for value in values
+                   if type(value.get('start_ms')) is int and any(value['start_ms'] < cut < value['end_ms'] for cut in cuts))
 
     async def _work(self):
         try:
             while True:
                 complete = self._complete()
                 progressed = await self._feed(complete)
+                progressed = self._close_regions(complete) or progressed
                 progressed = self._diarize(complete) or progressed
                 progressed = await self._decide(complete) or progressed
                 self._hold()
-                if self._final and self._origin is not None and self.memory.end_ms is not None \
-                        and self._region(self._decided)[0] > self.memory.end_ms:
+                if self._final and self._regions and self._regions[-1]['end_ms'] == float('inf') \
+                        and self._decided == len(self._regions):
                     self._late()          # anything still open is decided now, and counted as late
                 if self._final and self._finished():
                     self._done = True
@@ -271,7 +399,7 @@ class WordVerification:
     def _finished(self):
         end = self.memory.end_ms
         return end is not None and self._fed is not None and self._fed >= end and not self._open and \
-            self._region(self._decided)[0] > end
+            self._decided == len(self._regions) and bool(self._regions) and self._regions[-1]['end_ms'] == float('inf')
 
     async def _feed(self, complete):
         """Give the second recogniser the kept audio as far as it is complete; take what it answered."""
@@ -329,17 +457,18 @@ class WordVerification:
         """Start the diarization of every window whose sound is complete (at most ``concurrency`` at once)."""
         started, index = False, self._decided
         end = self.memory.end_ms
-        while True:
+        while index < len(self._regions):
             low, high = self._window(index)
             if end is None or low >= end:
                 break
-            if high > complete and not (self._final and complete == float('inf')):
+            if high > complete and not self._final:
                 break
             if index not in self._windows:
                 running = sum(isinstance(item, asyncio.Task) and not item.done() for item in self._windows.values())
                 if running >= self.windows['concurrency']:
                     break
                 self._windows[index] = asyncio.ensure_future(self._identify(index, low, min(high, end)))
+                self.stats['diarize_jobs'] = self.stats.get('diarize_jobs', 0) + 1
                 started = True
             index += 1
         return started
@@ -361,12 +490,16 @@ class WordVerification:
                                  person=score is not None and score >= self.voice['threshold']))
         for speaker in {turn[2] for turn in turns} - {item['speaker'] for item in speakers}:
             speakers.append(dict(speaker=speaker, speech_ms=0, score=None, person=False))
+        region = self._regions[index] if index < len(self._regions) else {}
         result = dict(turns=turns, speakers=speakers, low=low, high=high,
                       person={item['speaker'] for item in speakers if item['person']},
                       unknown={item['speaker'] for item in speakers if item['score'] is None})
         self._outbox.append(self.spec.validate(dict(
             kind='window', reference=self.reference_name, start_ms=int(low), end_ms=int(high),
-            speakers=sorted(speakers, key=lambda item: -item['speech_ms']), model=self._model())))
+            speakers=sorted(speakers, key=lambda item: -item['speech_ms']),
+            region=dict(start_ms=int(region.get('start_ms', low)),
+                        end_ms=None if region.get('end_ms', float('inf')) == float('inf') else int(region['end_ms']),
+                        reason=region.get('reason')), model=self._model())))
         return result
 
     async def _speaker_score(self, pieces):
@@ -408,11 +541,20 @@ class WordVerification:
                 self._scores.pop(next(iter(self._scores)))
         return self._scores[key]
 
-    async def _voice_of(self, window, start, end, words=()):
+    def _tse_at(self, start, end, words=None):
+        """The TSE lane's decision (``tse`` on a provisional word, :mod:`gamst.providers.overlap_tse`) over [start, end),
+        from ``words`` or else from the open provisional words there; None where it decided none."""
+        if words is None:
+            words = [word for word in self._open.values() if type(word.get('start_ms')) is int
+                     and word['start_ms'] < max(end, start + 1) and word.get('end_ms', word['start_ms']) > start]
+        return next((word['tse'] for word in words if isinstance(word.get('tse'), dict)
+                     and word['tse'].get('decision') in ('person', 'other', 'uncertain')), None)
+
+    async def _voice_of(self, window, start, end, words=None):
         """(match, basis, reason or None, speaker, its score, per-word score) of [start, end) in one window.
 
-        ``words``: the provisional words there; where they carry the TSE lane's decision (``tse``,
-        :mod:`gamst.providers.overlap_tse`), that decides an overlapped word instead of the score on the mixture."""
+        Overlapped speech (the person's speaker and another over ``overlap_share``): the TSE lane's decision where a
+        provisional word there carries one (``words``, else the open words over the span), else the per-word score."""
         shares = _share(window['turns'], start, end)
         active = {speaker: share for speaker, share in shares.items() if share >= self.voice['active_share']}
         person = max((share for speaker, share in active.items() if speaker in window['person']), default=0.)
@@ -421,9 +563,9 @@ class WordVerification:
         scores = {item['speaker']: item['score'] for item in window['speakers']}
         limit = self.voice['overlap_share']
         if person >= limit and other >= limit:
-            tse = next((word['tse'] for word in words if isinstance(word.get('tse'), dict)), None)
+            tse = self._tse_at(start, end, words)
             if tse is not None:
-                decision = tse.get('decision')
+                decision = tse['decision']
                 reason = None if decision == 'person' else 'other_speaker' if decision == 'other' else 'uncertain_overlap'
                 return decision == 'person', f'overlap_tse_{decision}', reason, dominant, scores.get(dominant), \
                     tse.get('score')
@@ -468,13 +610,13 @@ class WordVerification:
     async def _decide(self, complete):
         """Decide the next regions whose words are all in, heard twice, and whose window is diarized (in order)."""
         decided, near = False, self.rule['near_ms']
-        while True:
+        while self._decided < len(self._regions):
             low, high = self._region(self._decided)
             end = self.memory.end_ms
             task = self._windows.get(self._decided)
-            if end is None or low > end or task is None or not task.done():
+            if end is None or task is None or not task.done():
                 return decided
-            last = self._final and high >= end
+            last = high == float('inf')
             if last and self._heard_until() != float('inf'):
                 return decided
             if not last and (complete < high + near or self._heard_until() < high + near):
@@ -487,30 +629,28 @@ class WordVerification:
             self.stats['regions'] += 1
             self._decided += 1
             decided = True
+        return decided
 
     async def _settle(self, window, low, high):
+        if self.rule['decide'] == 'majority':
+            return await self._settle_majority(window, low, high)
         near = self.rule['near_ms']
         first = self._first_occurrences(low, high)
         second = self._second_occurrences(low - near, high + near)
         pairs = match_occurrences(first, second, near)
+        voted = self._vote_occurrences(low - near, high + near) if self.rule['vote'] else []
+        votes = match_occurrences(first, voted, near) if voted else {}
         verdicts, words_done = [], set()
         for index, item in enumerate(first):
-            if index in pairs:
-                heard = second[pairs[index]]
-                self._used.add(heard['key'])
+            if index in pairs or index in votes:
+                heard = second[pairs[index]] if index in pairs else item
+                if index in pairs:
+                    self._used.add(heard['key'])
                 match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                    window, heard['start_ms'], heard['end_ms'], [self._open[key] for key in item['word_ids']])
-                basis = 'heard_twice+' + basis
+                    window, heard['start_ms'], heard['end_ms'])
+                basis = ('heard_twice+' if index in pairs else 'heard_by_vote+') + basis
             else:
-                speech = self._speech_near(window, item['start_ms'], item['end_ms'])
-                revoke = self.rule['revoke_not_heard'] if speech else self.rule['revoke_no_speech']
-                reason = 'not_heard' if speech else 'no_speech'
-                if revoke:
-                    match, basis, speaker, speaker_score, score = False, reason, None, None, None
-                else:
-                    match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                        window, item['start_ms'], item['end_ms'], [self._open[key] for key in item['word_ids']])
-                    basis = 'heard_once+' + basis
+                match, basis, reason, speaker, speaker_score, score = await self._heard_once(window, item)
             for word_id in item['word_ids']:
                 verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score,
                                               heard=index in pairs))
@@ -518,26 +658,168 @@ class WordVerification:
         for word_id, word in list(self._open.items()):     # the other words: by the voice alone
             if word_id in words_done or not (low <= word['end_ms'] < high):
                 continue
-            match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                window, word['start_ms'], word['end_ms'], [word])
+            match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, word['start_ms'], word['end_ms'])
             verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score, heard=None))
         if verdicts:
             self.stats['verdicts'] += len(verdicts)
             self._outbox.append(self.spec.validate(dict(
                 kind='verdicts', reference=self.reference_name, start_ms=min(item['start_ms'] for item in verdicts),
                 end_ms=max(item['end_ms'] for item in verdicts), verdicts=verdicts, model=self._model())))
+        voted_here = self._vote_occurrences(low - near, high + near) if self.rule['vote'] else []
         for item in self._second_occurrences(low, high):     # heard only the second time: final at once
             self._used.add(item['key'])
+            if self.rule['vote'] and not self.rule['vote_adds_once'] and not match_occurrences([item], voted_here, near):
+                continue
             match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, item['start_ms'], item['end_ms'])
             self.stats['added'] += 1
+            uncertain = reason == 'uncertain_overlap'
             word = dict(text=item['spoken'], start_ms=item['start_ms'], end_ms=max(item['end_ms'], item['start_ms'] + 1),
                         match=match, decided_by='verification', basis='heard_once_by_verification+' + basis,
-                        **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}))
+                        **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}),
+                        # a later lane may settle an uncertain word: it has an ID and says so
+                        **({'state': 'uncertain', 'word_id': f"verification:{item['key']}#0"} if uncertain else {}))
             self._outbox.append(self.spec.validate(dict(
                 kind='utterance', reference=self.reference_name, utterance_id=f"verification:{item['key']}",
                 status='final', text=item['spoken'], start_ms=word['start_ms'], end_ms=word['end_ms'], words=[word],
                 speaker=dict(reference=self.reference_name, match=match, model=self.embedder.model_id),
                 model=self._model())))
+
+    def _words_near(self, values, start, end):
+        """Did any of these utterances have a word (of anything) within ``near_ms`` of [start, end)?"""
+        near = self.rule['near_ms']
+        return any(type(word.get('start_ms')) is int and type(word.get('end_ms')) is int and
+                   word['start_ms'] < end + near and word['end_ms'] > start - near
+                   for value in values for word in (value.get('words') or ()) if isinstance(word, dict))
+
+    async def _clear_voice(self, window, start, end):
+        """(clear, voice decision) of a span: the rule's ``clear`` on the diarized speaker and the per-word score."""
+        decided = await self._voice_of(window, start, end)
+        score = await self._word_score(start, end)
+        by_speaker = decided[1] == 'person_speaker'
+        by_score = score is not None and score >= self.voice['threshold'] + self.rule['clear_margin']
+        clear = dict(speaker=by_speaker, score=by_score, either=by_speaker or by_score, both=by_speaker and by_score)[
+            self.rule['clear']]
+        return clear, decided[:5] + (score,)
+
+    async def _settle_majority(self, window, low, high):
+        """At least two of the recognisers wrote it -> said (the voice decides who); one -> dropped, unless
+        ``keep_single``, nobody else wrote anything there and the voice is clearly the person's."""
+        near = self.rule['near_ms']
+        first = self._first_occurrences(low, high)
+        second = self._second_occurrences(low - near, high + near)
+        third = [dict(item, key=f"v{item['source']}:{item['end_ms']}") for item in self._vote_occurrences(low - near, high + near)]
+        third = [item for item in third if item['key'] not in self._used]
+        with_second = match_occurrences(first, second, near)
+        with_third = match_occurrences(first, third, near)
+        verdicts, words_done = [], set()
+        sources = dict(first=self._utterances, second=self._heard, third=self._voted)
+
+        async def single(item, own):
+            others = [values for name, values in sources.items() if name != own]
+            alone = not any(self._words_near(values, item['start_ms'], item['end_ms']) for values in others)
+            if not self._speech_near(window, item['start_ms'], item['end_ms']):
+                return False, 'heard_by_one+no_speech', 'no_speech', None, None, None
+            if self.rule['keep_single'] and alone:
+                clear, (match, basis, why, speaker, speaker_score, score) = await self._clear_voice(
+                    window, item['start_ms'], item['end_ms'])
+                if clear:
+                    return True, 'heard_by_one+alone+clear_voice+' + basis, None, speaker, speaker_score, score
+                if why == 'uncertain_overlap':
+                    return False, 'heard_by_one+alone+' + basis, why, speaker, speaker_score, score
+                return False, 'heard_by_one+alone+' + basis, 'heard_by_one', speaker, speaker_score, score
+            return False, 'heard_by_one' + ('+alone' if alone else '+others_heard_speech'), 'heard_by_one', None, None, None
+
+        for index, item in enumerate(first):
+            heard = [name for name, pairs in (('second', with_second), ('third', with_third)) if index in pairs]
+            if heard:
+                span = second[with_second[index]] if index in with_second else third[with_third[index]]
+                for name, pairs, items in (('second', with_second, second), ('third', with_third, third)):
+                    if index in pairs:
+                        self._used.add(items[pairs[index]]['key'])
+                match, basis, reason, speaker, speaker_score, score = await self._voice_of(
+                    window, span['start_ms'], span['end_ms'])
+                basis = f"heard_by_{1 + len(heard)}({'+'.join(['first', *heard])})+" + basis
+            else:
+                match, basis, reason, speaker, speaker_score, score = await single(item, 'first')
+            for word_id in item['word_ids']:
+                verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score,
+                                              heard='+'.join(['first', *heard])))
+                words_done.add(word_id)
+        for word_id, word in list(self._open.items()):     # the other words: by the voice alone
+            if word_id in words_done or not (low <= word['end_ms'] < high):
+                continue
+            match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, word['start_ms'], word['end_ms'])
+            verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score, heard=None))
+        if verdicts:
+            self.stats['verdicts'] += len(verdicts)
+            self._outbox.append(self.spec.validate(dict(
+                kind='verdicts', reference=self.reference_name, start_ms=min(item['start_ms'] for item in verdicts),
+                end_ms=max(item['end_ms'] for item in verdicts), verdicts=verdicts, model=self._model())))
+        # Words the first hearing did not write: said when the second and a voter both wrote them, else single.
+        second = [item for item in second if item['key'] not in self._used and low <= item['end_ms'] < high]
+        third = [item for item in third if item['key'] not in self._used]
+        pairs = match_occurrences(second, third, near)
+        candidates = [(item, 'second', third[pairs[index]] if index in pairs else None) for index, item in enumerate(second)]
+        used_third = {third[j]['key'] for j in pairs.values()}
+        candidates += [(item, 'third', None) for item in third if item['key'] not in used_third
+                       and low <= item['end_ms'] < high]
+        for item, own, partner in candidates:
+            self._used.add(item['key'])
+            if partner is not None:
+                self._used.add(partner['key'])
+                match, basis, reason, speaker, speaker_score, score = await self._voice_of(
+                    window, item['start_ms'], item['end_ms'])
+                basis = 'heard_by_2(second+third)+' + basis
+            else:
+                match, basis, reason, speaker, speaker_score, score = await single(item, own)
+                if not match and reason != 'uncertain_overlap':
+                    self.stats['dropped'] = self.stats.get('dropped', 0) + 1
+                    continue       # one recogniser only, not kept: nothing is added
+            self._add(item, match, basis, reason, score)
+
+    def _add(self, item, match, basis, reason, score):
+        self.stats['added'] += 1
+        uncertain = reason == 'uncertain_overlap'
+        word = dict(text=item['spoken'], start_ms=item['start_ms'], end_ms=max(item['end_ms'], item['start_ms'] + 1),
+                    match=match, decided_by='verification', basis=basis,
+                    **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}),
+                    **({'state': 'uncertain', 'word_id': f"verification:{item['key']}#0"} if uncertain else {}))
+        self._outbox.append(self.spec.validate(dict(
+            kind='utterance', reference=self.reference_name, utterance_id=f"verification:{item['key']}",
+            status='final', text=item['spoken'], start_ms=word['start_ms'], end_ms=word['end_ms'], words=[word],
+            speaker=dict(reference=self.reference_name, match=match, model=self.embedder.model_id),
+            model=self._model())))
+
+    async def _heard_once(self, window, item):
+        """A first-hearing occurrence the second recogniser did not write: kept when the voice is clearly the person's,
+        uncertain in unclear overlap, else revoked (the rule's settings)."""
+        speech = self._speech_near(window, item['start_ms'], item['end_ms'])
+        revoke = self.rule['revoke_not_heard'] if speech else self.rule['revoke_no_speech']
+        reason = 'not_heard' if speech else 'no_speech'
+        if not revoke:
+            match, basis, why, speaker, speaker_score, score = await self._voice_of(window, item['start_ms'], item['end_ms'])
+            return match, 'heard_once+' + basis, why, speaker, speaker_score, score
+        if not speech or not self.rule['keep_clear_voice']:
+            return False, reason, reason, None, None, None
+        match, basis, why, speaker, speaker_score, _ = await self._voice_of(window, item['start_ms'], item['end_ms'])
+        score = await self._word_score(item['start_ms'], item['end_ms'])
+        by_speaker = basis == 'person_speaker'
+        by_score = score is not None and score >= self.voice['threshold'] + self.rule['clear_margin']
+        clear = dict(speaker=by_speaker, score=by_score, either=by_speaker or by_score, both=by_speaker and by_score)[
+            self.rule['clear']]
+        if clear:
+            return True, 'heard_once+clear_voice+' + basis, None, speaker, speaker_score, score
+        if why == 'uncertain_overlap':
+            return False, 'heard_once+' + basis, why, speaker, speaker_score, score
+        return False, f'not_heard+{basis}', reason, speaker, speaker_score, score
+
+    def _vote_occurrences(self, low, high):
+        found = []
+        for value in self._voted:
+            for item in term_occurrences(value, self.terms):
+                if low <= item['end_ms'] < high:
+                    found.append(dict(item, source=str(value.get('utterance_id', '')).rsplit(':', 1)[0]))
+        return found
 
     def _verdict(self, word_id, match, basis, reason, speaker, speaker_score, score, *, heard):
         word = self._open.pop(word_id)
@@ -547,6 +829,8 @@ class WordVerification:
                        settled_by='verification', basis=basis)
         if reason and not match:
             verdict['reason'] = reason
+            if reason == 'uncertain_overlap':
+                verdict['uncertain'] = True        # neither the person's nor another's: a later lane may settle it
         for key, value in (('heard', heard), ('speaker', speaker), ('speaker_score', speaker_score), ('word_score', score)):
             if value is not None:
                 verdict[key] = value

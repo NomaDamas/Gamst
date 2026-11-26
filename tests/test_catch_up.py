@@ -108,13 +108,14 @@ class Collect:
         return None
 
 
-async def run(slowdown=None, frames=60):
+async def run(slowdown=None, frames=60, catch_up=True):
     async with Gamst(consent=True) as human:
         pipeline = Pipeline(human, 'catch')
         pipeline.add_input('microphone', Paced(frames), modality='audio')
         hearer, collect = Hearer(), Collect()
         pipeline.add_module('asr', hearer, consumes='microphone', spec=WORDS, queue=500,
-                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1), slowdown=slowdown)
+                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1) if catch_up else False,
+                            slowdown=slowdown)
         pipeline.add_module('words', collect, consumes='asr')
         await pipeline.run()
         status = pipeline.status()
@@ -125,7 +126,7 @@ async def run(slowdown=None, frames=60):
 @unittest.skipIf(np is None, 'numpy is needed')
 class CatchUpTest(unittest.TestCase):
     def test_a_lane_that_falls_behind_skips_to_now_and_a_worker_hears_what_it_skipped(self):
-        steady, _ = asyncio.run(run())
+        steady, _ = asyncio.run(run(catch_up=False))     # a loaded machine must not make the reference catch up
         slowed, status = asyncio.run(run(dict(ms=120, spans_s=[[.4, .9], [1.6, 2.1]])))
         asr = status['modules']['asr']
         self.assertEqual(sorted(steady, key=lambda word: int(word[1:])), [f'w{index}' for index in range(60) if pattern(index)])
@@ -216,43 +217,50 @@ class FakeRecogniser:
 
 @unittest.skipIf(np is None, 'numpy is needed')
 class VerificationTest(unittest.TestCase):
-    def test_words_are_confirmed_revoked_or_added_once_their_stretch_is_complete(self):
+    @staticmethod
+    def run_lane(rule, votes=()):
+        """First hearing: 'bbo' at frames 4 (person, heard twice too), 6 (person, heard once), 24 (another voice, heard
+        twice), 26 (another voice, heard once, counted at once by mistake), 35 (silence: invented). The second hearing
+        also writes 0, 8, 12 (person) and 20, 28 (another voice). ``votes``: frames a third recogniser wrote."""
         async def main():
             async with Gamst(consent=True) as human:
                 pipeline = Pipeline(human, 'verify')
                 pipeline.add_input('microphone', None, modality='audio')
                 pipeline.add_input('first', None, modality='text')
+                pipeline.add_input('third', None, modality='text')
                 pipeline.add_reference('voice', 'voice', dict(model='fake', embeddings=[[1., 0.]]), consent='test')
                 pipeline.add_reference('terms', 'terms', ['bbo'])
-                diarizer = FakeDiarizer()
-                verify = WordVerification(FakeRecogniser(), diarizer, FakeEmbedder(), audio='microphone',
-                                          rule=dict(near_ms=150), windows=dict(step_ms=1000, before_ms=500, after_ms=200))
-                pipeline.add_module('verification', verify, consumes=['microphone', 'first'], spec=verify.spec, queue=500)
+                verify = WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder(), audio='microphone',
+                                          rule=dict(rule, near_ms=150), windows=dict(step_ms=1000, before_ms=500, after_ms=200))
+                pipeline.add_module('verification', verify, consumes=['microphone', 'first', 'third'], spec=verify.spec,
+                                    queue=500)
                 terms = TermEvents(report_others=True)
                 pipeline.add_module('terms', terms, consumes=['first', 'verification'], spec=terms.spec)
                 base = time.time_ns() // 1_000_000 - 60000
-                levels = []
                 for index in range(40):       # 100 ms frames: person 0-1.5 s, another voice 2-3 s, silence after
                     level = .2 if index < 15 else .1 if 20 <= index < 30 else 0.
-                    levels.append(level)
                     samples = np.full(1600, level, np.float32)
                     samples[0] = index / 10000
                     await pipeline.push('microphone', samples, timestamp_ms=base + (index + 1) * 100, sample_rate=RATE)
-                # First hearing: 'bbo' at frames 4 (person, also heard twice), 6 (person, heard once: revoked),
-                # 24 (other voice, heard twice), 35 (silence: invented). Frames 8 and 12 only the second hearing writes.
-                first = []
-                for index in (4, 6, 24, 35):
+                for index in votes:
                     end = base + (index + 1) * 100
-                    first.append(dict(text='bbo', start_ms=end - 100, end_ms=end, word_id=f'u{index}#0',
-                                      state='provisional', match=index < 20, speaker_score=.9 if index < 20 else .1))
-                for word in first:
-                    value = dict(kind='utterance', reference='voice', utterance_id=word['word_id'][:-2], status='final',
-                                 text='bbo', start_ms=word['start_ms'], end_ms=word['end_ms'], words=[word],
+                    await pipeline.push('third', dict(utterance_id=f'third.asr:{index}', status='final', text='bbo',
+                                                      start_ms=end - 100, end_ms=end,
+                                                      words=[dict(text='bbo', start_ms=end - 100, end_ms=end)]),
+                                        timestamp_ms=end)
+                await pipeline.push('third', dict(utterance_id='third.asr:x', status='final', text='', start_ms=base,
+                                                  end_ms=base + 4000, words=[]), timestamp_ms=base + 4000)
+                for index in (4, 6, 24, 26, 35):
+                    end = base + (index + 1) * 100
+                    word = dict(text='bbo', start_ms=end - 100, end_ms=end, word_id=f'u{index}#0', state='provisional',
+                                match=index < 20 or index == 26, speaker_score=.9 if index < 20 else .1)
+                    value = dict(kind='utterance', reference='voice', utterance_id=f'u{index}', status='final',
+                                 text='bbo', start_ms=word['start_ms'], end_ms=end, words=[word],
                                  speaker=dict(match=word['match']))
-                    await pipeline.push('first', value, timestamp_ms=word['end_ms'])
+                    await pipeline.push('first', value, timestamp_ms=end)
                     await asyncio.sleep(.3)
                 await pipeline.drain()
-                records = await pipeline.finish()
+                await pipeline.finish()
                 rows = [record for record in human.store.query('local-user', kind='observation.signal', limit=500,
                                                                registered_only=True, capability_id='speech.term_events')]
                 from gamst.counting import count_events
@@ -263,15 +271,125 @@ class VerificationTest(unittest.TestCase):
                     for item in record['observation']['value'].get('verdicts') or ()}
                 await pipeline.close()
                 return counted, verdicts, verify.stats
-        counted, verdicts, stats = asyncio.run(main())
+        return asyncio.run(main())
+
+    def test_words_are_confirmed_kept_revoked_or_added_once_their_stretch_is_complete(self):
+        counted, verdicts, stats = self.run_lane({})
         self.assertTrue(verdicts['u4#0']['match'])                       # heard twice, the person's speaker
-        self.assertEqual(verdicts['u6#0']['reason'], 'not_heard')
+        self.assertTrue(verdicts['u6#0']['match'])                       # heard once, the person's speaker alone: kept
+        self.assertEqual(verdicts['u6#0']['basis'], 'heard_once+clear_voice+person_speaker')
         self.assertEqual(verdicts['u24#0']['reason'], 'other_speaker')
+        self.assertEqual(verdicts['u26#0']['reason'], 'not_heard')       # heard once, the voice points elsewhere
         self.assertEqual(verdicts['u35#0']['reason'], 'no_speech')
         self.assertEqual(stats['added'], 5)          # 0, 8, 12 (the person) and 20, 28 (another voice): heard the second time only
-        self.assertEqual(counted['count'], 1 + 3)    # 4, and the added 0, 8, 12
-        self.assertEqual(counted['states'], dict(provisional=0, final=4, revoked=1))   # 6 revoked: not heard twice
+        self.assertEqual(counted['count'], 2 + 3)    # 4, 6 and the added 0, 8, 12
+        self.assertEqual(counted['states'], dict(provisional=0, final=5, revoked=1))   # 26 revoked
         self.assertEqual(stats['late'], 0)
+
+    def test_without_the_clear_voice_rule_a_word_heard_once_is_revoked(self):
+        counted, verdicts, _ = self.run_lane(dict(keep_clear_voice=False))
+        self.assertEqual(verdicts['u6#0']['reason'], 'not_heard')
+        self.assertEqual(counted['count'], 1 + 3)
+
+    def test_a_third_recogniser_votes_when_asked(self):
+        counted, verdicts, _ = self.run_lane(dict(keep_clear_voice=False, vote=True), votes=(6,))
+        self.assertEqual(verdicts['u6#0']['basis'], 'heard_by_vote+person_speaker')
+        self.assertEqual(counted['count'], 2 + 3)
+        counted, verdicts, _ = self.run_lane(dict(keep_clear_voice=False), votes=(6,))     # off by default
+        self.assertEqual(verdicts['u6#0']['reason'], 'not_heard')
+
+
+    def test_by_majority_a_word_is_said_when_two_of_the_three_wrote_it(self):
+        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='majority'), votes=(6, 12))
+        self.assertTrue(verdicts['u4#0']['match'])                                  # first + second
+        self.assertEqual(verdicts['u6#0']['basis'], 'heard_by_2(first+third)+person_speaker')
+        self.assertEqual(verdicts['u24#0']['reason'], 'other_speaker')               # said, by another voice
+        self.assertEqual(verdicts['u26#0']['basis'], 'heard_by_one+others_heard_speech')
+        self.assertEqual(verdicts['u35#0']['reason'], 'no_speech')
+        # second only: 0 (nobody else wrote anything there, the person's speaker alone: kept), 8 and 28 (others wrote
+        # words there: dropped), 20 (alone, another voice: dropped); second + third: 12 (said)
+        self.assertEqual(stats['added'], 2)
+        self.assertEqual(counted['count'], 4)                                       # 4, 6, 0, 12
+        counted, _, stats = self.run_lane(dict(vote=True, decide='majority', keep_single=False), votes=(6, 12))
+        self.assertEqual((counted['count'], stats['added']), (3, 1))                 # 0 dropped too
+
+
+class RegionTest(unittest.TestCase):
+    @staticmethod
+    def lane(spans):
+        lane = WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder())
+        lane._origin = 0
+        lane._utterances = [dict(start_ms=low, end_ms=high) for low, high in spans]
+        return lane
+
+    def test_a_region_closes_in_a_pause_after_its_minimum_and_never_inside_an_utterance(self):
+        lane = self.lane([(0, 3000), (3200, 9500), (9900, 10600), (11000, 11800), (12400, 25000), (25200, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (10800, 'pause'))      # 9500-9900 is before the minimum
+        lane = self.lane([(0, 3000), (3200, 12000), (12100, 25000), (25600, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (12050, 'pause'))      # an utterance ends: a pause
+        lane = self.lane([(0, 21000), (21100, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (21050, 'max_extended'))
+        lane = self.lane([(0, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (30000, 'cap_split'))   # said, the only split
+        lane = self.lane([(0, 3000), (3200, 9000)])
+        self.assertEqual(lane._boundary(0, 9300, 9300), (None, None))              # not known yet: wait
+        self.assertEqual(lane._boundary(0, 12000, 12000)[1], 'pause')              # 9000-12000 is silence
+
+
+class UncertainTest(unittest.TestCase):
+    def test_an_uncertain_word_is_shown_not_counted_and_a_later_verdict_settles_it(self):
+        from types import SimpleNamespace
+        from gamst.counting import count_events
+        terms = TermEvents(terms=['bbo'], report_others=True)
+        records = []
+
+        def give(value, at):
+            out = terms.process(SimpleNamespace(data=value, timestamp_ms=at, subject_id='local-user'))
+            for item in (out if isinstance(out, list) else [out] if out else []):
+                records.append(dict(id=f'r{len(records)}', timestamp_ms=at, observation=dict(
+                    capability=dict(id='speech.term_events'), value=item)))
+        word = dict(text='bbo', start_ms=900, end_ms=1000, word_id='u#0', state='provisional', match=True)
+        give(dict(utterance_id='u', status='final', text='bbo', start_ms=900, end_ms=1000, words=[word]), 1000)
+        give(dict(kind='verdicts', verdicts=[dict(word_id='u#0', match=False, uncertain=True,
+                                                   reason='uncertain_overlap')]), 2000)
+        now = count_events(records, event='term.spoken')
+        self.assertEqual((now['count'], now['states']['uncertain']), (0, 1))
+        self.assertEqual(count_events(records, event='term.spoken', where={'state': 'uncertain'})['count'], 1)
+        self.assertEqual(records[-1]['observation']['value']['count'], 0)
+        give(dict(kind='verdicts', verdicts=[dict(word_id='u#0', match=True, basis='tse')]), 3000)    # a later lane
+        later = count_events(records, event='term.spoken')
+        self.assertEqual((later['count'], later['states']['final'], later['states'].get('uncertain', 0)), (1, 1, 0))
+        self.assertEqual(records[-1]['observation']['value']['count'], 1)
+
+    def test_another_voices_word_that_becomes_uncertain_is_shown_as_an_uncertain_term_spoken(self):
+        from types import SimpleNamespace
+        terms = TermEvents(terms=['bbo'], report_others=True)
+        word = dict(text='bbo', start_ms=900, end_ms=1000, word_id='u#0', state='provisional', match=False)
+        terms.process(SimpleNamespace(data=dict(utterance_id='u', status='final', text='bbo', start_ms=900, end_ms=1000,
+                                                words=[word]), timestamp_ms=1000, subject_id='s'))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(
+            word_id='u#0', match=False, uncertain=True, reason='uncertain_overlap')]), timestamp_ms=2000, subject_id='s'))
+        revision, doubt = out['events']
+        self.assertEqual((revision['state'], revision['reason']), ('revoked', 'uncertain_overlap'))
+        self.assertEqual((doubt['event'], doubt['state'], out['count']), ('term.spoken', 'uncertain', 0))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(word_id='u#0', match=True)]),
+                                            timestamp_ms=3000, subject_id='s'))
+        self.assertEqual((out['events'][0]['revises'], out['events'][0]['state'], out['count']),
+                         (doubt['event_id'], 'final', 1))
+
+    def test_a_word_added_uncertain_is_not_counted_until_settled(self):
+        from types import SimpleNamespace
+        terms = TermEvents(terms=['bbo'], report_others=True)
+        word = dict(text='bbo', start_ms=900, end_ms=1000, match=False, word_id='v#0', state='uncertain',
+                    reason='uncertain_overlap', decided_by='verification')
+        out = terms.process(SimpleNamespace(data=dict(utterance_id='v', status='final', text='bbo', start_ms=900,
+                                                      end_ms=1000, words=[word]), timestamp_ms=1000, subject_id='s'))
+        event = out['events'][0]
+        self.assertEqual((event['event'], event['state'], out['count']), ('term.spoken', 'uncertain', 0))
+        out = terms.process(SimpleNamespace(data=dict(kind='verdicts', verdicts=[dict(word_id='v#0', match=False,
+                                                                                         reason='other_speaker')]),
+                                            timestamp_ms=2000, subject_id='s'))
+        self.assertEqual((out['events'][0]['state'], out['count']), ('revoked', 0))
 
 
 if __name__ == '__main__':

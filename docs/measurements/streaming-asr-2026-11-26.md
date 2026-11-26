@@ -49,6 +49,15 @@ as the recorded baseline.
 ElevenLabs word times are counted from the start of the session's audio. This was checked with the real API: manual
 commits at known stream positions, and the words fell inside their own segments only on the session clock.
 
+Added later (branch `feat/asr-more-providers`):
+- Sessions for AssemblyAI STT-3.7-Realtime, Deepgram Nova-3 Korean and Speechmatics Realtime Enhanced: binary PCM16
+  in, word times from the stream start.
+- The service ends turns by default. `commit_strategy: manual` sends GAMST's commits instead (`ForceEndpoint` /
+  `Finalize` / `ForceEndOfUtterance`).
+- Keyterms: `keyterms_prompt` / `keyterm` / `additional_vocab` (`"bias": "terms"`). Profanity filters are sent as off.
+- Registry: `assemblyai.stt_3_7_realtime.hosted`, `deepgram.nova_3.hosted`, `speechmatics.enhanced.hosted`. All are
+  opt-in and never automatic.
+
 ## Run (one 54 s Korean shop clip `a.wav`, several speakers; M2 Pro)
 
 How it was run:
@@ -73,6 +82,18 @@ How it was run:
 | Scribe v3 Live, client commits + keyterms | 9 (not 14.0) | 12.64 20.74 27.44; 49–52: 3 | 23.84–24.16 | – | 2.8 s (0.4–12.0) | −0.26…+0.10 | $0.0041 |
 | gpt-live-transcribe + Qwen3-FA (2 runs) | 3 / 4 | 49–52: 1 (run 1 also 12.64) | not written | – | 4.7 s (1.6–13.2) | −0.26…+0.10 | $0.0154 |
 | gpt-live-transcribe + keywords + Qwen3-FA (2 runs) | 8 / 8 (not 14.0, 28.10) | 12.64 20.74 27.44 (run 2); 49–52: 3 | **not written** | 26.6 s (run 1) | 3.6 s (1.5–13.1) | −0.32…+0.10 | $0.0154 |
+| AssemblyAI STT-3.7-Realtime, server turns | 1 as 뽀또 (+2 as 포또) | 49–52: 3 (포또) | – | 11.1, 38.9 s | 8.4 s (7.5–8.4) | −0.27…−0.10 | $0.0045 |
+| AssemblyAI, server turns + keyterms | 1 as 뽀또 (+5 as 포또) | 20.74 (포또); 49–52: 3 (포또) | – | 11.1, 22.9, 38.9 s | 14.6 s (7.2–16.8) | −0.27…+0.30 | $0.0045 |
+| AssemblyAI, client commits (ForceEndpoint) | 1 | – | – | 10.9 s | 3.6 s | −0.36 | $0.0045 |
+| AssemblyAI, client commits + keyterms | 2 as 뽀또 (+3 as 포또) | 20.74 (포또); 49–52: 1 | – | 10.9, 23.0, 38.8, 46.0 s | 3.2 s (0.5–11.7) | −0.47…+0.20 | $0.0045 |
+| Deepgram Nova-3 ko, server endpointing (300 ms) | 4 | 20.74; 49–52: 1 | – | – | 2.3 s (1.0–3.5) | +0.03…+0.10 | $0.0043 |
+| Deepgram, server + keyterm | 6 | 12.64 20.74; 49–52: 1 | – | – | 2.3 s (1.1–3.5) | −0.19…+0.10 | $0.0055 |
+| Deepgram, client commits (Finalize) | 3 | 20.34 20.74 | – | 21.2 s | 2.4 s (1.2–3.3) | −0.06…+0.06 | $0.0043 |
+| Deepgram, client commits + keyterm (2 runs) | 6 / 7 as 뽀또 (+12.04 as 포또 both) | 3 / 4 of 4; 49–52: 3 / 2 | **written once** (23.66–24.38, run 1) | – / 21.2 s | 2.3 / 2.2 s | −0.26…+0.09 | $0.0055 |
+| **Speechmatics Enhanced, server (max_delay 0.7 s)** | 7 | 20.74 27.44; 49–52: 2 | not written | – | **1.2 s (0.95–1.76)** | −0.35…0 | $0.0060 |
+| **Speechmatics, server + additional_vocab (2 runs)** | **8 / 8** (not 14.0, 28.10) | 20.74 27.44; 49–52: 2 | **not written** | – | **1.2 / 1.1 s** (0.9–1.4) | −0.32…0 | $0.0060 |
+| Speechmatics, client commits (ForceEndOfUtterance), ± vocab | 8 / 8 | 20.74 27.44; 49–52: 2 | not written | – | 1.2 / 1.1 s | −0.35…0 | $0.0060 |
+| Speechmatics, max_delay 2.0 s + vocab | 8 | 20.74 27.44; 49–52: 2 | not written | – | 2.5 s (2.2–2.6) | −0.32…0 | $0.0060 |
 | sherpa Zipformer ko (local) | 1 | – | – | – | 3.7 s | +0.40 | local |
 | Voxtral 4B Realtime MLX, 480 ms delay (local) | 0 (one word in 54 s) | – | – | – | – | – | local |
 | Voxtral, 960 ms delay (local) | 3 (nothing before 35 s) | 49–52: 2 | – | 52.6 s | 4.1 s (2.5–6.5) | +0.16…+0.28 | local |
@@ -80,8 +101,19 @@ How it was run:
 Notes on the table:
 
 - **24.70.** Every Scribe run writes the word at 23.84–24.16 s. That end is 0.54 s before the 24.70 "nothing said"
-  label, so it falls inside the ±0.6 s window. Whisper's invented word ends at 24.70 itself. Whether 23.8–24.2 holds a
-  real word is for the owner to check by ear. gpt-live-transcribe did not write a word there in any run.
+  label, so it falls inside the ±0.6 s window. Whisper's invented word ends at 24.70 itself.
+  - The owner confirmed by ear that nothing is said at 23.8–24.2 s, so the Scribe word there is invented.
+  - Not written there: gpt-live-transcribe (any run), Speechmatics (6 runs) and AssemblyAI (4 runs).
+  - Deepgram wrote it in 1 of 2 runs with client commits and keyterms.
+- **The three later providers (added 2026-11-26).**
+  - Spellings: AssemblyAI mostly writes 포또, even with `keyterms_prompt`. Its word ends run 0.1–0.47 s early, and it
+    writes the word at 10.9–11.1 s and 38.8–38.9 s, where no moment is labelled. Its server turns in this noise lasted
+    up to 17 s.
+  - Speechmatics finalises word by word (about 90 finals in 54 s). A partial shows the word about 0.85 s after it ends,
+    with at most 3 revisions.
+  - Speechmatics with `max_delay` 2.0 s heard nothing more than with 0.7 s.
+  - Deepgram's partials show the word about 0.5 s after it ends, with at most 5 revisions.
+  - No provider heard 14.0. Only Deepgram (run 2) and Scribe heard 28.10.
 - **14.0.** Only Scribe v2 with server VAD heard it, in both runs. With client commits, a commit fell at about 13.9 s,
   inside the word (final spans end at 13.7 s and the next one starts at 14.0 s). The energy endpointer cut the word.
 - **Latency.** Server VAD (1.5 s silence) almost never commits in continuous shop noise: 4 finals in 54 s. Client
@@ -120,8 +152,28 @@ List prices, read 2026-11-26. Silence is billed too.
 |---|---|
 | OpenAI `gpt-live-transcribe` | $0.017 per minute ($1.02 per hour) |
 | ElevenLabs Scribe v2 Realtime / v3 Live | $0.22 per hour, keyterms +$0.05 per hour |
+| AssemblyAI STT-3.7-Realtime | $0.30 per hour of session time, keyterms included (Agent model $0.45) |
+| Deepgram Nova-3 monolingual streaming | $0.0048 per minute ($0.29 per hour), keyterm prompting +$0.0013 per minute |
+| Speechmatics Realtime Enhanced | $0.40 per hour |
 
 This work's hosted calls came to about $0.11 at list price: 7 OpenAI and 10 ElevenLabs sessions, including smoke tests.
+The three later providers came to about $0.09 at list price: 15 runs of 54 s, plus smoke and profanity tests.
+
+## Profanity
+
+Measured on a macOS TTS clip, «아 시발 진짜 짜증나. 씨발 이게 뭐야. 시발, 또 늦었어.», with each adapter's settings. No
+provider masked anything.
+
+| provider | default | how to keep it off | what it wrote for the three swear words |
+|---|---|---|---|
+| ElevenLabs Scribe v3 Live | no masking | do not set `entity_redaction`; `offensive_language` would redact into a separate `redacted_transcript` | 씨발, 씨발, 씨팔 |
+| OpenAI gpt-live-transcribe | no filter documented | – | 씨발, 씨발, 십팔 |
+| AssemblyAI | `filter_profanity` default false; masking would keep the first letter plus `*` | GAMST sends `filter_profanity=false` | 시발, 시발, 18 |
+| Deepgram | `profanity_filter` default false; Korean is in its filter's language list | GAMST sends `profanity_filter=false` | 씨발, 씨발, 씨발 |
+| Speechmatics | no masking; it tags profanity in English, Spanish and Italian only | – | 씨발, 시발, 18 |
+
+To count the word, the terms need the spellings 시발, 씨발, 씨팔 and 십팔. Two providers wrote the third one as "18",
+a digit string that cannot be counted as the word without false matches.
 
 ## Default
 

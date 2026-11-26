@@ -53,9 +53,9 @@ def _wall_ms():
     return time.time_ns() // 1_000_000
 
 
-def streaming_capability(version='1'):
+def streaming_capability(version='1', capability_id='speech.transcript_words'):
     return CapabilitySpec(
-        'speech.transcript_words', 'speech.transcript_words', 'audio', 'gamst.streaming_asr', version,
+        capability_id, capability_id, 'audio', 'gamst.streaming_asr', version,
         (OutputField('utterance_id', 'string'), OutputField('revision', 'integer', required=False),
          OutputField('text', 'string'), OutputField('status', 'string'),
          OutputField('start_ms', 'integer'), OutputField('end_ms', 'integer'),
@@ -111,7 +111,8 @@ class CaptureClock:
         for _, _, end_ms, wall in self.pieces:
             if end_ms >= capture_ms - 1:
                 return wall
-        return None
+        # a recogniser may place the last word a little after the last sample it was sent
+        return self.pieces[-1][3] if self.pieces and capture_ms - self.pieces[-1][2] <= 1000 else None
 
 
 class StreamResampler:
@@ -228,7 +229,7 @@ class StreamingWords:
     owns_process = True
 
     def __init__(self, session, *, aligner=None, language='ko', partials=False, endpointer=None,
-                 finish_timeout=30., ring_seconds=120., max_gap_ms=250):
+                 finish_timeout=30., ring_seconds=120., max_gap_ms=250, capability_id='speech.transcript_words'):
         self.session, self.aligner, self.language, self.partials = session, aligner, language, bool(partials)
         self.endpointer = endpointer if endpointer is not None else (Endpointer() if session.manual_commit else None)
         self.finish_timeout, self.max_gap_ms = float(finish_timeout), int(max_gap_ms)
@@ -236,7 +237,8 @@ class StreamingWords:
         self.ring = AudioRing(RATE, ring_seconds, max_drift_ms=max_gap_ms)
         self.resampler = StreamResampler(RATE, session.rate)
         aligner_id = getattr(aligner, 'model_id', None)
-        self.spec = streaming_capability(f"1.{session.version}{'.' + aligner_id if aligner_id else ''}".replace(':', '.'))
+        self.spec = streaming_capability(f"1.{session.version}{'.' + aligner_id if aligner_id else ''}".replace(':', '.'),
+                                         capability_id)
         self.name, self.version = session.name, session.version
         self._opened, self._outbox, self._lane = False, [], None
         self._segments = deque()      # (first, last) stream samples of commits not yet named by the recogniser
@@ -253,7 +255,7 @@ class StreamingWords:
         self._history = deque(maxlen=8)   # the last committed texts (a fork's context)
         self._owns_aligner = True
         self._options = dict(language=language, partials=partials, finish_timeout=finish_timeout,
-                             ring_seconds=ring_seconds, max_gap_ms=max_gap_ms)
+                             ring_seconds=ring_seconds, max_gap_ms=max_gap_ms, capability_id=capability_id)
 
     async def _open(self):
         if not self._opened:
@@ -295,7 +297,9 @@ class StreamingWords:
         await self._commit()
         await self.session.end()
         deadline = time.monotonic() + self.finish_timeout
-        while (self._waiting > 0 or not self.session.manual_commit and not self.session.ended) \
+        closes = getattr(self.session, 'closes_on_end', False)   # it answers what it holds, then closes
+        while ((not self.session.ended) if closes else (
+                self._waiting > 0 or not self.session.manual_commit and not self.session.ended)) \
                 and time.monotonic() < deadline and not self._pump.done():
             await asyncio.sleep(.05)
         if self._lane is not None:

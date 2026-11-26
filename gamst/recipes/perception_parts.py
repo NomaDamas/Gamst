@@ -88,7 +88,9 @@ async def _word_verify(options, context):
     """The verification lane (:mod:`gamst.providers.word_verification`): a second recogniser, diarization of windows
     and the few-shot voice settle the words counted at once. Hosted by default (OpenAI gpt-live-transcribe with the
     counted words as keywords + Qwen3-ForcedAligner here; pyannoteAI Precision-3): ``--allow-remote-asr`` is the
-    owner's opt-in for both, and each says its price first."""
+    owner's opt-in for the recogniser and ``--allow-remote-diarization`` for pyannoteAI, and each says its price first.
+    More recognisers vote when the item reads their ``speech.transcript_words`` and its ``"rule"`` says ``"vote": true``
+    (off by default)."""
     from ..providers.pyannoteai import PyannoteAI
     from ..providers.slot_sources import HostedBatch
     from ..providers.word_verification import WordVerification
@@ -103,7 +105,7 @@ async def _word_verify(options, context):
     recogniser = (await _stream_words(hearing, context))['module']
     diarization = dict(_registry_config('audio.diarization', options.get('diarizer', VERIFY_DIARIZER)) or {},
                        **(options.get('diarizer_config') or {}))
-    if context.get('allow_remote_asr'):
+    if context.get('allow_remote_diarization'):
         diarization['allow_remote'] = True
     diarization.pop('exclusive', None)
     try:
@@ -111,15 +113,23 @@ async def _word_verify(options, context):
     except PermissionError:
         await recogniser.close()
         raise SystemExit(f"{options.get('name')}: {options.get('diarizer', VERIFY_DIARIZER)} sends the sound to "
-                         'pyannoteAI (it leaves this device and is billed per job, 20 s minimum): add --allow-remote-asr '
+                         'pyannoteAI (it leaves this device and is billed per job, 20 s minimum): add --allow-remote-diarization '
                          'to consent') from None
     print(f"note: verification diarization: windows of the sound go to pyannoteAI ({client.model}) as they become "
           f"complete; list price {client.eur_per_hour} EUR per hour of audio, 20 s minimum per job", file=sys.stderr)
     diarizer = HostedBatch(client)
     diarizer.name = f'pyannoteai:{client.model}'
+    from . import PARTS
+    items = {item['name']: item for item in context.get('modules') or ()}
+    voters = [source for source in consumes if source.split(':', 1)[0] in items
+              and PARTS[items[source.split(':', 1)[0]]['use']].transcribes]
+    rule = dict(options.get('rule') or {})
+    if voters:      # another recogniser is read: it votes, and a word is said when two of the three wrote it
+        rule.setdefault('vote', True)
+        rule.setdefault('decide', 'majority')
     module = WordVerification(recogniser, diarizer, await speaker_embedder(options, context),
                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
-                              audio=audio, rule=options.get('rule'), voice=dict(
+                              audio=audio, rule=rule, voice=dict(
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
                                   is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
                               **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
@@ -458,7 +468,9 @@ async def _stream_words(options, context):
         config = dict(registry, **(options.get('config') or {}))
         if context.get('allow_remote_asr'):
             config['allow_remote'] = True
-        for key in ('endpoint', 'api_key_env', 'model', 'commit_strategy', 'delay', 'prompt', 'time_base'):
+        for key in ('endpoint', 'api_key_env', 'model', 'commit_strategy', 'delay', 'prompt', 'time_base', 'max_delay',
+                    'endpointing', 'mode', 'min_turn_silence', 'max_turn_silence', 'vad_threshold',
+                    'end_of_utterance_silence_trigger'):
             if options.get(key):
                 config[key] = options[key]
         config['language'] = language
@@ -497,7 +509,9 @@ async def _stream_words(options, context):
         if chosen.manual_commit:
             endpointer = Endpointer(**{key: float(options[key]) for key in ENDPOINT_KEYS if key in options})
         module = StreamingWords(chosen, aligner=aligner, language=language, partials=bool(options.get('partials')),
-                                endpointer=endpointer)
+                                endpointer=endpointer,
+                                # a second recogniser of the run (a voter) commits under a capability of its own
+                                **({'capability_id': options['capability_id']} if options.get('capability_id') else {}))
         return dict(module=module, spec=module.spec)
     config, python, profile = _entry(options, context, 'streaming.asr.words')
     config = dict(config, language=language, partials=bool(options.get('partials')))

@@ -431,7 +431,7 @@ def _marks(records):
     revised, targets = {}, set()
     for record in sorted((record for record in records if record.marks), key=lambda item: (item.known or 0, item.ts)):
         for event_id, revises, state, reason in record.marks.values():
-            if revises is not None and state in ('final', 'revoked'):
+            if revises is not None and state in ('final', 'revoked', 'uncertain'):
                 revised[revises] = state, reason, record.id      # the newest revision decides
             elif event_id is not None:
                 targets.add(event_id)
