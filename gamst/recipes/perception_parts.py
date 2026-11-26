@@ -12,7 +12,7 @@ import sys
 
 from ..crew.modules import WorkerModule
 
-VOICE_PARTS = ('speaker-verify', 'speaker-gate', 'target-speech')    # what ties sound to an enrolled voice
+VOICE_PARTS = ('speaker-verify', 'speaker-gate', 'target-speech', 'speaker-tracks')    # what ties sound to an enrolled voice
 
 
 def _entry(options, context, profile):
@@ -55,6 +55,58 @@ async def _speaker_verify(options, context):
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
                            **arguments)
+    return dict(module=module, spec=module.spec)
+
+
+async def _speaker_slots(options, context):
+    """Streaming speaker activity (``audio.diarization``: who is active, per slot, not who it is), in its own environment.
+
+    ``"mode"`` and ``"threshold"`` go to the model's config; audio reaches it in whole 10 ms blocks on a sample clock.
+    """
+    from ..crew.modules import WorkerModule
+    from ..process_provider import ProcessProvider
+    from ..providers.speaker_tracks import WholeBlocks
+    if isinstance(options.get('config'), dict):
+        config, python = dict(options['config']), options.get('python') or sys.executable
+        profile = options.get('profile')
+        if not profile:
+            raise SystemExit(f"{options.get('name')}: a module with its own \"config\" names its worker \"profile\"")
+    else:
+        entry = context['installed'](options)
+        config, python, profile = dict(entry['config']), entry.get('python') or sys.executable, entry.get('provider_profile')
+    python = context.get('worker_python') or python
+    config.update({key: options[key] for key in ('mode', 'threshold') if key in options})
+    worker = await ProcessProvider.open(python, profile, config, startup_timeout=300, inference_timeout=60)
+    module = WholeBlocks(WorkerModule(worker))
+    return dict(module=module, spec=module.spec)
+
+
+async def _speaker_tracks(options, context):
+    """Each slot's own sound against the enrolled voice; each word goes to the slot active when it was said."""
+    from ..providers.speaker_tracks import SpeakerTracks
+    arguments = {name: options[name] for name in ('piece_ms', 'min_ms', 'max_slot_ms', 'stable_ms', 'ring_seconds',
+                                                  'margin_ms', 'wait_ms', 'min_dbfs', 'overlap', 'capability_id')
+                 if name in options}
+    threshold = context.get('speaker_threshold')
+    module = SpeakerTracks(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
+                           threshold=float(options.get('threshold', .5) if threshold is None else threshold), **arguments)
+    return dict(module=module, spec=module.spec)
+
+
+async def _track_verify(options, context):
+    """Settles the provisional words of ``speaker-tracks`` in its own lane (``"queue"``, default 256 records)."""
+    from ..providers.speaker_tracks import TrackVerification
+    module = TrackVerification(reference=options.get('reference', 'voice'), **{
+        name: int(options[name]) for name in ('settle_ms', 'window_ms') if name in options})
+    return dict(module=module, spec=module.spec, queue=int(options.get('queue', 256)))
+
+
+async def _transcript_replay(options, context):
+    """Recorded ``speech.transcript_words`` given when the ASR gave them (``"file"``: :mod:`gamst.providers.transcript_replay`)."""
+    from ..providers.transcript_replay import TranscriptReplay
+    if not options.get('file'):
+        raise SystemExit(f"{options.get('name')}: transcript-replay needs \"file\" (a words JSONL)")
+    module = TranscriptReplay(options['file'])
     return dict(module=module, spec=module.spec)
 
 
@@ -509,6 +561,10 @@ def parts(Part):
                                 build=_speaker_sources),
         'hosted-identify': Part('module', role='audio.speaker_turns', candidate='pyannoteai.precision2',
                                 build=_hosted_identify),
+        'speaker-slots': Part('module', role='audio.diarization', candidate='nemotron3', build=_speaker_slots),
+        'speaker-tracks': Part('module', **speech, build=_speaker_tracks),
+        'track-verify': Part('module', build=_track_verify),
+        'transcript-replay': Part('module', build=_transcript_replay, transcribes=True),
         'whisper-words': Part('module', role='audio.asr', candidate='faster_whisper.small', build=_whisper_words,
                               transcribes=True),
         'qwen-words': Part('module', role='audio.asr', candidate='qwen3.asr_1_7b.transformers',

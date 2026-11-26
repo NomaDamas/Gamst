@@ -38,7 +38,7 @@ from types import SimpleNamespace
 
 from .capabilities import is_raw_key as _is_raw_key
 from .context import compact_observation, is_context_observation
-from .counting import GAP_CAPABILITY as GAPS, INSTRUCTION_CAPABILITY as INSTRUCTIONS
+from .counting import GAP_CAPABILITY as GAPS, INSTRUCTION_CAPABILITY as INSTRUCTIONS, REVISION
 from .observation_pages import _encode as seal_cursor, _open as open_cursor
 from .revisions import LATE_MS, RETRACTION, depends_on, record_span, span_of, time_ms
 
@@ -301,7 +301,7 @@ class _Record:
     """
     __slots__ = ('id', 'payload', 'known', 'ts', 'type', 'capability', 'name', 'named', 'source', 'sensor', 'clock',
                  'model', 'models', 'context', 'freshness', 'declared', 'modality', 'supersedes', 'utterance',
-                 'revision', 'partial', 'span', 'items', 'gap_events')
+                 'revision', 'partial', 'span', 'items', 'gap_events', 'marks')
 
     def __init__(self, payload, known, record=None, shared=None):
         record = json.loads(payload) if record is None else record
@@ -334,11 +334,16 @@ class _Record:
             self.partial = value.get('status') == 'partial'
             if self.capability == GAPS:
                 self.gap_events = value.get('events') or ()
-        items = []
+        items, self.marks = [], None
         for kind, index, start, end in _split(value, self.ts, self.span)[1]:
             phase = match = None
             if kind == 'events':
                 event = value[kind][index]
+                if event.get('event') == REVISION and isinstance(event.get('revises'), str) or isinstance(
+                        event.get('event_id'), str):     # revision states (gamst.counting)
+                    self.marks = self.marks or {}
+                    self.marks[len(items)] = (event.get('event_id'), event.get('revises') if event.get(
+                        'event') == REVISION else None, event.get('state'), event.get('reason'))
                 family, _, phase = str(event.get('event', event.get('type'))).rpartition('.')
                 if phase in ('matched', 'ended'):
                     match = json.dumps([family, event.get('reference'), event.get('reference_id'), event.get('index'),
@@ -352,11 +357,16 @@ class _Record:
 
 class _Item:
     """One thing a column says, at a time (an instant) or over an interval; local capture time."""
-    __slots__ = ('start', 'end', 'kind', 'index', 'record', 'clock', 'instant', 'gone', '_built')
+    __slots__ = ('start', 'end', 'kind', 'index', 'record', 'clock', 'instant', 'gone', '_built', 'revised')
 
-    def __init__(self, start, end, kind, index, record, clock, instant, gone):
+    def __init__(self, start, end, kind, index, record, clock, instant, gone, revised=None):
         self.start, self.end, self.kind, self.index, self.record = start, end, kind, index, record
-        self.clock, self.instant, self.gone, self._built = clock, instant, gone, None
+        self.clock, self.instant, self.gone, self._built, self.revised = clock, instant, gone, None, revised
+
+    def marked(self, revised):
+        """The same event with the state a later revision gave it: ``(state, reason, record ID)``."""
+        return _Item(self.start, self.end, self.kind, self.index, self.record, self.clock, self.instant, self.gone,
+                     revised)
 
     def built(self, key):
         """``(ref, entry, digest)``: the digest covers content only, so equal evidence has an equal revision."""
@@ -370,6 +380,9 @@ class _Item:
             else:
                 value = value[self.kind][self.index]
             shown, flags = summary(value, None if observation.get('capability') else observation.get('name'))
+            if self.revised is not None and isinstance(shown, dict):
+                state, reason, by = self.revised
+                shown = dict(shown, state=state, revised_by=dict(record_id=by, **({'reason': reason} if reason else {})))
             entry = dict(capability=key, kind=self.kind)
             entry.update(dict(at_ms=self.start) if self.instant else dict(start_ms=self.start, end_ms=self.end))
             entry['value'] = shown
@@ -412,6 +425,19 @@ def _evidence(record, clock, gone=frozenset()):
     return _Item(local(record.ts), local(record.ts), 'record', None, record, clock, True, gone), intervals
 
 
+def _marks(records):
+    """``(revised, targets)`` of records of one capability: ``{event_id: (state, reason, record ID)}`` of the newest
+    revision of each event, and the IDs of the events among them (any source of the capability)."""
+    revised, targets = {}, set()
+    for record in sorted((record for record in records if record.marks), key=lambda item: (item.known or 0, item.ts)):
+        for event_id, revises, state, reason in record.marks.values():
+            if revises is not None and state in ('final', 'revoked'):
+                revised[revises] = state, reason, record.id      # the newest revision decides
+            elif event_id is not None:
+                targets.add(event_id)
+    return revised, targets
+
+
 @dataclass
 class _Column:
     name: str                           # capability ID, else signal name, else a module or requested name
@@ -426,15 +452,19 @@ class _Column:
     processed: int | None = None
     key: str = ''
 
-    def place(self, gone, cache):
-        """Replace superseded evidence: a newer revision of an utterance, an event whose end is now known."""
+    def place(self, gone, cache, marks=({}, set())):
+        """Replace superseded evidence: a newer revision of an utterance, an event whose end is now known.
+
+        ``marks``: ``(revised, targets)`` of this capability (:func:`_marks`): an event shows the state its newest
+        revision gave it, and a revision whose event is shown is not shown on its own.
+        """
         latest = {}
         for order, record in enumerate(_breathe(self.records)):
             if record.utterance is not None:
                 rank = record.revision, record.ts, order
                 if record.utterance not in latest or rank > latest[record.utterance][0]:
                     latest[record.utterance] = rank, record.id
-        matched = {}
+        matched, (revised, targets) = {}, marks
         for record in _breathe(self.records):
             if record.utterance is not None and latest[record.utterance][1] != record.id:
                 continue
@@ -444,7 +474,12 @@ class _Column:
             instant, intervals = cache[which]
             if instant is not None:
                 self.instants.append(instant)
-            for item, (_, _, _, _, phase, match) in zip(intervals, record.items):
+            for position, (item, (_, _, _, _, phase, match)) in enumerate(zip(intervals, record.items)):
+                mark = record.marks.get(position) if record.marks else None
+                if mark is not None and mark[1] is not None and mark[1] in targets:
+                    continue        # shown as the state of the event it revises
+                if mark is not None and mark[0] in revised:
+                    item = item.marked(revised[mark[0]])
                 if phase == 'ended' and match in matched:
                     self.intervals[matched.pop(match)] = item    # same match, final end
                     continue
@@ -668,9 +703,13 @@ class _Query:
                 if self.wanted is None or {name, source['name']} & self.wanted:
                     columns[name, source['source_id'], source['sensor_id'], key] = _Column(
                         name, source['source_id'], source['sensor_id'], uncalibrated=key)
-        answered, covered = set(), set()
+        answered, covered, marks = set(), set(), {}
         for column in columns.values():
-            column.place(gone, self.cache)
+            if any(record.marks for record in column.records):
+                marks.setdefault(column.name, []).extend(column.records)
+        marks = {name: _marks(records) for name, records in marks.items()}
+        for column in columns.values():
+            column.place(gone, self.cache, marks.get(column.name, ({}, set())))
             models = {record.model for record in column.records if record.model and not record.capability}
             parts = [part for part in modules.values() if part.outputs & ({column.name} | models)]
             covered.update(part.module for part in parts)

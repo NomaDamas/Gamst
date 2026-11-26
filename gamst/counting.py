@@ -4,6 +4,17 @@ A count is context, not a model output: it is computed from committed records ea
 the same for an agent over MCP, an application over the SDK, and a replay of the same input.
 Events are the ``events`` arrays inside observation values; an event's name is its ``event`` or
 ``type`` field (both conventions exist in providers); ``group_by='@event'`` groups by that name.
+
+Revision states (any capability). An event may be committed at once as ``state: "provisional"`` with a stable
+``event_id``; a later record of the same capability marks it with an ``event.revision`` event::
+
+    {"event": "event.revision", "revises": "<event_id>", "state": "final" | "revoked", "reason": "...",
+     "start_ms": ..., "end_ms": ...}      # the revised event's own times, so a window that holds it holds this too
+
+An event without ``state`` is final as committed. The newest revision of an ``event_id`` decides its state. A count
+is of provisional and final events; revoked ones are listed in ``states`` but not counted, unless ``where`` asks
+for a state (``{"state": "revoked"}``). Revisions are no events of their own (``event="event.revision"`` counts
+them). Nothing is changed in the record that holds the revised event.
 """
 from __future__ import annotations
 
@@ -17,6 +28,46 @@ MAX_SCAN = 20000
 GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames that never reached a module
 INSTRUCTION_CAPABILITY = 'pipeline.instructions'    # records of gamst.pipeline: other words or another movement
 IDENTITY = ('reference_id', 'reference_revision')
+REVISION = 'event.revision'        # marks an earlier event (``revises``: its ``event_id``) final or revoked
+STATES = ('provisional', 'final', 'revoked')
+
+
+def event_name(item):
+    return item.get('event', item.get('type'))
+
+
+def revisions(rows):
+    """``{event_id: (revision event, record)}``: the newest revision of each event in ``rows`` (oldest first)."""
+    found = {}
+    for record in rows:
+        value = (record.get('observation') or {}).get('value')
+        for item in (value.get('events') if isinstance(value, dict) else None) or ():
+            if isinstance(item, dict) and event_name(item) == REVISION and isinstance(item.get('revises'), str) \
+                    and item.get('state') in STATES[1:]:
+                found[item['revises']] = item, record
+    return found
+
+
+def state_of(item, revised):
+    """(state, (revision event, its record) or None) of one event under ``revised`` (:func:`revisions`)."""
+    found = revised.get(item.get('event_id')) if isinstance(item.get('event_id'), str) else None
+    if found is not None:
+        return found[0]['state'], found
+    state = item.get('state')
+    return (state if state in STATES else 'final'), None
+
+
+def with_state(item, revised):
+    """The event as it stands now: its resolved ``state``, and what revised it (``revised_by``)."""
+    if not isinstance(item.get('event_id'), str) and 'state' not in item:
+        return item
+    state, found = state_of(item, revised)
+    if found is None:
+        return item if item.get('state') == state else dict(item, state=state)
+    revision, record = found
+    return dict(item, state=state, revised_by=dict(
+        record_id=record.get('id'), timestamp_ms=record.get('timestamp_ms'),
+        **{key: revision[key] for key in ('reason',) if key in revision}))
 
 
 def gaps_of(records, capability=None):
@@ -84,11 +135,16 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     Events of different revisions of one instruction (reference) are never counted together: the newest
     (``current``: :func:`current_instructions`, or that of a newer event) is counted, the others are listed in
     ``other_instructions``. ``where`` with ``reference_id`` or ``reference_revision`` chooses.
+
+    Revision states (module docstring): revoked events are not counted unless ``where`` names a ``state``;
+    ``states`` (and with ``group_by``, ``group_states``) say how many of each there are, once any event has one.
     """
     where = where or {}
     count, groups, evidence = 0, {}, []
     others, of = {}, set()
     newest = {} if {*IDENTITY} & set(where) else newest_instructions(rows, current)
+    revised = {} if event == REVISION else revisions(rows)
+    states, group_states, stated = dict.fromkeys(STATES, 0), {}, bool(revised)
     for record in rows:
         observation = record.get('observation') or {}
         value = observation.get('value')
@@ -99,10 +155,22 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
             if not isinstance(item, dict):
                 continue
             name = item.get('event', item.get('type'))
-            if event is not None and name != event:
+            if event is not None and name != event or event is None and name == REVISION:
                 continue
+            if event != REVISION:
+                item = with_state(item, revised)
+                stated = stated or 'state' in item
+                if 'state' in where and 'state' not in item:
+                    item = dict(item, state='final')     # as committed
             if any(_lookup(item, path) != (True, expected) for path, expected in where.items()):
                 continue
+            state = item.get('state', 'final') if event != REVISION else None
+            if state is not None:
+                states[state] += 1
+                if group_by == '@event':
+                    group_states.setdefault(name, dict.fromkeys(STATES, 0))[state] += 1
+                if state == 'revoked' and 'state' not in where:
+                    continue
             if any(key in item for key in IDENTITY):
                 reference, which = _about(item)
                 if not is_current(item, newest):
@@ -124,6 +192,10 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     result = dict(count=count, evidence=evidence, evidence_truncated=count > len(evidence))
     if group_by is not None:
         result['groups'] = groups
+    if stated:      # provisional + final = count; revoked ones are not in it
+        result['states'] = states
+        if group_states:
+            result['group_states'] = group_states
     for name, found in (('instructions', dict.fromkeys(sorted(of, key=str))), ('other_instructions', others)):
         if found:
             result[name] = [dict(zip(('reference', *IDENTITY), key), **({} if number is None else dict(count=number)))
@@ -143,9 +215,10 @@ def event_rows(records, *, capability=None, event=None):
 
     An event's own fields follow the record's capability, capture time and IDs. A match and its end are one
     row: ``exemplar.ended`` gives its ``exemplar.matched`` row (same capability, reference and start) the final
-    ``end_ms`` and ``best_distance``. Events with raw or private fields are left out, never renamed.
+    ``end_ms`` and ``best_distance``. Events with raw or private fields are left out, never renamed. An event with a
+    revision state has its current one (``state``, ``revised_by``); the revisions are rows too.
     """
-    rows, open_matches = [], {}
+    rows, open_matches, revised = [], {}, revisions(records)
     for record in records:
         observation = record.get('observation') or {}
         value = observation.get('value')
@@ -162,6 +235,8 @@ def event_rows(records, *, capability=None, event=None):
             except ValueError:
                 continue
             kind = item.get('event', item.get('type'))
+            if kind != REVISION:
+                item = with_state(item, revised)
             family, _, phase = str(kind).rpartition('.')
             key = (record.get('subject_id'), name, family, item.get('reference'), item.get('reference_id'),
                    item.get('reference_revision'), item.get('start_ms'))

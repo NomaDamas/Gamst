@@ -92,8 +92,10 @@ def choose(recipe, include=(), exclude=()):
     """Resolve ``"optional": "on" | "off"`` modules (``--with`` / ``--without``, by module or part name).
 
     A module may name what it reads when an optional one is absent (``consumes_without``), what it reads
-    only while an optional one is present (``consumes_optional``), and a
-    reference or record what it is for (``for``); both follow the choice.
+    only while an optional one is present (``consumes_optional``), what it reads instead while an optional one is
+    present (``consumes_with``), and a reference or record what it is for (``for``); both follow the choice. An
+    optional module that does the work of others (``replaces``) leaves them out while it runs, unless they are
+    asked for by name too.
     """
     optional = {item['name']: item for item in recipe.get('modules', ()) if item.get('optional')}
 
@@ -111,12 +113,17 @@ def choose(recipe, include=(), exclude=()):
     included, excluded = expand(include), expand(exclude)
     absent = {name for name, item in optional.items()
               if name in excluded or (item['optional'] == 'off' and name not in included)}
+    for name, item in optional.items():
+        if name not in absent:
+            absent |= {other for other in _listed(item.get('replaces')) if other in optional and other not in included}
     modules = []
     for item in recipe.get('modules', ()):
         if item['name'] in absent:
             continue
         for name in [name for name in item.get('consumes_without', {}) if name in absent]:
             item = dict(item, consumes=item['consumes_without'][name])
+        for name in [name for name in item.get('consumes_with', {}) if name in optional and name not in absent]:
+            item = dict(item, consumes=item['consumes_with'][name])
         if item.get('consumes_optional'):    # read only while the optional module that gives it is in the run
             present = [source for source in item['consumes_optional'] if not any(
                 other['name'] in absent and (source.split(':', 1)[0] == other['name'] or source in other.get('emits', ()))
@@ -632,6 +639,12 @@ def open_inputs(recipe, args, inputs):
                 clock.add(length + options.get('at_s', 0.) + max(0, offsets[item['id']]) / 1000)
     except (RuntimeError, OSError, ValueError) as error:
         raise SystemExit(str(error)) from error
+    if getattr(args, 'as_live', False):
+        from ..inputs import PacedInput
+        if any(live):
+            raise SystemExit('--as-live paces a recording; a live input has its own pace')
+        pace = {}
+        sources = {key: PacedInput(source, pace) for key, source in sources.items()}
     return sources, offsets
 
 
@@ -854,11 +867,12 @@ class _LiveMCP:
 
 async def run_pipeline(recipe, args):
     from .. import Gamst
-    from ..counting import MAX_SCAN, count_events, current_instructions, is_current, newest_instructions
+    from ..counting import MAX_SCAN, REVISION, count_events, current_instructions, is_current, newest_instructions, \
+        revisions, with_state
     from ..engine import timestamp
     from .instructions import Instructions
     recipe = dict(recipe, records=list(recipe.get('records', ())))     # an instruction may add one
-    report = dict(recipe=recipe['name'], frames=0)
+    report = dict(recipe=recipe['name'], frames=0, **({'paced': True} if getattr(args, 'as_live', False) else {}))
     inputs, first = recipe['inputs'], recipe['inputs'][0]['id']    # several: "frames" are those of the first input
     if len(inputs) > 1:
         report['input_frames'] = {item['id']: 0 for item in inputs}
@@ -948,6 +962,10 @@ async def run_pipeline(recipe, args):
                 if counted.get('other_instructions'):   # what was looked for before: never added to the count
                     report.setdefault('other_instructions', {})[capability] = counted['other_instructions']
                 report['events'][capability] = [item['event'] for item in counted['evidence']]
+                if counted.get('states'):   # provisional + final are counted; revoked ones are not
+                    report.setdefault('states', {})[capability] = counted.get('group_states') or counted['states']
+                    report.setdefault('event_states', {})[capability] = event_states(
+                        own, human.store.known_times([row['id'] for row in own]))
                 report['lost'][capability] = pipeline.lost(capability)
             # Complete: no frame the count depends on was lost, failed or captured while a module was off.
             report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
@@ -962,9 +980,15 @@ async def run_pipeline(recipe, args):
                 own = [row for row in rows if row['observation']['capability']['id'] == truth['capability']]
                 newest = newest_instructions(own, current_instructions(
                     [change for _, change in human.instruction_changes() if truth['capability'] in change['capabilities']]))
-                found = [event for row in own for event in row['observation']['value']['events'] if is_current(event, newest)]
-                report['score'] = dict(score(truth, found, start_ms=report.get('start_ms', 0)),
+                found = [event for row in own for event in row['observation']['value']['events']
+                         if is_current(event, newest) and event.get('event') != REVISION]
+                revised = revisions(own)
+                current = [event for event in (with_state(item, revised) for item in found) if event.get('state') != 'revoked']
+                report['score'] = dict(score(truth, current, start_ms=report.get('start_ms', 0)),
                                        complete=not pipeline.lost(truth['capability'])['gaps'])
+                if revised or any('state' in event for event in found):     # what was counted at once, before revisions
+                    report['score_provisional'] = score(truth, [event for event in found if 'replaces' not in event],
+                                                        start_ms=report.get('start_ms', 0))
             if any(PARTS[item['use']].transcribes or item['use'] == 'prosody' for item in recipe['modules']):
                 report['speaker'] = 'enrolled' if speaker_bound(recipe['modules']) else 'not_bound'
             report['pipeline'] = pipeline.status()
@@ -978,7 +1002,7 @@ async def run_pipeline(recipe, args):
                 await live.close()
             await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
-                                                   'failures', 'warnings', 'errors', 'score')
+                                                   'states', 'failures', 'warnings', 'errors', 'score', 'score_provisional')
                       if key in report and (key not in ('lost', 'errors', 'failures', 'warnings') or key == 'lost' and not report['complete']
                                             or key != 'lost' and report[key])},
                      ensure_ascii=False), flush=True)
@@ -988,6 +1012,28 @@ async def run_pipeline(recipe, args):
     if failed and not any(item['frames'] for item in report['pipeline']['inputs'].values()):
         raise SystemExit('; '.join(f"{item['input']}: {item['error']}" for item in failed))
     return report
+
+
+def event_states(rows, known):
+    """Each event with a revision state as it stands now, and when it was committed and settled.
+
+    ``committed_ms`` / ``settled_ms``: when the Store learned the event and its revision (``known``: record ID ->
+    knowledge time); ``capture_ms`` / ``settled_capture_ms``: the capture times of those records.
+    """
+    from ..counting import REVISION, revisions, with_state
+    revised, found = revisions(rows), []
+    for row in rows:
+        for item in row['observation']['value'].get('events') or ():
+            if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
+                continue
+            if 'state' not in item and item['event_id'] not in revised:
+                continue
+            entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'])
+            revision = revised.get(item['event_id'])
+            if revision is not None:
+                entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'])
+            found.append(entry)
+    return found
 
 
 async def enroll(recipe, args):
@@ -1015,7 +1061,7 @@ async def _enroll_identity(recipe, args, kind):
     context = dict(installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)))
     if kind == 'person':
         return await enrollment.enroll_person(recipe, args, build_pipeline=build_pipeline, context=context)
-    item = next((item for item in recipe['modules'] if item['use'] == 'speaker-verify'), None)
+    item = next((item for item in recipe['modules'] if item['use'] in ('speaker-verify', 'speaker-tracks')), None)
     if item is None:
         raise SystemExit(f"{recipe['name']} has no speaker-verify module to enroll for")
     (inputs, sources) = (inputs_of(recipe, upstream(recipe['modules'], item['name'])), None)
@@ -1080,6 +1126,8 @@ def _source_options(parser, *, clips=False):
                         help='shrink camera frames to at most this many pixels on the longer side (less to compute)')
     parser.add_argument('--capture-fps', type=float, help='override file timing for high-fps captures')
     parser.add_argument('--frames', type=int, help='stop after this many frames (several inputs: of the video)')
+    parser.add_argument('--as-live', action='store_true',
+                        help='give a recording at its own pace, as a live capture: nothing waits for slow modules')
     parser.add_argument('--models', help='weight root or an existing flat weights directory (default: the setup profile)')
     parser.add_argument('--worker-python', help='python for model worker processes (default: the setup profile)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'])
@@ -1223,6 +1271,11 @@ def main(argv=None):
     takes.add_argument('--all-throws', action='store_true',
                        help='count every throw of a take, one process per take (default: the best-named throw, '
                             'models kept loaded)')
+    given = sys.argv[1:] if argv is None else list(argv)
+    if given[:1] == ['bench']:       # its own options; the rest goes to each run
+        from .bench import main as bench
+        return bench(given[1:])
+    actions.add_parser('bench', help='one recipe on several owner clips, paced as live, one table (gamst/recipes/bench.py)')
     args = parser.parse_args(argv)
     if getattr(args, 'all_throws', False):
         args.fast = False

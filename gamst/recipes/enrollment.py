@@ -33,7 +33,8 @@ async def _close(embedder):
 
 
 def _item(recipe, use):
-    found = next((item for item in recipe['modules'] if item['use'] == use), None)
+    uses = ('speaker-verify', 'speaker-tracks') if use == 'speaker-verify' else (use,)    # the same speaker model
+    found = next((item for item in recipe['modules'] if item['use'] in uses), None)
     if found is None:
         raise SystemExit(f"{recipe['name']} has no {use} module to enroll for")
     return found

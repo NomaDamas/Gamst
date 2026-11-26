@@ -1047,6 +1047,39 @@ class PluginInput:
         return close() if callable(close) else None
 
 
+class PacedInput:
+    """A recording given at its own pace, as a live capture: each frame when its last sample would have been captured,
+    stamped with that moment. Nothing waits for slow modules, as with a camera or microphone: what falls behind is
+    a declared gap. ``pace`` (a dict) is shared by the inputs of one run, so they keep their places to each other.
+    """
+    live = True
+
+    def __init__(self, source, pace=None):
+        if getattr(source, 'live', True):
+            raise ValueError('only a recording is paced; a live input has its own pace')
+        self.source, self.modality = source, source.modality
+        self.pace = {} if pace is None else pace
+
+    @property
+    def missed(self):
+        return getattr(self.source, 'missed', 0)
+
+    async def frames(self):
+        from dataclasses import replace
+        async for frame in self.source.frames():
+            if 'recorded_ms' not in self.pace:
+                self.pace.update(recorded_ms=frame.timestamp_ms, wall_ms=_now_ms())
+            due = self.pace['wall_ms'] + frame.timestamp_ms - self.pace['recorded_ms']
+            wait = due - _now_ms()
+            if wait > 0:
+                await asyncio.sleep(wait / 1000)
+            yield replace(frame, timestamp_ms=due)
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        return close() if callable(close) else None
+
+
 def open_source(kind, value=None, **options):
     """The input module for a recipe source name (``sound``: the sound track of a media file)."""
     if kind == 'camera':
