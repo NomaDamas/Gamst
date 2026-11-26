@@ -114,3 +114,17 @@ final words identical. Shotgun movement clip: 16/16 (text rule, collision = sudd
   per-repetition times for "달달달" via Qwen3-ForcedAligner.
 - Next after it: merge feat/instant-hud, suite via guard.sh, push, report to the owner in Korean with the per-error table and
   video paths; then continue toward "더 완벽" (owner's words): remaining errors by type, voice sample UX demo, promotion video.
+
+
+## 9. Update (after feat/instant-hud, integration 1058e67)
+
+- Merged: instant HUD (L1 at once, corrections shown when decided), voice sample options (`--record-voice-first`,
+  `--voice-range`, `--voice-wav`, automatic `--main-speaker` via Precision-3), owner-label scoring (`scripts/score_owner_clips.py`,
+  bench `error_types`), speaker decision v2 (opt-in only; it did not help in leave-one-clip-out). Suite: 15 known errors.
+- Same-recording voice (automatic main speaker), scored on owner labels (words in the enrolment segments excluded; scored person
+  words 9 / 4 / 7 / 13): final right/counted 7/12, 3/4, 6/6, 12/12 (total 28/34); L1 instant 24/30; person→other misses 37 → 1;
+  other→person 6 (5 in 뽀또, whose automatic reference was mixed: two segments score 0.42 against each other); not heard 4.
+- Videos v5 (instant HUD): `~/Desktop/홍명보/gamst/GAMST 카운트 결과/<clip>/<term>_카운트_v5_즉시.mp4`.
+- Left: MCP/HUD hook for the voice-recording step; running main speaker for live input without a sample; remaining errors are
+  other voices that CAM++ and Precision-3 confuse with the person (better sample = owner sample on the same input; stronger
+  speaker model or TSE did not help so far).
