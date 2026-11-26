@@ -51,11 +51,17 @@ def load_events(report, wanted):
     return sorted(found, key=lambda event: event['t'])
 
 
-def render(report, video, out, *, title, count, other=None, count_label='counted', other_label='not counted',
+def render(report, video, out, *, title, count, other=None, support=None, count_label='counted', other_label='not counted',
            note='', slow=1, points=None, start=0., end=None):
     import cv2
     import numpy as np
     counted, others = load_events(report, count), load_events(report, other)
+    if support:     # another module's word on each counted event (e.g. whether it made a sound)
+        notes = [event for event in report['events'].get(support, ()) if event_time(event)]
+        for event in counted:
+            near = min(notes, key=lambda item: abs(event_time(item) - event_time(event)), default=None)
+            if near is not None and abs(event_time(near) - event_time(event)) <= 50:
+                event['support'] = near
     capture = cv2.VideoCapture(str(video))
     if not capture.isOpened():
         raise SystemExit(f'cannot open {video}')
@@ -138,6 +144,9 @@ def render(report, video, out, *, title, count, other=None, count_label='counted
 
 
 def count_detail(event):
+    near = event.get('support')
+    if near is not None:
+        return f"쿵 소리 +{near['delay_ms']}ms" if 'delay_ms' in near else '소리 없음, 동작으로 판정'
     if 'delay_ms' in event:
         return f"+{event['delay_ms']}ms 뒤 충돌음"
     if 'speaker_score' in event:
@@ -153,6 +162,7 @@ def main(argv=None):
     parser.add_argument('--title', required=True)
     parser.add_argument('--count', required=True, metavar='CAPABILITY:EVENT')
     parser.add_argument('--other', metavar='CAPABILITY:EVENT')
+    parser.add_argument('--support', metavar='CAPABILITY', help='events of another module shown beside each counted one')
     parser.add_argument('--count-label', default='counted')
     parser.add_argument('--other-label', default='not counted')
     parser.add_argument('--note', default='')

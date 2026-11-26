@@ -7,7 +7,8 @@ by its start)::
      "count": 7,                                  # what a person counted
      "events": [{"t_s": 1.2}, {"t_s": 3.4, "value": 3}, ...],   # optional: when, and a value
      "value_key": "flips",                        # optional: event field compared with "value"
-     "tolerance_s": 0.5}
+     "tolerance_s": 0.5,
+     "at": "start"}                               # optional: compare by "start" (default) or "end"
 
 The score reports only what was measured: the count error, and, when times are given, matched
 events (greedy by time within the tolerance), precision, recall, mean time error, and per-event
@@ -16,8 +17,8 @@ value differences.
 from __future__ import annotations
 
 
-def _event_time_ms(event):
-    for key in ('timestamp_ms', 'start_ms', 'end_ms'):
+def _event_time_ms(event, at='start'):
+    for key in ('timestamp_ms',) + (('end_ms', 'start_ms') if at == 'end' else ('start_ms', 'end_ms')):
         if isinstance(event.get(key), (int, float)):
             return event[key]
     return None
@@ -36,8 +37,9 @@ def score(truth, events, *, start_ms):
         return result
     tolerance = float(truth.get('tolerance_s', .5)) * 1000
     key = truth.get('value_key')
-    timed = sorted(((_event_time_ms(event) - start_ms, event) for event in found
-                    if _event_time_ms(event) is not None), key=lambda item: item[0])
+    at = truth.get('at', 'start')
+    timed = sorted(((_event_time_ms(event, at) - start_ms, event) for event in found
+                    if _event_time_ms(event, at) is not None), key=lambda item: item[0])
     used, pairs = set(), []
     for expected in sorted(truth_events, key=lambda item: item['t_s']):
         target = expected['t_s'] * 1000
