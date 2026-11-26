@@ -27,9 +27,13 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 15 | Sound-word terms: "달" counts only as a whole word made of that syllable ("달", "달달달"), once per repetition, never inside other words. |
 | 16 | Keys live only in `~/.config/gamst/keys.env` (mode 600); hosted calls print their price first. |
 | 17 | Never touch anything outside GAMST (other projects, other agents' files). |
-| 19 | Clip "감스트 피파 억까": count 시발, 씨발, 씨팔, 십팔 and "18" (as some recognisers write it) as one term (owner). "18" is matched only as a whole word (never inside 180 or 2018), like the sound-word terms. Risk noted: 십팔 / 18 are also the number eighteen; such matches are flagged in the result. |
-| 20 | Clips and terms: 뽀또 (감스트 뽀또), 몇기야 (해병대식 내리갈굼), 시발/씨발/씨팔/십팔 (피파 억까), 달 as a sound word (애교쟁이 인디깅). |
 | 18 | Heavy local runs go one at a time through `try-it/guard.sh` (memory guard) after an out-of-memory crash. |
+| 19 | Clip "감스트 피파 억까": count 시발, 씨발, 씨팔, 십팔 and "18" (as some recognisers write it) as one term (owner). "18" is matched only as a whole word (never inside 180 or 2018), like the sound-word terms. Risk noted: 십팔 / 18 are also the number eighteen; such matches are flagged in the result. |
+| 20 | Clips and terms: 뽀또 (감스트 뽀또), 몇기야 (해병대식 내리갈굼), 시발/씨발/씨팔/십팔/18 (피파 억까), 달 as a sound word (애교쟁이 인디깅). |
+| 21 | Verification regions follow speech: a region closes only at a speech pause after a minimum length, with a bounded maximum for continuous speech; no utterance is ever split between regions (replaces the fixed 15 s regions). |
+| 22 | Three recognisers may vote (live Scribe v3, gpt-live, Speechmatics): a word counts as said when at least two heard it; measured before it becomes the default. |
+| 23 | The recogniser defaults (live and verification) are chosen on the four owner clips, not on one: Speechmatics is the measured candidate for live (no invented word in 6 runs, ~1.2 s to final), Scribe v3 Live is today's default. |
+| 24 | Uncertain words keep the event `term.spoken` in state `uncertain` (shown, not counted, settled later by TSE or verification). |
 
 ## 2. Technical decisions and their evidence
 
@@ -71,6 +75,27 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
   person's voice; it counts the given words said by the given person.
 - **Why did the out-of-memory crash happen?** Several agents ran large models at once (Voxtral, Sortformer, DiariZen with 10.9 GB
   peak); not the catch-up design, which was not built yet. Swap filled the disk.
+
+- **What does verification check?** Two things per word. (1) Was it said: a second (and optionally third) recogniser listens
+  again; nobody else heard it → revoked (e.g. the invented word at 24.16 s). (2) Who said it: Precision-3 splits the region into
+  anonymous speakers A, B…; CAM++ compares each speaker's whole speech with the person's few-shot voice and names the person;
+  the word takes the speaker active at its time. Overlapped and unclear → uncertain, to be settled by TSE (L3).
+- **Does the LLM wait for verification?** No. A provisional word is in the Context as soon as L1 commits it; verification only
+  changes its state later (final / revoked / uncertain). Pending catch-up ranges are shown as pending.
+- **"Sending" to pyannoteAI.** pyannoteAI is a cloud API: GAMST uploads the region's audio (with margins) and gets speaker
+  segments back. That is why it has its own consent flag (`--allow-remote-diarization`).
+- **Precision-3 vs CAM++.** Precision-3 answers *when* each (anonymous) speaker talked and where speech overlaps; it does not
+  know the person. CAM++ answers *is this sound the person* by comparing with the few-shot voice. In L1 CAM++ sees ~1.5 s around a
+  word (fast, may include a neighbour); in L4 it sees the whole speech Precision-3 gave one speaker (long, clean). Precision-3
+  does not check CAM++; it gives CAM++ better material. It sits in the verification lane because it is not a streaming model.
+- **Why ~1.5 s around a word?** A word is 0.3-0.5 s; a voiceprint needs about a second to be stable. Longer windows can include a
+  neighbour: the other voice at 20.74 s scored 0.27 with 0.6 s and 0.41 with 1.5 s.
+- **Diarization vs TSE.** Diarization slices *time* (who, when; overlap = two labels on the same seconds, sound still mixed);
+  TSE slices *sound* (the person's voice extracted from the mixture). L3 runs TSE only where speech overlaps.
+- **Where did 15 s come from?** An implementation default, not tuned; it is replaced by speech-aligned regions (decision 21).
+  The extra context sent to Precision-3 (15 s before, 5 s after) keeps speaker labels stable; it does not decide the boundary.
+- **CAM++ and few-shot.** CAM++ turns sound into a 192-number voiceprint; the few-shot sample gives the reference voiceprint;
+  the score is their similarity (0-1).
 
 ## 4. Open (to decide on the owner's clip set)
 
