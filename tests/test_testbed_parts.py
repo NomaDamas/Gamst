@@ -158,7 +158,7 @@ class ScoreAtEndTest(unittest.TestCase):
     def test_truth_may_be_given_by_when_an_event_ended(self):
         from gamst.scoring import score
         events = [dict(event='e', start_ms=1000, end_ms=1500)]
-        truth = dict(event='e', count=1, tolerance_s=.1, events=[dict(t_s=.5)])
-        self.assertEqual(score(truth, events, start_ms=1000)['matched'], 1)
+        truth = dict(event='e', count=1, tolerance_s=.1, events=[dict(t_s=0.)])
+        self.assertEqual(score(truth, events, start_ms=1000)['matched'], 1)                  # by start
         self.assertEqual(score(dict(truth, at='end'), events, start_ms=1000)['matched'], 0)
-        self.assertEqual(score(dict(truth, at='end', events=[dict(t_s=.5 + .5)]), events, start_ms=1000)['matched'], 1)
+        self.assertEqual(score(dict(truth, at='end', events=[dict(t_s=.5)]), events, start_ms=1000)['matched'], 1)
