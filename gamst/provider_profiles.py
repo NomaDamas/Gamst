@@ -85,6 +85,17 @@ def capability(profile, config):
         if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:
             raise ValueError('diarization requires local bundle path and optional mode/threshold/device')
         return NemotronDiarization.capability(**{k:v for k,v in config.items() if k != 'path'})
+    if profile == 'sortformer.diarization':
+        from .providers.sortformer import SortformerDiarization
+        if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:
+            raise ValueError('sortformer requires the local .nemo path and optional mode/threshold/device')
+        return SortformerDiarization.capability(**{k:v for k,v in config.items() if k != 'path'})
+    if profile in ('pyannoteai.live.diarization', 'pyannoteai.offline.diarization'):
+        from .providers.slot_sources import hosted_capability
+        return hosted_capability(profile, config)
+    if profile == 'offline.diarization':
+        from .providers.slot_sources import local_capability
+        return local_capability(config)
     if profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         if not {'model_path','head_path','model_sha256','head_sha256'} <= set(config) or set(config)-{'model_path','head_path','model_sha256','head_sha256','window_ms','hop_ms'} or any(type(config[k]) is not str for k in ('model_path','head_path')):

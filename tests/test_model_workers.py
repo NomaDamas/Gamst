@@ -136,6 +136,8 @@ LOADERS = {
     'sapiens2.pose': 'sapiens2_pose', 'active_speaker.lightasd': 'active_speaker', 'audio.prosody': 'prosody', 'opencv.flow': 'motion',
     'streamingvlm.local': 'streaming_semantic', 'vision.rotation': 'rotation', 'faster_whisper.small': None, 'faster_whisper.large_v3_turbo': None,
     'qwen3.asr.words': 'qwen_words', 'hosted.asr.words': None,   # a hosted API loads no package
+    'sortformer.diarization': 'sortformer', 'pyannoteai.live.diarization': None, 'pyannoteai.offline.diarization': None,
+    'offline.diarization': None,   # slot_sources.py checks DiariZen's and community-1's pins in their own environments
     'pg.physical.local': None, 'opencv': None, 'sounddevice': None, 'pillow': None,   # no version check in a provider file
 }
 VERSION = re.compile(r'\d+(\.\d+)+')
@@ -209,7 +211,8 @@ class RegistryPinTest(unittest.TestCase):
                 loader = LOADERS.get(key)
                 if loader is None:
                     continue
-                pins = dict(line.split('==', 1) for line in candidate.packages if '==' in line and '@' not in line)
+                pins = dict(re.sub(r'\[.*\]', '', line).split('==', 1) for line in candidate.packages
+                            if '==' in line and '@' not in line)
                 for package, version in checked_versions(PROVIDERS / f'{loader}.py').items():
                     if pins.get(package) != version:
                         problems.append(f'{role.id} {name}: {loader}.py checks {package}=={version}, '

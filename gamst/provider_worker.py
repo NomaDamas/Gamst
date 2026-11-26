@@ -64,6 +64,18 @@ def _construct(profile, config):
     elif profile == 'nemotron3.diarization':
         from .providers.diarization import NemotronDiarization
         provider = NemotronDiarization.from_local(**config)
+    elif profile == 'sortformer.diarization':
+        from .providers.sortformer import SortformerDiarization
+        provider = SortformerDiarization.from_local(**config)
+    elif profile == 'pyannoteai.live.diarization':
+        from .providers.slot_sources import hosted_live
+        provider = hosted_live(config)
+    elif profile == 'pyannoteai.offline.diarization':
+        from .providers.slot_sources import hosted_offline
+        provider = hosted_offline(config)
+    elif profile == 'offline.diarization':
+        from .providers.slot_sources import local_offline
+        provider = local_offline(config)
     elif profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         provider = Emotion2VecContext.from_local(**config)

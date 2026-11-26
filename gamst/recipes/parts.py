@@ -216,6 +216,12 @@ async def _role(options, context):
     reason = refusal(role.id, entry['model'])
     if reason:
         raise SystemExit(f"{role.id} {entry['model']}: {reason}")
+    config = entry.get('config') or {}
+    if config.get('allow_remote') is True and 'eur_per_hour' in config:
+        # A worker's own output is closed once it starts, so the cost line of a hosted candidate is said here.
+        print(f"note: {role.id} {entry['model']} is hosted: the audio leaves this device and is billed at "
+              f"{config['eur_per_hour']} EUR/h (list price in the registry), 20 s minimum per stream or job",
+              file=sys.stderr)
     try:
         built = await role_module(context['human'], role.id, entry, python=context.get('worker_python'))
     except RoleUnavailable as error:
