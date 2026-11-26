@@ -8,7 +8,9 @@
 - **모드:** 세기(count, 기본) / 찾기(search, 놓치지 않게 넉넉히 세고 후보와 이유를 함께 줌).
 - **구조:** 입력 → Recipe → Pipeline 레인(L1 실시간 · L2 따라잡기 · L3 TSE · L4 검증) → Context(들림·잠정·확정·취소·애매함) → MCP → LLM.
   잠정은 바로, 고침은 결정된 순간에. 밀려도 소리를 버리지 않는다.
-- 결정 1–33: `decision-log-2026-11-26.md` · 교훈 1–27: `lessons-2026-11-26.md` · 측정: `measurements/*-2026-11-26.md`.
+- 찾기 모드 측정(뽀또): 찾은 비율 78% → 89%, 센 것 중 맞은 비율 78% → 53% (놓침을 줄이는 대신 다른 사람 말이 후보로 들어옴).
+- HUD: 영상 HUD 구성과 라이브 실행 명령은 `docs/hud-demo.md`. 데모 영상: 이슈 #371.
+- 결정 1–34: `decision-log-2026-11-26.md` · 교훈 1–27: `lessons-2026-11-26.md` · 측정: `measurements/*-2026-11-26.md`.
 
 ## What GAMST can do now (all measured on owner clips, Mac CPU + hosted recognisers)
 
@@ -17,7 +19,7 @@
 | Count a movement and find each occurrence | text (zero-shot: an LLM writes a rule over pose joints), example clips (few-shot), or a rule file | count, each occurrence's start/end capture time, its evidence | shotgun clip: 16/16, mean time error 9 ms (`testbed-2026-11-26.md`) |
 | Count a word and find each occurrence | words, spellings, `re:` patterns, whole-word `word:W` / repetitions `word:W*`, flags (`#may_be_number`) | count, each word's capture time, which recognisers heard it, state | words heard 45/46 on four clips; word → HUD ~0.7 s p50 (partials) |
 | Only one person's words | voice few-shot: `--record-voice-first N` (same microphone, live), `--voice-wav`, `--voice-range`, automatic main speaker; quality check with fallback | each word's speaker decision and reason | four owner-labelled clips: 30/33 right, 3 wrong (v8) |
-| Search instead of count | `--mode search`: recall first, candidates with reasons | candidates incl. uncertain ones | see `measurements/owner-labels-2026-11-26.md` |
+| Search instead of count | `--mode search`: recall first, candidates with reasons | candidates incl. uncertain ones, each with its reason | 뽀또: recall 78 % → 89 %, precision 78 % → 53 %; four clips 31 right (count mode 30) |
 | Realtime with corrections | L1 instant, L4 later; HUD shows corrections when decided | states heard/provisional/final/revoked/uncertain/pending | catch-up under overload: 0 audio dropped, identical finals |
 
 ## Experiments in order (word counting, 뽀또 clip unless stated)
@@ -40,7 +42,7 @@ for attribution. Remaining errors: an invented word counted (뽀또 24.16), anot
 
 ## Demo videos
 
-GitHub issue "Demo: person-specific word counting and movement counting" (table with playable videos): shotgun count,
+GitHub issue NomaDamas/Gamst#371 (table with playable videos): shotgun count,
 뽀또 (Korean / English promo, live timing), 시발, 달, 몇기야. Promo videos are presentation replays (final results drawn when
 each word was said, captioned); the live timing video shows what a live run shows.
 

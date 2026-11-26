@@ -137,3 +137,11 @@ quality check (`gamst/voice_quality.py`, `--voice-min-quality` 0.5, fallback ord
 replace → flag). v6 vs owner labels (L1 / final, right/counted): 뽀또 7/14 / 6/7; 몇기야 4/5 / 3/4; 시발 7/7 / 6/6; 달 13/13 / 8/8
 (another run 12/12 — hosted recognisers vary). Latency word→HUD p50 1.8-6.9 s (turn commits); short-turn variant
 `try-it/hud/l1/person-term-count-short-turns.json` is faster but lost words — owner decision. Videos `<term>_카운트_v6.mp4`.
+
+
+## 11. Update (wrap-up before merge, 2026-11-27)
+
+- Decision 32: SOTA first (`contested: stand`). v8 vs owner labels: 30/33 (뽀또 7/9, 몇기야 3/4, 시발 7/7, 달 13/13), word → HUD ~0.7 s.
+- Decision 33: `--mode count|search` (search: recall first, candidates with reasons; MCP `set_count_mode`). Live sound-only HUD window.
+- Wrap-up: `docs/wrapup-2026-11-26-person-words-and-movements.md`; HUD demo: `docs/hud-demo.md`; demo issue NomaDamas/Gamst#371.
+- Decision 34: merge PR #366 into Main after the wrap-up (owner). Next improvements are listed in the wrap-up.
