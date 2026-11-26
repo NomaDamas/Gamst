@@ -60,4 +60,22 @@ policy and the check change).
   51e5316); files `testbed/<clip>/hud/v6a.*`): 뽀또 L1 7/14 final 7/12 (o→p 5); 몇기야 L1 3/4 final 2/3 (27.1 revoked:
   the second recogniser did not write it this time, heard_by_one; run-to-run variance of hosted ASR); 시발 L1 7/7 final
   5/5 (24.78 revoked: no_speaker + per-word 0.48 vs the combined reference); 달 L1 12/12 final 12/12.
-- v6 (final code) started 23:08.
+- v6 (final code, 23:07-23:12, `testbed/<clip>/hud/v6.*`; reports have `voice_quality`): table below.
+
+## Per clip vs owner truth (`scripts/score_owner_clips.py`, enrolment segments excluded; person words scored 9/4/7/13)
+L1 = what the HUD counted the moment L1 committed (right/counted); final = after every correction.
+| clip | v4 (other recording) L1 / final | v5 m1 L1 / final | v6a L1 / final | v6 L1 / final | v6 errors (final) |
+|---|---|---|---|---|---|
+| 뽀또 | 4/4 / 6/7 | 4/9 / 7/12 | 7/14 / 7/12 | 8/15 / 7/13 | p→o 1 (28.1 revoked), o→p 6, not heard 1 (14.05) |
+| 몇기야 | 0/0 / 0/0 | 3/4 / 3/4 | 3/4 / 2/3 | 4/5 / 3/4 | p→o 1 (27.1 heard_by_one), o→p 1 (32.62) |
+| 시발 | 0/0 / 0/0 | 5/5 / 6/6 | 7/7 / 5/5 | 7/7 / 6/6 | p→o 1 (41.76 heard_by_one) |
+| 달 | 0/0 / 0/0 | 12/12 / 12/12 | 12/12 / 12/12 | 13/13 / 8/8 | p→o 5 (12.28 x5 heard_by_one) |
+v1 (owner's first look, coordinator's figure): 뽀또 8 counted / 6 right.
+- L1 now counts every heard word at once: person words heard and counted at L1 v6 32/32 (v5 24/29); the other
+  voices' words are counted too at L1 (뽀또 7) and revoked later where verification decides so.
+- Run-to-run variance of the hosted recognisers (same audio, same L1 scores): 몇기야 27.1 and 달 12.28 x5 were
+  "heard_by_one" (the second recogniser / voter did not write them) in one run and confirmed in the other. Not
+  caused by this branch (L1 scores identical; L4's word rule).
+- 뽀또 o→p stays 5-6: with the combined reference the other man's diarized speaker scores ~0.50 (offline anchored
+  windows 0.45-0.50, person 0.68-0.78), right at L4's absolute 0.5, so 49.86 / 50.4 (and 52.2 in v6) are still given
+  to the person. Offline the relative rule (v2) does not do better with the checked reference (5 errors vs 5).
