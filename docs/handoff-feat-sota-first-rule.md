@@ -47,3 +47,7 @@ was revoked by the recognisers any more; contested words in 3 runs: 24.16 x3 (ot
 ## Cost (list prices)
 Recognisers (Scribe $0.27 + Speechmatics $0.40 + gpt-live $1.02 per hour) on ~695 s (s1, p1, p2 = 3 x 213.7 s; s2 stopped
 during 뽀또 for the v7 merge) ≈ $0.33; Scribe probe 214 s ≈ $0.02; pyannoteAI ~51 jobs ≈ $0.05. Total ≈ $0.40 (cap $1.5).
+
+## Full suite (through guard, try-it/host python)
+1741 tests, 79 skipped, 3 errors, all from this interpreter lacking packages: test_streaming_semantic and test_watch (no
+pytest), test_yoloe one test (no torch). None of them involves this branch.
