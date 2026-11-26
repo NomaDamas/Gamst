@@ -140,6 +140,27 @@ unanswered turn, no queued record there) by `near_ms`, so a catch-up worker neve
 - Opt-in: `--with verification --allow-remote-asr --allow-remote-diarization` (the first for the second recogniser, the
   second for pyannoteAI; each prints its price before audio is sent).
 
+## Primary confidence (measured 2026-11-27, decides `low_confidence`)
+
+Scribe v3 Live gives every committed word a `logprob` (raw WebSocket, `committed_transcript_with_timestamps.words[]` =
+`{text, start, end, type, speaker_id, logprob, characters, channel_index}`; checked with the real API on the four owner
+clips, one pass each, VAD commits, the counted word as keyterm). The live adapter (`streaming_hosted.ElevenLabsSession`)
+does not pass it on yet (out of this branch's scope); the rule reads `confidence` / `logprob` on the primary's words
+whenever an adapter gives them, so with today's adapter `low_confidence` has nothing to read and no word is vetoed.
+
+The counted word's confidence (p = exp(logprob)) against the owner's labels:
+
+| | n | min | median | max |
+|---|---|---|---|---|
+| the person's words (true) | 23 | 0.02 | 0.47 | 0.63 |
+| another voice's words | 7 | 0.33 | 0.57 | 0.67 |
+
+The two words the vote was about: 뽀또 24.16 s (Scribe's word where the owner hears nothing / now labelled another
+voice) **0.33** (logprob -1.11); 피파 clip 41.76 s (the person said it) **0.02** (logprob -3.84). The other true words
+the majority revoked: 뽀또 28.10 0.11, 달 12.28 0.35. Lower confidence goes with the *true* words here: any threshold
+that vetoes 24.16 (> 0.33) also vetoes 41.76, 28.10, 몇기야 17.34 (0.15), 시발 23.18 / 29.50 (0.30) and 달 7.94 (0.18).
+So condition (a) cannot separate them on these clips and `low_confidence` defaults to `null` (no veto).
+
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
