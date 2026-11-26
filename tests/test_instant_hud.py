@@ -62,7 +62,7 @@ class HudTimelineTest(unittest.TestCase):
         other = next(item for item in hud['items'] if item['event_id'] == 'c')
         self.assertEqual((item_state(other, 5.), item_state(other, 21.)), ('other', 'final'))
         lines = {kind: change_line(kind, item) for _, _, kind, item in hud['changes']}
-        self.assertEqual(lines['revoked'], ('−1 취소 #2', '다른 사람 목소리'))
+        self.assertEqual(lines['revoked'], ('-1 취소 #2', '다른 사람 목소리'))
         self.assertEqual(change_line('added', other), ('+1 추가 #3', '감스트 목소리로 정정'))
 
     def test_an_uncertain_word_leaves_the_count_and_comes_back_when_settled(self):
@@ -71,7 +71,7 @@ class HudTimelineTest(unittest.TestCase):
         hud = hud_timeline(report, 'speech.term_events:term.spoken')
         self.assertEqual([(kind, delta) for _, delta, kind, _ in hud['changes']],
                          [('live', 1), ('uncertain', -1), ('added', 1)])
-        self.assertEqual(change_line('uncertain', hud['items'][0]), ('−1 보류 #1', '불확실: 목소리 겹침'))
+        self.assertEqual(change_line('uncertain', hud['items'][0]), ('-1 보류 #1', '불확실: 목소리 겹침'))
 
     def test_a_report_without_history_falls_back_to_committed_and_settled_times(self):
         report = dict(start_ms=1000, paced=True, event_states={'speech.term_events': [

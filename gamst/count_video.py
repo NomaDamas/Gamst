@@ -14,10 +14,10 @@ HUD shows exactly what was known at t: each event's ``history`` says when every 
 as it stood then: a word the live recogniser's partial hypothesis held steadily enters it the moment that was known
 (``heard``: pale, dashed "+1 들림"; gamst/providers/partial_terms.py); a word the live recogniser (L1) counted enters
 it the moment L1 committed it (orange, provisional), and a heard word turns provisional then (same word, no second +1)
-or leaves the count ("−1 취소 #n 부분 인식 철회");
+or leaves the count ("-1 취소 #n 부분 인식 철회");
 a later lane's decision (catch-up, TSE, verification) changes it only at the moment it was decided, with a visible
 correction in Korean: "+1 추가 #12" (a word given to the person later: another voice's at first, or heard again),
-"−1 취소 #9" with the reason (red, struck out), "−1 보류" (violet, uncertain: shown, not counted), "확정" (green).
+"-1 취소 #9" with the reason (red, struck out), "-1 보류" (violet, uncertain: shown, not counted), "확정" (green).
 The number that drops is shown struck out for a moment, then the new one. Words are numbered in the order they
 entered the count. The panel says how many are final, provisional, revoked and uncertain at that moment, each in its
 colour; another voice's words are listed as "제외". ``--hold-settled`` keeps the last picture until the last
@@ -209,7 +209,7 @@ def item_state(item, t):
 
 
 def change_line(kind, item):
-    """(headline, why) of one correction in Korean, e.g. ``("−1 취소 #9", "다른 사람 목소리")``."""
+    """(headline, why) of one correction in Korean (an ASCII minus: the Korean font has no U+2212), e.g. ``("-1 취소 #9", "다른 사람 목소리")``."""
     reason = None
     for _, state, step in item['steps']:
         if state in ('revoked', 'uncertain') and step.get('reason'):
@@ -217,9 +217,9 @@ def change_line(kind, item):
     reason = REASON_WORD.get(reason, reason)
     number = f" #{item['number']}" if item.get('number') else ''
     if kind == 'revoked':
-        return f"−1 취소{number}", reason or ''
+        return f"-1 취소{number}", reason or ''
     if kind == 'uncertain':
-        return f"−1 보류{number}", '불확실' + (f': {reason}' if reason else '')
+        return f"-1 보류{number}", '불확실' + (f': {reason}' if reason else '')
     if kind == 'added':
         first = item['steps'][0][1]
         return f"+1 추가{number}", '다시 들어서 찾음' if first in COUNTED_STATES else '감스트 목소리로 정정' \
@@ -368,7 +368,7 @@ def _draw_hud(canvas, text, hud, t, x0, y0, view, count_label, other_label, plac
             _flash_border(canvas, x0, y0, view, CHANGE_COLOR[newest[2]], since, HOLD_S * 1.5)
     text.put(canvas, '지금까지', SIDE + 32, 136, 28, MUTED)
     text.put(canvas, '말한 순간 기준 · 최종 결과' if hud.get('presentation') else
-             '들리는 즉시(들림) · L1 확인(잠정) · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
+             '들림 즉시 · 잠정 L1 · 정정은 결정된 순간에', SIDE + 32, 172, 20, DIM)
     big = (GOOD if newest[2] == 'live' else HEARD) if live else WHITE
     dropping = [change for change in corrections if change[1] < 0 and t - change[0] < .8]
     if dropping:      # the number that was there, struck out, for a moment: then the corrected one
