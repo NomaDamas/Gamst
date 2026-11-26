@@ -20,6 +20,8 @@ profile                    worker (real model)                                  
 ``faster_whisper.words``   FasterWhisperPlugin with word times                  ``RemoteWhisper``
 ``qwen3.asr.words``        Qwen3-ASR + Qwen3-ForcedAligner phrases (no CUDA)    ``RemoteWhisper``
 ``hosted.asr.words``       a hosted ASR API's phrases (audio leaves the device) ``RemoteWhisper``
+``streaming.asr.words``     a local streaming recogniser (sherpa-onnx, Voxtral)  ``RemoteStreamingWords``
+``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
 =========================  ==================================================  ====================
 
@@ -52,6 +54,8 @@ FIELDS = {
     'faster_whisper.words': ('audio', (OutputField('transcripts', 'array'),)),
     'qwen3.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
     'hosted.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
+    'streaming.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
+    'faster_whisper.align': ('audio', (OutputField('items', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
@@ -67,7 +71,8 @@ def model_id(profile, config):
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
             'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'qwen3.asr.words': 'qwen3-asr',
             'hosted.asr.words': 'hosted-asr', 'active_speaker.lightasd': 'lightasd', 'pixit.sources': 'pyannote-pixit',
-            'sepformer.sources': 'sepformer'}.get(profile) or {
+            'sepformer.sources': 'sepformer', 'faster_whisper.align': 'whisper-align',
+            'streaming.asr.words': config.get('backend')}.get(profile) or {
         'usef': 'usef-tfgridnet', 'sam-span': 'sam-audio'}.get(config.get('backend'), config.get('backend'))
     return f'{name}:{digest[:16]}'
 
@@ -85,6 +90,8 @@ def capability(profile, config):
     if profile == 'hosted.asr.words':
         from .hosted_asr import check_config
         check_config(config)
+    elif profile == 'streaming.asr.words' and config.get('backend') not in ('sherpa-zipformer', 'voxtral-mlx'):
+        raise ValueError('streaming.asr.words backend is sherpa-zipformer or voxtral-mlx')
     elif not (profile == 'faster_whisper.words' and 'sha256' not in config):
         model_id(profile, config)
     digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -260,6 +267,12 @@ def load(profile, config):
     if profile == 'qwen3.forced_aligner':
         from .asr_words import QwenForcedAligner
         return _Aligner(QwenForcedAligner.from_local(config.pop('path'), **config))
+    if profile == 'faster_whisper.align':
+        from .whisper_align import load as load_aligner
+        return _Aligner(load_aligner(config))
+    if profile == 'streaming.asr.words':
+        from .streaming_local import load as load_streaming
+        return _Whisper(load_streaming(config))
     if profile == 'faster_whisper.words':
         from ..plugins import FasterWhisperPlugin
         from .asr_words import WhisperWords
@@ -385,6 +398,37 @@ class RemoteWhisper(_Client):
 
     async def reset(self):
         await self.worker.reset()
+
+
+class RemoteStreamingWords(RemoteWhisper):
+    """A local streaming recogniser's records, with ``final_after_ms``: wall time from when a final's last sound
+    reached this module to when its record came back (what a live microphone would wait)."""
+
+    def __init__(self, worker, profile, config):
+        super().__init__(worker, profile, config)
+        from .streaming_asr import CaptureClock, streaming_capability
+        self.spec = streaming_capability('1.' + self.model_id.replace(':', '.'))
+        self.clock = CaptureClock(SAMPLE_RATE)
+
+    def _values(self, result):
+        from .streaming_asr import _wall_ms
+        values = []
+        for value in (result or {}).get('transcripts', ()):
+            value = dict(value)
+            arrived = self.clock.arrival_ms(value['end_ms']) if value.get('status') == 'final' else None
+            if arrived is not None:
+                value['final_after_ms'] = max(0, _wall_ms() - arrived)
+            values.append(self.spec.validate(value))
+        return values or None
+
+    async def process(self, frame):
+        if frame.modality == 'audio' and frame.data is not None:
+            self.clock.push(len(frame.data), frame.timestamp_ms)
+        return await super().process(frame)
+
+    async def reset(self):
+        self.clock.reset()
+        await super().reset()
 
 
 class RemotePose(_Client):

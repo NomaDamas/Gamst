@@ -554,6 +554,13 @@ def _role_config(selection, weight_paths, source_dir):
                       runtime_root=str(Path(checkpoint["path"]).parent))
     elif model.startswith("mediapipe.") or model in ("silero.vad", "yamnet", "depth_anything_v2.small"):
         config.update(path=first["path"], sha256=first["sha256"])
+    elif (selection.get("config") or {}).get("backend") in ("sherpa-zipformer", "voxtral-mlx"):
+        files = {item["name"]: item["sha256"] for item in weight_paths}
+        main = max(weight_paths, key=lambda item: item.get("bytes") or 0)
+        config.update(path=str(Path(first["path"]).parent), files=files, sha256=main["sha256"])
+    elif model == "faster_whisper.align_large_v3_turbo":
+        weights = next(item for item in weight_paths if item["name"] == "model.bin")
+        config.update(model_path=str(Path(weights["path"]).parent), sha256=weights["sha256"])
     elif model.startswith(("sherpa.", "lvface.")):
         config.update(path=first["path"], sha256=first["sha256"])
     elif model == "faster_whisper.small":
