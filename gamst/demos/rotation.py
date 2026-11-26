@@ -13,76 +13,62 @@ from __future__ import annotations
 
 import asyncio
 import argparse
-import hashlib
 import json
-import os
 from pathlib import Path
-import ssl
 import subprocess
 import sys
 import time
-from urllib.request import urlopen
 
+from ..crew.registry import weight_assets
+from ..crew.setup import model_directory
 from ..providers.rotation import RotationPlugin
 
 
-MODEL_ASSETS = {
-    'yoloe-26s-seg.pt': ('https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt',
-                         '48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654'),
-    'mobileclip2_b.ts': ('https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts',
-                         '35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f'),
-}
+# Pinned weights come from the one GAMST role registry (gamst.crew.registry); these are views of it.
+DETECTOR = ('vision.detect', 'yoloe.26s')
+REFINER = ('vision.video_segmentation', 'efficienttam.ti_512')
+MODEL_ASSETS = weight_assets(*DETECTOR)
 # Take refinement (--refine): promptable video segmenter, Hugging Face revision pinned.
-REFINE_ASSETS = {
-    'efficienttam_ti_512x512.pt': ('https://huggingface.co/yunyangx/efficient-track-anything/resolve/'
-                                   '9bdd8ab585b19ef95f9c9ed847ac9478301890b4/efficienttam_ti_512x512.pt',
-                                   '7d4d652a465f0081391050932f45d8a66768ccc99c8ea393ce8a5927e83f3b9b'),
-}
-DEFAULT_MODELS = Path(os.environ.get('GAMST_MODELS', Path.home() / '.cache' / 'gamst' / 'models')) / 'yoloe'
+REFINE_ASSETS = weight_assets(*REFINER)
 
 
-def _tls():
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        return ssl.create_default_context()
+def fetch_models(models=None, names=None):
+    """Download the pinned weights (only ``names`` when given) with setup's downloader (SHA256 verified).
+
+    They go where setup puts them: ``<models or the weight root>/<model>/<file>``; an existing flat
+    ``models`` directory that already holds a model's verified files is kept as it is.
+    """
+    from ..crew.registry import candidate
+    from ..crew.setup import SetupError, download_weight, weights_directory
+    for role, model in (DETECTOR, REFINER):
+        weights = [weight.as_dict() for weight in candidate(role, model).weights]
+        directory = weights_directory(model, weights, models)
+        for weight in weights:
+            if names is not None and weight['name'] not in names:
+                continue
+            try:
+                download_weight(weight, directory / weight['name'])
+            except SetupError as error:
+                raise SystemExit(str(error)) from error
+            print(f"{weight['name']}: sha256 verified")
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as source:
-        while chunk := source.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest()
+def detector_directory(models=None):
+    return model_directory(DETECTOR[1], MODEL_ASSETS, models)
 
 
-def fetch_models(directory, names=None):
-    """Download the pinned weights (only ``names`` when given) and verify their SHA256."""
-    directory.mkdir(parents=True, exist_ok=True)
-    for name, (url, expected) in {**MODEL_ASSETS, **REFINE_ASSETS}.items():
-        if names is not None and name not in names:
-            continue
-        target = directory / name
-        temporary = target.with_suffix('.download')
-        if target.exists() and _sha256(target) == expected:
-            print(f'{name}: sha256 verified')
-            continue
-        with urlopen(url, timeout=120, context=_tls()) as response, temporary.open('wb') as output:
-            while chunk := response.read(1 << 20):
-                output.write(chunk)
-        if _sha256(temporary) != expected:
-            temporary.unlink(missing_ok=True)
-            raise SystemExit(f'{name}: SHA256 mismatch; download discarded')
-        temporary.replace(target)
-        print(f'{name}: sha256 verified')
+def refiner_checkpoint(models=None):
+    """The take refiner's weight file and its pinned SHA256."""
+    [(name, (_, digest))] = REFINE_ASSETS.items()
+    return model_directory(REFINER[1], REFINE_ASSETS, models) / name, digest
 
 
 def detector_config(models, labels, device, threshold=.25):
+    models = detector_directory(models)
     missing = [name for name in MODEL_ASSETS if not (models / name).is_file()]
     if missing:
         raise SystemExit(f'missing detector weights {missing} in {models}; run: gamst demo rotation --fetch-models')
-    runtime = models.parent / 'runtime'
+    runtime = (models if models.name == DETECTOR[1] else models.parent) / 'runtime'
     runtime.mkdir(parents=True, exist_ok=True)
     return dict(checkpoint_path=str(models / 'yoloe-26s-seg.pt'),
         checkpoint_sha256=MODEL_ASSETS['yoloe-26s-seg.pt'][1], runtime_root=str(runtime),
@@ -146,14 +132,17 @@ class Panel:
 async def _detector_lane(args, human):
     if args.detector == 'motion' or args.roi is not None:
         return None
-    models = Path(args.models)
+    models = detector_directory(args.models)
     if args.detector == 'auto' and any(not (models / name).is_file() for name in MODEL_ASSETS):
         return None
     from .. import ProcessProvider, SensorStreams
-    _check_worker_dependencies(args.worker_python)
-    config = detector_config(models, args.targets, args.device)
+    from ..profile import role_python
+    # The environment setup made for the detector, unless another interpreter is named.
+    python = args.worker_python or role_python(*DETECTOR) or sys.executable
+    _check_worker_dependencies(python)
+    config = detector_config(args.models, args.targets, args.device)
     spec = ProcessProvider.capability('yoloe.local', config)
-    worker = await ProcessProvider.open(args.worker_python, 'yoloe.local', config)
+    worker = await ProcessProvider.open(python, 'yoloe.local', config)
     streams = SensorStreams(human)
     try:
         streams.register(spec, lambda: worker)
@@ -168,7 +157,7 @@ class _TakeCapture:
     """A GAMST 240 take read like a video file; positions are the phone's capture times."""
 
     def __init__(self, path):
-        from .rotation_live import read_recording
+        from ..inputs import read_recording
         path = Path(path)
         self.frames = read_recording(path / 'raw.gmst' if path.is_dir() else path)
         self.index, self.position_ms = 0, 0.
@@ -177,7 +166,7 @@ class _TakeCapture:
         return bool(self.frames)
 
     def read(self):
-        from .rotation_live import decode
+        from ..inputs import decode
         while self.index < len(self.frames):
             info, _, payload = self.frames[self.index]
             self.index += 1
@@ -351,9 +340,11 @@ def main(argv=None):
     parser.add_argument('--roi', type=lambda value: [float(item) for item in value.split(',')],
                         help='normalized x,y,width,height; bypasses detector/motion regions')
     parser.add_argument('--device', choices=['cpu', 'mps'], default='cpu')
-    parser.add_argument('--models', default=str(DEFAULT_MODELS))
+    parser.add_argument('--models', help='weight root, or an existing flat directory of weights (default: GAMST_MODELS '
+                                         'or ~/.cache/gamst/models)')
     parser.add_argument('--fetch-models', action='store_true', help='download pinned detector weights and exit')
-    parser.add_argument('--worker-python', default=sys.executable)
+    parser.add_argument('--worker-python', help='python of the detector worker (default: the environment gamst setup '
+                                                'made for it, else this one)')
     parser.add_argument('--detect-every-ms', type=int, default=100)
     parser.add_argument('--store', default=':memory:')
     parser.add_argument('--headless', action='store_true')
@@ -374,7 +365,7 @@ def main(argv=None):
                         help='stage backup: ANALYZE shows this already counted take (refined.json, refined.mp4) at once')
     args = parser.parse_args(argv)
     if args.fetch_models:
-        fetch_models(Path(args.models))
+        fetch_models(args.models)
         return
     if args.roi is not None and len(args.roi) != 4:
         parser.error('--roi requires x,y,width,height')

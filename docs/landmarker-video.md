@@ -36,12 +36,26 @@ sequence must strictly increase. The native clock starts at zero for each state
 segment and advances by actual capture time; publication timestamps remain original
 capture timestamps. No timestamp is synthesized to hide repeated/out-of-order input.
 
-A sequence gap, gap longer than `max_gap_ms`, changed image dimensions, subject,
+A sequence gap (unless `allow_skips` is set, below), gap longer than `max_gap_ms`, changed image dimensions, subject,
 source/sensor, epoch, coordinate frame, calibration ID or channel layout closes the
 old native detector. The next valid image creates a fresh detector. Explicit reset,
 invalid metadata/image, malformed native output and inference exceptions also clear
 state. Backward/repeated capture sequence or timestamp raises and resets; it is not
 published. Managed lanes additionally enforce their own input sequence contract.
+
+`allow_skips` (default false: the contract above, unchanged) is for live capture where
+frames can be lost before this lane. MediaPipe VIDEO mode requires strictly increasing
+timestamps, not every frame, and the caller passes real capture times, so a skipped frame is
+the same to it as a lower frame rate. Rebuilding the native detector for each skip is
+what is expensive: with 30 fps capture and a one-frame queue it left about 2 pose results
+a second (measured, docs/handoff-feat-realtime-pipeline.md). With `allow_skips: true` a
+sequence jump within `max_gap_ms` keeps the detector; every other boundary is the same: a
+longer gap, or a change of image dimensions, subject, source/sensor, epoch, coordinate frame,
+calibration ID or channel layout, still closes it, and backward or repeated sequence or
+timestamp still raises. The capability version ends in `.skips`, so a record says which
+contract produced it. A `state_segment` may then span skipped frames: it means one native
+tracking state, not gap-free capture. The recipe part `mediapipe-pose` sets it; what was lost
+is counted and reported by the Pipeline, not by this provider.
 
 Output summary adds `running_mode=VIDEO`, `temporal_tracking=true`, an opaque
 `state_segment` token, `native_timestamp_ms`, `persistent_track_ids=unavailable` and

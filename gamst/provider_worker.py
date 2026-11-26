@@ -8,6 +8,10 @@ from .provider_wire import envelope, sizes, parse_header, decode_frame, spec_val
 
 def _construct(profile, config):
     spec = capability(profile, config)
+    from .providers.model_workers import PROFILES
+    if profile in PROFILES:
+        from .providers.model_workers import load
+        return load(profile, config), spec
     if profile == 'sam_audio.text_temporal.local':
         from .providers.sam_audio_context import SAMAudioContext
         provider = SAMAudioContext.from_local(config)
@@ -19,9 +23,11 @@ def _construct(profile, config):
         provider = ORBSLAMContext.from_local(**config)
     elif profile == 'streamingvlm.local':
         from .providers.streaming_semantic import OpenAIStreamingBackend, StreamingSemanticContext
-        backend = OpenAIStreamingBackend(config['endpoint'], config['model'], config['revision'], config.get('api_key_env'),
-                                         config.get('request_options'), config.get('max_tokens', 256))
-        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000))
+        backend = OpenAIStreamingBackend.from_config(config)
+        if backend.remote and config.get('context') and config.get('allow_remote_context') is not True:
+            raise PermissionError('allow_remote sends frames to a hosted endpoint; transcripts and counts need allow_remote_context')
+        provider = StreamingSemanticContext(backend, window_frames=config.get('window_frames', 16), max_gap_ms=config.get('max_gap_ms', 2000),
+                                            context=config.get('context', False))
     elif profile == 'smolvlm2.500m.local':
         from .providers.smolvlm_context import SmolVLMContext
         provider = SmolVLMContext.from_local(**config)
@@ -58,6 +64,18 @@ def _construct(profile, config):
     elif profile == 'nemotron3.diarization':
         from .providers.diarization import NemotronDiarization
         provider = NemotronDiarization.from_local(**config)
+    elif profile == 'sortformer.diarization':
+        from .providers.sortformer import SortformerDiarization
+        provider = SortformerDiarization.from_local(**config)
+    elif profile == 'pyannoteai.live.diarization':
+        from .providers.slot_sources import hosted_live
+        provider = hosted_live(config)
+    elif profile == 'pyannoteai.offline.diarization':
+        from .providers.slot_sources import hosted_offline
+        provider = hosted_offline(config)
+    elif profile == 'offline.diarization':
+        from .providers.slot_sources import local_offline
+        provider = local_offline(config)
     elif profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         provider = Emotion2VecContext.from_local(**config)
@@ -183,9 +201,10 @@ def main():
     output = os.fdopen(os.dup(sys.stdout.fileno()), 'wb', buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     source = sys.stdin.buffer
-    provider = spec = None
+    provider = spec = operation = None
     separation_protocol = None
     separation_config = None
+    private = None
     try:
         while True:
             head_size, payload_size = sizes(_read_exact(source, 8))
@@ -208,8 +227,23 @@ def main():
                     separation_config = request['config']
                     provider, spec = _construct(request['profile'], request['config'])
                     result = dict(spec=spec_value(spec))
+                    if request.get('private_protocol') is not None:
+                        from .private_payload import CONTRACTS, PROTOCOL as PRIVATE_PROTOCOL
+                        if request['private_protocol'] != PRIVATE_PROTOCOL or request['profile'] not in CONTRACTS:
+                            raise ValueError('private payload negotiation failed')
+                        private = request['profile']
+                        result['private_protocol'] = PRIVATE_PROTOCOL
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
+                elif operation == 'query' and provider is not None and private is not None:
+                    from .private_payload import pack
+                    public, value = provider.query(decode_frame(request['frame'], payload), request.get('request'))
+                    public = spec.validate(public)
+                    descriptor, binary = pack(private, public, value, request['frame'])
+                    output.write(envelope(dict(id=number, ok=True, result=public, private=descriptor), binary))
+                    continue
+                elif private is not None and operation in ('process', 'process_regions', 'finish', 'endpoint'):
+                    raise PermissionError('private workers answer queries only')
                 elif operation == 'process' and provider is not None:
                     if separation_protocol is not None:
                         from .separation_media import request_binding, pack_pair
@@ -228,7 +262,9 @@ def main():
                     if result is not None:
                         result = spec.validate(result)
                 elif operation == 'process_regions' and provider is not None:
-                    result = spec.validate(provider.process_regions(decode_frame(request['frame'], payload), request['evidence']))
+                    result = provider.process_regions(decode_frame(request['frame'], payload), request['evidence'])
+                    if result is not None:
+                        result = spec.validate(result)
                 elif operation in ('finish', 'endpoint') and provider is not None and not payload:
                     finish = getattr(provider, operation, None)
                     if operation == 'endpoint' and not callable(finish):
@@ -247,10 +283,18 @@ def main():
                 else:
                     raise ValueError('invalid provider operation/state')
                 output.write(envelope(dict(id=number, ok=True, result=result)))
+                if operation == 'start':    # what the owner reads of this process's output ends here
+                    with open(os.devnull, 'wb') as nowhere:
+                        for descriptor in (1, 2):
+                            os.dup2(nowhere.fileno(), descriptor)
             except Exception as exc:
-                # No exception text or native logs are allowed into context:
-                # third-party exceptions may contain raw input or local secrets.
-                output.write(envelope(dict(id=number, ok=False, error_type=type(exc).__name__[:128])))
+                # No exception text or native logs are allowed into context: third-party exceptions may contain raw
+                # input or local secrets. Starting has no input yet; its message is needed to know what to fix.
+                failed = dict(id=number, ok=False, error_type=type(exc).__name__[:128])
+                if operation == 'start':
+                    from .redact import public_error
+                    failed['error'] = public_error(exc)
+                output.write(envelope(failed))
                 return  # Native failures invalidate temporal state; explicit reopen only.
     except (EOFError, BrokenPipeError):
         pass

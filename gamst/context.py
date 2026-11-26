@@ -1,6 +1,6 @@
 """Bounded, JSON-serializable sensor context for any LLM/VLM client."""
 import math
-from .capabilities import bounded_json
+from .capabilities import bounded_json, is_raw_key
 
 
 def compact_observation(name, value):
@@ -17,7 +17,7 @@ def compact_observation(name, value):
                 for face in value[:4]]
     if name == 'scene.poses' and isinstance(value, list):
         return [{**{k: pose.get(k) for k in ('frame_pose_index', 'track_id', 'bbox', 'geometry', 'association_quality')},
-                 'landmark_count': len(pose.get('landmarks', []))} for pose in value[:4]]
+                 'landmark_count': pose.get('landmark_count', 0)} for pose in value[:4]]
     if name == 'scene.segments' and isinstance(value, list):
         return [{k: item.get(k) for k in ('bbox', 'score', 'prompt', 'track_id')} for item in value[:16]]
     if isinstance(value, str):
@@ -30,8 +30,25 @@ def compact_observation(name, value):
         return [compact_observation('', item) for item in value[:8]]
     if isinstance(value, dict):
         return {str(k)[:100]: compact_observation('', v) for k, v in list(value.items())[:16]
-                if k not in ('landmarks', 'raw', 'frame', 'samples', 'jpeg', 'image', 'audio')}
+                if not is_raw_key(str(k))}
     return None
+
+
+def is_context_observation(record):
+    """May this record's value be shown as context? Registered, or a legacy signal whose form is known to be bounded."""
+    observation = record.get('observation', {})
+    name, value = observation.get('name'), observation.get('value')
+    if not name or record.get('type') != 'observation.signal':
+        return False
+    if observation.get('capability'):
+        return True
+    if isinstance(name, str) and name.startswith('classification.'):
+        try:
+            compact_observation(name, value)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return True
+    return type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
 
 
 def observation_packet(records, now):
@@ -40,16 +57,8 @@ def observation_packet(records, now):
     latest = {}
     for record in sorted(records, key=lambda r: r['timestamp_ms']):
         name = record.get('observation', {}).get('name')
-        value = record.get('observation', {}).get('value')
         registered = record.get('observation', {}).get('capability')
-        is_classification = not registered and isinstance(name,str) and name.startswith('classification.')
-        if is_classification:
-            try:
-                compact_observation(name,value)
-            except (ValueError,TypeError,KeyError):
-                continue
-        safe = registered or is_classification or type(value) in (int, float, bool) or name in ('text.utterance', 'text.transcript', 'speech.transcript', 'scene.description', 'scene.window', 'scene.faces', 'scene.person_boxes', 'scene.person_tracks', 'scene.poses', 'scene.body_tracks', 'scene.segments')
-        if name and safe and record.get('type') == 'observation.signal':
+        if is_context_observation(record):
             sensor = record['observation'].get('sensor', {})
             key = (name, registered['id'], sensor.get('source_id'), sensor.get('sensor_id')) if registered else (name,)
             latest[key] = record

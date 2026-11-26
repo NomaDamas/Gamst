@@ -1,0 +1,167 @@
+# GAMST holistic graph (CPU): pose + left/right hand + face landmarks.
+#
+# Composed from MediaPipe's holistic subgraphs (the same ones HolisticLandmarkCpu
+# wires), with what GAMST needs around them:
+#   - FlowLimiterCalculator: bounded in-flight frames (MAX_IN_FLIGHT side packet);
+#   - GateCalculator per branch (enable_pose / enable_hands / enable_face): GAMST
+#     switches branches per frame without restarting the graph, and a switched-off
+#     branch does no inference at all;
+#   - LandmarksSmoothingCalculator (one-euro) on hands and face; pose landmarks are
+#     already smoothed inside PoseLandmarkCpu (SMOOTH_LANDMARKS);
+#   - GamstFrameCalculator: one bundle per frame once every output has settled;
+#     it also closes the FlowLimiter's FINISHED back edge.
+#
+# Inputs (fed by gamst_graph_runner at the GAMST capture time in microseconds):
+input_stream: "input_video"     # ImageFrame SRGB
+input_stream: "enable_pose"     # bool, one per frame
+input_stream: "enable_hands"    # bool, one per frame
+input_stream: "enable_face"     # bool, one per frame
+
+input_side_packet: "model_complexity"        # int 0|1|2 (lite/full/heavy pose landmark model)
+input_side_packet: "smooth_landmarks"        # bool
+input_side_packet: "refine_face_landmarks"   # bool: attention model, 478 points with irises
+input_side_packet: "use_prev_landmarks"      # bool: track from the previous frame's landmarks
+input_side_packet: "max_in_flight"           # int: frames inside the graph at once
+
+output_stream: "gamst_frame"
+
+node {
+  calculator: "FlowLimiterCalculator"
+  input_stream: "input_video"
+  input_stream: "FINISHED:gamst_frame"
+  input_stream_info: {
+    tag_index: "FINISHED"
+    back_edge: true
+  }
+  input_side_packet: "MAX_IN_FLIGHT:max_in_flight"
+  output_stream: "throttled_input_video"
+  options: {
+    [mediapipe.FlowLimiterCalculatorOptions.ext] {
+      max_in_flight: 1
+      max_in_queue: 1
+      # First-frame model loading can take more than a second.
+      in_flight_timeout: 0
+    }
+  }
+}
+
+node {
+  calculator: "ImagePropertiesCalculator"
+  input_stream: "IMAGE:throttled_input_video"
+  output_stream: "SIZE:image_size"
+}
+
+# ---------------------------------------------------------------- pose (TFLite)
+node {
+  calculator: "GateCalculator"
+  input_stream: "throttled_input_video"
+  input_stream: "ALLOW:enable_pose"
+  output_stream: "pose_image"
+}
+
+node {
+  calculator: "PoseLandmarkCpu"
+  input_stream: "IMAGE:pose_image"
+  input_side_packet: "MODEL_COMPLEXITY:model_complexity"
+  input_side_packet: "SMOOTH_LANDMARKS:smooth_landmarks"
+  input_side_packet: "USE_PREV_LANDMARKS:use_prev_landmarks"
+  output_stream: "LANDMARKS:pose_landmarks"
+  output_stream: "WORLD_LANDMARKS:pose_world_landmarks"
+  output_stream: "ROI_FROM_LANDMARKS:pose_landmarks_roi"
+  output_stream: "DETECTION:pose_detection"
+}
+
+# ---------------------------------------------------------------- hands (from pose)
+node {
+  calculator: "GateCalculator"
+  input_stream: "throttled_input_video"
+  input_stream: "pose_landmarks"
+  input_stream: "ALLOW:enable_hands"
+  output_stream: "hands_image"
+  output_stream: "hands_pose_landmarks"
+}
+
+node {
+  calculator: "HandLandmarksLeftAndRightCpu"
+  input_stream: "IMAGE:hands_image"
+  input_stream: "POSE_LANDMARKS:hands_pose_landmarks"
+  output_stream: "LEFT_HAND_LANDMARKS:left_hand_landmarks_raw"
+  output_stream: "RIGHT_HAND_LANDMARKS:right_hand_landmarks_raw"
+}
+
+node {
+  calculator: "LandmarksSmoothingCalculator"
+  input_stream: "NORM_LANDMARKS:left_hand_landmarks_raw"
+  input_stream: "IMAGE_SIZE:image_size"
+  output_stream: "NORM_FILTERED_LANDMARKS:left_hand_landmarks"
+  options: {
+    [mediapipe.LandmarksSmoothingCalculatorOptions.ext] {
+      one_euro_filter { min_cutoff: 0.05 beta: 80.0 derivate_cutoff: 1.0 }
+    }
+  }
+}
+
+node {
+  calculator: "LandmarksSmoothingCalculator"
+  input_stream: "NORM_LANDMARKS:right_hand_landmarks_raw"
+  input_stream: "IMAGE_SIZE:image_size"
+  output_stream: "NORM_FILTERED_LANDMARKS:right_hand_landmarks"
+  options: {
+    [mediapipe.LandmarksSmoothingCalculatorOptions.ext] {
+      one_euro_filter { min_cutoff: 0.05 beta: 80.0 derivate_cutoff: 1.0 }
+    }
+  }
+}
+
+# ---------------------------------------------------------------- face (from pose)
+node {
+  calculator: "GateCalculator"
+  input_stream: "throttled_input_video"
+  input_stream: "pose_landmarks"
+  input_stream: "ALLOW:enable_face"
+  output_stream: "face_image"
+  output_stream: "face_pose_landmarks"
+}
+
+node {
+  calculator: "SplitNormalizedLandmarkListCalculator"
+  input_stream: "face_pose_landmarks"
+  output_stream: "face_landmarks_from_pose"
+  options: {
+    [mediapipe.SplitVectorCalculatorOptions.ext] {
+      ranges: { begin: 0 end: 11 }
+    }
+  }
+}
+
+node {
+  calculator: "FaceLandmarksFromPoseCpu"
+  input_stream: "IMAGE:face_image"
+  input_stream: "FACE_LANDMARKS_FROM_POSE:face_landmarks_from_pose"
+  input_side_packet: "REFINE_LANDMARKS:refine_face_landmarks"
+  output_stream: "FACE_LANDMARKS:face_landmarks_raw"
+}
+
+node {
+  calculator: "LandmarksSmoothingCalculator"
+  input_stream: "NORM_LANDMARKS:face_landmarks_raw"
+  input_stream: "IMAGE_SIZE:image_size"
+  output_stream: "NORM_FILTERED_LANDMARKS:face_landmarks"
+  options: {
+    [mediapipe.LandmarksSmoothingCalculatorOptions.ext] {
+      one_euro_filter { min_cutoff: 0.05 beta: 80.0 derivate_cutoff: 1.0 }
+    }
+  }
+}
+
+# ---------------------------------------------------------------- one bundle per frame
+node {
+  calculator: "GamstFrameCalculator"
+  input_stream: "FRAME:throttled_input_video"
+  input_stream: "STREAM:0:pose_landmarks"
+  input_stream: "STREAM:1:pose_world_landmarks"
+  input_stream: "STREAM:2:left_hand_landmarks"
+  input_stream: "STREAM:3:right_hand_landmarks"
+  input_stream: "STREAM:4:face_landmarks"
+  output_stream: "BUNDLE:gamst_frame"
+}

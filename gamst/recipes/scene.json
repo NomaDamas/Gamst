@@ -1,0 +1,296 @@
+{
+  "name": "scene",
+  "summary": "Several things at once on one capture clock: movements of an enrolled person, words that are said, and optionally a VLM's interpretation of segments; from a camera and a microphone, or a video file and its sound.",
+  "skill": "skills/gamst-scene/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "camera": "as person-action-count",
+    "microphone": "16 kHz mono",
+    "compute": "CPU for the default parts; whether one machine keeps up with all of them together has not been measured"
+  },
+  "inputs": [
+    {
+      "id": "camera",
+      "use": "camera",
+      "sources": [
+        "camera",
+        "video"
+      ]
+    },
+    {
+      "id": "microphone",
+      "use": "microphone",
+      "sources": [
+        "microphone",
+        "audio",
+        "video"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "name": "exemplar",
+      "kind": "exemplar",
+      "label": "the specified pose or movement",
+      "for": "exemplar"
+    },
+    {
+      "name": "person",
+      "kind": "person",
+      "label": "the enrolled person",
+      "for": "target_person"
+    },
+    {
+      "name": "voice",
+      "kind": "voice",
+      "label": "the enrolled voice",
+      "for": [
+        "speaker",
+        "target_voice",
+        "speaker_check"
+      ]
+    },
+    {
+      "name": "terms",
+      "kind": "terms",
+      "label": "the words to count",
+      "for": "terms"
+    }
+  ],
+  "modules": [
+    {
+      "name": "pose",
+      "use": "mediapipe-pose",
+      "candidate": "mediapipe.pose_full",
+      "max_poses": 4,
+      "tracker": "ocsort",
+      "consumes": [
+        "camera"
+      ],
+      "joints": "pose_joints",
+      "emits": [
+        "pose_joints"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "movement"
+      ]
+    },
+    {
+      "name": "target_person",
+      "use": "target-person",
+      "optional": "on",
+      "reference": "person",
+      "consumes": [
+        "camera",
+        "pose_joints"
+      ],
+      "joints": "target_joints",
+      "emits": [
+        "target_joints"
+      ],
+      "pausable": false,
+      "parts": [
+        "movement",
+        "person"
+      ]
+    },
+    {
+      "name": "pose_channels",
+      "use": "pose-channels",
+      "consumes": [
+        "target_joints"
+      ],
+      "consumes_without": {
+        "target_person": [
+          "pose_joints"
+        ]
+      },
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "movement"
+      ]
+    },
+    {
+      "name": "exemplar",
+      "use": "exemplar",
+      "mode": "hold",
+      "max_reps_s": 2,
+      "consumes": [
+        "pose_channels",
+        "target_person:vision.target_person",
+        "target_joints"
+      ],
+      "consumes_without": {
+        "target_person": [
+          "pose_channels",
+          "pose_joints"
+        ]
+      },
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "movement"
+      ]
+    },
+    {
+      "name": "onsets",
+      "use": "audio-onsets",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "impact"
+      ]
+    },
+    {
+      "name": "impact_movement",
+      "use": "coincidence",
+      "of": "exemplar",
+      "by": "onsets",
+      "of_event": "exemplar.matched",
+      "by_event": "audio.onset",
+      "before_ms": 30,
+      "after_ms": 150,
+      "consumes": [
+        "exemplar",
+        "onsets"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "impact"
+      ]
+    },
+    {
+      "name": "repetition",
+      "use": "repetition",
+      "max_reps_s": 2,
+      "consumes": [
+        "pose_channels"
+      ],
+      "optional": "off",
+      "parts": [
+        "movement"
+      ]
+    },
+    {
+      "name": "speaker",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "speech",
+        "voice"
+      ]
+    },
+    {
+      "name": "target_voice",
+      "use": "speaker-gate",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "speaker"
+      ],
+      "emits": [
+        "voice"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "speech",
+        "voice"
+      ]
+    },
+    {
+      "name": "asr",
+      "use": "stream-words",
+      "candidate": "elevenlabs.scribe_v3_live.hosted",
+      "language": "ko",
+      "consumes": [
+        "voice"
+      ],
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      },
+      "parts": [
+        "speech"
+      ],
+      "optional": "on",
+      "pausable": false
+    },
+    {
+      "name": "speaker_check",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "segments": false,
+      "capability_id": "speech.speaker_check",
+      "consumes": [
+        "microphone",
+        "asr:speech.transcript_words"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "speech",
+        "voice"
+      ]
+    },
+    {
+      "name": "terms",
+      "use": "terms",
+      "reference": "terms",
+      "consumes": [
+        "speaker_check"
+      ],
+      "consumes_without": {
+        "speaker_check": [
+          "asr:speech.transcript_words"
+        ]
+      },
+      "parts": [
+        "speech"
+      ],
+      "optional": "on",
+      "pausable": false
+    },
+    {
+      "name": "semantic",
+      "use": "semantic-scene",
+      "optional": "off",
+      "every_ms": 500,
+      "segment_s": 4,
+      "consumes": [
+        "camera"
+      ]
+    }
+  ],
+  "view": "count",
+  "records": [
+    {
+      "id": "temporal.exemplar_events",
+      "for": "exemplar"
+    },
+    {
+      "id": "temporal.repetition_count",
+      "for": "repetition"
+    },
+    {
+      "id": "speech.term_events",
+      "for": "terms"
+    },
+    {"id": "temporal.coincidence", "for": "impact_movement"}
+  ],
+  "limits": "the limits of person-action-count and person-term-count apply; a live camera's own latency is unknown, so sound and pictures may be off by it (--offset-ms camera=MS after measuring); the parts have not been run together with real models",
+  "measured": "not yet"
+}

@@ -18,7 +18,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 GAMST gives agents a shared layer for observing a changing world, tracking physical and semantic state, and adapting an action. The product's core is continuous observation and decision context; Companion replies are optional.
 
-**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup through GamstCrew (`gamst setup`, profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
+**Status: v0.6 alpha.** Adds executable recipes (`gamst recipe setup | check | run`): `coin-flip` and `rotation` (fans, wheels, turntables), each installing only its own parts and checking the camera's frame rate against the sampling limit first. Also: generic [object rotation](docs/halo-coin.md) (`gamst demo rotation`), role-based agentic setup built into GAMST (`gamst setup`, `gamst.crew`; profiles run with `--profile`), and builds on bounded background ASR/VLM workers, live context streaming, a shared-session MCP bridge, and the GAMST Playground (browser + local). Benchmark/billing code moved to the [archive](docs/archive/benchmarks-and-evaluation.md). No model establishes a person's inner emotions or intentions.
 
 ## 🗂️ Contents
 
@@ -133,6 +133,26 @@ asynchronous modalities, care about short-lived events, and must change an
 agent's action from that evidence. A single-image caption, one-shot transcript,
 or ordinary chatbot is intentionally outside this target.
 
+#### Why not let an LLM watch the video?
+
+A coding agent that can read images can count from a video: it cuts frames into timestamped contact sheets,
+looks at them, and zooms into doubtful moments. It did so on the two test-bed clips
+([docs/measurements/testbed-2026-11-26.md](docs/measurements/testbed-2026-11-26.md)), but it found *where* to look
+from what perception modules had measured (impact sounds, wrist heights, transcripts, voice scores), and it cannot hear.
+
+| | An LLM looks at frames | GAMST |
+| --- | --- | --- |
+| **Delay** | tens of seconds to minutes per question | per frame; measured: pose 31 ms/frame on a Mac CPU (keeps up with 30 fps, not with 60 fps: the 11.9 s 60 fps clip took 28.5 s) |
+| **One hour of video** | 108,000 frames at 30 fps; at 20 fps in sheets of 48, about 1,500 images, millions of input tokens (estimate) | on the device, no API cost |
+| **Always on** | not practical | what it is for |
+| **Same answer twice** | may differ between looks | same input, same count (three reruns gave the same 15) |
+| **Time resolution** | the spacing of the frames looked at (0.05 s) | every frame; sound onsets every 0.01 s |
+| **Privacy** | the frames are sent to the model provider | stays on the device unless a cloud module is chosen |
+| **Sound** | cannot hear | hears |
+
+The two work together: GAMST counts everything, continuously; an LLM looks only at the few events GAMST marks as
+doubtful, through bounded evidence.
+
 The reusable boundary is the common temporal contract, not a list of sensors:
 
 ```text
@@ -208,7 +228,7 @@ committed records and Watch alarms:
 
 ```bash
 pip install "gamst-sdk[rotation,yoloe]" "git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40"
-gamst demo rotation --fetch-models   # optional pinned YOLOE + MobileCLIP2 weights
+gamst demo rotation --fetch-models   # optional pinned weights, into ~/.cache/gamst/models/<model>/
 gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
 gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 ```
@@ -225,16 +245,16 @@ gamst recipe check rotation --symmetry 3 --max-rpm 1500 --fps 240
 gamst recipe run rotation --camera 0 --roi .3,.2,.4,.6 --symmetry 3 --max-rpm 1500
 ```
 
-Role-based hardware defaults are delegated to GamstCrew:
-`gamst setup plan --goals rotation,speech --json` and
-`gamst setup apply PLAN.json` (agents: MCP `plan_setup` / `apply_setup`). If
-GamstCrew is not installed, `gamst setup` prints its installation command
-instead of silently choosing another setup. Apply writes
-`~/.config/gamst/profile.json`; `await ProfileRuntime.open(human)` from
-`gamst.profile` then registers every selected role as an ordinary plugin
-(isolated workers behind a queue, model-free roles such as `vision.rotation`
-in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run
-the profile behind MCP capture or the dashboard; `push_video` feeds the same plugins.
+Setup is part of GAMST (`gamst.crew`, formerly the separate GamstCrew package; nothing else to
+install). There is one setup path: `gamst setup plan --goals rotation,speech --json` and
+`gamst setup apply PLAN.json`, MCP `plan_setup` / `apply_setup`, and `gamst recipe setup <recipe>`
+all run the same plan/apply over one role registry (`gamst/crew/registry.py`), which is the only
+place that names a weight URL and its SHA256. Apply installs the planned packages, downloads only
+pinned weights and verifies them, and writes `~/.config/gamst/profile.json`;
+`await ProfileRuntime.open(human)` from `gamst.profile` then runs every selected role as one
+Pipeline (isolated workers in bounded lanes, model-free roles such as `vision.rotation`
+in-process). Start `gamst mcp --profile` or `gamst dashboard --profile` to run the profile behind
+MCP capture or the dashboard; `push_video` feeds the same Pipeline. See [docs/crew.md](docs/crew.md).
 
 ### Rotation counting (experimental)
 
@@ -266,7 +286,7 @@ The named object is kept in `ObjectMemory`. `refined.json` and `refined.mp4`
 (each throw at 8× slow motion with the running count) are written next to the
 take.
 
-The `coin-flip` recipe runs this pipeline. `setup` installs only its parts: the extras, the SHA256-pinned YOLOE and
+The `coin-flip` recipe runs this pipeline. `setup` installs only its parts through `gamst setup`'s apply: their packages, the SHA256-pinned YOLOE and
 EfficientTAM tiny weights, and EfficientTAM at its pinned revision. `check` tells whether a camera's frame rate can
 count the recipe's speed.
 
@@ -502,6 +522,7 @@ Add it to your MCP client's server configuration, replacing the absolute paths:
 | --- | --- |
 | `get_state`, `get_events`, `get_context`, `get_trends` | Read current and temporal observations |
 | `inspect_interval` | Inspect retained evidence |
+| `get_timeline` | Values of all modules at the same capture time, with what is pending, lost or off, and what changed since the last read ([docs](docs/aligned-timeline.md)) |
 | `push_text`, `push_claim` | Supply conversation and structured assertions |
 | `start_capture`, `stop_capture`, `get_capture_status` | Control local devices |
 | `pause_capture`, `resume_capture`, `delete_data` | Control observation and retention |

@@ -47,6 +47,23 @@ GAMST publishes this as `vision.semantic_state`, then the host fusion layer
 combines it with typed audio, ASR, physical and other plugin signals. Strong
 VLM/LLM calls remain application-owned and are not triggered by this provider.
 
+## Text context
+
+When the semantic lane is on, what the same run transcribed and counted goes with the frames of a segment as text data
+(`config.context`, recipe default `["transcript", "counts"]`). Off: `--vlm-context none` (or one of the two), `"context": []` in the
+recipe item, or MCP `configure_pipeline_module` `{"transcript": false}`. Nothing is waited for: utterances and events that overlap the
+segment and are in the Store when the last frame is sent, current revisions only. At most 16 utterances, 500 characters each, 4000
+together, 32 events, 8 counts.
+
+It travels beside the frame through the existing worker operation (`process_regions`) and reaches the model as the JSON field
+`untrusted_data`, next to an instruction that nothing inside it is an instruction, not to count and not to change the counts. The record's
+`context` lists the record IDs, utterance IDs, revisions and values given and `as_of_ms`; `depends_on` makes `get_timeline` show
+`depends_on_changed` when one was revised later. A recipe cannot list `vision.streaming_semantic` in `records`.
+
+Tests check the request's structure. Whether a given VLM obeys text in a transcript is not tested. With a hosted endpoint
+(`allow_remote` is the consent for frames) nothing but frames is sent by default; the text needs its own consent:
+`--vlm-remote-context`, or `allow_remote_context` in the config. The worker refuses without it. Local endpoints are unchanged.
+
 ## Acceptance gate
 
 The provider contract tests validate chronology, window bounds, previous-state

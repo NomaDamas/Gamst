@@ -1,0 +1,1137 @@
+"""Input modules: the front layer that turns devices and recordings into capture-stamped frames.
+
+Each module has ``frames()``, an async iterator of :class:`gamst.plugins.InputFrame` whose
+``timestamp_ms`` is the capture time, and ``close()``. A :class:`gamst.pipeline.Pipeline` pumps them;
+hosts that own capture themselves keep using ``Gamst.push_video`` / ``push_audio`` or
+``Pipeline.push``. Third-party inputs plug in the same way (any object with ``frames()``).
+
+A source may say more: ``live`` (default True; a recorded source waits for the modules, a live one
+cannot), ``missed`` (how many frames or chunks it lost so far; the Pipeline turns an increase into a gap
+before the next frame) and ``status()``.
+
+``IPhone240Input`` is the GAMST 240 iPhone app (live over TCP, or a ``raw.gmst`` replayed): its
+frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
+
+Recorded inputs are re-timed onto the wall clock so the newest frame is not in the future (the
+runtime rejects capture times more than 5 s ahead), keeping the recording's own spacing. Several recordings
+of one run share a :class:`RecordedClock`; a video file and its own sound (:func:`media_streams`,
+:class:`SoundTrackInput`) are placed on it by the start times the container gives both streams.
+
+Live inputs use the host's clock: a camera frame the moment it was read (the camera's own latency is unknown
+and not subtracted), microphone samples their capture time as far as the device reports its latency. A
+measured difference is the owner's ``offset_ms`` of an input (:meth:`gamst.pipeline.Pipeline.add_input`).
+"""
+from __future__ import annotations
+
+import asyncio
+import collections
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+import queue
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import typing
+
+from .capabilities import SensorMetadata
+from .plugins import InputFrame
+
+
+def _now_ms():
+    return time.time_ns() // 1_000_000
+
+
+class RecordedClock:
+    """The one capture clock of the recordings of a run; position 0 is the same moment for all of them.
+
+    Every recording says how far it reaches (``add``) before the first one is read; the clock then starts so
+    that the last of them ends one second before now.
+    """
+
+    def __init__(self):
+        self._end_s, self._base = 0., None
+
+    def add(self, end_s):
+        if self._base is not None:
+            raise RuntimeError('the recordings already started')
+        self._end_s = max(self._end_s, float(end_s))
+
+    @property
+    def base_ms(self):
+        if self._base is None:
+            self._base = _now_ms() - round(1000 * self._end_s) - 1000
+        return self._base
+
+
+class _DeviceReader:
+    """A thread that takes everything a device delivers, so a busy event loop never makes the device drop.
+
+    ``read()`` runs in the thread and returns (item, bytes), or None at the end. Items wait in order up to
+    ``max_bytes``; beyond that the oldest is given up, and the count travels with the item after it.
+    """
+
+    def __init__(self, read, max_bytes, name):
+        self.read, self.max_bytes = read, max_bytes
+        self.waiting, self.bytes, self.lock = collections.deque(), 0, threading.Lock()
+        self.stop, self.ended, self.error = threading.Event(), False, None
+        self.loop, self.ready = asyncio.get_running_loop(), asyncio.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True, name=name)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            while not self.stop.is_set():
+                found = self.read()
+                if found is None:
+                    break
+                with self.lock:
+                    self.waiting.append([*found, 0])
+                    self.bytes += found[1]
+                    while self.bytes > self.max_bytes and len(self.waiting) > 1:
+                        _, size, lost = self.waiting.popleft()
+                        self.bytes -= size
+                        self.waiting[0][2] += lost + 1
+                self.loop.call_soon_threadsafe(self.ready.set)
+        except BaseException as error:   # raised by items(), never lost in the thread
+            self.error = error
+        self.ended = True
+        try:
+            self.loop.call_soon_threadsafe(self.ready.set)
+        except RuntimeError:             # the loop is already closed
+            pass
+
+    async def items(self):
+        """(item, items lost just before it), until the device ends."""
+        while True:
+            self.ready.clear()
+            with self.lock:
+                found = self.waiting.popleft() if self.waiting else None
+                if found is not None:
+                    self.bytes -= found[1]
+            if found is not None:
+                yield found[0], found[2]
+            elif self.ended:
+                if self.error is not None and not self.stop.is_set():
+                    raise self.error
+                return
+            else:
+                await self.ready.wait()
+
+    def close(self):
+        """True when the thread is out of the device, so the device may be released."""
+        self.stop.set()
+        if self.thread is not threading.current_thread():
+            self.thread.join(2)
+        return not self.thread.is_alive()
+
+
+class CameraInput:
+    """A local camera (OpenCV). Capture time is the host's monotonic clock at read.
+
+    Every frame the driver delivers is read and waits for the consumer (up to ``MAX_WAITING_BYTES``;
+    beyond that the oldest is given up and counted in ``missed``). Frames the camera or its driver
+    dropped before the read are not visible here and are not counted. ``max_side`` shrinks larger frames
+    (aspect ratio kept) as they are read, so every module after it sees the smaller ones.
+    """
+    modality = 'video'
+    live = True
+    MAX_WAITING_BYTES = 256 * 1024 * 1024
+
+    def __init__(self, index=0, *, max_frames=None, max_side=None):
+        if max_side is not None and (type(max_side) is not int or not 160 <= max_side <= 8192):
+            raise ValueError('max_side must be 160..8192 pixels')
+        self.index, self.max_frames, self.max_side, self.missed = index, max_frames, max_side, 0
+        self._cap = self._reader = None
+
+    async def frames(self):
+        import cv2
+        backend = cv2.CAP_AVFOUNDATION if sys.platform == 'darwin' else cv2.CAP_ANY
+        cap = self._cap = cv2.VideoCapture(self.index, backend)
+        if not cap.isOpened():
+            raise RuntimeError(f'cannot open camera {self.index}')
+        base, start, last, count = _now_ms(), time.monotonic(), None, 0
+
+        def read():
+            ok, frame = cap.read()
+            if not ok:      # a camera has no end: it was unplugged, or the system took it away
+                raise RuntimeError(f'camera {self.index} stopped giving frames')
+            stamp = base + round(1000 * (time.monotonic() - start))
+            scale = self.max_side / max(frame.shape[:2]) if self.max_side else 1
+            if scale < 1:
+                frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            return (stamp, frame), frame.nbytes
+
+        self._reader = _DeviceReader(read, self.MAX_WAITING_BYTES, f'gamst-camera-{self.index}')
+        try:
+            async for (stamp, frame), lost in self._reader.items():
+                if self.max_frames is not None and count >= self.max_frames:
+                    break
+                self.missed += lost
+                stamp = stamp if last is None or stamp > last else last + 1
+                last, count = stamp, count + 1
+                yield InputFrame(frame, 'video', stamp)
+                if count == self.max_frames:
+                    break
+        finally:
+            self.close()
+
+    def slow_hint(self):
+        return f"{'a smaller ' if self.max_side else ''}--camera-max-side PX shrinks camera frames as they are read" + (
+            f' (now {self.max_side})' if self.max_side else '')
+
+    def status(self):
+        reader = self._reader
+        oldest = reader.waiting[0][0][0] if reader is not None and reader.waiting else None
+        return dict(waiting=len(reader.waiting) if reader is not None else 0,
+                    backlog_ms=0 if oldest is None else max(0, _now_ms() - oldest))
+
+    def close(self):
+        reader, self._reader = self._reader, None
+        cap, self._cap = self._cap, None
+        if cap is not None and (reader is None or reader.close()):
+            cap.release()   # never while a read is still inside the driver
+
+
+class VideoFileInput:
+    """A video file; ``capture_fps`` overrides file timing (high-speed clips saved at 30 fps).
+
+    ``start_s`` / ``end_s`` read only that part of the file. ``origin_ms`` is the capture time of the file's
+    first frame, so ``timestamp_ms - origin_ms`` is a position in the file whichever part is read.
+    """
+    modality = 'video'
+    live = False
+
+    def __init__(self, path, *, capture_fps=None, max_frames=None, start_s=0., end_s=None, clock=None, at_s=0.):
+        """``at_s``: where the first frame is on ``clock`` (a :class:`RecordedClock` other recordings share)."""
+        self.path, self.capture_fps, self.max_frames = str(path), capture_fps, max_frames
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
+        self._cap = None
+
+    def fps(self):
+        import cv2
+        cap = cv2.VideoCapture(self.path)
+        try:
+            return self.capture_fps or cap.get(cv2.CAP_PROP_FPS) or None
+        finally:
+            cap.release()
+
+    def duration_s(self):
+        """From the file's frame count and rate; None when the container does not say."""
+        import cv2
+        cap = cv2.VideoCapture(self.path)
+        try:
+            if not cap.isOpened():
+                raise RuntimeError(f'cannot open video {self.path}')
+            fps, total = self.capture_fps or cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            return total / fps if fps and total and total > 0 else None
+        finally:
+            cap.release()
+
+    async def frames(self):
+        import cv2
+        self._cap = cv2.VideoCapture(self.path)
+        if not self._cap.isOpened():
+            raise RuntimeError(f'cannot open video {self.path}')
+        fps = self.capture_fps or self._cap.get(cv2.CAP_PROP_FPS) or 30.
+        total = self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        base = self.origin_ms = _now_ms() - round(1000 * total / fps) - 1000 if self.clock is None else \
+            self.clock.base_ms + round(1000 * self.at_s)
+        position = first = round(self.start_s * fps)
+        if first and not (self._cap.set(cv2.CAP_PROP_POS_FRAMES, first)
+                          and round(self._cap.get(cv2.CAP_PROP_POS_FRAMES)) == first):
+            self._cap.release()      # this container cannot seek: decode up to the start
+            self._cap = cv2.VideoCapture(self.path)
+            for _ in range(first):
+                if not self._cap.grab():
+                    break
+        last = None
+        while self.max_frames is None or position - first < self.max_frames:
+            ok, frame = self._cap.read()
+            if not ok:
+                break
+            offset = position * 1000 / self.capture_fps if self.capture_fps else self._cap.get(cv2.CAP_PROP_POS_MSEC)
+            if self.end_s is not None and offset > 1000 * self.end_s:
+                break
+            stamp = base + round(offset)
+            stamp = stamp if last is None or stamp > last else last + 1
+            last, position = stamp, position + 1
+            yield InputFrame(frame, 'video', stamp)
+
+    def close(self):
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+
+# ---------------------------------------------------------------- GAMST 240 (iPhone high-fps app) wire format
+
+# "GMS3" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 |
+# u16 clockwise degrees to upright | u16 x4 crop rect (sensor-normalized x65535) | u32 jpeg bytes.
+# Frames arrive in sensor orientation; the Mac rotates them upright. "GMS2" frames are already upright
+# and uncropped; "GMST" (first app build) has no flags and counts as one continuous take.
+# The Mac drives the phone with newline-delimited JSON commands written back on the same socket.
+HEADER_SIZE = {b'GMS3': 36, b'GMS2': 28, b'GMST': 24}
+RECORDING, FRONT_CAMERA = 1, 2
+FULL = (0., 0., 1., 1.)
+
+
+class FrameHeader(typing.NamedTuple):
+    sequence: int
+    seconds: float
+    width: int
+    height: int
+    flags: int
+    zoom: float
+    size: int
+    angle: int = 0
+    crop: tuple = FULL
+
+
+def parse_header(header):
+    magic = header[:4]
+    if magic == b'GMS3':
+        sequence, seconds, width, height, flags, zoom, angle, cx, cy, cw, ch, size = struct.unpack(
+            '<IdHHBBH4HI', header[4:36])
+        return FrameHeader(sequence, seconds, width, height, flags, (zoom or 10) / 10, size, angle % 360,
+                           (cx / 65535, cy / 65535, cw / 65535, ch / 65535))
+    if magic == b'GMS2':
+        sequence, seconds, width, height, flags, zoom, size = struct.unpack('<IdHHBB2xI', header[4:28])
+        return FrameHeader(sequence, seconds, width, height, flags, (zoom or 10) / 10, size)
+    if magic == b'GMST':
+        sequence, seconds, width, height, size = struct.unpack('<IdHHI', header[4:24])
+        return FrameHeader(sequence, seconds, width, height, RECORDING, 1., size)
+    raise ValueError('not a GAMST 240 frame stream')
+
+
+def read_recording(path):
+    """[(FrameHeader, header bytes, jpeg bytes)] of a raw.gmst stream."""
+    data = Path(path).read_bytes()
+    frames, offset = [], 0
+    while offset + 4 <= len(data):
+        size = HEADER_SIZE.get(data[offset:offset + 4])
+        if size is None:
+            raise SystemExit(f'{path}: not a GAMST 240 recording')
+        info = parse_header(data[offset:offset + size])
+        offset += size
+        frames.append((info, data[offset - size:offset], data[offset:offset + info.size]))
+        offset += info.size
+    return frames
+
+
+def decode(info, payload):
+    """The frame upright, as BGR."""
+    import cv2
+    import numpy as np
+    frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+    turn = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(info.angle)
+    return frame if frame is None or turn is None else cv2.rotate(frame, turn)
+
+
+def sensor_to_upright(x, y, angle):
+    """Full-sensor normalized point -> full upright normalized point (clockwise ``angle``)."""
+    return {0: (x, y), 90: (1 - y, x), 180: (1 - x, 1 - y), 270: (y, 1 - x)}[angle]
+
+
+def upright_to_sensor(x, y, angle):
+    return {0: (x, y), 90: (y, 1 - x), 180: (1 - x, 1 - y), 270: (1 - y, x)}[angle]
+
+
+def frame_to_upright(info, fx, fy):
+    """Point in the received (cropped, upright) frame, normalized -> full upright normalized."""
+    # Undo the rotation inside the crop, then place the crop in the full sensor frame.
+    lx, ly = upright_to_sensor(fx, fy, info.angle)
+    cx, cy, cw, ch = info.crop
+    return sensor_to_upright(cx + lx * cw, cy + ly * ch, info.angle)
+
+
+def upright_rect_to_sensor(rect, angle):
+    x, y, w, h = rect
+    points = [upright_to_sensor(px, py, angle) for px, py in ((x, y), (x + w, y + h))]
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+
+class TakeInput:
+    """A GAMST 240 take (folder or ``raw.gmst``); capture times are the phone's sensor times."""
+    modality = 'video'
+    live = False
+
+    def __init__(self, path, *, max_frames=None):
+        path = Path(path)
+        self.path = path / 'raw.gmst' if path.is_dir() else path
+        if not self.path.is_file():
+            raise FileNotFoundError(f'no GAMST 240 recording at {self.path}')
+        self.max_frames = max_frames
+
+    def fps(self):
+        summary = self.path.parent / 'summary.json'
+        if summary.is_file():
+            import json
+            fps = json.loads(summary.read_text()).get('capture_fps')
+            if fps:
+                return float(fps)
+        frames = read_recording(self.path)
+        span = frames[-1][0].seconds - frames[0][0].seconds if len(frames) > 1 else 0
+        return (len(frames) - 1) / span if span else None
+
+    async def frames(self):
+        recording = read_recording(self.path)
+        if not recording:
+            return
+        first, end = recording[0][0].seconds, recording[-1][0].seconds
+        base = _now_ms() - round(1000 * (end - first)) - 1000
+        last, count = None, 0
+        for info, _, payload in recording:
+            if self.max_frames is not None and count >= self.max_frames:
+                break
+            frame = decode(info, payload)
+            if frame is None:
+                continue
+            stamp = base + round(1000 * (info.seconds - first))
+            stamp = stamp if last is None or stamp > last else last + 1
+            last, count = stamp, count + 1
+            yield InputFrame(frame, 'video', stamp)
+            await asyncio.sleep(0)
+
+
+@dataclass
+class PhoneFrame:
+    """One GAMST 240 frame as received: its header, the JPEG as sent, and the upright image on demand.
+
+    Decoding a 240 fps JPEG stream costs more than a frame interval on full frames, so a consumer
+    that only records the frame (``header + payload``) or shows one frame in eight never pays for
+    the others; ``image()`` decodes once.
+    """
+    info: FrameHeader
+    header: bytes
+    payload: bytes
+    _image: typing.Any = field(default=None, repr=False, compare=False)
+
+    @property
+    def recording(self):
+        """Recorded between Start and Stop on the phone (or REC on the Mac): part of a take."""
+        return bool(self.info.flags & RECORDING)
+
+    def image(self):
+        if self._image is None:
+            self._image = decode(self.info, self.payload)
+        return self._image
+
+
+@dataclass(frozen=True)
+class PhoneEvent:
+    """Not a frame: the phone disconnected (``kind``), so a take in progress ends here."""
+    kind: str
+    reason: str = ''
+    recording = False
+
+
+class IPhone240Input:
+    """The GAMST 240 iPhone app (``apps/ios-highspeed-camera``): live over TCP, or a ``raw.gmst`` replayed.
+
+    Each frame's capture time is the phone's sensor time, re-timed onto the runtime clock by
+    :meth:`clock` (fixed at the first frame, keeping the phone's spacing). Its data is a
+    :class:`PhoneFrame`; ``decode=True`` yields upright BGR arrays instead, for generic video modules.
+
+    Takes are marked by the phone: frames between Start and Stop carry the recording flag
+    (``PhoneFrame.recording``). Live, every recording frame is kept in order, while a standby frame
+    is skipped when a newer one is already waiting (standby only frames the shot); the first standby
+    frame after a take is always kept, so the end of the take is never lost. A disconnect is
+    yielded as a :class:`PhoneEvent`.
+
+    :meth:`command` drives the phone like its own buttons (``record``, ``camera``, ``zoom``,
+    ``crop``); the phone echoes its state in each frame header (:meth:`state`).
+    """
+
+    def __init__(self, port=None, *, replay=None, host='0.0.0.0', decode=False, max_frames=None):
+        if (port is None) == (replay is None):
+            raise ValueError('IPhone240Input listens on a port or replays a recording, not both')
+        if replay is not None:
+            replay = Path(replay)
+            replay = replay / 'raw.gmst' if replay.is_dir() else replay
+            if not replay.is_file():
+                raise FileNotFoundError(f'no GAMST 240 recording at {replay}')
+        self.port, self.replay, self.host = port, replay, host
+        self.decode, self.max_frames = decode, max_frames
+        self.modality = 'video' if decode else 'gamst240'
+        self.live = replay is None
+        self.received = 0
+        self._queue = queue.Queue()
+        self._capture = collections.deque(maxlen=241)
+        self._phone = dict(sock=None, recording=False, front=False, zoom=1., angle=0, crop=FULL)
+        self._listener = None
+        self._stopped = False
+        self._first = self._base = None
+        self._span_ms = 0
+
+    # ---------------------------------------------------------------- clock and state
+
+    def clock(self, capture_ms):
+        """Phone capture time (ms) -> runtime ms, so records land at the moment things happened."""
+        if self._first is None:
+            raise RuntimeError('no frame received yet')
+        return self._base + round((capture_ms / 1000 - self._first) * 1000)
+
+    def fps(self):
+        return TakeInput(self.replay).fps() if self.replay is not None else None
+
+    def state(self):
+        window, phone = list(self._capture), self._phone
+        fps = (len(window) - 1) / (window[-1] - window[0]) if len(window) > 1 and window[-1] > window[0] else 0.
+        return dict(live=self.live, connected=phone['sock'] is not None, recording=phone['recording'],
+                    front=phone['front'], zoom=phone['zoom'], angle=phone['angle'], crop=tuple(phone['crop']),
+                    capture_fps=fps, received=self.received)
+
+    # ---------------------------------------------------------------- phone commands
+
+    def command(self, name, *, around=None):
+        """Send a phone command; returns the message, or None when no phone is connected.
+
+        ``crop`` with ``around=(info, x, y)``, a normalized point in that received frame, moves the
+        phone's native-resolution strip there: full frame height (the object flies up), narrow
+        enough to keep 240 fps. ``crop`` alone returns to the full frame.
+        """
+        phone = self._phone
+        if name == 'record':
+            message = dict(cmd='record', on=not phone['recording'])
+        elif name == 'camera':
+            message = dict(cmd='camera', position='back' if phone['front'] else 'front')
+        elif name == 'zoom':
+            message = dict(cmd='zoom', factor=1 if phone['zoom'] >= 3 else round(phone['zoom']) + 1)
+        elif name == 'crop':
+            if around is None:
+                rect = list(FULL)
+            else:
+                info, fx, fy = around
+                ux, _ = frame_to_upright(info, fx, fy)
+                left = min(max(0., ux - .2), .6)
+                rect = [round(v, 4) for v in upright_rect_to_sensor((left, 0., .4, 1.), info.angle)]
+            message = dict(cmd='crop', rect=rect)
+        else:
+            raise ValueError(f'unknown phone command {name!r}; commands: record, camera, zoom, crop')
+        sock = phone['sock']
+        if sock is None:
+            return None
+        try:
+            sock.sendall((json.dumps(message) + '\n').encode())
+        except OSError:
+            return None
+        print(json.dumps({'command': message}), flush=True)
+        return message
+
+    # ---------------------------------------------------------------- frames
+
+    def _note(self, info):
+        self.received += 1
+        self._capture.append(info.seconds)
+        self._phone.update(recording=bool(info.flags & RECORDING), front=bool(info.flags & FRONT_CAMERA),
+                           zoom=info.zoom, angle=info.angle, crop=info.crop)
+
+    def _serve(self, listener):
+        """Socket thread: reads the phone stream, so a busy consumer never back-pressures the phone."""
+        while True:
+            try:
+                sock, peer = listener.accept()
+            except OSError:
+                return
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            print(json.dumps({'iphone': 'connected', 'peer': str(peer)}), flush=True)
+            self._phone['sock'] = sock
+            stream = sock.makefile('rb', buffering=1 << 20)
+            reason = 'stream ended'
+            try:
+                while True:
+                    magic = stream.read(4)
+                    if magic not in HEADER_SIZE:
+                        raise ConnectionError('stream ended' if len(magic) < 4 else 'not a GAMST 240 frame stream')
+                    header = magic + stream.read(HEADER_SIZE[magic] - 4)
+                    info = parse_header(header)
+                    payload = stream.read(info.size)
+                    if len(payload) < info.size:
+                        raise ConnectionError('stream ended')
+                    self._note(info)
+                    self._queue.put(PhoneFrame(info, header, payload))
+            except (OSError, ValueError, struct.error) as error:
+                reason = str(error)
+                print(json.dumps({'iphone': 'disconnected', 'reason': reason}), flush=True)
+            finally:
+                if self._phone['sock'] is sock:
+                    self._phone['sock'] = None
+                self._phone['recording'] = False
+                self._queue.put(PhoneEvent('disconnected', reason))
+                stream.close()
+                sock.close()
+
+    async def _received(self):
+        self._listener = socket.create_server((self.host, self.port), reuse_port=False)
+        self.port = self._listener.getsockname()[1]
+        threading.Thread(target=self._serve, args=(self._listener,), daemon=True).start()
+        print(json.dumps({'listening': self.port}), flush=True)
+        standby = False  # the last item handed on was a standby frame
+        while not self._stopped:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(.003)
+                continue
+            if isinstance(item, PhoneFrame) and not item.recording:
+                if standby and not self._queue.empty():
+                    continue  # a newer frame is waiting; standby frames only frame the shot
+                standby = True
+            else:
+                standby = False
+            yield item
+
+    async def _replayed(self):
+        recording = read_recording(self.replay)
+        self._span_ms = round(1000 * (recording[-1][0].seconds - recording[0][0].seconds)) if recording else 0
+        for info, header, payload in recording:
+            if self._stopped:
+                return
+            self._note(info)
+            yield PhoneFrame(info, header, payload)
+
+    async def frames(self):
+        last, count = None, 0
+        async for item in (self._received() if self.live else self._replayed()):
+            if isinstance(item, PhoneEvent):
+                if not self.decode:
+                    last = _now_ms() if last is None else last + 1
+                    yield InputFrame(item, self.modality, last)
+                continue
+            info = item.info
+            if self._first is None:
+                # The runtime rejects capture times in the future; a replay ends 1 s before now.
+                self._first, self._base = info.seconds, _now_ms() - 1000 - self._span_ms
+            data = item.image() if self.decode else item
+            if data is None:
+                continue
+            stamp = self.clock(info.seconds * 1000)
+            stamp = stamp if last is None or stamp > last else last + 1
+            last, count = stamp, count + 1
+            sensor = SensorMetadata(source_id='gamst240', sensor_id='camera', sequence=info.sequence,
+                                    capture_sequence=info.sequence)
+            yield InputFrame(data, self.modality, stamp, sensor=sensor)
+            await asyncio.sleep(0)
+            if self.max_frames is not None and count >= self.max_frames:
+                break
+
+    def stop(self):
+        """End ``frames()`` (the owner quit); the phone's socket thread ends with the process."""
+        self._stopped = True
+        if self._listener is not None:
+            self._listener.close()
+            self._listener = None
+
+    def reopen(self):
+        """After a failure: let go of the port, so that ``frames()`` can listen again."""
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            listener.close()
+
+    def close(self):
+        self.stop()
+
+
+def _part(start_s, end_s, done, samples, rate):
+    """The samples of a block (which starts ``done`` samples into the stream) inside [start_s, end_s], and where they start."""
+    first = min(len(samples), max(0, round(start_s * rate) - done))
+    last = len(samples) if end_s is None else max(first, min(len(samples), round(end_s * rate) - done))
+    return samples[first:last], done + first
+
+
+class AudioFileInput:
+    """A PCM WAV file as mono float32 chunks at its own sample rate (16 kHz expected by speech modules).
+
+    ``start_s`` / ``end_s`` read only that part; ``origin_ms`` is the capture time of the file's start.
+    """
+    modality = 'audio'
+    live = False
+
+    def __init__(self, path, *, chunk_ms=100, start_s=0., end_s=None, clock=None, at_s=0.):
+        self.path, self.chunk_ms = str(path), int(chunk_ms)
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
+
+    def duration_s(self):
+        import wave
+        with wave.open(self.path, 'rb') as source:
+            return source.getnframes() / source.getframerate()
+
+    async def frames(self):
+        import wave
+        import numpy as np
+        with wave.open(self.path, 'rb') as source:
+            rate, width, channels = source.getframerate(), source.getsampwidth(), source.getnchannels()
+            total = source.getnframes()
+            if width not in (2, 4):
+                raise ValueError('16- or 32-bit PCM WAV required')
+            chunk = max(1, rate * self.chunk_ms // 1000)
+            base = self.origin_ms = _now_ms() - round(1000 * total / rate) - 1000 if self.clock is None else \
+                self.clock.base_ms + round(1000 * self.at_s)
+            done = 0
+            while True:
+                raw = source.readframes(chunk)
+                if not raw:
+                    break
+                samples = np.frombuffer(raw, np.int16 if width == 2 else np.int32).astype(np.float32)
+                samples /= 32768. if width == 2 else 2147483648.
+                if channels > 1:
+                    samples = samples.reshape(-1, channels).mean(axis=1)
+                kept, begin = _part(self.start_s, self.end_s, done, samples, rate)
+                done += len(samples)
+                if len(kept):
+                    # The frame's time is the capture time of its last sample, like push_audio.
+                    yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
+                await asyncio.sleep(0)
+
+
+class Paced:
+    """A recording replayed at its own speed (``speed`` 1: as it was captured), as a live capture would arrive.
+
+    Frames keep their capture times; each is released no earlier than its time after the first, so a module that
+    measures how long an answer takes (a streaming recogniser) sees what a microphone would give it. The source stays
+    a recording (``live`` False): a module that falls behind still gets every frame.
+    """
+
+    def __init__(self, source, speed=1.):
+        if not float(speed) > 0:
+            raise ValueError('speed must be positive')
+        self.source, self.speed = source, float(speed)
+        self.modality = getattr(source, 'modality', None)
+        self.live = False
+
+    def __getattr__(self, name):
+        return getattr(self.source, name)
+
+    async def frames(self):
+        first, start = None, None
+        async for frame in self.source.frames():
+            if first is None:
+                first, start = frame.timestamp_ms, time.monotonic()
+            wait = start + (frame.timestamp_ms - first) / 1000. / self.speed - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            yield frame
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        if callable(close):
+            close()
+
+
+def _media_tool(name):
+    found = shutil.which(name)
+    if found is None:
+        raise RuntimeError(f'reading the sound of a video file needs {name}, which is not on PATH (install ffmpeg, e.g. '
+                           'brew install ffmpeg), or give the sound as a PCM WAV file')
+    return found
+
+
+def _media_url(path):
+    """A local file only: never an address ffmpeg would open over the network."""
+    return 'file:' + str(Path(path).expanduser().resolve())
+
+
+def media_streams(path):
+    """``{'video': start_s or None, 'audio': start_s or None, 'duration_s'}`` of a media file (ffprobe)."""
+    if not Path(path).expanduser().is_file():
+        raise RuntimeError(f'cannot open {path}')
+    command = [_media_tool('ffprobe'), '-v', 'error', '-protocol_whitelist', 'file', '-show_entries',
+               'stream=codec_type,start_time:stream_disposition=attached_pic:format=duration', '-of', 'json', _media_url(path)]
+    try:
+        found = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f'{path}: ffprobe did not answer') from error
+    if found.returncode:
+        raise RuntimeError(f"{path}: {found.stderr.decode(errors='replace').strip()[-300:] or 'not a media file'}")
+
+    def number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    value = json.loads(found.stdout)
+    result = dict(video=None, audio=None, duration_s=number((value.get('format') or {}).get('duration')) or 0.)
+    for stream in value.get('streams', ()):
+        kind = stream.get('codec_type')
+        if kind in ('video', 'audio') and result[kind] is None and not (stream.get('disposition') or {}).get('attached_pic'):
+            result[kind] = number(stream.get('start_time')) or 0.
+    return result
+
+
+class SoundTrackInput:
+    """The first sound track of a media file as mono float32 chunks, streamed from an ffmpeg process.
+
+    Nothing is written to disk; at most what the process's pipe and one chunk hold is in memory. Samples keep
+    their place: a stretch the container has no sound for is silence, not a shift. ``at_s`` is where the
+    track's first sample is on ``clock``. Positions (``start_s``, ``end_s``) are from the track's first sample.
+    """
+    modality = 'audio'
+    live = False
+
+    def __init__(self, path, *, sample_rate=16000, chunk_ms=100, start_s=0., end_s=None, clock=None, at_s=0.):
+        self.path, self.sample_rate, self.chunk_ms = str(path), int(sample_rate), int(chunk_ms)
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s, self._process = clock, float(at_s), None
+
+    def command(self):
+        return [_media_tool('ffmpeg'), '-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-i', _media_url(self.path),
+                '-map', '0:a:0', '-af', 'aresample=async=1', '-ac', '1', '-ar', str(self.sample_rate),
+                '-f', 'f32le', 'pipe:1']
+
+    async def frames(self):
+        import numpy as np
+        rate, size = self.sample_rate, self.sample_rate * self.chunk_ms // 1000
+        clock = self.clock
+        if clock is None:
+            info = media_streams(self.path)
+            if info['audio'] is None:
+                raise RuntimeError(f'{self.path} has no sound track')
+            clock = RecordedClock()
+            clock.add(info['duration_s'])
+        process = self._process = await asyncio.create_subprocess_exec(
+            *self.command(), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, limit=8 * size, close_fds=True)
+        problems = bytearray()
+
+        async def drain():
+            while block := await process.stderr.read(4096):
+                problems.extend(block)
+                del problems[:-2000]
+
+        errors = asyncio.create_task(drain())
+        try:
+            base = self.origin_ms = clock.base_ms + round(1000 * self.at_s)
+            done, more = 0, True
+            while more:
+                try:
+                    raw = await process.stdout.readexactly(4 * size)
+                except asyncio.IncompleteReadError as end:
+                    raw, more = end.partial, False
+                    raw = raw[:len(raw) // 64 * 64]     # the last, shorter chunk: whole milliseconds at 16 kHz
+                samples = np.clip(np.frombuffer(raw, '<f4'), -1., 1.).astype(np.float32)
+                kept, begin = _part(self.start_s, self.end_s, done, samples, rate)
+                done += len(samples)
+                if len(kept):
+                    yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
+                if self.end_s is not None and done >= self.end_s * rate:
+                    return
+            if await process.wait():
+                await errors
+                raise RuntimeError(f"{self.path}: {problems.decode(errors='replace').strip()[-300:] or 'ffmpeg failed'}")
+        finally:
+            self._process = None
+            from .process_provider import stop_child
+            await stop_child(process)
+            errors.cancel()
+
+    def close(self):
+        process = self._process
+        if process is not None and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+
+
+class SensorFileInput:
+    """Time-stamped numeric samples of a physical sensor (an IMU and similar) from a CSV or JSONL file.
+
+    Declared by the caller, never guessed: ``columns`` (``[{"name", "unit"}]``, in channel order; an optional
+    ``"scale"`` divides the channel, as distances are compared across channels) and ``time``
+    (``{"column", "unit": "s" | "ms" | "us" | "ns"}``, the sensor's own time, strictly increasing; its first
+    sample is the recording's position 0, at ``at_s`` on ``clock``). A CSV has a header row; a JSONL line is one
+    object. A missing value is a channel with ``mask`` false, never a number. Frames carry
+    ``{"channels": [...], "mask": [...]}``, what exemplar, repetition and rhythm modules read.
+    """
+    live = False
+    UNITS = dict(s=1000., ms=1., us=.001, ns=.000001)
+    MAX_CHANNELS, MAX_LINE = 128, 65536
+
+    def __init__(self, path, *, columns, time, modality='imu', start_s=0., end_s=None, clock=None, at_s=0.):
+        from .capabilities import MODALITIES
+        if modality not in MODALITIES - {'video', 'audio', 'text'}:
+            raise ValueError(f'a sensor input is not {modality!r}')
+        columns = [dict(item) for item in columns]
+        names = [item.get('name') for item in columns]
+        if not 1 <= len(columns) <= self.MAX_CHANNELS or len(set(names)) != len(names) or any(
+                set(item) - {'scale'} != {'name', 'unit'} or not all(isinstance(item[key], str) and item[key] for key in ('name', 'unit'))
+                or type(item.get('scale', 1)) not in (int, float) or not 0 < item.get('scale', 1) < 1e12 for item in columns):
+            raise ValueError('sensor columns are [{"name", "unit", "scale"?}, ...] with distinct names')
+        if not isinstance(time, dict) or set(time) != {'column', 'unit'} or time['unit'] not in self.UNITS \
+                or not isinstance(time['column'], str) or time['column'] in names:
+            raise ValueError('a sensor\'s time is {"column", "unit"}, unit ' + ', '.join(self.UNITS))
+        self.path, self.columns, self.time, self.modality = Path(path), columns, dict(time), modality
+        self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
+        self.clock, self.at_s = clock, float(at_s)
+
+    @property
+    def contract(self):
+        """What the channels are, so that a movement learned from other columns or units is refused."""
+        return f'sensor.{self.modality}:' + ','.join(
+            f"{item['name']}[{item['unit']}]" + (f"/{item['scale']:g}" if 'scale' in item else '') for item in self.columns)
+
+    def _rows(self):
+        """(time in ms since the first sample, channels, mask) of every line."""
+        import csv
+        names, wanted = [item['name'] for item in self.columns], self.time['column']
+        scale, first, last = self.UNITS[self.time['unit']], None, None
+        with open(self.path, newline='', encoding='utf-8') as source:
+            def lines():
+                while line := source.readline(self.MAX_LINE):
+                    if len(line) >= self.MAX_LINE:
+                        raise ValueError(f'{self.path}: a line is too long')
+                    yield line
+
+            if self.path.suffix.lower() in ('.jsonl', '.ndjson'):
+                rows = (json.loads(line) for line in lines() if line.strip())
+            else:
+                rows = csv.DictReader(lines())
+                missing = [name for name in (wanted, *names) if name not in (rows.fieldnames or ())]
+                if missing:
+                    raise ValueError(f"{self.path} has no column {', '.join(missing)}")
+            for number, row in enumerate(rows, 1):
+                if not isinstance(row, dict):
+                    raise ValueError(f'{self.path}: sample {number} is not an object')
+                stamp = self._number(row.get(wanted))
+                if stamp is None:
+                    raise ValueError(f'{self.path}: sample {number} has no time')
+                stamp *= scale
+                if last is not None and stamp <= last:
+                    raise ValueError(f'{self.path}: sample {number} is not later than the one before it')
+                first, last = stamp if first is None else first, stamp
+                values = [self._number(row.get(name)) for name in names]
+                yield stamp - first, [0. if value is None else value / item.get('scale', 1) for value, item in
+                                      zip(values, self.columns)], [value is not None for value in values]
+
+    @staticmethod
+    def _number(value):
+        if type(value) not in (int, float, str):
+            return None
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+        return value if abs(value) <= 1e100 else None     # also refuses nan and inf
+
+    def duration_s(self):
+        end = 0.
+        for end, _, _ in self._rows():
+            pass
+        return end / 1000
+
+    async def frames(self):
+        clock = self.clock
+        if clock is None:
+            clock = RecordedClock()
+            clock.add(self.duration_s())
+        base, last = None, None
+        for number, (offset, channels, mask) in enumerate(self._rows()):
+            if base is None:
+                base = self.origin_ms = clock.base_ms + round(1000 * self.at_s)
+            if offset < 1000 * self.start_s:
+                continue
+            if self.end_s is not None and offset > 1000 * self.end_s:
+                return
+            stamp = base + round(offset)
+            if last is not None and stamp <= last:
+                stamp = last + 1
+                if stamp - base - offset > 2:
+                    raise ValueError(f'{self.path}: capture times are milliseconds; at most 1000 samples per second')
+            last = stamp
+            yield InputFrame(dict(channels=channels, mask=mask), self.modality, stamp)
+            await asyncio.sleep(0)
+
+    def status(self):
+        return dict(columns=self.columns, time=self.time)
+
+    def close(self):
+        pass
+
+
+class MicrophoneInput:
+    """The default microphone as mono float32 chunks (needs ``sounddevice``).
+
+    A chunk's time is the capture time of its last sample on the device's sample clock: it starts at the
+    first read (arrival minus what still waits in the device buffer and the latency the device reports) and
+    advances by samples, so scheduling delays do not move it. An overflow reported by the device, or a
+    sample clock more than ``resync_ms`` away from arrival (loss the device did not report, or clock
+    drift), is a gap: what was buffered around an overflow is dropped, the clock starts again, and
+    ``missed`` grows by the lost time in chunks (at least one).
+    """
+    modality = 'audio'
+    live = True
+    resync_ms = 250
+    MAX_WAITING_BYTES = 64 * 1024 * 1024
+
+    def __init__(self, *, sample_rate=16000, chunk_ms=100, device=None, max_chunks=None, stream_factory=None):
+        self.sample_rate, self.chunk_ms, self.device = sample_rate, chunk_ms, device
+        self.max_chunks, self._factory, self._stream = max_chunks, stream_factory, None
+        self.missed = self.overflows = self.resyncs = self.lost_ms = 0
+        self._reader = None
+
+    async def frames(self):
+        if self._factory is None:
+            try:
+                import sounddevice
+            except ImportError as exc:
+                raise RuntimeError('MicrophoneInput needs: pip install sounddevice') from exc
+            factory = lambda **options: sounddevice.InputStream(**options)
+        else:
+            factory = self._factory
+        rate = self.sample_rate
+        chunk = rate * self.chunk_ms // 1000
+        stream = self._stream = factory(samplerate=rate, channels=1, dtype='float32', blocksize=chunk,
+                                        device=self.device)
+        stream.start()
+        clock = dict(anchor=None, done=0, last=None, lost=False)
+
+        def read():
+            while True:
+                samples, overflowed = stream.read(chunk)
+                waiting = int(getattr(stream, 'read_available', 0) or 0)
+                arrived = _now_ms() - 1000 * waiting / rate - 1000 * float(getattr(stream, 'latency', 0) or 0)
+                if not overflowed:
+                    break
+                self.overflows += 1
+                clock.update(anchor=None, lost=True)
+                if waiting:
+                    stream.read(waiting)   # the loss is at an unknown place in it
+            samples = samples.reshape(-1).copy()
+            clock['done'] += len(samples)
+            if clock['anchor'] is not None and abs(
+                    arrived - clock['anchor'] - 1000 * clock['done'] / rate) > self.resync_ms:
+                self.resyncs += 1
+                clock.update(anchor=None, lost=True)
+            if clock['anchor'] is None:
+                clock.update(done=len(samples), anchor=arrived - 1000 * len(samples) / rate)
+            stamp, last = round(clock['anchor'] + 1000 * clock['done'] / rate), clock['last']
+            if last is not None and stamp <= last:
+                stamp = last + 1
+            missed = 0
+            if clock['lost']:
+                gone = 0 if last is None else max(0, round(stamp - 1000 * len(samples) / rate - last))
+                self.lost_ms += gone
+                missed = max(1, round(gone / self.chunk_ms))
+            clock.update(last=stamp, lost=False)
+            return (samples, stamp, missed), samples.nbytes
+
+        self._reader, count = _DeviceReader(read, self.MAX_WAITING_BYTES, 'gamst-microphone'), 0
+        try:
+            async for (samples, stamp, missed), lost in self._reader.items():
+                self.missed += missed + lost
+                count += 1
+                yield InputFrame(samples, 'audio', stamp, sample_rate=rate)
+                if count == self.max_chunks:
+                    break
+        finally:
+            self.close()
+
+    def status(self):
+        return dict(overflows=self.overflows, resyncs=self.resyncs, lost_ms=self.lost_ms,
+                    waiting=len(self._reader.waiting) if self._reader is not None else 0)
+
+    def close(self):
+        reader, self._reader = self._reader, None
+        stream, self._stream = self._stream, None
+        if reader is not None:
+            reader.close()
+        if stream is not None:
+            stream.stop()
+            stream.close()
+
+
+class PluginInput:
+    """A user-made input (``gamst.inputs`` entry point) as a recipe input: its frames are checked, nothing else is added.
+
+    Its code runs in this process with this process's rights; only the owner selects it (``--plugin NAME``).
+    """
+
+    def __init__(self, name, source, modality):
+        if source.modality != modality:
+            raise ValueError(f'plugin input {name} gives {source.modality}, the recipe declares {modality}')
+        self.name, self.source, self.modality = name, source, modality
+        self.live = bool(getattr(source, 'live', True))
+        for optional in ('reopen', 'status', 'slow_hint'):
+            if callable(getattr(source, optional, None)):
+                setattr(self, optional, getattr(source, optional))
+
+    @property
+    def missed(self):
+        return getattr(self.source, 'missed', 0)
+
+    async def frames(self):
+        async for frame in self.source.frames():
+            if not isinstance(frame, InputFrame) or frame.modality != self.modality or type(frame.timestamp_ms) is not int \
+                    or not 0 <= frame.timestamp_ms <= _now_ms() + 5000:
+                raise ValueError(f'plugin input {self.name}: a frame is an InputFrame of {self.modality} with its capture '
+                                 'time in integer milliseconds, not in the future')
+            yield frame
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        return close() if callable(close) else None
+
+
+class PacedInput:
+    """A recording given at its own pace, as a live capture: each frame when its last sample would have been captured,
+    stamped with that moment. Nothing waits for slow modules, as with a camera or microphone: what falls behind is
+    a declared gap. ``pace`` (a dict) is shared by the inputs of one run, so they keep their places to each other.
+    """
+    live = True
+
+    def __init__(self, source, pace=None):
+        if getattr(source, 'live', True):
+            raise ValueError('only a recording is paced; a live input has its own pace')
+        self.source, self.modality = source, source.modality
+        self.pace = {} if pace is None else pace
+
+    @property
+    def missed(self):
+        return getattr(self.source, 'missed', 0)
+
+    async def frames(self):
+        from dataclasses import replace
+        async for frame in self.source.frames():
+            if 'recorded_ms' not in self.pace:
+                self.pace.update(recorded_ms=frame.timestamp_ms, wall_ms=_now_ms())
+            due = self.pace['wall_ms'] + frame.timestamp_ms - self.pace['recorded_ms']
+            wait = due - _now_ms()
+            if wait > 0:
+                await asyncio.sleep(wait / 1000)
+            yield replace(frame, timestamp_ms=due)
+
+    def close(self):
+        close = getattr(self.source, 'close', None)
+        return close() if callable(close) else None
+
+
+def open_source(kind, value=None, **options):
+    """The input module for a recipe source name (``sound``: the sound track of a media file)."""
+    if kind == 'camera':
+        return CameraInput(int(value or 0), **options)
+    if kind == 'video':
+        return VideoFileInput(value, **options)
+    if kind == 'take':
+        return TakeInput(value, **options)
+    if kind == 'iphone':
+        return IPhone240Input(int(value or 9123), **options)
+    if kind == 'gamst240-take':
+        return IPhone240Input(replay=value, **options)
+    if kind == 'audio':
+        return AudioFileInput(value, **options)
+    if kind == 'sound':
+        return SoundTrackInput(value, **options)
+    if kind == 'sensor':
+        return SensorFileInput(value, **options)
+    if kind == 'microphone':
+        return MicrophoneInput(**options)
+    raise ValueError(f'unknown input source {kind!r}')

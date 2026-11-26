@@ -109,9 +109,10 @@ class YOLOEContext:
     execution evidence. Worker registration is provided only with a native loader.
     """
     def __init__(self, backend, *, labels, prompt_sha256, checkpoint_sha256, mode,
-                 threshold=.25, max_objects=16, artifact_verified=False):
+                 threshold=.25, max_objects=16, artifact_verified=False, stateless=False):
         self.spec = self.capability(labels=labels,prompt_sha256=prompt_sha256,
-            checkpoint_sha256=checkpoint_sha256,mode=mode,threshold=threshold,max_objects=max_objects)
+            checkpoint_sha256=checkpoint_sha256,mode=mode,threshold=threshold,max_objects=max_objects,
+            stateless=stateless)
         if not callable(getattr(backend,'predict',None)) or not callable(getattr(backend,'close',None)):
             raise ValueError('owned YOLOE backend with predict/close required')
         if type(artifact_verified) is not bool:
@@ -124,7 +125,12 @@ class YOLOEContext:
         self._owner = self._last = None
 
     @staticmethod
-    def capability(*, labels, prompt_sha256, checkpoint_sha256, mode, threshold=.25, max_objects=16):
+    def capability(*, labels, prompt_sha256, checkpoint_sha256, mode, threshold=.25, max_objects=16, stateless=False):
+        """``stateless`` declares what the model is: every result depends on its own frame only. The instance
+        still refuses repeated or backward captures. Without it (default, unchanged) the contract is the
+        owner-stream one, which lanes reset at a gap and which may not run in replicas."""
+        if type(stateless) is not bool:
+            raise ValueError('stateless must be boolean')
         labels = prompt_labels(labels); _hash(prompt_sha256); _hash(checkpoint_sha256)
         if mode not in ('text','exemplar'):
             raise ValueError('prompt mode must be text or exemplar')
@@ -133,9 +139,9 @@ class YOLOEContext:
         if type(max_objects) is not int or not 1 <= max_objects <= 16:
             raise ValueError('max_objects must be1..16')
         version = hashlib.sha256(json.dumps([labels,prompt_sha256,checkpoint_sha256,mode,threshold,max_objects]).encode()).hexdigest()
-        return CapabilitySpec('vision.yoloe.prompted','vision.prompted_objects','video','yoloe.local','1.'+version,
-            (OutputField('objects','array'),OutputField('summary','object')),'frame',stateful=True,
-            reset_on_gap=True,freshness_ms=1000,interpretation='estimate',devices=('cpu','cuda','mps'),
+        return CapabilitySpec('vision.yoloe.prompted','vision.prompted_objects','video','yoloe.local','1.'+version+('.stateless' if stateless else ''),
+            (OutputField('objects','array'),OutputField('summary','object')),'frame',stateful=not stateless,
+            reset_on_gap=not stateless,freshness_ms=1000,interpretation='estimate',devices=('cpu','cuda','mps'),
             sensor_requirements=('uint8-bgr-camera','declared-image-coordinate-frame'),
             license='adapter:Apache-2.0;Ultralytics:AGPL-3.0-or-commercial;weights:verify-separately')
 

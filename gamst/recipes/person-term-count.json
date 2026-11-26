@@ -1,0 +1,371 @@
+{
+  "name": "person-term-count",
+  "summary": "Count how often chosen words are said: by one enrolled person (default), or by anyone (--without voice).",
+  "skill": "skills/gamst-person-terms/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "microphone": "16 kHz mono",
+    "compute": "CPU (CAM++ speaker embedding, faster-whisper small)",
+    "camera": "only with --with lips: the same capture's video (a video file gives both)"
+  },
+  "inputs": [
+    {
+      "id": "microphone",
+      "use": "microphone",
+      "sources": [
+        "microphone",
+        "audio",
+        "video"
+      ]
+    },
+    {
+      "id": "camera",
+      "use": "camera",
+      "sources": [
+        "camera",
+        "video"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "name": "voice",
+      "kind": "voice",
+      "label": "the enrolled voice",
+      "for": [
+        "speaker",
+        "target_voice",
+        "speaker_check",
+        "identify",
+        "tracks",
+        "tse"
+      ]
+    },
+    {
+      "name": "person",
+      "kind": "person",
+      "label": "the enrolled face (gamst recipe enroll person-action-count --kind person)",
+      "for": [
+        "lips"
+      ]
+    },
+    {
+      "name": "terms",
+      "kind": "terms",
+      "label": "the words to count"
+    }
+  ],
+  "modules": [
+    {
+      "name": "speaker",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "voice"
+      ]
+    },
+    {
+      "name": "target_voice",
+      "use": "speaker-gate",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "speaker"
+      ],
+      "emits": [
+        "voice"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "voice"
+      ]
+    },
+    {
+      "name": "separation",
+      "use": "speaker-sources",
+      "consumes": [
+        "microphone"
+      ],
+      "emits": [
+        "sources"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "overlap"
+      ],
+      "block_ms": 8000,
+      "context_ms": 4000
+    },
+    {
+      "name": "identify",
+      "use": "hosted-identify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "hosted"
+      ],
+      "block_ms": 60000
+    },
+    {
+      "name": "asr",
+      "use": "stream-words",
+      "candidate": "elevenlabs.scribe_v3_live.hosted",
+      "language": "ko",
+      "bias": "terms",
+      "partials": true,
+      "consumes": [
+        "voice"
+      ],
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
+    },
+    {
+      "name": "diarization",
+      "use": "speaker-slots",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "tracks",
+        "tse"
+      ],
+      "mode": "low_latency"
+    },
+    {
+      "name": "tse",
+      "use": "tse-words",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "diarization"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "tse"
+      ],
+      "workers": 1
+    },
+    {
+      "name": "tracks",
+      "use": "speaker-tracks",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "diarization",
+        "asr:speech.transcript_words"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "tracks"
+      ],
+      "replaces": [
+        "speaker_check"
+      ]
+    },
+    {
+      "name": "verify",
+      "use": "track-verify",
+      "reference": "voice",
+      "consumes": [
+        "tracks"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "tracks"
+      ],
+      "queue": 256
+    },
+    {
+      "name": "speaker_check",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "segments": false,
+      "capability_id": "speech.speaker_check",
+      "consumes": [
+        "microphone",
+        "asr:speech.transcript_words"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
+      ],
+      "context_ms": 1500,
+      "words": true,
+      "l1": {
+        "policy": "instant",
+        "clear_other": 0.1
+      },
+      "partials": {
+        "terms": "terms"
+      },
+      "sources": "sources",
+      "turns": "identify",
+      "consumes_optional": [
+        "sources",
+        "identify"
+      ]
+    },
+    {
+      "name": "tse_decision",
+      "use": "tse-decide",
+      "reference": "voice",
+      "tse": "tse",
+      "consumes": [
+        "microphone",
+        "speaker_check",
+        "tse"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "tse"
+      ]
+    },
+    {
+      "name": "vote_asr",
+      "use": "stream-words",
+      "candidate": "speechmatics.enhanced.hosted",
+      "language": "ko",
+      "bias": "terms",
+      "capability_id": "speech.vote_words",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "vote"
+      ],
+      "votes_for": "verification"
+    },
+    {
+      "name": "verification",
+      "use": "word-verify",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "speaker_check"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "verification"
+      ],
+      "consumes_optional": [
+        "vote_asr"
+      ],
+      "consumes_with": {
+        "tse_decision": [
+          "microphone",
+          "tse_decision"
+        ]
+      }
+    },
+    {
+      "name": "faces",
+      "use": "face-points",
+      "in": "lips",
+      "optional": "off",
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "face_identity",
+      "use": "face-identity",
+      "in": "lips",
+      "optional": "off",
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "lips",
+      "use": "active-speaker",
+      "reference": "person",
+      "consumes": [
+        "camera",
+        "microphone"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "speaker_lips",
+      "use": "speaker-evidence",
+      "consumes": [
+        "speaker_check",
+        "lips"
+      ],
+      "optional": "off",
+      "pausable": false,
+      "parts": [
+        "lips"
+      ]
+    },
+    {
+      "name": "terms",
+      "use": "terms",
+      "reference": "terms",
+      "consumes": [
+        "speaker_lips"
+      ],
+      "consumes_without": {
+        "speaker_lips": [
+          "speaker_check"
+        ],
+        "speaker_check": [
+          "asr:speech.transcript_words"
+        ]
+      },
+      "report_others": true,
+      "partials": {},
+      "consumes_with": {
+        "tracks": [
+          "tracks",
+          "verify"
+        ],
+        "verification": [
+          "speaker_check",
+          "verification"
+        ],
+        "tse_decision": [
+          "tse_decision"
+        ],
+        "tse_decision+verification": [
+          "tse_decision",
+          "verification"
+        ]
+      }
+    }
+  ],
+  "view": "count",
+  "records": [
+    "speech.term_events"
+  ],
+  "limits": "overlapping voices are not separated by default: --with overlap scores each word on PixIT's separated per-speaker sources (pyannote, gated weights; slower than real time on a Mac CPU), --with target_voice mutes other voices before the words are read; --with hosted adds pyannoteAI identification as evidence beside each word (audio leaves the device, billed); --with lips (off by default) consults faces only for words whose voice score is in the ambiguous band, and only faces that pass the gate (size, turn, mouth in the picture, sharpness); it needs an enrolled face (--person) and the camera of the same capture; the speaker threshold must be set on your own audio; a phrase two people share gets one verdict; what another voice said is reported (term.other_voice) and never counted; --without voice counts every voice and says so (speaker: not_bound); --with tracks (opt-in; on the one measured clip Nemotron's slots mixed the person with others, docs/measurements/tracks-2026-11-26.md) decides each word by the streaming speaker slot active when it was said (audio.diarization, default Nemotron-3, low_latency mode) and that slot's accumulated sound against the voice, counts it at once as provisional, and settles it later as final or revoked; --with verification (opt-in, hosted: --allow-remote-asr for the second recogniser, --allow-remote-diarization for pyannoteAI) counts each word at once as provisional and settles it behind the live lane, in capture order, once that stretch is complete: a second hearing (gpt-live-transcribe with the words as keywords, Qwen3-ForcedAligner times) and pyannoteAI Precision-3 windows whose speakers are identified by the voice; a word only the first hearing has stays when the voice is clearly the person's; revoked words say why (not_heard, no_speech, other_speaker); overlapped words whose voice is unclear are uncertain (not counted, not revoked); words only the second hearing heard are added as final; --with vote adds a third recogniser (Speechmatics Enhanced, the words as additional vocabulary; hosted, --allow-remote-asr) and a word is then said when two of the three wrote it (docs/catch-up-verification.md); --with tse (opt-in; needs --voice-wav, the owner's clip of the person, and --with tracks' diarization runs with it) extracts the enrolled voice where the live diarization's slots say voices meet (PS4 target speaker extraction, Apache-2.0), hears it with a fork of the live recogniser and decides the counted words there from it: person / not the person (tse_not_heard) / uncertain (uncertain_overlap); with --with verification the verification lane uses that decision for overlapped words (docs/realtime-tse.md; on the one measured clip it changed no count and added 10-21 s of latency on a Mac CPU, so it stays opt-in)",
+  "measured": "--with verification: docs/measurements/catch-up-verification-2026-11-26.md, docs/measurements/verify-recall-2026-11-26.md; one 54 s clip of several people in a noisy shop (2026-11-26): docs/measurements/testbed-2026-11-26.md; --with lips changed no word (docs/measurements/av-speaker-2026-11-26.md); --with overlap was not reliably better (docs/measurements/overlap-2026-11-26.md); Qwen3-ASR was worse than Whisper turbo (docs/measurements/sota-asr-2026-11-26.md); --with tracks with Scribe v2 Realtime words: precision 0.58-0.83, recall 0.50-0.78 (docs/measurements/tracks-2026-11-26.md); --with tse: docs/measurements/tse-2026-11-26.md"
+}

@@ -24,11 +24,15 @@ def capability(profile, config):
     config = bounded_json(config)
     if type(config) is not dict:
         raise ValueError('provider config must be an object')
+    from .providers.model_workers import PROFILES
+    if profile in PROFILES:
+        from .providers.model_workers import capability as model_capability
+        return model_capability(profile, config)
     if profile == 'streamingvlm.local':
         from .providers.streaming_semantic import StreamingSemanticContext
         required={'endpoint','model','revision'}
-        if not required <= set(config) or set(config)-required-{'window_frames','max_gap_ms','device','api_key_env','request_options','max_tokens'}:
-            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env/request_options/max_tokens')
+        if not required <= set(config) or set(config)-required-{'window_frames','window_ms','max_gap_ms','device','api_key_env','request_options','max_tokens','allow_remote','context','allow_remote_context'}:
+            raise ValueError('streamingvlm requires endpoint, model, revision and optional window/max_gap/device/api_key_env/request_options/max_tokens/allow_remote/context/allow_remote_context')
         return StreamingSemanticContext.capability(**config)
     if profile == 'food.segformer_b0':
         from .providers.food import FoodContext
@@ -81,6 +85,17 @@ def capability(profile, config):
         if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:
             raise ValueError('diarization requires local bundle path and optional mode/threshold/device')
         return NemotronDiarization.capability(**{k:v for k,v in config.items() if k != 'path'})
+    if profile == 'sortformer.diarization':
+        from .providers.sortformer import SortformerDiarization
+        if 'path' not in config or type(config['path']) is not str or set(config)-{'path','mode','threshold','device'}:
+            raise ValueError('sortformer requires the local .nemo path and optional mode/threshold/device')
+        return SortformerDiarization.capability(**{k:v for k,v in config.items() if k != 'path'})
+    if profile in ('pyannoteai.live.diarization', 'pyannoteai.offline.diarization'):
+        from .providers.slot_sources import hosted_capability
+        return hosted_capability(profile, config)
+    if profile == 'offline.diarization':
+        from .providers.slot_sources import local_capability
+        return local_capability(config)
     if profile == 'emotion2vec.seed.onnx':
         from .providers.vocal_expression import Emotion2VecContext
         if not {'model_path','head_path','model_sha256','head_sha256'} <= set(config) or set(config)-{'model_path','head_path','model_sha256','head_sha256','window_ms','hop_ms'} or any(type(config[k]) is not str for k in ('model_path','head_path')):
@@ -140,10 +155,11 @@ def capability(profile, config):
             arch=config.get('arch','ResNet50'),max_faces=config.get('max_faces',4))
     if profile in ('mediapipe.body.video', 'mediapipe.hand.video', 'mediapipe.face.video', 'mediapipe.gesture.video'):
         from .providers.landmarker_video import MediaPipeVideoContext
-        if set(config)-{'path','sha256','max_entities','max_gap_ms'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
-            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms')
+        if set(config)-{'path','sha256','max_entities','max_gap_ms','allow_skips'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:
+            raise ValueError('VIDEO profile requires path, sha256 and optional max_entities/max_gap_ms/allow_skips')
         return MediaPipeVideoContext.capability(profile.split('.')[1], config['sha256'],
-            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000))
+            max_entities=config.get('max_entities',4), max_gap_ms=config.get('max_gap_ms',1000),
+            allow_skips=config.get('allow_skips',False))
     if profile == 'mediapipe.face':
         from .providers.face_context import MediaPipeFaceContext
         if set(config)-{'path','sha256','max_faces'} or not {'path','sha256'} <= set(config) or type(config['path']) is not str:

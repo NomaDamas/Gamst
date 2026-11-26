@@ -209,3 +209,34 @@ class Publication(unittest.IsolatedAsyncioTestCase):
                                 items[1]['observation']['value']['summary']['state_segment'])
             await streams.clear(); self.assertTrue(p.closed)
             self.assertTrue(all(d.closed==1 for d in made))
+
+
+@unittest.skipIf(np is None, 'numpy required')
+class SkippedFrames(unittest.TestCase):
+    def test_default_still_rebuilds_at_a_sequence_gap(self):
+        item, made = provider('body')
+        item.process(frame(0, 1000)); item.process(frame(2, 1066))
+        self.assertEqual((len(made), made[0].closed), (2, 1))
+        self.assertTrue(item.spec.version.endswith('.g1000'))
+
+    def test_allow_skips_keeps_the_detector_within_max_gap_only(self):
+        item, made = provider('body', allow_skips=True)
+        first = item.process(frame(0, 1000))
+        second = item.process(frame(5, 1166))
+        self.assertEqual(len(made), 1)
+        self.assertEqual([stamp for _, stamp in made[0].calls], [0, 166])
+        self.assertEqual(first['summary']['state_segment'], second['summary']['state_segment'])
+        item.process(frame(6, 3000))                                  # longer than max_gap_ms
+        self.assertEqual(len(made), 2)
+        item.process(frame(7, 3033, source_id='other'))               # another owner
+        self.assertEqual(len(made), 3)
+        with self.assertRaisesRegex(ValueError, 'strictly increase'):
+            item.process(frame(7, 3066, source_id='other'))
+        self.assertTrue(item.spec.version.endswith('.g1000.skips'))
+
+    def test_profile_accepts_the_option(self):
+        config = dict(path='/x.task', sha256='0'*64)
+        self.assertNotEqual(capability('mediapipe.body.video', config).version,
+                            capability('mediapipe.body.video', dict(config, allow_skips=True)).version)
+        with self.assertRaisesRegex(ValueError, 'boolean'):
+            capability('mediapipe.body.video', dict(config, allow_skips=1))

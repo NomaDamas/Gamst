@@ -74,6 +74,7 @@ class Dashboard:
             async with self._guide_test_lock:
                 import cv2, base64
                 from .plugins import InputFrame
+                from .visualization import with_points
                 image = cv2.imread(str(self.fixture_image))
                 if image is None:
                     raise ValueError("Unable to read the sample image")
@@ -86,7 +87,9 @@ class Dashboard:
                     plugin = getattr(worker, 'plugin', worker)
                     for signal in await plugin.process(InputFrame(image, 'video', now, 'guide-preview')):
                         if signal['name'] in ('scene.faces', 'scene.poses', 'scene.person_tracks'):
-                            guides[signal['name']] = dict(value=signal['value'], timestamp_ms=now, fresh=True, age_ms=0)
+                            drawing = getattr(plugin, 'drawing', None)
+                            points = drawing and drawing.points(signal['name'], 'guide-preview', now)
+                            guides[signal['name']] = dict(value=with_points(signal['value'], points), timestamp_ms=now, fresh=True, age_ms=0)
                 ok, encoded = cv2.imencode('.jpg', image)
                 if not ok:
                     raise ValueError("Unable to encode sample image")
@@ -139,7 +142,7 @@ class Dashboard:
             from .settings import feature_status
             from .visualization import guide_packet
             state = await self.human.get_state()
-            return {"sam3": self.sam3_status(), "features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": state, "guides": guide_packet(state),
+            return {"sam3": self.sam3_status(), "features": feature_status(self.human), "text_companion_enabled": getattr(self.human, "text_companion_enabled", True), "asr": self.asr_settings(), "routing": self.router.status(), "vlm": scene_status(self.human), "state": state, "guides": guide_packet(state, self.human),
                     "context": await self.human.get_context(),
                     "guide_test_available": self.fixture_image is not None, "capture": self.capture,
                     "capture_revision": self.capture_revision, "adapter_errors": self.errors,

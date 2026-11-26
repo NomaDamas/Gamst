@@ -1,0 +1,634 @@
+"""One enrolled person's voice separated from the room, as a derived input (``voice:<reference>``).
+
+The separated audio is a :class:`gamst.pipeline.Derived` input: it is routed to the modules that
+consume it (ASR, prosody, speaker verification) with the original capture time, and never enters the
+Store or any context. Only records do.
+
+Two ways to condition on the person:
+
+1. **Enrollment audio** (:class:`TargetSpeech`): a target-speaker-extraction model takes the mixture
+   and a clip of the enrolled voice.
+   - ``ps4``: PS4 (TaurenMountain/PS4, Apache-2.0), BSRNN + ECAPA-TDNN fine-tuned on real meeting recordings;
+     the best released system of the SLT 2026 REAL-TSE challenge (:class:`PS4Extractor`). The TSE lane
+     (:mod:`gamst.providers.overlap_tse`) runs it on the stretches where voices meet.
+   - ``wesep``: WeSep BSRNN (``wesep_2024`` branch, pretrained English model ``bsrnn_ecapa_vox1``),
+     Apache-2.0 code. ``wesep.load_model_local(dir)`` + ``extract_speech_from_pcm``. 16 kHz.
+   - ``usef``: USEF-TFGridNet (ZBang/USEF-TSE). Best SI-SDRi in the research notes, but code and
+     weights are **CC BY-NC 4.0**: opt-in only (``allow_noncommercial=True``). It is trained on
+     WSJ0-2mix/WHAM!/WHAMR! at **8 kHz**, so the mixture is resampled to 8 kHz and the estimate back to
+     16 kHz (:func:`gamst.providers.audio_ring.resample`); content above 4 kHz is lost.
+   Both are offline (non-causal) models; :class:`TargetSpeech` runs them on blocks of ``block_ms`` with
+   ``context_ms`` of preceding audio and keeps only the new block, so each output sample has left
+   context and the latency is one block.
+
+2. **Per-speaker sources** (:class:`SpeakerSources`): no enrollment at separation time. A separation
+   model splits each block into one source per speaker (``pixit``: pyannote PixIT, which diarizes and
+   separates jointly; ``sepformer``: SpeechBrain SepFormer, two sources). The block goes on a derived
+   input as a :class:`SourceBlock`; :class:`gamst.providers.speaker_verify.SpeakerVerify` (``sources``)
+   scores each word on the sources that are active at that word, so overlapping voices are not embedded
+   as one mixture. Which source is the person is decided by the voice score, as before.
+
+3. **Speaker-match spans** (:class:`SAMSpanSpeech`): no enrollment audio at separation time. The spans
+   where :class:`gamst.providers.speaker_verify.SpeakerVerify` matched the enrolled voice become
+   SAM-Audio span anchors (``+`` for the person, ``-`` for scored speech that is someone else) on
+   complete 48 kHz windows, using GAMST's existing SAM-Audio loader
+   (:class:`gamst.providers.sam_audio_native.SAMAudioNative`) and window contract
+   (:func:`gamst.sam_audio_windows.prepare_window`). SAM-Audio's span prompt "can be inherently
+   ambiguous when multiple sound events occur simultaneously" (SAM Audio paper).
+
+The enrollment clip for (1) is the owner's own WAV file named in the ``voice`` reference
+(``{"wav": path}``) or samples given in process (``{"samples": [...], "sample_rate": 16000}``); the
+module keeps it in memory only. A person reference needs a consent record (``Pipeline.add_reference``).
+"""
+from __future__ import annotations
+
+import hashlib
+import inspect
+from pathlib import Path
+
+from .audio_ring import AudioRing, mono_float, resample
+
+SAMPLE_RATE = 16000
+
+
+def _np():
+    import numpy as np
+    return np
+
+
+async def _call(function, *args):
+    value = function(*args)
+    return await value if inspect.isawaitable(value) else value
+
+
+def _verify(path, expected):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for block in iter(lambda: source.read(1 << 20), b''):
+            digest.update(block)
+    value = digest.hexdigest()
+    if expected is not None and value != expected:
+        raise ValueError(f'{path} does not match its pinned sha256 {expected}')
+    return value
+
+
+def read_wav(path):
+    """Mono float32 samples and rate of a 16/32-bit PCM WAV."""
+    import wave
+    np = _np()
+    with wave.open(str(path), 'rb') as source:
+        rate, width, channels = source.getframerate(), source.getsampwidth(), source.getnchannels()
+        raw = source.readframes(source.getnframes())
+    if width not in (2, 4):
+        raise ValueError('16- or 32-bit PCM WAV required')
+    samples = np.frombuffer(raw, np.int16 if width == 2 else np.int32).astype(np.float32)
+    samples /= 32768. if width == 2 else 2147483648.
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    return samples, rate
+
+
+def enrollment_audio(value):
+    """16 kHz enrollment samples from a voice reference value."""
+    if isinstance(value, dict) and value.get('wav'):
+        samples, rate = read_wav(value['wav'])
+    elif isinstance(value, dict) and value.get('samples') is not None:
+        np = _np()
+        clips = value['samples']
+        clips = clips if isinstance(clips, (list, tuple)) and clips and hasattr(clips[0], '__len__') else [clips]
+        samples, rate = np.concatenate([mono_float(clip) for clip in clips]), int(value.get('sample_rate', SAMPLE_RATE))
+    else:
+        raise ValueError('target speech needs the enrolled voice clip: a voice reference with "wav" or "samples" '
+                         '(saved embeddings alone cannot condition an extraction model)')
+    return resample(samples, rate, SAMPLE_RATE) if rate != SAMPLE_RATE else samples
+
+
+# ---------------------------------------------------------------- extraction backends
+
+class WeSepExtractor:
+    """WeSep (``wesep_2024`` branch) BSRNN target speaker extraction from a local model directory."""
+
+    sample_rate = SAMPLE_RATE
+
+    def __init__(self, model, model_id):
+        self.model, self.model_id = model, model_id
+
+    @classmethod
+    def from_local(cls, directory, *, sha256=None, device='cpu'):
+        import yaml
+        import wesep
+        directory = Path(directory)
+        checkpoint, config = directory / 'avg_model.pt', directory / 'config.yaml'
+        if not checkpoint.is_file() or not config.is_file():
+            raise ValueError(f'{directory} needs avg_model.pt and config.yaml (a WeSep model directory)')
+        model_args = ((yaml.safe_load(config.read_text()) or {}).get('model_args') or {}).get('tse_model') or {}
+        if not model_args.get('joint_training'):
+            raise ValueError(f'{config}: extract_speech_from_pcm returns nothing unless joint_training is true')
+        digest = _verify(checkpoint, sha256)
+        model = wesep.load_model_local(str(directory))
+        model.set_device(device)
+        model.set_vad(False)
+        model.set_output_norm(False)   # keep the mixture's level; no peak normalisation
+        return cls(model, f'wesep:{digest[:16]}')
+
+    def extract(self, mixture, enrollment):
+        import torch
+        mix = torch.from_numpy(mono_float(mixture)).unsqueeze(0)
+        enroll = torch.from_numpy(mono_float(enrollment)).unsqueeze(0)
+        estimate = self.model.extract_speech_from_pcm(mix, SAMPLE_RATE, enroll, SAMPLE_RATE)
+        if estimate is None:
+            raise ValueError('WeSep returned no estimate')
+        return _fit(estimate.detach().cpu().numpy().reshape(-1), len(mixture))
+
+
+class USEFExtractor:
+    """USEF-TFGridNet (CC BY-NC 4.0) from a pinned ZBang/USEF-TSE source checkout and checkpoint."""
+
+    sample_rate = 8000
+    SOURCE_REVISION = 'bdaeb3609735b3a9dbedd1b0625343826f2cb5fe'
+
+    def __init__(self, model, model_id, device):
+        self.model, self.model_id, self.device = model, model_id, device
+
+    @classmethod
+    def from_local(cls, source, checkpoint, *, sha256=None, device='cpu', allow_noncommercial=False):
+        if allow_noncommercial is not True:
+            raise PermissionError('USEF-TSE code and weights are CC BY-NC 4.0: pass allow_noncommercial=True '
+                                  'to opt in (non-commercial use only)')
+        import subprocess
+        import sys
+        import torch
+        from hyperpyyaml import load_hyperpyyaml
+        source = Path(source)
+        head = subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'], capture_output=True,
+                              text=True).stdout.strip()
+        if head != cls.SOURCE_REVISION:
+            raise ValueError(f'{source} must be ZBang/USEF-TSE at {cls.SOURCE_REVISION}, found {head or "no git"}')
+        digest = _verify(checkpoint, sha256)
+        if str(source) not in sys.path:
+            sys.path.insert(0, str(source))   # the repo's modules (models.*, utils.*) are imported by the config
+        with open(source / 'chkpt' / 'USEF-TFGridNet' / 'config.yaml') as handle:
+            config = load_hyperpyyaml(handle)
+        model = config['modules']['masknet']
+        state = torch.load(checkpoint, map_location='cpu', weights_only=True)['model_state_dict']
+        state = {key.replace('module.', '').replace('convolution_', 'convolution_module.'): value
+                 for key, value in state.items()}
+        model.load_state_dict(state)
+        model.eval().to(device)
+        return cls(model, f'usef-tfgridnet:{digest[:16]}', device)
+
+    def extract(self, mixture, enrollment):
+        import torch
+        mix = resample(mixture, SAMPLE_RATE, self.sample_rate)
+        aux = resample(enrollment, SAMPLE_RATE, self.sample_rate)
+        with torch.inference_mode():
+            estimate = self.model(torch.from_numpy(mix).unsqueeze(0).to(self.device),
+                                  torch.from_numpy(aux).unsqueeze(0).to(self.device))
+        estimate = estimate.detach().cpu().numpy().reshape(-1)
+        return _fit(resample(estimate, self.sample_rate, SAMPLE_RATE), len(mixture))
+
+
+class PS4Extractor:
+    """PS4 (TaurenMountain/PS4, Apache-2.0): BSRNN + ECAPA-TDNN fine-tuned on real meeting recordings, 16 kHz.
+
+    Second on the SLT 2026 REAL-TSE leaderboard's offline track and the best released system there (arXiv
+    2607.08111, 2607.15198). The publisher's ``inference.py`` (pinned by sha256) defines the network; it is loaded
+    from the model directory by path. The model is not causal (bidirectional band and sequence RNNs, whole-window
+    normalisation), so it runs on windows. The enrolled voice is embedded once: the publisher's speaker encoder on
+    ``enroll_piece_s`` pieces of the enrollment clip (its training enrolments were at most 10 s), the mean of the
+    pieces' embeddings conditions every window.
+    """
+
+    sample_rate = SAMPLE_RATE
+    CODE_SHA256 = '172f22339c79c29e46b1e213e91f822fb46b13d95cd3c90bfc93b8b007ea004e'
+
+    def __init__(self, model, model_id, device, *, enroll_piece_s=10.):
+        self.model, self.model_id, self.device = model, model_id, device
+        self.enroll_piece_s = float(enroll_piece_s)
+        self._enrolled = None      # (id of the enrollment array, embedding)
+
+    @classmethod
+    def from_local(cls, directory, *, sha256=None, device='cpu', threads=None, enroll_piece_s=10.):
+        import importlib.util
+        import torch
+        directory = Path(directory)
+        code, checkpoint = directory / 'inference.py', directory / 'checkpoint_epoch037.pt'
+        if not code.is_file() or not checkpoint.is_file():
+            raise ValueError(f'{directory} needs inference.py and checkpoint_epoch037.pt (TaurenMountain/PS4)')
+        _verify(code, cls.CODE_SHA256)
+        digest = _verify(checkpoint, sha256)
+        if threads:
+            torch.set_num_threads(int(threads))
+        spec = importlib.util.spec_from_file_location('gamst_ps4_network', code)
+        network = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(network)
+        model = network.build_model(torch.device('cpu'))
+        saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
+        state = saved.get('model', saved.get('state_dict', saved)) if isinstance(saved, dict) else saved
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            raise ValueError(f'PS4 checkpoint does not fit the network: {len(missing)} missing, {len(unexpected)} unexpected keys')
+        model.eval().to(device)
+        return cls(model, f'ps4:{digest[:16]}', device, enroll_piece_s=enroll_piece_s)
+
+    def embedding(self, enrollment):
+        """The conditioning vector of one enrollment clip (mean over its pieces), computed once per clip."""
+        import torch
+        if self._enrolled is not None and self._enrolled[0] is enrollment:
+            return self._enrolled[1]
+        samples = mono_float(enrollment)
+        size = int(self.enroll_piece_s * SAMPLE_RATE)
+        pieces = [samples[i:i + size] for i in range(0, len(samples), size)]
+        pieces = [piece for piece in pieces if len(piece) >= SAMPLE_RATE] or [samples]
+        model, vectors = self.model, []
+        with torch.inference_mode():
+            for piece in pieces:
+                wav = torch.from_numpy(piece).unsqueeze(0).to(self.device)
+                feats = model.spk_encoder(model.preEmphasis(wav)) + 1e-8
+                feats = feats.log()
+                feats = (feats - feats.mean(dim=-1, keepdim=True)).permute(0, 2, 1)
+                vector = model.spk_model(feats)
+                vectors.append(vector[-1] if isinstance(vector, tuple) else vector)
+            vector = torch.stack(vectors).mean(dim=0)
+        self._enrolled = (enrollment, vector)
+        return vector
+
+    def extract(self, mixture, enrollment):
+        import torch
+        np = _np()
+        vector = self.embedding(enrollment)
+        samples = mono_float(mixture)
+        peak = float(np.abs(samples).max()) if len(samples) else 0.
+        if peak <= 0:
+            return np.zeros(len(samples), np.float32)
+        model = self.model
+        with torch.inference_mode():
+            model.joint_training = False      # the enrolled voice's vector is given: the encoder ran once
+            try:      # peak-normalised in, as the publisher's loader gives it; back at the mixture's level out
+                estimate, _ = model(torch.from_numpy(samples / peak).unsqueeze(0).to(self.device), vector)
+            finally:
+                model.joint_training = True
+        return _fit(estimate.detach().cpu().numpy().reshape(-1) * peak, len(samples))
+
+
+EXTRACTORS = {'wesep': WeSepExtractor, 'usef': USEFExtractor, 'ps4': PS4Extractor}
+
+
+def _fit(values, length):
+    np = _np()
+    values = np.asarray(values, dtype=np.float32)
+    if len(values) >= length:
+        return values[:length]
+    return np.concatenate([values, np.zeros(length - len(values), np.float32)])
+
+
+# ---------------------------------------------------------------- block scheduling (math)
+
+class Blocks:
+    """Emit [end - context - block, end) windows every ``block_ms`` of new audio; keep the last block."""
+
+    def __init__(self, *, block_ms=2000, context_ms=2000, ring_seconds=20.):
+        if block_ms < 200 or context_ms < 0:
+            raise ValueError('require block_ms >= 200 and context_ms >= 0')
+        self.block_ms, self.context_ms = int(block_ms), int(context_ms)
+        self.ring = AudioRing(SAMPLE_RATE, max(ring_seconds, 2 * (block_ms + context_ms) / 1000))
+        self.reset()
+
+    def reset(self):
+        self.ring.reset()
+        self._next_ms = None
+
+    def push(self, samples, end_ms):
+        """Returns [(block_start_ms, block_end_ms, window_samples, keep_samples)]."""
+        if self.ring.append(samples, end_ms, SAMPLE_RATE) or self._next_ms is None:
+            if self.ring.start_ms is None:
+                return []
+            self._next_ms = self.ring.start_ms + self.block_ms
+        blocks = []
+        while self._next_ms <= self.ring.end_ms + .5:
+            blocks.append(self._block(self._next_ms - self.block_ms, self._next_ms))
+            self._next_ms += self.block_ms
+        return [block for block in blocks if block[3]]
+
+    def flush(self):
+        """The last, shorter block at the end of the input."""
+        if self._next_ms is None:
+            return []
+        start, end = self._next_ms - self.block_ms, self.ring.end_ms
+        self._next_ms = None
+        return [self._block(start, end)] if end - start >= 1 else []
+
+    def _block(self, start, end):
+        window = self.ring.span(max(self.ring.start_ms, start - self.context_ms), end)
+        keep = min(len(window), int(round((end - start) * SAMPLE_RATE / 1000)))
+        return int(round(start)), int(round(end)), window, keep
+
+
+def derived_chunks(name, samples, start_ms, chunk_ms=100):
+    """Split separated audio into chunks stamped with their own capture time, like a microphone's."""
+    from ..pipeline import Derived
+    size = SAMPLE_RATE * chunk_ms // 1000
+    return [Derived(name, samples[i:i + size].copy(), 'audio', SAMPLE_RATE,
+                    timestamp_ms=int(round(start_ms + 1000 * min(i + size, len(samples)) / SAMPLE_RATE)))
+            for i in range(0, len(samples), size)]
+
+
+class SourceBlock:
+    """One separated window on a derived input: ``sources`` (speakers x samples, 16 kHz) from ``start_ms``.
+
+    ``keep_ms`` is where the new audio of this block begins (before it: left context). Raw media of
+    several people: it is read by modules only, and nothing copies or serializes it.
+    """
+    __slots__ = ('start_ms', 'keep_ms', 'end_ms', 'sources')
+
+    def __init__(self, start_ms, keep_ms, end_ms, sources):
+        self.start_ms, self.keep_ms, self.end_ms, self.sources = int(start_ms), int(keep_ms), int(end_ms), sources
+
+    def span(self, index, first_ms, last_ms):
+        """Samples of one source in [first_ms, last_ms) (clipped to the window)."""
+        offset = lambda ms: min(self.sources.shape[1], max(0, int(round((ms - self.start_ms) * SAMPLE_RATE / 1000))))
+        return self.sources[index, offset(first_ms):offset(last_ms)]
+
+    def covers(self, first_ms, last_ms):
+        return self.start_ms <= first_ms and last_ms <= self.end_ms
+
+    def __repr__(self):
+        return f'<separated sources: {self.sources.shape[0]} x {self.end_ms - self.start_ms} ms>'
+
+    def __reduce_ex__(self, *_):
+        raise TypeError('separated sources are not serialized or copied')
+
+    __reduce__ = __copy__ = __deepcopy__ = __reduce_ex__
+
+
+class SpeakerSources:
+    """Pipeline module: mixture audio in, ``Derived(emits, SourceBlock)`` out (no enrolled voice needed).
+
+    ``separator.separate(window) -> (speakers, samples)``, in this process or its worker
+    (:class:`gamst.providers.model_workers.RemoteSeparator`). Each block carries ``context_ms`` of the
+    audio before it, so a word near a block's start is scored with the sound around it.
+    """
+
+    owns_process = True
+
+    def __init__(self, separator, *, emits='sources', block_ms=8000, context_ms=2000):
+        self.separator, self.emits = separator, emits
+        self.blocks = Blocks(block_ms=block_ms, context_ms=context_ms)
+        self.name, self.version = 'speaker_sources', getattr(separator, 'model_id', 'unspecified')
+
+    def reset(self):
+        self.blocks.reset()
+
+    async def process(self, frame):
+        if frame.modality != 'audio' or frame.data is None or isinstance(frame.data, dict):
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('speaker_sources needs 16 kHz mono audio')
+        return await self._separate(self.blocks.push(frame.data, int(frame.timestamp_ms)))
+
+    async def finish(self):
+        return await self._separate(self.blocks.flush())
+
+    async def _separate(self, blocks):
+        from ..pipeline import Derived
+        np, output = _np(), []
+        for start_ms, end_ms, window, _ in blocks:
+            sources = np.asarray(await _call(self.separator.separate, window), dtype=np.float32)
+            if sources.ndim != 2 or sources.shape[1] != len(window):
+                raise ValueError('a separator returns (speakers, samples) for the whole window')
+            begin = end_ms - 1000 * len(window) / SAMPLE_RATE
+            output.append(Derived(self.emits, SourceBlock(round(begin), start_ms, end_ms, sources), 'audio',
+                                  SAMPLE_RATE, timestamp_ms=end_ms))
+        return output
+
+    async def close(self):
+        close = getattr(self.separator, 'close', None)
+        if callable(close):
+            await _call(close)
+
+
+class TargetSpeech:
+    """Pipeline module: mixture audio in, ``Derived(emits, separated block)`` out (enrollment-audio TSE)."""
+
+    owns_process = True
+
+    def __init__(self, extractor, *, reference='voice', emits=None, block_ms=2000, context_ms=2000):
+        self.extractor, self.reference_name = extractor, reference
+        self.emits = emits or f'voice:{reference}'
+        self.blocks = Blocks(block_ms=block_ms, context_ms=context_ms)
+        self.enrollment = None
+        self.name, self.version = 'target_speech', getattr(extractor, 'model_id', 'unspecified')
+
+    def bind(self, pipeline):
+        reference = pipeline.references.get(self.reference_name)
+        if reference is None or reference['kind'] != 'voice':
+            raise ValueError(f'target_speech needs a voice reference named {self.reference_name!r}')
+        self.enrollment = enrollment_audio(reference['value'])
+
+    def reset(self):
+        self.blocks.reset()
+
+    async def process(self, frame):
+        if frame.modality != 'audio' or frame.data is None or isinstance(frame.data, dict):
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('target_speech needs 16 kHz mono audio')
+        if self.enrollment is None:
+            raise RuntimeError('no enrolled voice clip bound')
+        return await self._extract(self.blocks.push(frame.data, int(frame.timestamp_ms)))
+
+    async def finish(self):
+        return await self._extract(self.blocks.flush())
+
+    async def _extract(self, blocks):
+        output = []
+        for start_ms, _, window, keep in blocks:
+            estimate = await _call(self.extractor.extract, window, self.enrollment)
+            output += derived_chunks(self.emits, estimate[-keep:], start_ms)
+        return output
+
+    async def close(self):
+        close = getattr(self.extractor, 'close', None)
+        if callable(close):
+            await _call(close)
+
+
+class SpeakerGate:
+    """Pipeline module: the room audio, silenced wherever the enrolled voice was not matched (no model).
+
+    Consumes the audio and the ``audio.speaker_match`` segments of :class:`SpeakerVerify`. Each 100 ms
+    chunk takes the verdict of the segment whose middle is nearest to it, so output lags by one segment.
+    This does not separate overlapping voices: while the enrolled person speaks, everything audible
+    passes. Use a :class:`TargetSpeech` model where voices overlap.
+    """
+
+    def __init__(self, *, reference='voice', emits=None, segment_ms=1500, chunk_ms=100):
+        self.reference_name, self.emits = reference, emits or f'voice:{reference}'
+        self.segment_ms, self.chunk_ms = int(segment_ms), int(chunk_ms)
+        self.name, self.version = 'speaker_gate', '1'
+        self.reset()
+
+    def reset(self):
+        self.blocks = Blocks(block_ms=200, context_ms=0)
+        self.pending, self.segments = [], []
+
+    def process(self, frame):
+        value = frame.data
+        if isinstance(value, dict):
+            if value.get('kind') == 'segment' and value.get('reference') == self.reference_name:
+                self.segments = self.segments[-63:] + [(value['start_ms'], value['end_ms'], bool(value['match']))]
+            return []
+        if frame.modality != 'audio' or value is None:
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('speaker gate needs 16 kHz mono audio')
+        self.pending += [(start, end, window) for start, end, window, _ in
+                         self.blocks.push(value, int(frame.timestamp_ms))]
+        return self._emit(self.blocks.ring.end_ms - self.segment_ms)
+
+    @property
+    def pending_since_ms(self):
+        """Audio that waits for its verdict (the Pipeline does not call it complete yet)."""
+        return int(self.pending[0][0]) if self.pending else None
+
+    def finish(self):
+        self.pending += [(start, end, window) for start, end, window, _ in self.blocks.flush()]
+        return self._emit(None)
+
+    def _emit(self, until_ms):
+        np = _np()
+        output = []
+        while self.pending and (until_ms is None or self.pending[0][1] <= until_ms):
+            start, end, window = self.pending.pop(0)
+            middle = (start + end) / 2
+            covering = [item for item in self.segments if item[0] <= middle <= item[1]] or \
+                (self.segments[-1:] if until_ms is None else [])
+            keep = bool(covering) and min(covering, key=lambda item: abs((item[0] + item[1]) / 2 - middle))[2]
+            output += derived_chunks(self.emits, window if keep else np.zeros_like(window), start, self.chunk_ms)
+        return output
+
+
+# ---------------------------------------------------------------- SAM-Audio span prompt path
+
+def span_anchors(spans, window_start_ms, window_end_ms, *, include_other=True, min_ms=100):
+    """Speaker-match spans -> non-overlapping SAM-Audio anchors (token, start_s, end_s) in window seconds.
+
+    ``spans``: ``(start_ms, end_ms, match)``; overlapping spans of the same token are merged, a ``+``
+    span wins over an overlapping ``-`` span, and pieces shorter than ``min_ms`` are dropped.
+    """
+    duration = window_end_ms - window_start_ms
+    clipped = {'+': [], '-': []}
+    for start, end, match in spans:
+        start, end = max(start, window_start_ms), min(end, window_end_ms)
+        if end - start >= min_ms and (match or include_other):
+            clipped['+' if match else '-'].append([start, end])
+    merged = {}
+    for token, items in clipped.items():
+        items.sort()
+        out = []
+        for start, end in items:
+            if out and start <= out[-1][1]:
+                out[-1][1] = max(out[-1][1], end)
+            else:
+                out.append([start, end])
+        merged[token] = out
+    negatives = []
+    for start, end in merged['-']:
+        pieces = [[start, end]]
+        for p_start, p_end in merged['+']:
+            next_pieces = []
+            for a, b in pieces:
+                if p_end <= a or p_start >= b:
+                    next_pieces.append([a, b])
+                    continue
+                if p_start > a:
+                    next_pieces.append([a, p_start])
+                if p_end < b:
+                    next_pieces.append([p_end, b])
+            pieces = next_pieces
+        negatives += [piece for piece in pieces if piece[1] - piece[0] >= min_ms]
+    anchors = [('+', s, e) for s, e in merged['+']] + [('-', s, e) for s, e in negatives]
+    anchors.sort(key=lambda item: item[1])
+    result = []
+    for token, start, end in anchors[:32]:
+        start_s = round((start - window_start_ms) / 1000, 3)
+        end_s = round(min(duration, end - window_start_ms) / 1000, 3)
+        if end_s > start_s:
+            result.append((token, start_s, end_s))
+    return result
+
+
+class SAMSpanBackend:
+    """GAMST's SAM-Audio loader asked for one anchored 16 kHz block at a time."""
+
+    def __init__(self, native, prompt):
+        self.native, self.prompt = native, prompt
+
+    @classmethod
+    def from_local(cls, config):
+        from .sam_audio_context import configuration
+        from .sam_audio_native import SAMAudioNative
+        config = configuration(config)
+        return cls(SAMAudioNative.from_local(config), config['prompt'])
+
+    def separate(self, window, anchors):
+        from ..sam_audio_windows import SAMPLE_RATE as SAM_RATE, prepare_window
+        np = _np()
+        pcm = np.clip(resample(window, SAMPLE_RATE, SAM_RATE), -1., 1.).astype(np.float32)
+        prepared = prepare_window(pcm, sample_rate=SAM_RATE, prompt=self.prompt, anchors=list(anchors),
+                                  hop_length=self.native.hop_length)
+        target, _, _, _ = self.native.predict(prepared)
+        return _fit(resample(np.frombuffer(target, dtype=np.float32), SAM_RATE, SAMPLE_RATE), len(window))
+
+    def close(self):
+        self.native.close()
+
+
+class SAMSpanSpeech:
+    """Pipeline module: 16 kHz mixture + ``audio.speaker_match`` segments in, Derived voice blocks out.
+
+    ``backend`` is :class:`SAMSpanBackend` (complete windows of 1..4 s) or its worker client. Windows
+    with no ``+`` span emit silence for the person (nothing of theirs to keep).
+    """
+
+    owns_process = True
+
+    def __init__(self, backend, *, reference='voice', emits=None, window_ms=2000, include_other=True):
+        if not 1000 <= window_ms <= 4000:
+            raise ValueError('SAM-Audio windows are 1..4 s')
+        self.backend, self.reference_name = backend, reference
+        self.emits = emits or f'voice:{reference}'
+        self.include_other = include_other
+        self.blocks = Blocks(block_ms=window_ms, context_ms=0)
+        self.spans = []
+        self.name, self.version = 'sam_span_speech', 'sam-audio.span'
+
+    def reset(self):
+        self.blocks.reset()
+        self.spans = []
+
+    async def process(self, frame):
+        value = frame.data
+        if isinstance(value, dict):
+            if value.get('kind') == 'segment' and value.get('reference') == self.reference_name \
+                    and value.get('state') != 'silent':
+                self.spans = self.spans[-255:] + [(value['start_ms'], value['end_ms'], bool(value.get('match')))]
+            return []
+        if frame.modality != 'audio' or value is None:
+            return []
+        if frame.sample_rate != SAMPLE_RATE:
+            raise ValueError('sam span speech needs 16 kHz mono audio')
+        np = _np()
+        output = []
+        for start_ms, end_ms, window, _ in self.blocks.push(value, int(frame.timestamp_ms)):
+            anchors = span_anchors(self.spans, start_ms, end_ms, include_other=self.include_other)
+            if any(token == '+' for token, _, _ in anchors):
+                estimate = await _call(self.backend.separate, window, anchors)
+            else:
+                estimate = np.zeros(len(window), np.float32)
+            output += derived_chunks(self.emits, estimate, start_ms)
+            self.spans = [span for span in self.spans if span[1] > end_ms - 4000]
+        return output
+
+    async def close(self):
+        await _call(self.backend.close)

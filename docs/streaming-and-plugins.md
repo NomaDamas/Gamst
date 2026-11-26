@@ -30,6 +30,21 @@ decision is then part of the shared Context/Memory path. It never receives or
 returns raw media. `decide_multimodal` exposes the same provider through MCP;
 MCP is the invocation/transport layer, not the decision model.
 
+## User-made modules and inputs in recipes
+
+A recipe item may name an installed entry point: a module of group `gamst.plugins` (`process(frame)`, `modalities`, and either signals or a
+`spec` with values) or an input of group `gamst.inputs` (`frames()`, `modality`, optionally `live`, `missed`, `status`, `close`, `reopen`).
+
+```json
+{"inputs": [{"id": "gyro", "use": "plugin", "plugin": "my-gyro", "modality": "imu", "options": {"port": 3}}],
+ "modules": [{"name": "peaks", "use": "plugin", "plugin": "my-peaks", "consumes": ["gyro"], "options": {}}]}
+```
+
+`gamst recipe run mine.json --plugin my-gyro --plugin my-peaks`. Each is allowed by name by the owner; a recipe file alone never runs
+installed code. **It is trusted code**: it runs in GAMST's process with the owner's rights, nothing isolates it. It gets the same lanes
+(`owns_process` gives it one), gaps, timeline, counts and record guards as a built-in part. GAMST installs no plugin: `gamst recipe setup` sets up the
+built-in parts and a missing entry point is refused by name. A recorded plugin input runs alone (it shares no clock).
+
 ## Design references
 
 These are architectural references and protocol integrations, not copied source

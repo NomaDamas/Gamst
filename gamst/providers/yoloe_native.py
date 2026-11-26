@@ -15,7 +15,7 @@ CLIP_REVISION = '7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40'
 def configuration(config):
     """Validate discovery without opening a file, importing ML or spawning a child."""
     common = {'checkpoint_path','checkpoint_sha256','labels','mode','runtime_root'}
-    optional = {'device','threshold','max_objects','imgsz'}
+    optional = {'device','threshold','max_objects','imgsz','stateless'}
     mode = config.get('mode')
     extra = {'encoder_path','encoder_sha256','encoder_family'} if mode == 'text' else {
         'reference_path','reference_sha256','boxes','class_ids'}
@@ -56,7 +56,7 @@ def configuration(config):
     provenance.update(imgsz=imgsz,runtime=ULTRALYTICS_VERSION)
     args = dict(labels=labels,prompt_sha256=hashlib.sha256(json.dumps(provenance,sort_keys=True,
         separators=(',',':')).encode()).hexdigest(),checkpoint_sha256=config['checkpoint_sha256'],mode=mode,
-        threshold=config.get('threshold',.25),max_objects=config.get('max_objects',16))
+        threshold=config.get('threshold',.25),max_objects=config.get('max_objects',16),stateless=config.get('stateless',False))
     YOLOEContext.capability(**args)
     return args,device,imgsz
 

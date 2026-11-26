@@ -1,0 +1,171 @@
+{
+  "name": "person-voice-style-count",
+  "summary": "Count how often a demonstrated way of speaking (tone) is used, and optionally a text pattern: by one enrolled person (default), or by anyone (--without voice).",
+  "skill": "skills/gamst-person-terms/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "microphone": "16 kHz mono",
+    "compute": "CPU (CAM++ speaker embedding, prosody DSP)"
+  },
+  "inputs": [
+    {
+      "id": "microphone",
+      "use": "microphone",
+      "sources": [
+        "microphone",
+        "audio",
+        "video"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "name": "voice",
+      "kind": "voice",
+      "label": "the enrolled voice",
+      "for": [
+        "speaker",
+        "target_voice",
+        "speaker_check"
+      ]
+    },
+    {
+      "name": "style",
+      "kind": "exemplar",
+      "label": "the demonstrated way of speaking"
+    },
+    {
+      "name": "terms",
+      "kind": "terms",
+      "label": "words or re: patterns",
+      "for": "terms"
+    }
+  ],
+  "modules": [
+    {
+      "name": "speaker",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "consumes": [
+        "microphone"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
+      ]
+    },
+    {
+      "name": "target_voice",
+      "use": "speaker-gate",
+      "reference": "voice",
+      "consumes": [
+        "microphone",
+        "speaker"
+      ],
+      "emits": [
+        "voice"
+      ],
+      "optional": "on",
+      "pausable": false,
+      "parts": [
+        "voice"
+      ]
+    },
+    {
+      "name": "prosody",
+      "use": "prosody",
+      "consumes": [
+        "voice"
+      ],
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
+    },
+    {
+      "name": "voice_channels",
+      "use": "voice-channels",
+      "step_ms": 90,
+      "consumes": [
+        "prosody"
+      ]
+    },
+    {
+      "name": "exemplar",
+      "use": "exemplar",
+      "reference": "style",
+      "mode": "sequence",
+      "modality": "audio",
+      "capability_id": "audio.exemplar_events",
+      "enter": 0.12,
+      "exit": 0.18,
+      "max_reps_s": 1,
+      "consumes": [
+        "voice_channels",
+        "speaker"
+      ],
+      "consumes_without": {
+        "speaker": [
+          "voice_channels"
+        ]
+      }
+    },
+    {
+      "name": "asr",
+      "use": "stream-words",
+      "candidate": "elevenlabs.scribe_v3_live.hosted",
+      "language": "ko",
+      "consumes": [
+        "voice"
+      ],
+      "optional": "off",
+      "consumes_without": {
+        "target_voice": [
+          "microphone"
+        ]
+      }
+    },
+    {
+      "name": "speaker_check",
+      "use": "speaker-verify",
+      "reference": "voice",
+      "segments": false,
+      "capability_id": "speech.speaker_check",
+      "consumes": [
+        "microphone",
+        "asr:speech.transcript_words"
+      ],
+      "optional": "off",
+      "parts": [
+        "voice",
+        "terms"
+      ]
+    },
+    {
+      "name": "terms",
+      "use": "terms",
+      "reference": "terms",
+      "consumes": [
+        "speaker_check"
+      ],
+      "optional": "off",
+      "consumes_without": {
+        "speaker_check": [
+          "asr:speech.transcript_words"
+        ]
+      }
+    }
+  ],
+  "view": "count",
+  "records": [
+    "audio.exemplar_events",
+    {
+      "id": "speech.term_events",
+      "for": "terms"
+    }
+  ],
+  "limits": "tone channels describe pitch, level and brightness, not emotion; the match thresholds are the pose defaults and have not been measured for voice; text patterns need --with asr --with terms (and --with speaker_check to check each utterance again); --without voice counts every voice and says so (speaker: not_bound)",
+  "measured": "not yet"
+}

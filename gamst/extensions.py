@@ -7,6 +7,7 @@ import re
 from .plugins import _signal as signal
 
 ENTRY_POINT_GROUP = 'gamst.plugins'
+INPUT_GROUP = 'gamst.inputs'
 
 
 @dataclass(frozen=True)
@@ -34,11 +35,25 @@ def discover_plugins():
             for e in entry_points(group=ENTRY_POINT_GROUP)]
 
 
-def load_plugin(name, **options):
-    entries = [e for e in entry_points(group=ENTRY_POINT_GROUP) if e.name == name]
+def _entry(group, name):
+    found = list(entry_points(group=group))
+    entries = [e for e in found if e.name == name]
     if len(entries) != 1:
-        raise ValueError('Plugin must resolve to exactly one installed entry point')
-    plugin = entries[0].load()(**options)
+        raise ValueError(f"Plugin must resolve to exactly one installed entry point: {len(entries)} {group} named {name!r} "
+                         f"(installed: {', '.join(sorted({e.name for e in found})) or 'none'}); install the package that provides it")
+    return entries[0]
+
+
+def load_input(name, **options):
+    """An input module of an installed ``gamst.inputs`` entry point: ``frames()`` and ``modality``."""
+    source = _entry(INPUT_GROUP, name).load()(**options)
+    if not callable(getattr(source, 'frames', None)) or not isinstance(getattr(source, 'modality', None), str):
+        raise TypeError('An input plugin must define modality and frames()')
+    return source
+
+
+def load_plugin(name, **options):
+    plugin = _entry(ENTRY_POINT_GROUP, name).load()(**options)
     if not callable(getattr(plugin,'process',None)) or not getattr(plugin,'modalities',None):
         raise TypeError('Plugin must define modalities and process(InputFrame)')
     manifest = getattr(plugin,'manifest',None)

@@ -19,6 +19,12 @@ mouthShrugLower mouthShrugUpper mouthSmileLeft mouthSmileRight mouthStretchLeft 
 mouthUpperUpLeft mouthUpperUpRight noseSneerLeft noseSneerRight""".split())
 
 
+# Private rows of a face (normalized image x, y), in this order: the subject's right eye (iris centre, image-left
+# for a frontal face), left eye, nose tip, right mouth corner, left mouth corner (ArcFace order), inner upper and
+# lower lip, then the top-left and bottom-right of the extent of all points.
+POINTS = (468, 473, 1, 61, 291, 13, 14, 'min', 'max')
+
+
 class MediaPipeFaceContext:
     def __init__(self, detector, image_api, *, sha256, max_faces=4):
         self.spec = self.capability(sha256, max_faces=max_faces)
@@ -107,6 +113,13 @@ class MediaPipeFaceContext:
         return output
 
     def process(self, frame):
+        return self._infer(frame)[0]
+
+    def query(self, frame, request=None):
+        """(public geometry, ``POINTS`` rows per face) for the module that owns this worker (``gamst.private_payload``)."""
+        return self._infer(frame, private=True)
+
+    def _infer(self, frame, private=False):
         if self.closed: raise RuntimeError('face provider is closed')
         try:
             import numpy as np
@@ -125,9 +138,11 @@ class MediaPipeFaceContext:
         if (not isinstance(raw,(list,tuple)) or len(raw)>self.max_faces or
                 not isinstance(coefficients,(list,tuple)) or len(coefficients)!=len(raw)):
             raise ValueError('face result count exceeds bound or blendshape association is malformed')
-        faces=[]
+        faces,rows=[],[]
         for index,face in enumerate(raw):
             points=self._points(face)
+            if private:
+                rows.append(self._rows(points))
             geometry={
                 'left_eye_gap_over_width':self._ratio(points,(386,374),(263,362),width,height),
                 'right_eye_gap_over_width':self._ratio(points,(159,145),(33,133),width,height),
@@ -142,11 +157,20 @@ class MediaPipeFaceContext:
             scores=self._blendshapes(coefficients[index])
             faces.append(dict(frame_face_index=index,bbox=bbox,geometry=geometry,
                 blendshapes=scores,blendshapes_available=bool(scores),joint_confidence='unavailable'))
-        return self.spec.validate(dict(faces=faces,summary=dict(count=len(faces),max_faces=self.max_faces,
+        value=self.spec.validate(dict(faces=faces,summary=dict(count=len(faces),max_faces=self.max_faces,
             coordinate_frame='normalized_image_xy',geometry_space='pixel_plane',
             image_width=width,image_height=height,mirror_status='unspecified',
             identity='unavailable',temporal_tracking=False,metric_3d=False,
             gaze='unavailable',emotion='unavailable')))
+        return value,(np.asarray(rows,dtype=np.float32).reshape(len(rows),len(POINTS),2) if private else None)
+
+    @staticmethod
+    def _rows(points):
+        """``POINTS`` as (x, y): the ArcFace five, the inner lips, and the extent of all 478 points."""
+        rows=[[points[i]['x'],points[i]['y']] for i in POINTS[:7]]
+        rows.append([min(p['x'] for p in points),min(p['y'] for p in points)])
+        rows.append([max(p['x'] for p in points),max(p['y'] for p in points)])
+        return rows
 
     def close(self):
         if not self.closed:

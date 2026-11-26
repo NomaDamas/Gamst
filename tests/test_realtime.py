@@ -44,7 +44,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_contains_compact_faces_but_no_raw_media(self):
         async with Gamst(consent=True) as human:
-            await human.push_signal('scene.faces', [{'frame_face_index': 0, 'landmarks': [{'x': 1}] * 478,
+            await human.push_signal('scene.faces', [{'frame_face_index': 0, 'landmark_count': 478,
                 'blendshapes': {'mouthSmileLeft': .8, 'eyeBlinkLeft': .1}}], 'video')
             await human.push_signal('scene.image', 'secret-image', 'video')
             context = await human.get_context()

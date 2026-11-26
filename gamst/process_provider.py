@@ -6,9 +6,60 @@ from pathlib import Path
 import tempfile
 
 from .capabilities import bounded_json
+from .redact import public_text
 from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
 from .provider_profiles import capability
 from .streams import _finish
+
+
+async def stop_child(process):
+    """Stop one explicitly spawned child: close its pipes, let it exit, then terminate/kill it.
+
+    Shared by every owned worker process (ProcessProvider, the MediaPipe graph runner).
+    """
+    if process is None:
+        return
+    if process.stdin:
+        process.stdin.close()
+    # Process has no public close-reader method. Its owned asyncio transport
+    # exposes pipe closure; close stdout even when StreamReader has paused
+    # after malformed excessive output, rather than relying on GC to do it.
+    transport = process._transport
+    for descriptor in (1, 2):
+        pipe = transport.get_pipe_transport(descriptor)
+        if pipe is not None:
+            pipe.close()
+    try:
+        # A close acknowledgement, EOF or protocol failure often means the
+        # worker is already exiting. Let asyncio's child watcher reap it
+        # before asking Popen to signal (and poll) the same child.
+        try:
+            await asyncio.wait_for(process.wait(), .1)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if process.returncode is None:
+            try:
+                process.terminate()  # Only this explicitly spawned child handle.
+            except ProcessLookupError:
+                pass
+        try:
+            await asyncio.wait_for(process.wait(), 1)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+    finally:
+        transport.close()
+
+
+async def _tail(stream, kept):
+    """The end of what a starting child writes to its error output (so a full pipe never blocks it)."""
+    while block := await stream.read(4096):
+        kept.extend(block)
+        del kept[:-4000]
 
 
 class ProcessProvider:
@@ -22,10 +73,19 @@ class ProcessProvider:
     # Legacy transports can initialize their process fields directly instead
     # of calling open(). Only the explicit SAM open path installs an owner.
     _separation_owner = None
+    profile = None
+    _errors = None      # the task reading the child's error output while it starts
+    # True: this worker answers ``query`` of its owning module only (gamst.private_payload).
+    private = False
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
-                   separation_owner=None):
+                   separation_owner=None, private=False):
+        from .private_payload import CONTRACTS, PRIVATE_ONLY, PROTOCOL as PRIVATE_PROTOCOL
+        if type(private) is not bool or private and profile not in CONTRACTS:
+            raise PermissionError(f'{profile} declares no private payload')
+        if profile in PRIVATE_ONLY and not private:
+            raise PermissionError(f'{profile} answers its owning module only')
         if profile == 'pg.physical.local':
             if separation_owner is not None:raise ValueError('PG has no private separation media')
             from .pg_physical_process import PGPhysicalProcess
@@ -47,7 +107,7 @@ class ProcessProvider:
         self = cls()
         self.spec = capability(profile, config)
         self.config = bounded_json(config)
-        self.profile, self.timeout = profile, inference_timeout
+        self.profile, self.timeout, self.private = profile, inference_timeout, private
         self._lock = asyncio.Lock()
         self._process = None
         self._close_task = None
@@ -75,11 +135,20 @@ class ProcessProvider:
                 worker_environment['GAMST_SAM_TOKENIZER_DIR'] = str(Path(staging.name).absolute())
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(python, '-u', '-m',
                 'gamst.provider_worker', stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=worker_environment, close_fds=True))
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=worker_environment, close_fds=True))
             self._process = await asyncio.shield(spawn)
+            kept = bytearray()
+            self._errors = asyncio.create_task(_tail(self._process.stderr, kept))
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
-            response = await self._request('start', profile=profile, config=self.config,
-                                           timeout=startup_timeout, **extra)
+            if private:
+                extra['private_protocol'] = PRIVATE_PROTOCOL
+            try:
+                response = await self._request('start', profile=profile, config=self.config,
+                                               timeout=startup_timeout, **extra)
+            except (asyncio.IncompleteReadError, BrokenPipeError, ConnectionResetError) as ended:
+                raise RuntimeError(await self._ended_early(kept)) from ended
+            except asyncio.TimeoutError as late:
+                raise asyncio.TimeoutError(f'{profile} worker did not start within {startup_timeout:g} s') from late
             if response != {'spec': spec_value(self.spec), **extra}:
                 raise RuntimeError('worker capability/provenance differs from selected contract')
             return self
@@ -95,48 +164,27 @@ class ProcessProvider:
             if staging is not None:
                 staging.cleanup()
 
+    async def _ended_early(self, kept):
+        """Why a child ended before it answered: its exit code and the last line it wrote (bounded, no secrets)."""
+        await asyncio.wait({self._errors}, timeout=1)
+        try:
+            code = await asyncio.wait_for(self._process.wait(), 1)
+        except asyncio.TimeoutError:
+            code = 'unknown'
+        lines = [line.strip() for line in kept.decode(errors='replace').splitlines() if line.strip()]
+        return f'{self.profile} worker ended while starting (exit code {code}): ' \
+            f"{public_text(lines[-1]) if lines else 'no message'}"
+
     async def _stop(self):
         self.closed = True
+        errors, self._errors = self._errors, None
+        if errors is not None:
+            errors.cancel()
         owner = getattr(self, '_separation_owner', None)
         if owner is not None:
             owner.close()
         process, self._process = self._process, None
-        if process is None:
-            return
-        if process.stdin:
-            process.stdin.close()
-        # Process has no public close-reader method. Its owned asyncio transport
-        # exposes pipe closure; close stdout even when StreamReader has paused
-        # after malformed excessive output, rather than relying on GC to do it.
-        transport = process._transport
-        for descriptor in (1, 2):
-            pipe = transport.get_pipe_transport(descriptor)
-            if pipe is not None:
-                pipe.close()
-        try:
-            # A close acknowledgement, EOF or protocol failure often means the
-            # worker is already exiting. Let asyncio's child watcher reap it
-            # before asking Popen to signal (and poll) the same child.
-            try:
-                await asyncio.wait_for(process.wait(), .1)
-                return
-            except asyncio.TimeoutError:
-                pass
-            if process.returncode is None:
-                try:
-                    process.terminate()  # Only this explicitly spawned child handle.
-                except ProcessLookupError:
-                    pass
-            try:
-                await asyncio.wait_for(process.wait(), 1)
-            except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                await process.wait()
-        finally:
-            transport.close()
+        await stop_child(process)
 
     async def _exchange(self, operation, payload, fields):
         process = self._process
@@ -150,7 +198,8 @@ class ProcessProvider:
             from .separation_media import MAX_PAIR_BYTES, MEDIA_HEADER_LIMIT
             if head_size > MEDIA_HEADER_LIMIT or payload_size > MAX_PAIR_BYTES:
                 raise ValueError('separation response exceeds private wire bounds')
-        if payload_size and (owner is None or operation != 'process'):
+        query = operation == 'query' and self.private
+        if payload_size and not query and (owner is None or operation != 'process'):
             raise ValueError('worker response cannot contain raw sensor payload')
         response = parse_header(await process.stdout.readexactly(head_size))
         if type(response) is not dict or type(response.get('id')) is not int or response.get('id') != sequence or type(response.get('ok')) is not bool:
@@ -159,6 +208,8 @@ class ProcessProvider:
             kind = response.get('error_type', 'unknown')
             if not isinstance(kind, str) or len(kind) > 128:
                 kind = 'unknown'
+            message = response.get('error') if operation == 'start' else None
+            kind = public_text(message) if isinstance(message, str) and message else kind
             raise RuntimeError(f'{self.profile} worker failed ({kind}); verify profile configuration, '
                                'local checkpoints and optional dependencies in the selected Python environment')
         result = response.get('result')
@@ -172,6 +223,18 @@ class ProcessProvider:
                 raise ValueError('separation response length differs from request')
             binary = await process.stdout.readexactly(payload_size)
             return unpack_pair(result, response['separation'], binary, binding, self.spec), binding
+        if query:
+            from .private_payload import expected_size, unpack
+            if set(response) != {'id', 'ok', 'result', 'private'}:
+                raise ValueError('query requires a public result and a private descriptor')
+            # The declared size is checked before any private byte is read.
+            if payload_size != expected_size(self.profile, response['private'], fields['frame']):
+                raise ValueError('private payload length differs from its shape')
+            binary = await process.stdout.readexactly(payload_size)
+            public = self.spec.validate(result)
+            return public, unpack(self.profile, public, response['private'], binary, fields['frame'])
+        if 'private' in response:
+            raise ValueError('unnegotiated private payload')
         if 'separation' in response:
             raise ValueError('unnegotiated separation metadata')
         if owner is not None and operation != 'start' and result is not None:
@@ -235,18 +298,32 @@ class ProcessProvider:
                 if self._separation_owner is not None:
                     self._separation_owner._release()
 
+    def _committable(self):
+        if self.private:
+            raise PermissionError('a private worker answers query() of its owning module only')
+
+    async def query(self, frame, request=None):
+        """(public value, :class:`gamst.private_payload.Private`) for the module that owns this worker."""
+        if not self.private:
+            raise PermissionError('this worker was not opened for private queries')
+        return await self._request('query', input_frame=frame, request=bounded_json(request))
+
     async def process(self, frame):
+        self._committable()
         return await self._request('process', input_frame=frame)
 
     async def process_regions(self, frame, evidence):
+        self._committable()
         evidence = bounded_json(evidence)
         return await self._request('process_regions', input_frame=frame, evidence=evidence)
 
     async def endpoint(self):
         """Serialize a nonterminal utterance endpoint; unsupported workers fail closed."""
+        self._committable()
         return await self._request('endpoint')
 
     async def finish(self):
+        self._committable()
         return await self._request('finish')
 
     async def reset(self):

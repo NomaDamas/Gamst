@@ -42,6 +42,10 @@ class ContextMemory:
         self._evidence: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._revision = 0
         self._sizes: dict[int, tuple[dict[str, Any], int]] = {}
+        self._copies = False    # replayed state may hold two items with one evidence ID
+        # What append changed since the last full count: bytes of all retained items, and how often each is held.
+        self._bytes = 0
+        self._held: dict[int, int] = {}
 
     def _encoded(self, value) -> int:
         return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
@@ -52,37 +56,55 @@ class ContextMemory:
             cached = self._sizes[id(item)] = (item, self._encoded(item))
         return cached[1]
 
+    def _hold(self, item: dict[str, Any], extra: int = 0) -> None:
+        self._bytes += self._item_size(item) + extra
+        self._held[id(item)] = self._held.get(id(item), 0) + 1
+
+    def _drop(self, item: dict[str, Any], extra: int = 0) -> None:
+        self._bytes -= self._item_size(item) + extra
+        self._held[id(item)] -= 1
+        if not self._held[id(item)]:
+            del self._held[id(item)], self._sizes[id(item)]
+            if self._evidence.get(item.get("evidence_id")) is item:
+                del self._evidence[item["evidence_id"]]
+
     def _snapshot_bytes(self) -> int:
         """Exact byte length of the compact snapshot JSON without copying or re-encoding retained items."""
         empty = {"session_id": self.session_id, "revision": self._revision,
                  "current_state": {}, "recent_timeline": [], "episodic_memory": []}
-        total = self._encoded(empty)
-        for items in (self.recent_timeline, self.episodic_memory):
-            total += sum(self._item_size(item) for item in items) + max(0, len(items) - 1)
-        total += sum(self._encoded(key) + 1 + self._item_size(item) for key, item in self.current_state.items())
-        return total + max(0, len(self.current_state) - 1)
+        return self._encoded(empty) + self._bytes + sum(
+            max(0, len(items) - 1) for items in (self.recent_timeline, self.episodic_memory, self.current_state))
+
+    def _retained(self) -> list[dict[str, Any]]:
+        return list(self.recent_timeline) + list(self.episodic_memory) + list(self.current_state.values())
+
+    def _order_evidence(self) -> None:
+        self._evidence = OrderedDict(
+            (item["evidence_id"], item) for item in self._retained() if item.get("evidence_id")
+        )
 
     def _check_size(self) -> None:
+        """Full count: after anything but :meth:`append` changed the collections, or when they must shrink."""
+        self._bytes, self._held, sizes = 0, {}, self._sizes
+        self._sizes = {id(item): sizes[id(item)] for item in self._retained() if id(item) in sizes}
+        for item in list(self.recent_timeline) + list(self.episodic_memory):
+            self._hold(item)
+        for key, item in self.current_state.items():
+            self._hold(item, self._encoded(key) + 1)
+        self._order_evidence()
         # Retention is bounded across every index.  Previously only episodic
         # entries were evicted, allowing non-episodic evidence and current
         # state to grow without limit.
-        while True:
-            if self._snapshot_bytes() <= self.max_bytes:
-                break
+        while self._snapshot_bytes() > self.max_bytes:
             if self.episodic_memory:
-                self.episodic_memory.popleft()
+                self._drop(self.episodic_memory.popleft())
             elif self.recent_timeline:
-                self.recent_timeline.popleft()
+                self._drop(self.recent_timeline.popleft())
             elif self.current_state:
-                self.current_state.popitem(last=False)
+                key, item = self.current_state.popitem(last=False)
+                self._drop(item, self._encoded(key) + 1)
             else:
                 break
-        retained = list(self.recent_timeline) + list(self.episodic_memory) + list(self.current_state.values())
-        self._evidence = OrderedDict(
-            (item["evidence_id"], item) for item in retained if item.get("evidence_id")
-        )
-        live = {id(item) for item in retained}
-        self._sizes = {key: value for key, value in self._sizes.items() if key in live}
 
     def append(self, event: dict[str, Any], *, entity_id: str | None = None,
                episodic: bool = False) -> dict[str, Any]:
@@ -95,21 +117,32 @@ class ContextMemory:
             item.setdefault("entity_id", str(entity_id))
         evidence_id = item.get("evidence_id") or item.get("event_id")
         # Delta replay and provider retries are idempotent by evidence ID.
+        if self._copies:
+            self._order_evidence()
         prior = self._evidence.get(evidence_id)
         if prior is not None:
             return deepcopy(prior)
-        self.recent_timeline.append(item)
         item["evidence_id"] = evidence_id
         self._evidence[evidence_id] = item
+        for items, wanted in ((self.recent_timeline, True), (self.episodic_memory, episodic)):
+            if wanted:
+                self._hold(item)
+                if len(items) == items.maxlen:
+                    self._drop(items[0])
+                items.append(item)
         if entity_id is not None:
-            self.current_state[str(entity_id)] = item
-            self.current_state.move_to_end(str(entity_id))
+            key = str(entity_id)
+            self._hold(item, self._encoded(key) + 1)
+            if key in self.current_state:
+                self._drop(self.current_state[key], self._encoded(key) + 1)
+            self.current_state[key] = item
+            self.current_state.move_to_end(key)
             while len(self.current_state) > self.max_current:
-                self.current_state.popitem(last=False)
-        if episodic:
-            self.episodic_memory.append(item)
+                key, oldest = self.current_state.popitem(last=False)
+                self._drop(oldest, self._encoded(key) + 1)
         self._revision += 1
-        self._check_size()
+        if self._snapshot_bytes() > self.max_bytes:
+            self._check_size()
         return deepcopy(item)
 
     update = append
@@ -141,6 +174,7 @@ class ContextMemory:
             self.current_state.move_to_end(str(entity_id))
         while len(self.current_state) > self.max_current:
             self.current_state.popitem(last=False)
+        self._copies = True
         self._check_size()
 
     apply_delta = replay
@@ -151,6 +185,7 @@ class ContextMemory:
         if type(limit) is not int or not 1 <= limit <= 256:
             raise ValueError("limit must be 1..256")
         result = []
+        self._order_evidence()
         for item in reversed(list(self._evidence.values())):
             if evidence_id is not None and item.get("evidence_id") != evidence_id and item.get("event_id") != evidence_id:
                 continue
@@ -195,6 +230,7 @@ class ContextMemory:
             if item.get("evidence_id"):
                 memory._evidence[item["evidence_id"]] = item
         memory._revision = int(state.get("revision", 0))
+        memory._copies = True
         memory._check_size()
         return memory
 

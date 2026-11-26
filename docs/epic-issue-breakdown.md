@@ -1,5 +1,7 @@
 # GAMST Epic and sub-issue execution map
 
+> Note (2026-11-25): GamstCrew was absorbed into GAMST as `gamst.crew` (docs/crew.md). References below to GamstCrew commits, PRs and issues are history.
+
 This document is the issue-level execution contract for `docs/approved-plan.md`.
 It is written before the remaining implementation work. A sub-issue is complete
 only when its code, focused tests, runtime evidence, documentation, and required

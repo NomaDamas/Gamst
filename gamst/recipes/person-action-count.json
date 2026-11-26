@@ -1,0 +1,118 @@
+{
+  "name": "person-action-count",
+  "summary": "Count how many times one enrolled person makes a pose or movement specified by example clips, a text or a rule; no training.",
+  "skill": "skills/gamst-person-action/SKILL.md",
+  "hardware": {
+    "min_fps": null,
+    "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
+    "compute": "CPU (MediaPipe Pose Landmarker in VIDEO mode and LVFace face matching, each in its own process and environment)"
+  },
+  "inputs": [
+    {
+      "id": "camera",
+      "use": "camera",
+      "sources": [
+        "camera",
+        "video",
+        "take"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "name": "exemplar",
+      "kind": "exemplar",
+      "label": "the specified pose or movement"
+    },
+    {
+      "name": "person",
+      "kind": "person",
+      "label": "the enrolled person",
+      "for": "target_person"
+    }
+  ],
+  "modules": [
+    {
+      "name": "pose",
+      "use": "mediapipe-pose",
+      "candidate": "mediapipe.pose_full",
+      "max_poses": 4,
+      "tracker": "ocsort",
+      "consumes": [
+        "camera"
+      ],
+      "joints": "pose_joints",
+      "emits": [
+        "pose_joints"
+      ]
+    },
+    {
+      "name": "target_person",
+      "use": "target-person",
+      "optional": "on",
+      "reference": "person",
+      "consumes": [
+        "camera",
+        "pose_joints"
+      ],
+      "joints": "target_joints",
+      "emits": [
+        "target_joints"
+      ]
+    },
+    {
+      "name": "pose_channels",
+      "use": "pose-channels",
+      "consumes": [
+        "target_joints"
+      ],
+      "consumes_without": {
+        "target_person": [
+          "pose_joints"
+        ]
+      }
+    },
+    {
+      "name": "exemplar",
+      "use": "exemplar",
+      "mode": "hold",
+      "max_reps_s": 2,
+      "consumes": [
+        "pose_channels",
+        "target_person:vision.target_person",
+        "target_joints"
+      ],
+      "consumes_without": {
+        "target_person": [
+          "pose_channels",
+          "pose_joints"
+        ]
+      }
+    },
+    {
+      "name": "repetition",
+      "use": "repetition",
+      "max_reps_s": 2,
+      "consumes": [
+        "pose_channels"
+      ]
+    },
+    {
+      "name": "semantic",
+      "use": "semantic-scene",
+      "optional": "off",
+      "every_ms": 500,
+      "segment_s": 4,
+      "consumes": [
+        "camera"
+      ]
+    }
+  ],
+  "view": "count",
+  "records": [
+    "temporal.exemplar_events",
+    "temporal.repetition_count"
+  ],
+  "limits": "the enrolled face must be visible to confirm identity (then the track is held up to 10 s); --without target_person counts the most visible person instead; identity thresholds are not measured on people",
+  "measured": "not yet"
+}
