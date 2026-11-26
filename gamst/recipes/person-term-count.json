@@ -123,6 +123,7 @@
       "candidate": "elevenlabs.scribe_v3_live.hosted",
       "language": "ko",
       "bias": "terms",
+      "partials": true,
       "consumes": [
         "voice"
       ],
@@ -213,6 +214,9 @@
       "l1": {
         "policy": "instant",
         "clear_other": 0.1
+      },
+      "partials": {
+        "terms": "terms"
       },
       "sources": "sources",
       "turns": "identify",
@@ -338,6 +342,7 @@
         ]
       },
       "report_others": true,
+      "partials": {},
       "consumes_with": {
         "tracks": [
           "tracks",

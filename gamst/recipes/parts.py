@@ -198,8 +198,15 @@ async def _exemplar(options, context):
 async def _terms(options, context):
     from ..providers.term_events import TermEvents
     from . import speaker_bound
+    from .perception_parts import heard_settings
+    # heard words straight from a recogniser's partials (no voice module between: --without voice)
+    readers = {item['name']: item.get('use') for item in context.get('modules') or ()}
+    raw = any(readers.get(source.split(':', 1)[0]) == 'stream-words' for source in options.get('consumes') or ())
+    partials = heard_settings(options, context) if raw else None
     module = TermEvents(reference=options.get('reference', 'terms'), report_others=bool(options.get('report_others')),
-                        speaker_bound=speaker_bound(context['modules'], options['name']))
+                        speaker_bound=speaker_bound(context['modules'], options['name']),
+                        partials=None if partials is None else {key: value for key, value in partials.items()
+                                                                if key != 'terms'})
     return dict(module=module, spec=module.spec)
 
 

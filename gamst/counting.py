@@ -11,6 +11,12 @@ Revision states (any capability). An event may be committed at once as ``state: 
     {"event": "event.revision", "revises": "<event_id>", "state": "final" | "revoked" | "uncertain", "reason": "...",
      "start_ms": ..., "end_ms": ...}      # the revised event's own times, so a window that holds it holds this too
 
+``heard`` (the lightest state) is a word a streaming recogniser's partial hypothesis held (:mod:`gamst.providers.partial_terms`):
+counted at once; its times are an estimate. The final hearing of the same turn revises it to ``provisional`` (same
+``event_id``: never counted twice) with the word's own times, or ``revoked`` (``partial_withdrawn``). A revision that
+carries ``start_ms`` / ``end_ms`` gives a heard event those times (:func:`with_state`; ``heard_start_ms`` /
+``heard_end_ms`` keep the estimate).
+
 An event without ``state`` is final as committed. The newest revision of an ``event_id`` decides its state. A count
 is of provisional and final events; revoked and uncertain ones are listed in ``states`` but not counted, unless ``where``
 asks for a state (``{"state": "revoked"}``). ``uncertain`` is neither said nor not said (overlapped speech whose voice
@@ -30,8 +36,9 @@ GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames 
 INSTRUCTION_CAPABILITY = 'pipeline.instructions'    # records of gamst.pipeline: other words or another movement
 IDENTITY = ('reference_id', 'reference_revision')
 REVISION = 'event.revision'        # marks an earlier event (``revises``: its ``event_id``) final or revoked
-STATES = ('provisional', 'final', 'revoked', 'uncertain')
-COUNTED = ('provisional', 'final')    # what a count holds unless ``where`` asks for a state
+STATES = ('heard', 'provisional', 'final', 'revoked', 'uncertain')
+REVISED = STATES[1:]                   # what a revision may make an event
+COUNTED = ('heard', 'provisional', 'final')    # what a count holds unless ``where`` asks for a state
 
 
 def event_name(item):
@@ -45,7 +52,7 @@ def revisions(rows):
         value = (record.get('observation') or {}).get('value')
         for item in (value.get('events') if isinstance(value, dict) else None) or ():
             if isinstance(item, dict) and event_name(item) == REVISION and isinstance(item.get('revises'), str) \
-                    and item.get('state') in STATES[1:]:
+                    and item.get('state') in REVISED:
                 found[item['revises']] = item, record
     return found
 
@@ -58,7 +65,7 @@ def revision_history(rows):
         value = (record.get('observation') or {}).get('value')
         for item in (value.get('events') if isinstance(value, dict) else None) or ():
             if isinstance(item, dict) and event_name(item) == REVISION and isinstance(item.get('revises'), str) \
-                    and item.get('state') in STATES[1:]:
+                    and item.get('state') in REVISED:
                 found.setdefault(item['revises'], []).append((item, record))
     return found
 
@@ -80,6 +87,10 @@ def with_state(item, revised):
     if found is None:
         return item if item.get('state') == state else dict(item, state=state)
     revision, record = found
+    if item.get('state') == 'heard' and all(type(revision.get(key)) is int for key in ('start_ms', 'end_ms')):
+        item = dict(item, start_ms=revision['start_ms'], end_ms=revision['end_ms'], heard_start_ms=item.get('start_ms'),
+                    heard_end_ms=item.get('end_ms'),
+                    **{key: revision[key] for key in ('word_timed', 'word_ids') if key in revision})
     return dict(item, state=state, revised_by=dict(
         record_id=record.get('id'), timestamp_ms=record.get('timestamp_ms'),
         **{key: revision[key] for key in ('reason', 'basis') if key in revision}))
@@ -207,10 +218,11 @@ def count_events(rows, *, event=None, where=None, group_by=None, max_evidence=20
     result = dict(count=count, evidence=evidence, evidence_truncated=count > len(evidence))
     if group_by is not None:
         result['groups'] = groups
-    if stated:      # provisional + final = count; revoked and uncertain ones are not in it
-        for kept in (states, *group_states.values()):    # uncertain is said once there is one
-            if not kept['uncertain']:
-                del kept['uncertain']
+    if stated:      # heard + provisional + final = count; revoked and uncertain ones are not in it
+        for kept in (states, *group_states.values()):    # uncertain and heard are said once there is one
+            for name in ('uncertain', 'heard'):
+                if not kept[name]:
+                    del kept[name]
         result['states'] = states
         if group_states:
             result['group_states'] = group_states

@@ -52,6 +52,19 @@ once. A later ``verdicts`` value (``{"kind": "verdicts", "verdicts": [{"word_id"
 :class:`gamst.providers.speaker_tracks.TrackVerification`) settles it: an ``event.revision`` marks it ``final``, or
 ``revoked`` with the reason, and ``count`` is provisional + final. A ``term.other_voice`` that the verdict gives to
 the enrolled voice is revoked and a ``term.spoken`` that ``replaces`` it is committed as final.
+
+Heard words (owner decision 26: count at once, correct later, visibly). A ``status: "partial"`` record whose words say
+``state: "heard"`` (:class:`gamst.providers.speaker_verify.SpeakerVerify` with ``partials``: the counted words that are
+stable in the streaming recogniser's partial hypothesis, each with its voice on the sound so far) makes a
+``term.spoken`` event in state ``heard``, counted at once, with estimated times. A heard word whose voice is clearly
+another's (``match: false``) is not counted; the final decides it. Without a voice module upstream, ``partials``
+(:class:`gamst.providers.partial_terms.PartialSpotter` settings) finds them in the raw partial records here. When the
+final of the turn arrives its occurrences are paired with the heard events by capture time
+(:func:`gamst.providers.partial_terms.reconcile`): a paired one is revised to the state the final gives it
+(``provisional``, ``uncertain``, ``final``) with the word's own times, the same event (never counted twice), and later
+verdicts settle it under that ID; a final occurrence that is another voice's revokes its heard event (``other_voice``) and
+is reported as before; a heard event the final does not hold is ``revoked`` (``partial_withdrawn``), as is one whose
+turn's final never came (a later final of the same recogniser starts after it was heard, or the input ended).
 """
 from __future__ import annotations
 
@@ -315,9 +328,17 @@ def parse_terms(value):
     return mapping, origin
 
 
+WITHDRAWN = 'partial_withdrawn'
+MATCH_MS = 4000     # a heard word and the final's occurrence of the same turn are the same word within this
+
+
 class TermEvents:
-    def __init__(self, *, reference='terms', terms=None, max_utterances=4096, speaker_bound=True, report_others=False):
+    def __init__(self, *, reference='terms', terms=None, max_utterances=4096, speaker_bound=True, report_others=False,
+                 partials=None, match_ms=MATCH_MS):
         self.report_others = bool(report_others)     # also say (never count) what another voice said
+        self.partials, self.spotter, self.match_ms = None if partials is None else dict(partials), None, int(match_ms)
+        self._heard = OrderedDict()        # heard events by ID: [event, words] (counted until reconciled)
+        self.heard_stats = dict(heard=0, other_voice=0, confirmed=0, withdrawn=0, revoked_other_voice=0, late=0)
         self.reference_name, self.max_utterances = reference, max_utterances
         self.speaker_bound = bool(speaker_bound)
         self._lock = threading.RLock()
@@ -344,12 +365,20 @@ class TermEvents:
             return
         self._words = [self.prepare(reference)]
         self._words[0].from_ms = reference.get('from_ms', 0)
+        self._spot()
+
+    def _spot(self):
+        """The spotter of raw partials (``partials``) for the words counted now."""
+        if self.partials is not None and self._words:
+            from .partial_terms import PartialSpotter
+            self.spotter = PartialSpotter(self._words[-1].terms, **self.partials)
 
     def set_terms(self, value):
         """What to count, from the start (:func:`parse_terms`)."""
         words = _Words(*parse_terms(value))
         words.clear()
         self._words = [words]
+        self._spot()
 
     def prepare(self, reference):
         """Checked words to count from a stated time on; nothing of the running ones changes."""
@@ -377,13 +406,16 @@ class TermEvents:
 
     def status(self):
         words = self._words[-1] if self._words else None
-        return {} if words is None else dict(words.identity, terms=len(words.terms), count=words.total, from_ms=words.from_ms)
+        heard = {'heard': dict(self.heard_stats, open=len(self._heard))} if any(self.heard_stats.values()) else {}
+        return {} if words is None else dict(words.identity, terms=len(words.terms), count=words.total, from_ms=words.from_ms,
+                                             **heard)
 
     def reset(self):
         with self._lock:
             self._counted = {}
             self._open.clear()
             self._verdicts.clear()
+            self._heard.clear()
             for words in self._words:
                 words.clear()
 
@@ -398,8 +430,12 @@ class TermEvents:
             value = value if isinstance(value, dict) else {}
             if value.get('kind') == 'verdicts':
                 return self._settle(value.get('verdicts') or ())
+            if value.get('status') == 'partial':
+                return self._partial(value, frame)
             if value.get('status') != 'final' or not value.get('text'):
                 return None
+            if self.spotter is not None:
+                self.spotter.final(value.get('utterance_id'))
             speaker = value.get('speaker')
             whole = isinstance(speaker, dict) and speaker.get('match') is False
             if whole and not self.report_others and not any(
@@ -413,9 +449,10 @@ class TermEvents:
                 self._counted.pop(next(iter(self._counted)))
             start, end = (value[key] if type(value.get(key)) in (int, float) else frame.timestamp_ms
                           for key in ('start_ms', 'end_ms'))
+            stale = self._stale(value, start)
             found = [self._find(words, value, start, end) for words in self._words
                      if words.terms and words.from_ms <= end and (words.until_ms is None or start < words.until_ms)]
-            found = [item for item in found if item is not None]
+            found = [item for item in stale + found if item is not None]
             return None if not found else found[0] if len(found) == 1 else found
 
     def _find(self, words, value, start, end):
@@ -468,9 +505,136 @@ class TermEvents:
                     while len(self._open) > OPEN:
                         self._open.popitem(last=False)
                 events.append(event)
+        events = self._reconcile(words, value, start, end, events)
         if not events:
             return None
         return self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
+
+    # ---------------------------------------------------------------- heard words (partial hypotheses)
+
+    def _partial(self, value, frame):
+        """Heard words of one partial record (module doc): ``term.spoken`` events in state ``heard``, counted at once."""
+        if (value.get('utterance_id'), frame.subject_id) in self._counted:
+            self.heard_stats['late'] += 1
+            return None       # its final is here already
+        heard = [word for word in value.get('words') or () if isinstance(word, dict) and word.get('state') == 'heard']
+        if not heard and self.spotter is not None and value.get('text'):
+            heard = [dict(text=item['spoken'], state='heard', term=item['term'], index=item['index'],
+                          word_id=f"heard:{item['utterance_id']}:{item['term']}:{item['index']}",
+                          start_ms=item['start_ms'], end_ms=item['end_ms'], heard_to_ms=item['heard_to_ms'],
+                          word_timed=item['timed'], **({'flags': item['flags']} if item['flags'] else {}),
+                          **({'part': item['part']} if item['part'] else {}))
+                     for item in self.spotter.update(value)]
+        changed = OrderedDict()
+        for word in heard:
+            start = word.get('start_ms')
+            if type(start) not in (int, float) or type(word.get('end_ms')) not in (int, float):
+                continue
+            words = next((item for item in reversed(self._words) if word.get('term') in item.terms
+                          and item.from_ms <= start and (item.until_ms is None or start < item.until_ms)), None)
+            if words is None:
+                continue
+            key = event_id('heard', word.get('word_id'), *words.identity.values())
+            if key in self._heard or key in self._open:
+                continue
+            if word.get('match') is False:     # clearly another voice already: the final decides it
+                self.heard_stats['other_voice'] += 1
+                continue
+            flags, part = word.get('flags') or [], word.get('part')
+            event = dict(event='term.spoken', state='heard', term=word['term'], event_id=key, spoken=word.get('text'),
+                         reference=self.reference_name, **({'flags': list(flags)} if flags else {}),
+                         **({'repetition': list(part)} if part else {}), **words.identity,
+                         utterance_id=value.get('utterance_id'), start_ms=int(start), end_ms=int(word['end_ms']),
+                         word_timed=bool(word.get('word_timed')), heard_to_ms=word.get('heard_to_ms'), **words.origin,
+                         **({'speaker_score': word['speaker_score']} if 'speaker_score' in word else {}),
+                         **({'l1': word['l1']} if 'l1' in word else {}),
+                         **({} if self.speaker_bound else {'speaker': 'not_bound'}))
+            self._heard[key] = [event, words]
+            while len(self._heard) > OPEN:
+                self._heard.popitem(last=False)
+            words.total += 1
+            words.counts[event['term']] = words.counts.get(event['term'], 0) + 1
+            self.heard_stats['heard'] += 1
+            changed.setdefault(id(words), (words, []))[1].append(event)
+        records = [self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
+                   for words, events in changed.values()]
+        return None if not records else records[0] if len(records) == 1 else records
+
+    def _withdraw(self, key, reason=WITHDRAWN):
+        """The revision that takes a heard event out of the count (its final did not hold it)."""
+        event, words = self._heard.pop(key)
+        words.total -= 1
+        words.counts[event['term']] = words.counts.get(event['term'], 0) - 1
+        self.heard_stats['withdrawn' if reason == WITHDRAWN else 'revoked_other_voice'] += 1
+        return words, dict(event='event.revision', state='revoked', revises=key, revised_event=event['event'],
+                           term=event['term'], start_ms=event['start_ms'], end_ms=event['end_ms'], reason=reason,
+                           by='l1', **words.identity)
+
+    def _source(self, utterance_id):
+        return str(utterance_id).rsplit(':', 1)[0]
+
+    def _stale(self, value, start):
+        """Heard events of the same recogniser whose turn's final never came: this later final starts after they were
+        heard."""
+        source, changed = self._source(value.get('utterance_id')), OrderedDict()
+        for key in [key for key, (event, _) in self._heard.items()
+                    if event['utterance_id'] != value.get('utterance_id') and self._source(event['utterance_id']) == source
+                    and type(event.get('heard_to_ms')) in (int, float) and event['heard_to_ms'] <= start]:
+            words, revision = self._withdraw(key)
+            changed.setdefault(id(words), (words, []))[1].append(revision)
+        return [self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events, **words.identity))
+                for words, events in changed.values()]
+
+    def _reconcile(self, words, value, start, end, events):
+        """Pair this final's occurrences with the heard events of its turn (module doc); returns the record's events."""
+        from .partial_terms import reconcile
+        utterance = value.get('utterance_id')
+        mine = [key for key, (event, owner) in self._heard.items() if owner is words and (
+            event['utterance_id'] == utterance or self._source(event['utterance_id']) == self._source(utterance)
+            and start - self.match_ms <= event['end_ms'] <= end + self.match_ms)]
+        if not mine:
+            return events
+        out, paired = list(events), {}
+        for term in {self._heard[key][0]['term'] for key in mine}:
+            heard = [(self._heard[key][0]['end_ms'], key) for key in mine if self._heard[key][0]['term'] == term]
+            final = [(event['end_ms'], index) for index, event in enumerate(events) if event.get('term') == term
+                     and event.get('event') in ('term.spoken', 'term.other_voice') and type(event.get('end_ms')) is int]
+            paired.update({index: key for key, index in reconcile(heard, final, max_ms=self.match_ms)})
+        for index, key in paired.items():
+            event = events[index]
+            if event['event'] == 'term.other_voice':      # the final's voice check: clearly another's
+                out.append(self._withdraw(key, 'other_voice')[1])
+                continue
+            heard, _ = self._heard.pop(key)
+            state = event.get('state', 'final')
+            # the heard event was counted, and the final's occurrence again if it counts (uncertain: not): once only
+            words.total -= 1
+            words.counts[event['term']] = words.counts.get(event['term'], 0) - 1
+            if event['event_id'] in self._open:     # later verdicts settle it under the heard event's ID
+                entry = self._open.pop(event['event_id'])
+                entry[0] = dict(entry[0], event_id=key, heard_end_ms=heard['end_ms'])
+                self._open[key] = entry
+            self.heard_stats['confirmed'] += 1
+            out[index] = dict(event='event.revision', state=state, revises=key, revised_event='term.spoken',
+                              term=event['term'], start_ms=event['start_ms'], end_ms=event['end_ms'], by='l1',
+                              **words.identity, **{name: event[name] for name in (
+                                  'utterance_id', 'word_timed', 'word_ids', 'speaker_score', 'l1', 'reason', 'decided_by')
+                                  if name in event})
+        for key in mine:
+            if key in self._heard:
+                out.append(self._withdraw(key)[1])
+        return out
+
+    def finish(self):
+        """End of input: heard words whose final never came leave the count."""
+        with self._lock:
+            changed = OrderedDict()
+            for key in list(self._heard):
+                words, revision = self._withdraw(key)
+                changed.setdefault(id(words), (words, []))[1].append(revision)
+            records = [self.spec.validate(dict(count=words.total, counts=dict(words.counts), events=events,
+                                               **words.identity)) for words, events in changed.values()]
+            return None if not records else records[0] if len(records) == 1 else records
 
     def _settle(self, verdicts):
         """Revisions of the open events whose words all have a verdict now (one record per revision of the words).

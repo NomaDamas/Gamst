@@ -829,7 +829,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
-                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)), l1=_l1(args),
+                   speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)), l1=_l1(args), partials=_partials(args),
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
@@ -1279,6 +1279,14 @@ def _movement_options(parser):
     parser.add_argument('--l1-clear-margin', type=float, metavar='COSINE',
                         help='with --l1 instant and speaker decision v2: excluded at once when a known other voice is '
                              'this much closer than the person (default: off)')
+    parser.add_argument('--partials', choices=['on', 'off'],
+                        help="count a word the moment the live recogniser's partial hypothesis holds it steadily "
+                             "('heard', corrected by the final; gamst/providers/partial_terms.py): 'off' waits for the "
+                             "recogniser's final, as before (default: the recipe's)")
+    parser.add_argument('--partial-revisions', type=int, metavar='N',
+                        help='a word is heard once N partials in a row held it (default 2)')
+    parser.add_argument('--partial-ms', type=float, metavar='MS',
+                        help='... or once partials held it for MS of capture time (default: off)')
     parser.add_argument('--voice-fallback', action='append', default=[], metavar='FILE',
                         help='another enrolled voice of the same person (e.g. an owner sample from another recording): '
                              'used when the voice reference is not self-consistent (gamst/voice_quality.py)')
@@ -1300,6 +1308,17 @@ def _l1(args):
     if found and 'policy' not in found:
         found['policy'] = 'instant'
     return found or None
+
+
+def _partials(args):
+    """Heard words from ``--partials``, ``--partial-revisions`` and ``--partial-ms`` (None: the recipe's; False: off)."""
+    if getattr(args, 'partials', None) == 'off':
+        return False
+    found = {key: value for key, value in (('min_revisions', getattr(args, 'partial_revisions', None)),
+                                           ('min_ms', getattr(args, 'partial_ms', None))) if value is not None}
+    if getattr(args, 'partials', None) == 'on' or found:
+        return found
+    return None
 
 
 def _speaker_decision(value):
