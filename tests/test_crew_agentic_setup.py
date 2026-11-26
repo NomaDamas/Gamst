@@ -49,7 +49,13 @@ class Planning(unittest.TestCase):
         large = make_plan("scene,speech", hardware=host("cuda-ge24gb"))
         self.assertEqual(large["roles"]["vision.detect"]["model"], "rfdetr.large")
         self.assertEqual(large["roles"]["vision.semantic_scene"]["model"], "qwen3.5.9b")
-        self.assertEqual(large["roles"]["audio.asr"]["model"], "qwen3.asr_1_7b")
+        # one recogniser on every tier: the streaming Scribe Live (hosted; it sends nothing without the owner's opt-in)
+        self.assertEqual(large["roles"]["audio.asr"]["model"], "elevenlabs.scribe_v3_live.hosted")
+        for tier in ("cpu-only", "apple-mps", "cuda-lt24gb", "cuda-ge80gb"):
+            self.assertEqual(make_plan("speech", hardware=host(tier))["roles"]["audio.asr"]["model"],
+                             "elevenlabs.scribe_v3_live.hosted", tier)
+        chosen = make_plan("speech", ["audio.asr=qwen3.asr_1_7b"], hardware=host("cuda-ge24gb"))
+        self.assertEqual(chosen["roles"]["audio.asr"]["model"], "qwen3.asr_1_7b")       # the others stay choices
 
     def test_hardware_and_capture_warnings(self):
         plan = make_plan("scene", ["vision.semantic_scene=qwen3.5.9b"], hardware=host())

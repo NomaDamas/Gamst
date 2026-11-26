@@ -98,6 +98,75 @@ class _Stand:
         await self.server.wait_closed()
 
 
+class ScribeStandIn:
+    """The default ``audio.asr`` candidate (Scribe v3 Live) answered by a local stand-in for ElevenLabs.
+
+    A WebSocket server in its own thread speaks the documented realtime protocol; the registry endpoint of the
+    candidate points at it for the test (a local endpoint needs no opt-in and no key), so a recipe run uses its real
+    ``stream-words`` part: the session, the endpointer, the capture clock. Only the recogniser is a stand-in.
+
+    ``hear()`` is called once per session and returns ``word(index, samples)``: what is said in the index-th block of
+    ``block_s`` seconds of the session's audio, as ``(text, start_s, end_s)`` within the block, or None. Each commit
+    is answered with the words of the blocks that begin before it (word times in seconds of the session's audio);
+    ``turns`` keeps the words of each answer that had any.
+    """
+    CANDIDATE = 'elevenlabs.scribe_v3_live.hosted'
+
+    def __init__(self, hear, block_s=1.):
+        self.hear, self.block_s, self.queries, self.turns = hear, float(block_s), [], []
+
+    def start(self, test):
+        import threading
+        from unittest import mock
+        from websockets.asyncio.server import serve
+        from gamst.crew.registry import ROLES
+        self.loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        thread.start()
+
+        async def opened():
+            return await serve(self._session, '127.0.0.1', 0)
+        self.server = asyncio.run_coroutine_threadsafe(opened(), self.loop).result(10)
+        url = f"ws://127.0.0.1:{self.server.sockets[0].getsockname()[1]}/v1/speech-to-text/realtime"
+        patcher = mock.patch.dict(ROLES['audio.asr'].candidates[self.CANDIDATE].config, endpoint=url)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+        def stop():
+            self.server.close()
+            asyncio.run_coroutine_threadsafe(self.server.wait_closed(), self.loop).result(10)
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            thread.join(10)
+            self.loop.close()
+        test.addCleanup(stop)
+        return self
+
+    async def _session(self, ws):
+        self.queries.append(ws.request.path)
+        word, audio, told = self.hear(), bytearray(), 0
+        size = round(16000 * self.block_s)
+        await ws.send(json.dumps(dict(message_type='session_started', session_id=f's{len(self.queries)}', config={})))
+        async for raw in ws:
+            message = json.loads(raw)
+            audio += base64.b64decode(message.get('audio_base_64') or '')
+            if not message.get('commit'):
+                continue
+            samples = np.frombuffer(bytes(audio), '<i2').astype(np.float32) / 32768
+            words = []
+            while told * size < len(samples):
+                said = word(told, samples[told * size:(told + 1) * size])
+                if said:
+                    text, start, end = said
+                    words.append(dict(text=text, start=told * self.block_s + start, end=told * self.block_s + end,
+                                      type='word', logprob=0.))
+                told += 1
+            text = ' '.join(item['text'] for item in words)
+            if words:
+                self.turns.append([item['text'] for item in words])
+            await ws.send(json.dumps(dict(message_type='committed_transcript', text=text)))
+            await ws.send(json.dumps(dict(message_type='committed_transcript_with_timestamps', text=text, words=words)))
+
+
 async def feed(module, items, *, finish=True):
     out = []
     for frame in items:
@@ -329,13 +398,47 @@ class RecipeTest(unittest.TestCase):
         for name in ('openai.gpt_live_transcribe.hosted', 'elevenlabs.scribe_v2_realtime.hosted',
                      'elevenlabs.scribe_v3_live.hosted'):
             candidate = ROLES['audio.asr'].candidates[name]
-            self.assertFalse(candidate.automatic)
+            # the default is set up like any default (only its WebSocket client; no weights); the others by hand
+            self.assertEqual(candidate.automatic, name == 'elevenlabs.scribe_v3_live.hosted')
+            self.assertEqual(candidate.weights, ())
             self.assertIs(candidate.config['allow_remote'], False)
             self.assertNotIn('api_key', candidate.config)
         for name in ('sherpa.zipformer_ko_streaming', 'voxtral.mini_4b_realtime_2602.mlx'):
             candidate = ROLES['audio.asr'].candidates[name]
             self.assertEqual(candidate.provider_profile, 'streaming.asr.words')
             self.assertTrue(all(weight.sha256 and '/resolve/' in weight.url for weight in candidate.weights))
+
+    def test_the_default_recogniser_is_streaming_and_hosted_only_with_the_owners_consent(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from gamst import recipes
+        from gamst.crew.registry import ROLES, TIERS
+        default = 'elevenlabs.scribe_v3_live.hosted'
+        self.assertEqual(set(ROLES['audio.asr'].defaults.values()), {default})
+        self.assertEqual(set(ROLES['audio.asr'].defaults), set(TIERS))
+        for name in ('person-term-count', 'person-voice-style-count', 'scene'):
+            asr = next(item for item in json.loads((recipes.RECIPES / f'{name}.json').read_text())['modules']
+                       if item['name'] == 'asr')
+            self.assertEqual((asr['use'], asr['candidate']), ('stream-words', default), name)
+        profile = Path(tempfile.mkdtemp()) / 'none.json'
+        run = ['run', 'person-term-count', '--audio', str(profile.parent / 'missing.wav'), '--without', 'voice',
+               '--terms', '대박', '--headless', '--profile', str(profile)]
+        with mock.patch.dict(os.environ), self.assertRaises(SystemExit) as caught:
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            recipes.main(run)
+        text = str(caught.exception)       # said before any input opens (the file does not exist)
+        for part in (default, 'leaves this device', '--allow-remote-asr', '--asr sherpa.zipformer_ko_streaming',
+                     '--asr voxtral.mini_4b_realtime_2602.mlx', 'gamst recipe setup person-term-count --asr'):
+            self.assertIn(part, text)
+        with mock.patch.dict(os.environ), self.assertRaises(SystemExit) as caught:
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            recipes.main(run + ['--allow-remote-asr'])
+        self.assertNotIn('--allow-remote-asr', str(caught.exception))       # consented: on to the next problem
+        with self.assertRaisesRegex(SystemExit, '--allow-remote-asr'):     # words by example are transcribed too
+            recipes.main(['enroll', 'person-term-count', '--kind', 'terms', '--audio', str(profile.parent / 'a.wav'),
+                          '--proposals', str(profile.parent / 'p.json'), '--profile', str(profile)])
 
     def test_a_replayed_recording_arrives_at_its_own_speed(self):
         from gamst.inputs import Paced

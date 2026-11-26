@@ -52,3 +52,20 @@ audio ring + later context ─▶ verification lane (concurrent) ─▶ revision
 
 Remaining errors were a word the ASR invented while the person spoke (long-context bias) and words of other people
 said within a second of the person's.
+
+## Catch-up and verification (owner decisions, 2026-11-26)
+
+- **Nothing is dropped.** When a live lane falls behind by more than `lag_ms`, it skips to "now"; the skipped capture range is
+  kept (memory, spilled to disk past a budget) and becomes a to-do item.
+- **Catch-up workers** (a pool, capped by resources: one on a laptop, more for hosted streams or a GPU server) take to-do
+  items. A worker starts from a copy of the live module's state at the range start and listens from the last speech pause
+  before it (bounded), so the word in progress is not cut. Hosted recognisers get the preceding text instead of a state copy.
+- **Verification lane** runs in capture order behind both, and only over ranges that are complete (no to-do left): a second
+  recogniser (gpt-live-transcribe + Qwen3-ForcedAligner times) checks the words, pyannoteAI Precision-3 on windows tells who
+  spoke, the few-shot voice identifies the person; it emits final / revoked only where something changes. Catch-up can never
+  overwrite a final.
+- **Live diarization slots do not decide who said a word** (Nemotron-3 mixed people on the test clip). Live uses the per-word
+  voice score for provisional counts.
+- **Recognisers:** live = ElevenLabs Scribe v3 Live (best published error rate; best recall here), verification =
+  gpt-live-transcribe with keyword hints (wrote no invented word here; the owner confirmed by ear that nothing is said at
+  23.8-24.2 s where Scribe wrote the word). Non-commercial state-of-the-art models are registered as opt-in only.
