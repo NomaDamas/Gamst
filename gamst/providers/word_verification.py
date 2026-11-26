@@ -59,7 +59,8 @@ DECIDE = ('pair', 'majority')
 CLEAR = ('speaker', 'score', 'either', 'both')
 VOICE = dict(threshold=.5, min_speaker_ms=1000, piece_ms=2000, overlap_share=.3, active_share=.1, word_context_ms=1500,
              min_dbfs=-45.)
-WINDOWS = dict(step_ms=15000, before_ms=15000, after_ms=5000, concurrency=2)
+WINDOWS = dict(min_ms=10000, max_ms=20000, cap_ms=30000, pause_ms=500, before_ms=15000, after_ms=5000, concurrency=2,
+               step_ms=None)
 
 
 def _settings(defaults, given, what):
@@ -127,8 +128,11 @@ class WordVerification:
         # The second recogniser is a realtime API: it gets the complete audio at most ``feed_speed`` times real time,
         # evenly (a little faster than real time, so it catches up after a stall); None: as soon as it is complete
         self.feed_speed = None if feed_speed is None else float(feed_speed)
-        if not 0 < self.windows['step_ms'] <= 120000 or self.windows['before_ms'] < 0 or self.windows['after_ms'] < 0:
-            raise ValueError('windows need 0 < step_ms <= 120000 and non-negative before_ms, after_ms')
+        w = self.windows
+        if w['step_ms'] is not None and not 0 < w['step_ms'] <= 120000 or w['before_ms'] < 0 or w['after_ms'] < 0 \
+                or not 0 < w['min_ms'] <= w['max_ms'] <= w['cap_ms'] <= 300000 or not 0 < w['pause_ms'] <= 10000:
+            raise ValueError('windows need 0 < min_ms <= max_ms <= cap_ms <= 300000, 0 < pause_ms <= 10000, '
+                             'non-negative before_ms and after_ms (step_ms: None, or fixed regions 0 < step_ms <= 120000)')
         self.spec = CapabilitySpec(
             capability_id, capability_id, 'audio', 'gamst.word_verification', '1', (
                 OutputField('kind', 'string'), OutputField('reference', 'string'), OutputField('start_ms', 'integer'),
@@ -136,6 +140,7 @@ class WordVerification:
                 OutputField('utterance_id', 'string', required=False), OutputField('status', 'string', required=False),
                 OutputField('text', 'string', required=False), OutputField('words', 'array', required=False),
                 OutputField('speaker', 'object', required=False), OutputField('speakers', 'array', required=False),
+                OutputField('region', 'object', required=False),
                 OutputField('model', 'object')),
             'native', stateful=True, reset_on_gap=True, freshness_ms=120000, interpretation='estimate',
             devices=('cpu',), license='Apache-2.0 adapter; recogniser, diarization and speaker model per their terms')
@@ -171,6 +176,7 @@ class WordVerification:
         self._voted = []               # final utterances of other recognisers this lane reads (votes)
         self._windows = {}             # index -> {"turns", "speakers", "person"} | asyncio task
         self._decided = 0              # regions decided so far
+        self._regions = []             # closed regions [{"start_ms", "end_ms", "reason"}], in capture order
         self._used = set()             # ids of second-hearing occurrences that confirmed or were added
         self._outbox, self._scores = [], {}
         self.stats = dict(regions=0, verdicts=0, added=0, late=0, windows=0, diarize_ms=[], decided_after_ms=[],
@@ -197,8 +203,11 @@ class WordVerification:
                     recogniser_errors=[str(item)[:200] for item in getattr(self.recogniser, 'errors', ())][-8:],
                     heard_turns=[dict(start_ms=value['start_ms'], end_ms=value['end_ms'], words=len(value.get('words') or ()),
                                       aligned=bool(value.get('aligned'))) for value in self._heard][-64:],
-                    fed_until_ms=self._fed, decided_until_ms=None if self._origin is None else
-                    self._origin + self._decided * self.windows['step_ms'])
+                    fed_until_ms=self._fed, decided_until_ms=None if self._origin is None else self._region(self._decided)[0],
+                    regions=[dict(item, end_ms=None if item['end_ms'] == float('inf') else item['end_ms'],
+                                  length_ms=None if item['end_ms'] == float('inf') else item['end_ms'] - item['start_ms'])
+                             for item in self._regions[-64:]], straddling=self._straddling(),
+                    diarize_jobs=self.stats.get('diarize_jobs', 0))
 
     # ------------------------------------------------------------------ frames
 
@@ -260,23 +269,118 @@ class WordVerification:
         return float('-inf') if value is None else value
 
     def _region(self, index):
-        step = self.windows['step_ms']
-        return self._origin + index * step, self._origin + (index + 1) * step
+        """(start, end) of a closed region; past the closed ones: (where the next one starts, inf)."""
+        if index < len(self._regions):
+            return self._regions[index]['start_ms'], self._regions[index]['end_ms']
+        return (self._regions[-1]['end_ms'] if self._regions else self._origin), float('inf')
 
     def _window(self, index):
         low, high = self._region(index)
-        return max(self._origin, low - self.windows['before_ms']), high + self.windows['after_ms']
+        end = self.memory.end_ms if self.memory is not None and self.memory.end_ms is not None else low
+        return max(self._origin, low - self.windows['before_ms']), min(high + self.windows['after_ms'], max(end, low))
+
+    def _spans(self, start):
+        """Merged [start, end] of every utterance of every recogniser that ends after ``start``."""
+        found = sorted((value['start_ms'], value['end_ms']) for values in (self._utterances, self._heard, self._voted)
+                       for value in values if type(value.get('start_ms')) is int and type(value.get('end_ms')) is int
+                       and value['end_ms'] > start)
+        merged = []
+        for low, high in found:
+            if merged and low <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], high)
+            else:
+                merged.append([low, high])
+        return merged
+
+    def _close_regions(self, complete):
+        """Close regions where speech pauses: at the middle of a pause of at least ``pause_ms`` that no recogniser
+        wrote anything in, once the region is ``min_ms`` long; by ``max_ms`` the next such pause closes it
+        (``max_extended``); at ``cap_ms`` any point between utterances does (``cap_short_pause``), else the cap itself
+        (``cap_split``, the only case in which an utterance is split, and said so). ``step_ms``: fixed regions."""
+        w, end = self.windows, self.memory.end_ms
+        if end is None or self._origin is None:
+            return False
+        horizon = float('inf') if self._final else min(complete, self._heard_until())
+        closed = False
+        while True:
+            start = self._region(len(self._regions))[0]
+            if start >= end:
+                return closed
+            if w['step_ms'] is not None:
+                stop, reason = start + w['step_ms'], 'fixed'
+                if stop > horizon and not self._final:
+                    return closed
+                if self._final and stop >= end:
+                    stop, reason = float('inf'), 'end'
+            else:
+                stop, reason = self._boundary(start, horizon, end)
+                if stop is None:
+                    return closed
+            self._regions.append(dict(start_ms=start, end_ms=stop, reason=reason))
+            closed = True
+            if stop == float('inf'):
+                return closed
+
+    def _boundary(self, start, horizon, end):
+        w = self.windows
+        spans = self._spans(start)
+        limit = min(horizon, end) if not self._final else end
+        gaps, at = [], start
+        for low, high in spans:
+            if low > at:
+                gaps.append((at, min(low, limit)))
+            at = max(at, high)
+        if at < limit:
+            gaps.append((at, limit))             # silence up to what is known
+        gaps = [(low, high) for low, high in gaps if high > low]
+
+        def first(low, high, wide=True):
+            """The first point in [low, high] inside a pause: with at least half a pause of silence on each side
+            (``wide``), else the middle of any gap; in a gap that is still open, as early as allowed."""
+            for gap_low, gap_high in gaps:
+                if wide and gap_high - gap_low < w['pause_ms']:
+                    continue
+                pad = w['pause_ms'] / 2 if wide else (gap_high - gap_low) / 2
+                earliest, latest = gap_low + pad, gap_high - pad
+                target = earliest if gap_high >= limit and not self._final else (gap_low + gap_high) / 2
+                point = min(max(target, low), high)
+                if earliest <= point <= latest:
+                    return int(point)
+            return None
+        if self._final and end - start <= w['max_ms']:
+            return float('inf'), 'end'
+        found = first(start + w['min_ms'], start + w['max_ms'])
+        if found is not None:
+            return found, 'pause'
+        if limit < start + w['max_ms']:
+            return (float('inf'), 'end') if self._final else (None, None)
+        found = first(start + w['max_ms'], start + w['cap_ms'])
+        if found is not None:
+            return found, 'max_extended'
+        if limit < start + w['cap_ms']:
+            return (float('inf'), 'end') if self._final else (None, None)
+        found = first(start + w['min_ms'], start + w['cap_ms'], wide=False)
+        if found is not None:
+            return found, 'cap_short_pause'
+        return start + w['cap_ms'], 'cap_split'
+
+    def _straddling(self):
+        """Utterances (of any recogniser) that a closed region boundary cuts: 0 unless a region says ``cap_split``."""
+        cuts = [item['end_ms'] for item in self._regions if item['end_ms'] != float('inf')]
+        return sum(1 for values in (self._utterances, self._heard, self._voted) for value in values
+                   if type(value.get('start_ms')) is int and any(value['start_ms'] < cut < value['end_ms'] for cut in cuts))
 
     async def _work(self):
         try:
             while True:
                 complete = self._complete()
                 progressed = await self._feed(complete)
+                progressed = self._close_regions(complete) or progressed
                 progressed = self._diarize(complete) or progressed
                 progressed = await self._decide(complete) or progressed
                 self._hold()
-                if self._final and self._origin is not None and self.memory.end_ms is not None \
-                        and self._region(self._decided)[0] > self.memory.end_ms:
+                if self._final and self._regions and self._regions[-1]['end_ms'] == float('inf') \
+                        and self._decided == len(self._regions):
                     self._late()          # anything still open is decided now, and counted as late
                 if self._final and self._finished():
                     self._done = True
@@ -293,7 +397,7 @@ class WordVerification:
     def _finished(self):
         end = self.memory.end_ms
         return end is not None and self._fed is not None and self._fed >= end and not self._open and \
-            self._region(self._decided)[0] > end
+            self._decided == len(self._regions) and bool(self._regions) and self._regions[-1]['end_ms'] == float('inf')
 
     async def _feed(self, complete):
         """Give the second recogniser the kept audio as far as it is complete; take what it answered."""
@@ -351,17 +455,18 @@ class WordVerification:
         """Start the diarization of every window whose sound is complete (at most ``concurrency`` at once)."""
         started, index = False, self._decided
         end = self.memory.end_ms
-        while True:
+        while index < len(self._regions):
             low, high = self._window(index)
             if end is None or low >= end:
                 break
-            if high > complete and not (self._final and complete == float('inf')):
+            if high > complete and not self._final:
                 break
             if index not in self._windows:
                 running = sum(isinstance(item, asyncio.Task) and not item.done() for item in self._windows.values())
                 if running >= self.windows['concurrency']:
                     break
                 self._windows[index] = asyncio.ensure_future(self._identify(index, low, min(high, end)))
+                self.stats['diarize_jobs'] = self.stats.get('diarize_jobs', 0) + 1
                 started = True
             index += 1
         return started
@@ -383,12 +488,16 @@ class WordVerification:
                                  person=score is not None and score >= self.voice['threshold']))
         for speaker in {turn[2] for turn in turns} - {item['speaker'] for item in speakers}:
             speakers.append(dict(speaker=speaker, speech_ms=0, score=None, person=False))
+        region = self._regions[index] if index < len(self._regions) else {}
         result = dict(turns=turns, speakers=speakers, low=low, high=high,
                       person={item['speaker'] for item in speakers if item['person']},
                       unknown={item['speaker'] for item in speakers if item['score'] is None})
         self._outbox.append(self.spec.validate(dict(
             kind='window', reference=self.reference_name, start_ms=int(low), end_ms=int(high),
-            speakers=sorted(speakers, key=lambda item: -item['speech_ms']), model=self._model())))
+            speakers=sorted(speakers, key=lambda item: -item['speech_ms']),
+            region=dict(start_ms=int(region.get('start_ms', low)),
+                        end_ms=None if region.get('end_ms', float('inf')) == float('inf') else int(region['end_ms']),
+                        reason=region.get('reason')), model=self._model())))
         return result
 
     async def _speaker_score(self, pieces):
@@ -481,13 +590,13 @@ class WordVerification:
     async def _decide(self, complete):
         """Decide the next regions whose words are all in, heard twice, and whose window is diarized (in order)."""
         decided, near = False, self.rule['near_ms']
-        while True:
+        while self._decided < len(self._regions):
             low, high = self._region(self._decided)
             end = self.memory.end_ms
             task = self._windows.get(self._decided)
-            if end is None or low > end or task is None or not task.done():
+            if end is None or task is None or not task.done():
                 return decided
-            last = self._final and high >= end
+            last = high == float('inf')
             if last and self._heard_until() != float('inf'):
                 return decided
             if not last and (complete < high + near or self._heard_until() < high + near):
@@ -500,6 +609,7 @@ class WordVerification:
             self.stats['regions'] += 1
             self._decided += 1
             decided = True
+        return decided
 
     async def _settle(self, window, low, high):
         if self.rule['decide'] == 'majority':

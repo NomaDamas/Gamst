@@ -60,16 +60,24 @@ used to decide who said a word (owner decision). Late words of a catch-up worker
 
 ## L4: the verification lane (`gamst/providers/word_verification.py`, part `word-verify`, item `verification`)
 
-Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in capture order, in regions of `step_ms`
-(15 s), each only when `inputs_complete_until` has passed it (no TODO, no unanswered turn, no queued record there) by
-`near_ms`, so a catch-up worker never changes a word after it was settled.
+Consumes the microphone (as ticks), `speaker_check` and any voter. Its own work runs in capture order, in **regions
+that follow speech** (owner decision 21), each decided only when `inputs_complete_until` has passed it (no TODO, no
+unanswered turn, no queued record there) by `near_ms`, so a catch-up worker never changes a word after it was settled.
 
+- **Regions** (`WINDOWS`): a region closes at the middle of a pause of at least `pause_ms` (500, the endpointer's pause)
+  in which no recogniser (first hearing, second, voters) wrote anything, once it is `min_ms` (10 s) long and at most
+  `max_ms` (20 s). Without such a pause by `max_ms` it closes at the next one up to `cap_ms` (30 s, reason
+  `max_extended`); by `cap_ms` at any point between two utterances (`cap_short_pause`); only when one utterance runs
+  past `cap_ms` is it cut there (`cap_split`, the only case that splits an utterance, and the region record says so).
+  A pause counts only once every recogniser is complete past it. The last region runs to the end of the input
+  (`end`). Each region's reason and length are in the `window` record (`region`) and in the lane's status
+  (`regions`, `straddling`: utterances a boundary cuts, `diarize_jobs`). `step_ms` gives the old fixed regions.
 - **Second recogniser**: `gpt-live-transcribe`, the counted words as `keywords`, Qwen3-ForcedAligner word times
   (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete, at most `feed_speed` (1.25) times real
   time: it is a realtime API, and a little faster lets it catch up after a stall (`null`: as soon as complete, in
   bursts).
 - **Diarization windows**: pyannoteAI Precision-3 (`"diarizer"`) on `[region - before_ms (15 s), region + after_ms
-  (5 s)]` (windows overlap), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
+  (5 s)]` (windows overlap, so speaker labels have context; speakers are re-identified in each window by the voice), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
   active) is cut in `piece_ms` pieces, embedded with CAM++ and its duration-weighted mean scored against the voice;
   speakers at or above `threshold` (0.5, the module default everywhere) are the person; under `min_speaker_ms` of own
   sound a speaker is unidentified.
