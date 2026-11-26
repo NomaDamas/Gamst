@@ -7,7 +7,11 @@ times in seconds from the start of the recording::
      "text": "뽀또", "words": [{"text": "뽀또", "start_s": 11.6, "end_s": 12.04}]}
 
 Only the text of words that match the counted terms is kept; every other word is ``"_"`` (its time stays), so the
-file holds no transcript of what people said. :class:`TranscriptReplay` reads the microphone only for its clock and
+file holds no transcript of what people said.
+
+A recording of the record values themselves (capture times in ms, ``final_after_ms``: how long after the utterance's
+end the ASR made it final) is read too, with ``origin_ms`` (the capture time of the recording's first sample; default:
+``<file>.meta.json``, or for ``x.words.jsonl`` ``x.meta.json``). :class:`TranscriptReplay` reads the microphone only for its clock and
 gives each utterance once the recording has reached ``known_s`` (or its end), with capture times of this run: the
 modules after it see the same words at the same delay as from the live ASR.
 
@@ -28,8 +32,16 @@ HIDDEN = '_'
 class TranscriptReplay:
     """Pipeline module: the microphone in (as a clock), recorded ``speech.transcript_words`` out."""
 
-    def __init__(self, path, *, model='replay'):
+    def __init__(self, path, *, model='replay', origin_ms=None):
         rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+        if rows and 'end_ms' in rows[0]:
+            meta = next((item for item in (Path(f'{path}.meta.json'), Path(str(path).replace('.words.jsonl', '.meta.json')))
+                         if item.is_file()), Path(f'{path}.meta.json'))
+            if origin_ms is None and meta.is_file():
+                origin_ms = json.loads(meta.read_text())['origin_ms']
+            if origin_ms is None:
+                raise ValueError(f'{path} has capture times: give origin_ms (or {meta.name})')
+            rows = [seconds(row, origin_ms) for row in rows]
         self.rows = sorted(rows, key=lambda row: row.get('known_s', row['end_s']))
         self.spec = words_capability(f'1.replay.{model}')
         self.name, self.version = 'gamst.transcript_replay', self.spec.version
@@ -64,6 +76,15 @@ class TranscriptReplay:
         out = [self._value(row) for row in self.rows[self._next:]]
         self._next = len(self.rows)
         return out or None
+
+
+def seconds(value, origin_ms):
+    """A recorded ``speech.transcript_words`` value (capture ms) as a replay row (seconds from ``origin_ms``)."""
+    at = lambda ms: round((ms - origin_ms) / 1000, 3)
+    return dict(utterance_id=str(value['utterance_id']), start_s=at(value['start_ms']), end_s=at(value['end_ms']),
+                known_s=at(value['end_ms'] + int(value.get('final_after_ms') or 0)), text=value['text'],
+                words=[dict(text=word['text'], start_s=at(word['start_ms']), end_s=at(word['end_ms'])) for word in value['words']],
+                **({'language': value['language']} if value.get('language') else {}))
 
 
 def hide(text, terms):

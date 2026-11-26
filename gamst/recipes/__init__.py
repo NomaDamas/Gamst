@@ -1031,7 +1031,8 @@ def event_states(rows, known):
             entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'])
             revision = revised.get(item['event_id'])
             if revision is not None:
-                entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'])
+                entry.update(settled_ms=known.get(revision[1]['id']), settled_capture_ms=revision[1]['timestamp_ms'],
+                             **({'settled_slot_score': revision[0]['slot_score']} if 'slot_score' in revision[0] else {}))
             found.append(entry)
     return found
 

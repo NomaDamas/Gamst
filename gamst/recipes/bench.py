@@ -190,7 +190,9 @@ def words_of(truth, report, capability='speech.term_events'):
         final = 'counted' if (later is not None or event['event'] == EVENT and event['state'] != 'revoked') else 'not counted'
         settled = (later or event).get('settled_ms') if later is None else later.get('committed_ms')
         rows.append(dict(end_s=round((event['end_ms'] - start) / 1000, 2), truth=label, slot=event.get('slot'),
-                         slot_score=event.get('slot_score'), provisional='counted' if event['event'] == EVENT else 'not counted',
+                         slot_score=event.get('slot_score'), final_slot_score=(later or event).get('settled_slot_score', (
+                             later or {}).get('slot_score')),
+                         provisional='counted' if event['event'] == EVENT else 'not counted',
                          final=final, latency_ms=None if settled is None or event.get('committed_ms') is None
                          else settled - event['committed_ms']))
     for index, point in enumerate(points):

@@ -106,7 +106,7 @@ async def _transcript_replay(options, context):
     from ..providers.transcript_replay import TranscriptReplay
     if not options.get('file'):
         raise SystemExit(f"{options.get('name')}: transcript-replay needs \"file\" (a words JSONL)")
-    module = TranscriptReplay(options['file'])
+    module = TranscriptReplay(options['file'], origin_ms=options.get('origin_ms'))
     return dict(module=module, spec=module.spec)
 
 

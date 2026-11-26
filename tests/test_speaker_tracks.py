@@ -83,7 +83,8 @@ def words(utterance, start, *spans, provisional=True, matches=None):
     for index, (first, last) in enumerate(spans):
         item = dict(text='대박', start_ms=start + first, end_ms=start + last, word_id=f'{utterance}#{index}')
         if provisional:
-            item.update(state='provisional', match=True if matches is None else matches[index], slot='s1:0')
+            item.update(state='provisional', match=True if matches is None else matches[index], slot='s1:0',
+                        slot_score=.4, speaker_score=.4)
         items.append(item)
     return dict(utterance_id=utterance, status='final', text=' '.join('대박' for _ in spans), start_ms=start + spans[0][0],
                 end_ms=start + spans[-1][1], words=items)
@@ -356,3 +357,18 @@ class TranscriptReplayTest(unittest.TestCase):
         out = next(value for _, value in given if value)
         self.assertEqual((out[0]['start_ms'], out[0]['words'][1]['end_ms'], out[0]['status']), (50100, 50600, 'final'))
         self.assertIsNone(replay.finish())
+
+
+class RecordedValuesReplayTest(unittest.TestCase):
+    def test_a_recording_of_record_values_is_read_with_its_origin(self):
+        from gamst.providers.transcript_replay import TranscriptReplay
+        value = dict(utterance_id='x:0', status='final', text='· 뽀또', start_ms=10500, end_ms=11000, final_after_ms=700,
+                     words=[dict(text='·', start_ms=10500, end_ms=10600), dict(text='뽀또', start_ms=10700, end_ms=11000)])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'a.words.jsonl'
+            path.write_text(json.dumps(value, ensure_ascii=False) + '\n')
+            with self.assertRaises(ValueError):
+                TranscriptReplay(path)
+            (Path(folder) / 'a.meta.json').write_text(json.dumps(dict(origin_ms=10000)))
+            row = TranscriptReplay(path).rows[0]
+        self.assertEqual((row['start_s'], row['end_s'], row['known_s'], row['words'][1]['end_s']), (.5, 1., 1.7, 1.))

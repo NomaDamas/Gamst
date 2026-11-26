@@ -335,11 +335,13 @@ class TermEvents:
             if match and not counted:       # the enrolled voice after all: counted from now on, as final
                 words.total += 1
                 words.counts[event['term']] = words.counts.get(event['term'], 0) + 1
-                added.append(dict(event='term.spoken', state='final', **{
-                    name: value for name, value in event.items() if name not in ('word_ids', 'state', 'event', 'event_id')},
-                                  event_id=event_id(key, 'final'), replaces=key,
-                                  **{name: found[0][name] for name in ('slot', 'slot_score') if name in found[0]},
-                                  **({'speaker_score': found[0]['slot_score']} if 'slot_score' in found[0] else {})))
+                promoted = dict(event='term.spoken', state='final', **{
+                    name: value for name, value in event.items() if name not in ('word_ids', 'state', 'event', 'event_id')})
+                promoted.update(event_id=event_id(key, 'final'), replaces=key,
+                                **{name: found[0][name] for name in ('slot', 'slot_score') if name in found[0]})
+                if 'slot_score' in found[0]:
+                    promoted['speaker_score'] = found[0]['slot_score']
+                added.append(promoted)
             elif counted and not match:
                 words.total -= 1
                 words.counts[event['term']] = words.counts.get(event['term'], 0) - 1
