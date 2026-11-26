@@ -134,6 +134,8 @@ class Session:
 
     def set_context(self, text):
         """Text said just before this session's first sound (the recogniser's prompt; ``config['context_key']``)."""
+        if getattr(self, 'context_key', None) is None:
+            return          # this API takes no preceding text: the new session starts without it
         base = self.config.setdefault('_own_' + self.context_key, self.config.get(self.context_key) or '')
         self.config[self.context_key] = f'{base} {text}'.strip()
 

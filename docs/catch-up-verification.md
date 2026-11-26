@@ -60,16 +60,25 @@ used to decide who said a word (owner decision). Late words of a catch-up worker
 
 ## L4: the verification lane (`gamst/providers/word_verification.py`, part `word-verify`, item `verification`)
 
-Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in capture order, in regions of `step_ms`
-(15 s), each only when `inputs_complete_until` has passed it (no TODO, no unanswered turn, no queued record there) by
-`near_ms`, so a catch-up worker never changes a word after it was settled.
+Consumes the microphone (as ticks), `speaker_check` and any voter. Its own work runs in capture order, in **regions
+that follow speech** (owner decision 21), each decided only when `inputs_complete_until` has passed it (no TODO, no
+unanswered turn, no queued record there) by `near_ms`, so a catch-up worker never changes a word after it was settled.
 
+- **Regions** (`WINDOWS`): a region closes at a speech pause once it is `min_ms` (10 s) long and at most `max_ms`
+  (20 s): the middle of a gap between two utterances (an utterance of some recogniser ended there and none was going
+  on), or, after the last utterance, `pause_ms / 2` into a silence of at least `pause_ms` (500 ms, the endpointer's
+  pause). Without one by `max_ms` it closes at the next one up to `cap_ms` (30 s, reason `max_extended`); only when
+  speech runs on past `cap_ms` is it cut there (`cap_split`, the only case that splits an utterance, and the region
+  record says so). A pause counts only once every recogniser (first hearing, second, voters) is complete past it. The
+  last region runs to the end of the input (`end`). Each region's reason and length are in the `window` record
+  (`region`) and in the lane's status (`regions`, `straddling`: utterances a boundary cuts, `diarize_jobs`).
+  `step_ms` gives the old fixed regions.
 - **Second recogniser**: `gpt-live-transcribe`, the counted words as `keywords`, Qwen3-ForcedAligner word times
   (`"recogniser"`, `"aligner"`), fed the kept audio as far as it is complete, at most `feed_speed` (1.25) times real
   time: it is a realtime API, and a little faster lets it catch up after a stall (`null`: as soon as complete, in
   bursts).
 - **Diarization windows**: pyannoteAI Precision-3 (`"diarizer"`) on `[region - before_ms (15 s), region + after_ms
-  (5 s)]` (windows overlap), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
+  (5 s)]` (windows overlap, so speaker labels have context; speakers are re-identified in each window by the voice), at most `concurrency` (2) jobs at once. Each speaker's own sound (where it alone is
   active) is cut in `piece_ms` pieces, embedded with CAM++ and its duration-weighted mean scored against the voice;
   speakers at or above `threshold` (0.5, the module default everywhere) are the person; under `min_speaker_ms` of own
   sound a speaker is unidentified.
@@ -89,6 +98,12 @@ Consumes the microphone (as ticks) and `speaker_check`. Its own work runs in cap
   heard within `near_ms` counts as heard twice (`heard_by_vote+...`); `vote_adds_once: false` adds a second-hearing-only
   occurrence only when a voter heard it too. Recipe: add the module, list it in the item's `consumes` and set
   `"rule": {"vote": true}`.
+- **Majority** (`decide: "majority"`; the recipe sets it, with `vote`, when the item reads another recogniser: `--with
+  vote` adds `vote_asr`, Speechmatics Enhanced with the words as additional vocabulary): an occurrence is **said** when at
+  least two of the recognisers (the first hearing, the second one, the voters) wrote the same word within `near_ms`
+  (paired one to one, nearest first); the voice rule then decides who. An occurrence only one of them wrote is revoked
+  (`heard_by_one`), or not added, unless `keep_single` (on) and no other recogniser wrote anything within `near_ms` of it
+  and the voice is clear (`clear`, as above); where nobody spoke it is `no_speech`; unclear overlap stays `uncertain`.
 - **Voice rule** (`VOICE`) on the word's span (the second hearing's): person speaker over `overlap_share` (0.3) and
   another one too -> overlapped: the per-word CAM++ score (1.5 s around the word) decides, below threshold it is
   `uncertain_overlap`; person dominant -> the person; another identified speaker dominant ->

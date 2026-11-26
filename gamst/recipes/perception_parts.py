@@ -105,9 +105,17 @@ async def _word_verify(options, context):
           f"complete; list price {client.eur_per_hour} EUR per hour of audio, 20 s minimum per job", file=sys.stderr)
     diarizer = HostedBatch(client)
     diarizer.name = f'pyannoteai:{client.model}'
+    from . import PARTS
+    items = {item['name']: item for item in context.get('modules') or ()}
+    voters = [source for source in consumes if source.split(':', 1)[0] in items
+              and PARTS[items[source.split(':', 1)[0]]['use']].transcribes]
+    rule = dict(options.get('rule') or {})
+    if voters:      # another recogniser is read: it votes, and a word is said when two of the three wrote it
+        rule.setdefault('vote', True)
+        rule.setdefault('decide', 'majority')
     module = WordVerification(recogniser, diarizer, await speaker_embedder(options, context),
                               reference=options.get('reference', 'voice'), terms=options.get('terms', 'terms'),
-                              audio=audio, rule=options.get('rule'), voice=dict(
+                              audio=audio, rule=rule, voice=dict(
                                   {'threshold': float(context['speaker_threshold'])} if context.get('speaker_threshold')
                                   is not None else {}, **(options.get('voice') or {})), windows=options.get('windows'),
                               **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
@@ -449,7 +457,9 @@ async def _stream_words(options, context):
         if chosen.manual_commit:
             endpointer = Endpointer(**{key: float(options[key]) for key in ENDPOINT_KEYS if key in options})
         module = StreamingWords(chosen, aligner=aligner, language=language, partials=bool(options.get('partials')),
-                                endpointer=endpointer)
+                                endpointer=endpointer,
+                                # a second recogniser of the run (a voter) commits under a capability of its own
+                                **({'capability_id': options['capability_id']} if options.get('capability_id') else {}))
         return dict(module=module, spec=module.spec)
     config, python, profile = _entry(options, context, 'streaming.asr.words')
     config = dict(config, language=language, partials=bool(options.get('partials')))

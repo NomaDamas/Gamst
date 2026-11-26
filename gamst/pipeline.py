@@ -493,6 +493,8 @@ class Pipeline:
             begin = max(begin, int(memory.start_ms))
         if entry['until'] is not None:      # what was said complete already stays the live module's
             begin = max(begin, min(start, entry['until'] + 1))
+        if entry['claims']:                 # nor does a worker hear again what another worker owns
+            begin = max(begin, min(start, entry['claims'][-1][1] + 1))
         for item in items:
             item.names.remove(name)
             if not item.names:

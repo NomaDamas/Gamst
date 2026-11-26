@@ -108,13 +108,14 @@ class Collect:
         return None
 
 
-async def run(slowdown=None, frames=60):
+async def run(slowdown=None, frames=60, catch_up=True):
     async with Gamst(consent=True) as human:
         pipeline = Pipeline(human, 'catch')
         pipeline.add_input('microphone', Paced(frames), modality='audio')
         hearer, collect = Hearer(), Collect()
         pipeline.add_module('asr', hearer, consumes='microphone', spec=WORDS, queue=500,
-                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1), slowdown=slowdown)
+                            catch_up=dict(lag_ms=150, max_lookback_ms=2000, tail_ms=200, workers=1) if catch_up else False,
+                            slowdown=slowdown)
         pipeline.add_module('words', collect, consumes='asr')
         await pipeline.run()
         status = pipeline.status()
@@ -125,7 +126,7 @@ async def run(slowdown=None, frames=60):
 @unittest.skipIf(np is None, 'numpy is needed')
 class CatchUpTest(unittest.TestCase):
     def test_a_lane_that_falls_behind_skips_to_now_and_a_worker_hears_what_it_skipped(self):
-        steady, _ = asyncio.run(run())
+        steady, _ = asyncio.run(run(catch_up=False))     # a loaded machine must not make the reference catch up
         slowed, status = asyncio.run(run(dict(ms=120, spans_s=[[.4, .9], [1.6, 2.1]])))
         asr = status['modules']['asr']
         self.assertEqual(sorted(steady, key=lambda word: int(word[1:])), [f'w{index}' for index in range(60) if pattern(index)])
@@ -296,6 +297,43 @@ class VerificationTest(unittest.TestCase):
         self.assertEqual(counted['count'], 2 + 3)
         counted, verdicts, _ = self.run_lane(dict(keep_clear_voice=False), votes=(6,))     # off by default
         self.assertEqual(verdicts['u6#0']['reason'], 'not_heard')
+
+
+    def test_by_majority_a_word_is_said_when_two_of_the_three_wrote_it(self):
+        counted, verdicts, stats = self.run_lane(dict(vote=True, decide='majority'), votes=(6, 12))
+        self.assertTrue(verdicts['u4#0']['match'])                                  # first + second
+        self.assertEqual(verdicts['u6#0']['basis'], 'heard_by_2(first+third)+person_speaker')
+        self.assertEqual(verdicts['u24#0']['reason'], 'other_speaker')               # said, by another voice
+        self.assertEqual(verdicts['u26#0']['basis'], 'heard_by_one+others_heard_speech')
+        self.assertEqual(verdicts['u35#0']['reason'], 'no_speech')
+        # second only: 0 (nobody else wrote anything there, the person's speaker alone: kept), 8 and 28 (others wrote
+        # words there: dropped), 20 (alone, another voice: dropped); second + third: 12 (said)
+        self.assertEqual(stats['added'], 2)
+        self.assertEqual(counted['count'], 4)                                       # 4, 6, 0, 12
+        counted, _, stats = self.run_lane(dict(vote=True, decide='majority', keep_single=False), votes=(6, 12))
+        self.assertEqual((counted['count'], stats['added']), (3, 1))                 # 0 dropped too
+
+
+class RegionTest(unittest.TestCase):
+    @staticmethod
+    def lane(spans):
+        lane = WordVerification(FakeRecogniser(), FakeDiarizer(), FakeEmbedder())
+        lane._origin = 0
+        lane._utterances = [dict(start_ms=low, end_ms=high) for low, high in spans]
+        return lane
+
+    def test_a_region_closes_in_a_pause_after_its_minimum_and_never_inside_an_utterance(self):
+        lane = self.lane([(0, 3000), (3200, 9500), (9900, 10600), (11000, 11800), (12400, 25000), (25200, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (10800, 'pause'))      # 9500-9900 is before the minimum
+        lane = self.lane([(0, 3000), (3200, 12000), (12100, 25000), (25600, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (12050, 'pause'))      # an utterance ends: a pause
+        lane = self.lane([(0, 21000), (21100, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (21050, 'max_extended'))
+        lane = self.lane([(0, 40000)])
+        self.assertEqual(lane._boundary(0, 50000, 50000), (30000, 'cap_split'))   # said, the only split
+        lane = self.lane([(0, 3000), (3200, 9000)])
+        self.assertEqual(lane._boundary(0, 9300, 9300), (None, None))              # not known yet: wait
+        self.assertEqual(lane._boundary(0, 12000, 12000)[1], 'pause')              # 9000-12000 is silence
 
 
 class UncertainTest(unittest.TestCase):

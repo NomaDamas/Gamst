@@ -246,7 +246,7 @@ def with_asr(recipe, candidate):
     part = asr_part(candidate)
     modules, changed = [], False
     for item in recipe['modules']:
-        if PARTS[item['use']].transcribes:
+        if PARTS[item['use']].transcribes and not item.get('votes_for'):     # a voter keeps its own recogniser
             if item['use'] != part:     # the old part's own settings (phrase buffer, windows) do not carry over
                 item = {key: value for key, value in item.items() if key not in PART_SETTINGS}
             item, changed = dict(item, use=part, candidate=candidate), True
@@ -391,6 +391,10 @@ def roles(recipe):
     from ..crew.registry import ROLES
     selected, open_choice = {}, []
     for item, part in _items(recipe):
+        role, model = _role(item)
+        chosen = ROLES[role].candidates.get(model) if role in ROLES and model else None
+        if item.get('votes_for') and chosen is not None and 'api' in (chosen.config or {}):
+            continue        # a hosted voter: nothing to set up, and its role keeps the recipe's own recogniser
         for role, model in [_role(item)] + [(role, item.get(key, default)) for key, role, default in part.extra_roles]:
             if role is None:
                 continue
