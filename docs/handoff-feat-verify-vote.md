@@ -16,8 +16,15 @@
   19.74 uncertain (overlap); 28.10 revoked (heard_by_one); 14.0 not transcribed.
 - Fixed 15 s boundaries cut 5 utterances per run (2 Scribe, 1 Speechmatics, 2 gpt); 4 pyannoteAI jobs per run.
 
+## Measured, speech-aligned regions v1 (G1-G3; pause = 500 ms gap in all recognisers)
+- Identical in 3 runs: regions 10.0 / 13.6 / 11.7 s + end (reasons pause, cap_short_pause x2), 0 utterances straddled
+  (fixed 15 s: 5 per run), 4 pyannoteAI jobs (as fixed). Final 8 counted / 7 right (27.44, another voice, counted:
+  its window's Precision-3 labels gave the person's speaker), uncertain 2. Provisional->final p50 46-50 s, p95 63-68 s
+  (fixed: 15-20 / 22-24 s): with no 500 ms gap shared by all recognisers the region waited for the 30 s cap.
+- Fix committed: an utterance end is a pause too (cap_short_pause removed). H1-H3 running with it.
+
 ## Left
-- Speech-aligned runs G1-G3 (running at the time of writing): region lengths min/median/max, straddling (must be 0),
+- Speech-aligned runs H1-H3 (after the fix): region lengths min/median/max, straddling (must be 0),
   latency, jobs vs fixed; then `docs/measurements/verify-vote-2026-11-26.md` and the results line in
   `docs/decision-log-2026-11-26.md` (add results/links only; rows 21-24 are the coordinator's).
 
