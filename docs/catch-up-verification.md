@@ -163,7 +163,8 @@ So condition (a) cannot separate them on these clips and `low_confidence` defaul
 
 Measured live (4 clips x 3 runs, v7 base; table in docs/handoff-feat-sota-first-rule.md): no word is revoked by the
 recognisers any more; the contested words were 24.16 (another voice) and 28.10, 41.76 (the person) in every run and
-27.10 (the person) in one: all `uncertain`. Final right/counted is the same as the majority (v7) on every clip, the
+27.10 (the person) in one: all `uncertain`. Final right/counted is the same as the majority (v7) on every clip and run except 몇기야 p1 (2/3: 27.10 contested this time,
+uncertain; v7 had it confirmed by the second recogniser); the
 person words the majority revoked are now shown as uncertain instead of "not said". `contested: "stand"` would have
 counted 7 more right words and 3 wrong ones (24.16) over the three runs: the owner's choice.
 
