@@ -245,6 +245,9 @@ def bias_terms(options, context):
         return []
     from ..providers.term_events import parse_terms
     value = (context.get('references') or {}).get(name)
+    declared = {item.get('name') for item in (context.get('recipe') or {}).get('references') or ()}
+    if value is None and name not in declared:
+        return []       # a run that has no such reference (enrolling terms from clips): nothing to bias with
     if value is None:
         raise SystemExit(f"{options.get('name')}: \"bias\" names the reference {name!r}, which this run does not have")
     terms, _ = parse_terms(value)[:2]
