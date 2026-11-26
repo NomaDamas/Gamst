@@ -74,7 +74,9 @@ async def _word_verify(options, context):
     """The verification lane (:mod:`gamst.providers.word_verification`): a second recogniser, diarization of windows
     and the few-shot voice settle the words counted at once. Hosted by default (OpenAI gpt-live-transcribe with the
     counted words as keywords + Qwen3-ForcedAligner here; pyannoteAI Precision-3): ``--allow-remote-asr`` is the
-    owner's opt-in for both, and each says its price first."""
+    owner's opt-in for the recogniser and ``--allow-remote-diarization`` for pyannoteAI, and each says its price first.
+    More recognisers vote when the item reads their ``speech.transcript_words`` and its ``"rule"`` says ``"vote": true``
+    (off by default)."""
     from ..providers.pyannoteai import PyannoteAI
     from ..providers.slot_sources import HostedBatch
     from ..providers.word_verification import WordVerification
@@ -89,7 +91,7 @@ async def _word_verify(options, context):
     recogniser = (await _stream_words(hearing, context))['module']
     diarization = dict(_registry_config('audio.diarization', options.get('diarizer', VERIFY_DIARIZER)) or {},
                        **(options.get('diarizer_config') or {}))
-    if context.get('allow_remote_asr'):
+    if context.get('allow_remote_diarization'):
         diarization['allow_remote'] = True
     diarization.pop('exclusive', None)
     try:
@@ -97,7 +99,7 @@ async def _word_verify(options, context):
     except PermissionError:
         await recogniser.close()
         raise SystemExit(f"{options.get('name')}: {options.get('diarizer', VERIFY_DIARIZER)} sends the sound to "
-                         'pyannoteAI (it leaves this device and is billed per job, 20 s minimum): add --allow-remote-asr '
+                         'pyannoteAI (it leaves this device and is billed per job, 20 s minimum): add --allow-remote-diarization '
                          'to consent') from None
     print(f"note: verification diarization: windows of the sound go to pyannoteAI ({client.model}) as they become "
           f"complete; list price {client.eur_per_hour} EUR per hour of audio, 20 s minimum per job", file=sys.stderr)

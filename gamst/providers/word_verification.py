@@ -17,13 +17,20 @@ never change a word after it was settled. For each stretch it has:
   few-shot voice with the speaker model (CAM++): speakers whose score reaches ``threshold`` are the person. Windows
   overlap (``before_ms`` of earlier sound, ``after_ms`` of later sound around each ``step_ms`` decided);
 - **the word rule** between the two recognisers (:data:`RULE`): a provisional occurrence of a counted word is
-  confirmed when the second recogniser heard the same word within ``near_ms`` of it (one to one, nearest first),
-  revoked (``not_heard``) when it heard speech there but not the word, revoked (``no_speech``) when nobody spoke there;
-  an occurrence only the second recogniser heard is added, final;
+  confirmed when the second recogniser heard the same word within ``near_ms`` of it (one to one, nearest first). When
+  only the first hearing has it and someone spoke there, it stays when the voice evidence for the person is *clear*
+  (``keep_clear_voice``; ``clear``: ``speaker`` = the person's diarized speaker alone is active at the word,
+  ``score`` = the per-word score is at least ``threshold + clear_margin``, ``either`` or ``both``), is ``uncertain``
+  when the person's speaker overlaps another one and the score is not clear, and is revoked (``not_heard``) when the
+  voice points elsewhere or is absent; revoked (``no_speech``) when nobody spoke there. An occurrence only the second
+  recogniser heard is added, final. ``vote``: more ``speech.transcript_words`` sources (any recogniser the item also
+  reads) vote; a first-hearing word that one of them also heard counts as heard twice, and with
+  ``vote_adds_once: false`` a second-hearing word is added only when a voter heard it too;
 - **the voice rule** (:data:`VOICE`) for each word that stays: the person's speaker active over the word and no other
   speaker over ``overlap_share`` of it -> the person; another speaker dominant -> another voice; both over
   ``overlap_share`` (overlapped speech) -> the per-word voice score decides, and below ``threshold`` the word is
-  ``uncertain_overlap``: not counted, and said so. With no speaker active, or an unidentified one, the per-word score
+  ``uncertain_overlap``: its verdict says ``uncertain: true``, :class:`gamst.providers.term_events.TermEvents` gives it
+  the state ``uncertain`` (not counted, not revoked), and a later lane may still settle it with a verdict of its own. With no speaker active, or an unidentified one, the per-word score
   decides.
 
 Outputs (capability ``speech.word_verdicts``): ``kind: "verdicts"`` (``[{word_id, match, provisional, changed, basis,
@@ -43,7 +50,9 @@ from .speaker_verify import centroid, cosine, embed, l2_normalize
 from .term_events import parse_terms, term_occurrences
 
 SAMPLE_RATE = 16000
-RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True)
+RULE = dict(near_ms=1000, revoke_not_heard=True, revoke_no_speech=True, keep_clear_voice=True, clear='either',
+            clear_margin=.1, vote=False, vote_adds_once=True)
+CLEAR = ('speaker', 'score', 'either', 'both')
 VOICE = dict(threshold=.5, min_speaker_ms=1000, piece_ms=2000, overlap_share=.3, active_share=.1, word_context_ms=1500,
              min_dbfs=-45.)
 WINDOWS = dict(step_ms=15000, before_ms=15000, after_ms=5000, concurrency=2)
@@ -106,6 +115,8 @@ class WordVerification:
         self.recogniser, self.diarizer, self.embedder = recogniser, diarizer, embedder
         self.reference_name, self.terms_name, self.audio = reference, terms, audio
         self.rule, self.voice = _settings(RULE, rule, 'rule'), _settings(VOICE, voice, 'voice')
+        if self.rule['clear'] not in CLEAR:
+            raise ValueError(f"rule clear is one of {', '.join(CLEAR)}")
         self.windows = _settings(WINDOWS, windows, 'window')
         # The second recogniser is a realtime API: it gets the complete audio at most ``feed_speed`` times real time,
         # evenly (a little faster than real time, so it catches up after a stall); None: as soon as it is complete
@@ -151,6 +162,7 @@ class WordVerification:
         self._utterances = []          # first-hearing utterances with provisional words, in arrival order
         self._open = {}                # word_id -> provisional word, until its verdict
         self._heard = []               # the second recogniser's final utterances
+        self._voted = []               # final utterances of other recognisers this lane reads (votes)
         self._windows = {}             # index -> {"turns", "speakers", "person"} | asyncio task
         self._decided = 0              # regions decided so far
         self._used = set()             # ids of second-hearing occurrences that confirmed or were added
@@ -185,6 +197,9 @@ class WordVerification:
     def process(self, frame):
         value = frame.data
         if isinstance(value, dict):
+            if 'kind' not in value and value.get('status') == 'final' and value.get('words'):
+                self._voted.append(value)      # a recogniser's own words (speech.transcript_words): a vote
+                return self._take()
             if value.get('kind') == 'utterance' and value.get('status') == 'final' and \
                     value.get('reference', self.reference_name) == self.reference_name:
                 words = [word for word in value.get('words') or () if isinstance(word, dict)
@@ -483,24 +498,19 @@ class WordVerification:
         first = self._first_occurrences(low, high)
         second = self._second_occurrences(low - near, high + near)
         pairs = match_occurrences(first, second, near)
+        voted = self._vote_occurrences(low - near, high + near) if self.rule['vote'] else []
+        votes = match_occurrences(first, voted, near) if voted else {}
         verdicts, words_done = [], set()
         for index, item in enumerate(first):
-            if index in pairs:
-                heard = second[pairs[index]]
-                self._used.add(heard['key'])
+            if index in pairs or index in votes:
+                heard = second[pairs[index]] if index in pairs else item
+                if index in pairs:
+                    self._used.add(heard['key'])
                 match, basis, reason, speaker, speaker_score, score = await self._voice_of(
                     window, heard['start_ms'], heard['end_ms'])
-                basis = 'heard_twice+' + basis
+                basis = ('heard_twice+' if index in pairs else 'heard_by_vote+') + basis
             else:
-                speech = self._speech_near(window, item['start_ms'], item['end_ms'])
-                revoke = self.rule['revoke_not_heard'] if speech else self.rule['revoke_no_speech']
-                reason = 'not_heard' if speech else 'no_speech'
-                if revoke:
-                    match, basis, speaker, speaker_score, score = False, reason, None, None, None
-                else:
-                    match, basis, reason, speaker, speaker_score, score = await self._voice_of(
-                        window, item['start_ms'], item['end_ms'])
-                    basis = 'heard_once+' + basis
+                match, basis, reason, speaker, speaker_score, score = await self._heard_once(window, item)
             for word_id in item['word_ids']:
                 verdicts.append(self._verdict(word_id, match, basis, reason, speaker, speaker_score, score,
                                               heard=index in pairs))
@@ -515,18 +525,55 @@ class WordVerification:
             self._outbox.append(self.spec.validate(dict(
                 kind='verdicts', reference=self.reference_name, start_ms=min(item['start_ms'] for item in verdicts),
                 end_ms=max(item['end_ms'] for item in verdicts), verdicts=verdicts, model=self._model())))
+        voted_here = self._vote_occurrences(low - near, high + near) if self.rule['vote'] else []
         for item in self._second_occurrences(low, high):     # heard only the second time: final at once
             self._used.add(item['key'])
+            if self.rule['vote'] and not self.rule['vote_adds_once'] and not match_occurrences([item], voted_here, near):
+                continue
             match, basis, reason, speaker, speaker_score, score = await self._voice_of(window, item['start_ms'], item['end_ms'])
             self.stats['added'] += 1
+            uncertain = reason == 'uncertain_overlap'
             word = dict(text=item['spoken'], start_ms=item['start_ms'], end_ms=max(item['end_ms'], item['start_ms'] + 1),
                         match=match, decided_by='verification', basis='heard_once_by_verification+' + basis,
-                        **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}))
+                        **({'reason': reason} if reason else {}), **({'speaker_score': score} if score is not None else {}),
+                        # a later lane may settle an uncertain word: it has an ID and says so
+                        **({'state': 'uncertain', 'word_id': f"verification:{item['key']}#0"} if uncertain else {}))
             self._outbox.append(self.spec.validate(dict(
                 kind='utterance', reference=self.reference_name, utterance_id=f"verification:{item['key']}",
                 status='final', text=item['spoken'], start_ms=word['start_ms'], end_ms=word['end_ms'], words=[word],
                 speaker=dict(reference=self.reference_name, match=match, model=self.embedder.model_id),
                 model=self._model())))
+
+    async def _heard_once(self, window, item):
+        """A first-hearing occurrence the second recogniser did not write: kept when the voice is clearly the person's,
+        uncertain in unclear overlap, else revoked (the rule's settings)."""
+        speech = self._speech_near(window, item['start_ms'], item['end_ms'])
+        revoke = self.rule['revoke_not_heard'] if speech else self.rule['revoke_no_speech']
+        reason = 'not_heard' if speech else 'no_speech'
+        if not revoke:
+            match, basis, why, speaker, speaker_score, score = await self._voice_of(window, item['start_ms'], item['end_ms'])
+            return match, 'heard_once+' + basis, why, speaker, speaker_score, score
+        if not speech or not self.rule['keep_clear_voice']:
+            return False, reason, reason, None, None, None
+        match, basis, why, speaker, speaker_score, _ = await self._voice_of(window, item['start_ms'], item['end_ms'])
+        score = await self._word_score(item['start_ms'], item['end_ms'])
+        by_speaker = basis == 'person_speaker'
+        by_score = score is not None and score >= self.voice['threshold'] + self.rule['clear_margin']
+        clear = dict(speaker=by_speaker, score=by_score, either=by_speaker or by_score, both=by_speaker and by_score)[
+            self.rule['clear']]
+        if clear:
+            return True, 'heard_once+clear_voice+' + basis, None, speaker, speaker_score, score
+        if why == 'uncertain_overlap':
+            return False, 'heard_once+' + basis, why, speaker, speaker_score, score
+        return False, f'not_heard+{basis}', reason, speaker, speaker_score, score
+
+    def _vote_occurrences(self, low, high):
+        found = []
+        for value in self._voted:
+            for item in term_occurrences(value, self.terms):
+                if low <= item['end_ms'] < high:
+                    found.append(dict(item, source=str(value.get('utterance_id', '')).rsplit(':', 1)[0]))
+        return found
 
     def _verdict(self, word_id, match, basis, reason, speaker, speaker_score, score, *, heard):
         word = self._open.pop(word_id)
@@ -536,6 +583,8 @@ class WordVerification:
                        settled_by='verification', basis=basis)
         if reason and not match:
             verdict['reason'] = reason
+            if reason == 'uncertain_overlap':
+                verdict['uncertain'] = True        # neither the person's nor another's: a later lane may settle it
         for key, value in (('heard', heard), ('speaker', speaker), ('speaker_score', speaker_score), ('word_score', score)):
             if value is not None:
                 verdict[key] = value

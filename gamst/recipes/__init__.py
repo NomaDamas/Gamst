@@ -819,6 +819,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
                    references={reference['name']: value for reference, value, _ in references},
                    allow_remote_asr=getattr(args, 'allow_remote_asr', False),
+                   allow_remote_diarization=getattr(args, 'allow_remote_diarization', False),
                    record_dir=getattr(args, 'record_dir', None), replay=replay,
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
@@ -1041,7 +1042,8 @@ async def run_pipeline(recipe, args):
                 found = [event for row in own for event in row['observation']['value']['events']
                          if is_current(event, newest) and event.get('event') != REVISION]
                 revised = revisions(own)
-                current = [event for event in (with_state(item, revised) for item in found) if event.get('state') != 'revoked']
+                current = [event for event in (with_state(item, revised) for item in found)
+                           if event.get('state') not in ('revoked', 'uncertain')]
                 report['score'] = dict(score(truth, current, start_ms=report.get('start_ms', 0)),
                                        complete=not pipeline.lost(truth['capability'])['gaps'])
                 if revised or any('state' in event for event in found):     # what was counted at once, before revisions
@@ -1284,6 +1286,9 @@ def main(argv=None):
     start.add_argument('--vlm-remote-context', action='store_true',
                        help='consent to sending the transcript and counts to a hosted VLM beside the frames (default: frames only)')
     _asr_options(start)
+    start.add_argument('--allow-remote-diarization', action='store_true',
+                       help="consent to sending the sound to a hosted diarization service's paid API (the verification "
+                            "lane's pyannoteAI Precision-3 windows); separate from --allow-remote-asr")
     start.add_argument('--debug-slowdown', action='append', metavar='MODULE=MS@FROM-TO[,FROM-TO]',
                        help='test and debug: sleep MS before each audio frame of MODULE captured in those seconds of the '
                             'run, so its live lane falls behind on purpose (it catches up without losing audio)')
