@@ -177,6 +177,8 @@ def tool_definitions() -> list[dict]:
          {"reference": identifier_field, "window": WINDOW, "max_events": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, ("reference",)),
         ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap. Optional options go to the module itself, e.g. a MediaPipe graph module: {\"branches\": {\"face\": false}} or {\"side_packets\": {\"model_complexity\": 2}}.",
          {"name": identifier_field, "enabled": {"type": "boolean"}, "options": {"type": "object"}}, ("name", "enabled")),
+        ("set_count_mode", "How the running recipe decides from now on. 'count' (default): words or moments whose voice or identity is unclear are shown as uncertain or revoked. 'search' (when looking for the person: never miss them, over-count rather than miss): those are counted as candidates (candidate: true, with the reason they would not have counted); only a heard word the recogniser withdrew, or a voice clearly another person's by a large margin, leaves the count. What was decided before stays. get_pipeline and every report say the mode.",
+         {"mode": {"type": "string", "enum": ["count", "search"]}, "actor": WATCH_ACTOR}, ("mode", "actor")),
     ]
     return [{"name": name, "description": desc, "inputSchema": _schema(props, required)}
             for name, desc, props, required in specs]
@@ -320,12 +322,14 @@ class MCPServer:
             return await asyncio.to_thread(_setup_tool, name, args)
         if name == "count_events":
             return await self.human.count_events(**args)
-        if name in ("get_pipeline", "configure_pipeline_module"):
+        if name in ("get_pipeline", "configure_pipeline_module", "set_count_mode"):
             pipeline = getattr(self.human, "pipeline", None)
             if pipeline is None:
                 raise ValueError("no Pipeline is running; start one with a recipe (gamst recipe run …)")
             if name == "get_pipeline":
                 return pipeline.status()
+            if name == "set_count_mode":
+                return pipeline.set_mode(args["mode"], actor=args["actor"])
             if args.get("options"):
                 await pipeline.configure(args["name"], args["options"])
             return pipeline.enable(args["name"]) if args["enabled"] else pipeline.disable(args["name"])

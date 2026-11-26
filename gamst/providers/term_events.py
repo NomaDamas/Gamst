@@ -62,7 +62,8 @@ another's (``match: false``) is not counted; the final decides it. Without a voi
 final of the turn arrives its occurrences are paired with the heard events by capture time
 (:func:`gamst.providers.partial_terms.reconcile`): a paired one is revised to the state the final gives it
 (``provisional``, ``uncertain``, ``final``) with the word's own times, the same event (never counted twice), and later
-verdicts settle it under that ID; a final occurrence that is another voice's revokes its heard event (``other_voice``) and
+verdicts settle it under that ID (a verdict with ``candidate: true``, search mode of :mod:`gamst.counting`, makes it
+``final`` with ``candidate: true`` and the verdict's ``reason``); a final occurrence that is another voice's revokes its heard event (``other_voice``) and
 is reported as before; a heard event the final does not hold is ``revoked`` (``partial_withdrawn``), as is one whose
 turn's final never came (a later final of the same recogniser starts after it was heard, or the input ended).
 """
@@ -472,7 +473,7 @@ class TermEvents:
                 decided = {}
                 if checked:      # each word's own voice, where people share a phrase
                     other, score = not all(word['match'] for word in checked), checked[0].get('speaker_score')
-                    decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason')
+                    decided = {key: checked[0][key] for key in ('decided_by', 'lips', 'basis', 'reason', 'candidate')
                                if key in checked[0]}
                 ids = word_ids(times[2] if times else (), part)
                 provisional = bool(ids) and any(word.get('state') == 'provisional' for word in times[2])
@@ -618,7 +619,7 @@ class TermEvents:
             out[index] = dict(event='event.revision', state=state, revises=key, revised_event='term.spoken',
                               term=event['term'], start_ms=event['start_ms'], end_ms=event['end_ms'], by='l1',
                               **words.identity, **{name: event[name] for name in (
-                                  'utterance_id', 'word_timed', 'word_ids', 'speaker_score', 'l1', 'reason', 'decided_by')
+                                  'utterance_id', 'word_timed', 'word_ids', 'speaker_score', 'l1', 'reason', 'decided_by', 'candidate')
                                   if name in event})
         for key in mine:
             if key in self._heard:
@@ -679,6 +680,8 @@ class TermEvents:
                 revision['reason'] = reason or ('another_voice' if spoken else 'enrolled_voice')
             elif reason:        # unchanged, and the verdict says why (e.g. another voice's word)
                 revision['reason'] = reason
+            if any(item.get('candidate') for item in found):    # search mode: counted, though it would not be
+                revision['candidate'] = True
             added = changed.setdefault(id(words), (words, []))[1]
             added.append(revision)
             now = spoken and state == 'final'

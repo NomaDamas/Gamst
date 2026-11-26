@@ -70,6 +70,12 @@ def partials_wanted(options, context):
     return bool(options.get('partials')) and context.get('partials') is not False
 
 
+def _mode(context):
+    """The run's counting mode for a module that has one (``count``, the default, or ``search``: gamst.counting)."""
+    mode = context.get('mode') or 'count'
+    return {} if mode == 'count' else dict(mode=mode, search=context.get('search'))
+
+
 async def _speaker_verify(options, context):
     from ..providers.speaker_verify import SpeakerVerify
     arguments = {name: options[name] for name in ('hysteresis', 'segment_ms', 'hop_ms', 'min_dbfs',
@@ -102,7 +108,7 @@ async def _speaker_verify(options, context):
         arguments.update(relative=decision['l1'], bank=decision.get('bank'))
     module = SpeakerVerify(await speaker_embedder(options, context), reference=options.get('reference', 'voice'),
                            threshold=float(options.get('threshold', .5) if threshold is None else threshold),
-                           **arguments)
+                           **arguments, **_mode(context))
     return dict(module=module, spec=module.spec)
 
 
@@ -159,7 +165,8 @@ async def _word_verify(options, context):
                                   is not None else {}, **(options.get('voice') or {}),
                                   **((context.get('speaker_decision') or {}).get('l4') or {})),
                               bank=(context.get('speaker_decision') or {}).get('bank'), windows=options.get('windows'),
-                              **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}))
+                              **({'feed_speed': options['feed_speed']} if 'feed_speed' in options else {}),
+                              **_mode(context))
     return dict(module=module, spec=module.spec)
 
 
@@ -595,7 +602,7 @@ async def _target_person(options, context):
     emits = [name for name in options.get('emits') or () if name != joints]
     return dict(module=TargetPerson(await face_embedder(options, context), await body_embedder(options, context),
                                     reference=options.get('reference', 'person'),
-                                    emits=emits[0] if emits else None, joints=joints, **arguments))
+                                    emits=emits[0] if emits else None, joints=joints, **arguments, **_mode(context)))
 
 
 async def _active_speaker(options, context):

@@ -56,6 +56,11 @@ the person by ``clear_margin``. Verification revokes the rest later, visibly. Me
 so a threshold cannot separate them at L1; one of the person's words under game sound scored 0.15 against a cleaned
 reference (offline), so the default floor 0.1 is far below anything of the person's seen so far.
 
+Search mode (``mode="search"``, owner decision 33, :data:`gamst.counting.SEARCH`): a word is excluded at once only
+below ``l1_clear_other`` (a minimal score; with the instant policy the lower of it and ``clear_other``). Under the
+threshold policy (no later lane) a word under ``threshold`` but not under that floor counts too, marked
+``candidate: true`` with ``reason: "below_threshold"``. :meth:`set_mode` switches it while the run goes on.
+
 Heard words (``partials``: ``{terms, min_revisions, min_ms, lag_ms, ms_per_char}``, only with ``words``). The streaming
 recogniser's partial records are read too: :class:`gamst.providers.partial_terms.PartialSpotter` says which counted words
 just became stable in them, and each is scored like a word (``context_ms`` of the sound held so far, ending
@@ -252,7 +257,7 @@ class SpeakerVerify:
                  hop_ms=500, min_dbfs=-45., min_utterance_ms=400, ring_seconds=30.,
                  segments=True, capability_id='audio.speaker_match', context_ms=0, words=False, sources=None,
                  source_gate_db=None, turns=False, provisional=False, audio_memory=None, relative=None, bank=None,
-                 l1=None, partials=None):
+                 l1=None, partials=None, mode='count', search=None):
         # counted words in the recogniser's partial hypotheses, at once (``heard``; gamst/providers/partial_terms.py)
         self.partials, self.spotter = None if partials is None else dict(partials), None
         if self.partials is not None:
@@ -273,6 +278,7 @@ class SpeakerVerify:
         if self.l1['policy'] == 'instant' and not provisional:
             raise ValueError('the instant L1 policy counts words a later lane settles: it needs provisional words')
         self.provisional = bool(provisional)    # a later module settles each word: give it an ID and say so
+        self.set_mode(mode, search)
         self.audio_memory, self._memory = audio_memory, None   # an input whose kept audio covers what the ring lost
         if self.provisional and not words:
             raise ValueError('provisional words need word scores: set words')
@@ -333,11 +339,24 @@ class SpeakerVerify:
             self.spotter = PartialSpotter(parse_terms(terms['value'])[0],
                                           **{key: value for key, value in self.partials.items() if key != 'terms'})
 
+    def set_mode(self, mode, search=None):
+        """``count`` or ``search`` (module doc) for the words from now on; ``search``: :data:`gamst.counting.SEARCH`."""
+        from ..counting import MODES, search_settings
+        if mode not in MODES:
+            raise ValueError(f"mode is one of {', '.join(MODES)}")
+        self.mode, self.search = mode, search_settings(search) if mode == 'search' else None
+
+    def _floor(self):
+        """The score under which a word is another voice's at once (the instant policy's, lower in search mode)."""
+        floor = self.l1['clear_other']
+        return floor if self.search is None else min(floor, self.search['l1_clear_other'])
+
     def status(self):
-        """What the partial spotter saw (counts only, never text), when partials are read."""
+        """What the partial spotter saw (counts only, never text), when partials are read; the mode."""
+        mode = {'mode': self.mode, 'l1_floor': self._floor()} if self.mode != 'count' else {}
         if self.spotter is None:
-            return {}
-        return dict(partials=self.spotter.stats(), partial_trace=self.spotter.trace())
+            return mode
+        return dict(partials=self.spotter.stats(), partial_trace=self.spotter.trace(), **mode)
 
     def _covers(self, first, last):
         return self.ring.covers(first, last) or self._memory is not None and self._memory.covers(first, last)
@@ -497,26 +516,30 @@ class SpeakerVerify:
             match, pos, neg = self.bank.decide(vector, **self.relative)
             if self.l1['policy'] == 'instant':     # excluded only when clearly another voice
                 margin = self.l1['clear_margin']
-                match = pos >= self.l1['clear_other'] and not (
+                match = pos >= self._floor() and not (
                     margin is not None and neg is not None and neg - pos >= margin)
             return dict(item, match=match, speaker_score=pos, decision='relative', **self._l1_fields(),
                         **({} if neg is None else {'negative_score': neg}))
         if self._waits():   # decided once the separated sources / turns of this word are here
             return dict(item, **({} if score is None else {'mixture_score': score})), (first, last)
-        return dict(item, match=self._l1_match(score), **self._l1_fields(),
+        return dict(item, match=self._l1_match(score), **self._l1_fields(score),
                     **({} if score is None else {'speaker_score': score}))
 
     def _waits(self):
         return self.sources is not None or self.turns
 
     def _l1_match(self, score):
-        """Whether a word counts at once (see the module doc, L1 policy)."""
-        if self.l1['policy'] == 'instant':
-            return score is None or score >= self.l1['clear_other']
+        """Whether a word counts at once (see the module doc, L1 policy and search mode)."""
+        if self.l1['policy'] == 'instant' or self.search is not None:
+            return score is None or score >= self._floor()
         return score is not None and score >= self.threshold
 
-    def _l1_fields(self):
-        return {'l1': 'instant'} if self.l1['policy'] == 'instant' else {}
+    def _l1_fields(self, score=None):
+        if self.l1['policy'] == 'instant':
+            return {'l1': 'instant'}
+        if self.search is not None and (score is None or score < self.threshold) and self._l1_match(score):
+            return dict(candidate=True, reason='below_threshold')     # search mode: counted, it would not be
+        return {}
 
     def _on_turns(self, item):
         if not self.turns or self._turns_until is None:
@@ -557,7 +580,7 @@ class SpeakerVerify:
             score, scored_on = max(scores), 'sources'
         else:
             score, scored_on = item.get('mixture_score'), 'mixture'
-        return dict(item, match=self._l1_match(score), sources_active=active, **self._l1_fields(),
+        return dict(item, match=self._l1_match(score), sources_active=active, **self._l1_fields(score),
                     scored_on=scored_on, **({} if score is None else {'speaker_score': score}))
 
     async def _decide(self, item, first, last):
@@ -566,7 +589,7 @@ class SpeakerVerify:
         else:
             score = item.get('mixture_score')
             item = dict({key: value for key, value in item.items() if key != 'mixture_score'},
-                        match=self._l1_match(score), **self._l1_fields(),
+                        match=self._l1_match(score), **self._l1_fields(score),
                         **({} if score is None else {'speaker_score': score}))
         return self._on_turns(item)
 

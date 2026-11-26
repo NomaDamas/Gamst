@@ -22,6 +22,16 @@ is of provisional and final events; revoked and uncertain ones are listed in ``s
 asks for a state (``{"state": "revoked"}``). ``uncertain`` is neither said nor not said (overlapped speech whose voice
 is unclear): it is shown as such, never as revoked, and a later revision may settle it. Revisions are no events of their own (``event="event.revision"`` counts
 them). Nothing is changed in the record that holds the revised event.
+
+Modes (owner decision 33: "when searching, never miss the person: over-count rather than miss"). ``count`` (the
+default) is the behaviour above. ``search`` biases every lane toward recall (:data:`SEARCH`, each a parameter): the live
+lane excludes a word only below a minimal voice score (``l1_clear_other``); a word the verification lane would leave
+``uncertain`` (overlap, contested) or revoke for its voice or its hearing is counted instead, as ``final`` with
+``candidate: true`` and the ``reason`` it would have had; verification still revokes a word whose voice is clearly
+another person's by a large margin (every voice score it has at most ``threshold - revoke_margin``), and a heard word
+the recogniser's final withdrew (``partial_withdrawn``) still leaves the count. Words any one other recogniser wrote are
+added (``add``). For a person's movements, an identity the face does not clearly contradict selects the person
+(``face_threshold`` down to ``face_reject``) and a body match counts from ``body_threshold``.
 """
 from __future__ import annotations
 
@@ -39,6 +49,18 @@ REVISION = 'event.revision'        # marks an earlier event (``revises``: its ``
 STATES = ('heard', 'provisional', 'final', 'revoked', 'uncertain')
 REVISED = STATES[1:]                   # what a revision may make an event
 COUNTED = ('heard', 'provisional', 'final')    # what a count holds unless ``where`` asks for a state
+MODES = ('count', 'search')        # owner decision 33 (module doc); a run, its report and its pipeline say which
+SEARCH = dict(l1_clear_other=0., revoke_margin=.3, add='any', body_threshold=.45)
+
+
+def search_settings(given=None):
+    """The search mode's settings (:data:`SEARCH`) with ``given`` over them; unknown names are refused."""
+    found = dict(SEARCH, **(given or {}))
+    if set(found) - set(SEARCH):
+        raise ValueError(f"search settings are {', '.join(SEARCH)}")
+    if not 0 <= float(found['revoke_margin']) <= 2:
+        raise ValueError('search revoke_margin is a cosine distance between 0 and 2')
+    return found
 
 
 def event_name(item):
@@ -91,9 +113,9 @@ def with_state(item, revised):
         item = dict(item, start_ms=revision['start_ms'], end_ms=revision['end_ms'], heard_start_ms=item.get('start_ms'),
                     heard_end_ms=item.get('end_ms'),
                     **{key: revision[key] for key in ('word_timed', 'word_ids') if key in revision})
-    return dict(item, state=state, revised_by=dict(
+    return dict(item, state=state, **({'candidate': True} if revision.get('candidate') else {}), revised_by=dict(
         record_id=record.get('id'), timestamp_ms=record.get('timestamp_ms'),
-        **{key: revision[key] for key in ('reason', 'basis') if key in revision}))
+        **{key: revision[key] for key in ('reason', 'basis', 'candidate') if key in revision}))
 
 
 def gaps_of(records, capability=None):

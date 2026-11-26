@@ -807,6 +807,8 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
     pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
     references = reference_values(recipe, args)
     pipeline.voice_quality = getattr(args, 'voice_quality', None)      # shown by the live view when low
+    mode, search = _mode(args)
+    pipeline.mode, pipeline.search = mode, search       # gamst.counting: count (default) or search
     if sources is None:
         sources, offsets = open_inputs(recipe, args, inputs)
         replay = any(kind == 'take' for _, kind, _ in _sources(recipe, args, inputs))
@@ -829,6 +831,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    models=getattr(args, 'models', None), enter=getattr(args, 'enter', None),
                    exit=getattr(args, 'exit', None), language=getattr(args, 'language', None),
                    speaker_threshold=getattr(args, 'speaker_threshold', None), inputs=sources, recipe=recipe,
+                   mode=mode, search=search,
                    speaker_decision=_speaker_decision(getattr(args, 'speaker_decision', None)), l1=_l1(args), partials=_partials(args),
                    modules=modules, vlm_context=getattr(args, 'vlm_context', None),
                    remote_context=getattr(args, 'vlm_remote_context', False), plugins=getattr(args, 'plugins', None),
@@ -946,7 +949,8 @@ async def run_pipeline(recipe, args):
     from ..engine import timestamp
     from .instructions import Instructions
     recipe = dict(recipe, records=list(recipe.get('records', ())))     # an instruction may add one
-    report = dict(recipe=recipe['name'], frames=0, **({'paced': True} if getattr(args, 'as_live', False) else {}))
+    report = dict(recipe=recipe['name'], frames=0, mode=_mode(args)[0],
+                  **({'paced': True} if getattr(args, 'as_live', False) else {}))
     if getattr(args, 'voice_sample', None):     # where the person's voice sample came from (recipes/voice_sample.py)
         report['voice_sample'] = {key: value for key, value in args.voice_sample.items() if key != 'segments_s'}
         report['voice_sample']['excluded_s'] = args.voice_sample.get('segments_s') or (
@@ -1053,6 +1057,9 @@ async def run_pipeline(recipe, args):
             if any(item.get('module') not in optional for item in report['failures']):
                 report['complete'] = False
             report['warnings'] = pipeline.warnings()
+            report['mode'] = pipeline.mode            # gamst.counting; an instruction may have switched it
+            if pipeline.mode_changes:
+                report['mode_changes'] = [dict(item) for item in pipeline.mode_changes]
             if human.instruction_changes():
                 report['instruction_changes'] = [change for _, change in human.instruction_changes()]
             if truth:
@@ -1084,10 +1091,10 @@ async def run_pipeline(recipe, args):
             if live is not None:
                 await live.close()
             await pipeline.close()
-    print(json.dumps({key: report[key] for key in ('recipe', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
+    print(json.dumps({key: report[key] for key in ('recipe', 'mode', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
                                                    'states', 'failures', 'warnings', 'errors', 'score', 'score_provisional')
-                      if key in report and (key not in ('lost', 'errors', 'failures', 'warnings') or key == 'lost' and not report['complete']
-                                            or key != 'lost' and report[key])},
+                      if key in report and (key not in ('lost', 'errors', 'failures', 'warnings', 'mode') or key == 'lost' and not report['complete']
+                                            or key == 'mode' and report[key] != 'count' or key not in ('lost', 'mode') and report[key])},
                      ensure_ascii=False), flush=True)
     if getattr(args, 'report', None):
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
@@ -1133,7 +1140,7 @@ def event_states(rows, known, *, paced=False):
                           **({'by': item['decided_by']} if item.get('decided_by') else {}))]
             for change, record in history.get(item['event_id'], ()):
                 steps.append(dict(state=change['state'], capture_ms=record['timestamp_ms'], decided_ms=decided(record),
-                                  **{key: change[key] for key in ('reason', 'basis', 'by') if change.get(key)}))
+                                  **{key: change[key] for key in ('reason', 'basis', 'by', 'candidate') if change.get(key)}))
             entry['history'] = steps
             found.append(entry)
     return found
@@ -1296,6 +1303,13 @@ def _movement_options(parser):
     parser.add_argument('--voice-fallback-mode', choices=['replace', 'combined'],
                         help="a low-quality reference with a --voice-fallback: 'replace' (default: the fallback alone) "
                              "or 'combined' (both, equal weight)")
+    parser.add_argument('--mode', choices=['count', 'search'],
+                        help="'count' (default): today's decisions; 'search' (owner decision 33): never miss the person, "
+                             'over-count rather than miss: words or moments that would be uncertain or revoked for their '
+                             'voice or identity are counted as candidates with their reason (gamst/counting.py)')
+    parser.add_argument('--search-revoke-margin', type=float, metavar='COSINE',
+                        help="with --mode search: verification still revokes a word whose voice scores are all this much "
+                             'under the speaker threshold (clearly another person; default 0.3)')
     parser.add_argument('--enter', type=float, help="match threshold (default: the movement file's)")
     parser.add_argument('--exit', type=float, help='release threshold')
 
@@ -1308,6 +1322,20 @@ def _l1(args):
     if found and 'policy' not in found:
         found['policy'] = 'instant'
     return found or None
+
+
+def _mode(args):
+    """(mode, search settings or None) from ``--mode``, ``--search-revoke-margin`` and ``--l1-clear-other``."""
+    from ..counting import search_settings
+    mode = getattr(args, 'mode', None) or 'count'
+    if mode != 'search':
+        return mode, None
+    given = {key: value for key, value in (('revoke_margin', getattr(args, 'search_revoke_margin', None)),
+                                           ('l1_clear_other', getattr(args, 'l1_clear_other', None))) if value is not None}
+    try:
+        return mode, search_settings(given)
+    except ValueError as error:
+        raise SystemExit(f'--mode search: {error}') from None
 
 
 def _partials(args):

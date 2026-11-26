@@ -26,6 +26,13 @@ gamst recipe run person-voice-style-count --microphone --voice me.json --exempla
 
 `--video FILE` reads a video's own sound (needs ffmpeg and ffprobe on PATH).
 
+`--mode search` (owner decision 33, when looking for the person: never miss them, over-count rather than miss): words
+whose voice is unclear (overlap, contested, below the threshold) are counted as candidates (`candidate: true` with the
+reason they would not have counted); only a word the recogniser withdrew, or a voice clearly another person's by
+`--search-revoke-margin` (default 0.3 under the threshold), leaves the count. `--mode count` (default) is unchanged.
+A run with `--serve` switches over MCP (`set_count_mode`); the report and `get_pipeline` say the mode. Live and video
+HUD: docs/hud-demo.md.
+
 ### The voice sample from the same input (recommended)
 
 Microphones and recordings change a voice more than the model does, so take the sample from the input you count on
