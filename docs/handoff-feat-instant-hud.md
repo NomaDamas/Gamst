@@ -141,8 +141,8 @@ default; it stays opt-in (`--speaker-decision`). The remaining errors are other 
 and that Precision-3 puts into the person's speaker; neither a margin nor negatives separate them on these clips.
 
 ## Left
-- Full suite through guard (queued as hud-suite; log in the session scratchpad: rerun if lost) -> must be the 15 known
-  errors.
+- Full suite (22:32, through guard): 1710 tests, the 15 known errors + 1 failure from this branch
+  (test_perception_recipes: voice file keys; `enrolled_from` added on purpose) -> test updated, module passes.
 - Not built: MCP/HUD hook for the voice-recording step; a running "main speaker so far" for live input without a
   sample.
 
@@ -151,3 +151,8 @@ Same-clip "current" rule: final person→other 2, other→person 7 (뽀또 6 of 
 v2 leave-one-clip-out: folds chose the same parameters as the live v2 runs (뽀또 fold: max, margin 0.1, L1 floor 0.3
 margin 0.1; other folds: grow, centroid, margin 0, L1 floor 0.4, L1 margin 0.05 (몇기야) or 0); held-out final
 person→other 7, other→person 7; L1 5 / 7. Only 시발 improved (7/7 offline).
+
+## Cost of this branch (list prices)
+Recognisers (Scribe + gpt-live + Speechmatics, $1.69 per hour of audio) on 2 x 213 s of clips ≈ $0.20; pyannoteAI:
+main-speaker enrolment 0.0025 EUR, m1 runs 0.017 EUR, v2 live runs 0.07 EUR, v2 study 0.065 EUR -> ≈ 0.155 EUR.
+Total ≈ $0.37 (cap $3).
