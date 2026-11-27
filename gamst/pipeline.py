@@ -1261,6 +1261,12 @@ class Pipeline:
         if self._video_memory is None:
             from .providers.video_memory import VideoMemory
             self._video_memory = VideoMemory(**options)
+            memory = self._video_memory
+            if memory.disk_limited:     # the disk is part of the budget
+                note = (f'video spill bound {memory.disk_bytes / 1024 ** 3:.1f} GB instead of '
+                        f'{memory.asked_disk_bytes / 1024 ** 3:.0f} GB: the disk keeps {memory.disk_floor_bytes / 1024 ** 3:.0f} GB free')
+                self.notes['video_memory'] = note
+                self._say(note)
         return self._video_memory
 
     def _release(self, item):

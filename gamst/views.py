@@ -151,6 +151,9 @@ class CountView(_Window):
         lines = [(f'GAMST  {self.pipeline.name}   mode: {mode}', (80, 220, 255)), ('', None)]
         if mode == 'search':
             lines.insert(1, ('SEARCH: unclear words count as candidates', STATE_COLOR['provisional']))
+        spill = (getattr(self.pipeline, 'notes', None) or {}).get('video_memory')
+        if spill:                         # the spill file was bounded by free disk (gamst/providers/video_memory.py)
+            lines.insert(1, ('SPILL LIMITED: ' + spill[:70], STATE_COLOR['revoked']))
         choice = (getattr(self.pipeline, 'notes', None) or {}).get('pose_choice')
         if isinstance(choice, dict):      # which pose model counts, as measured at start (recipes.choose_pose)
             kept = choice['chosen'] == choice['model']

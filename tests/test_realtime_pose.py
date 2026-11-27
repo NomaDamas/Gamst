@@ -34,7 +34,7 @@ class Slow:
 class VideoMemoryTest(unittest.TestCase):
     def test_frames_beyond_memory_spill_and_come_back_the_same(self):
         from gamst.providers.video_memory import VideoMemory
-        memory = VideoMemory(memory_bytes=2 * 300, disk_bytes=10 * 300)
+        memory = VideoMemory(memory_bytes=2 * 300, disk_bytes=10 * 300, disk_floor_bytes=0)
         frames = [np.full((10, 10, 3), index, np.uint8) for index in range(5)]
         kept = [memory.keep(frame) for frame in frames]
         status = memory.status()
@@ -45,9 +45,24 @@ class VideoMemoryTest(unittest.TestCase):
         self.assertEqual((memory.in_memory, memory.spilled, memory._end), (0, 0, 0))   # the file starts over
         memory.close()
 
+    def test_the_spill_bound_keeps_a_free_disk_floor(self):
+        from gamst.providers import video_memory
+        free = [5000]
+        original = video_memory.VideoMemory._free
+        video_memory.VideoMemory._free = lambda self: free[0]
+        try:
+            memory = video_memory.VideoMemory(memory_bytes=0, disk_bytes=10_000, disk_floor_bytes=4000)
+            self.assertEqual((memory.disk_bytes, memory.status()['disk_limited']), (1000, True))   # min(asked, free - floor)
+            self.assertIsNotNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))      # 300 bytes: still above the floor
+            free[0] = 4100                                                          # the disk filled meanwhile
+            self.assertIsNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))         # declared, never below the floor
+            memory.close()
+        finally:
+            video_memory.VideoMemory._free = original
+
     def test_a_frame_beyond_the_disk_bound_is_dropped_not_kept(self):
         from gamst.providers.video_memory import VideoMemory
-        memory = VideoMemory(memory_bytes=0, disk_bytes=300)
+        memory = VideoMemory(memory_bytes=0, disk_bytes=300, disk_floor_bytes=0)
         self.assertIsNotNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))
         self.assertIsNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))
         self.assertEqual(memory.status()['dropped'], 1)
@@ -80,7 +95,7 @@ class Lanes(unittest.IsolatedAsyncioTestCase):
             pipeline, slow = Pipeline(human, 'live'), Slow()
             pipeline.add_input('camera')
             pipeline.add_module('verify', slow, consumes='camera', backlog='spill')
-            memory = pipeline.video_memory(memory_bytes=2 * 12, disk_bytes=1 << 20)
+            memory = pipeline.video_memory(memory_bytes=2 * 12, disk_bytes=1 << 20, disk_floor_bytes=0)
             now = timestamp() - 5000
             for index in range(20):
                 await pipeline.push('camera', np.full((2, 2, 3), index, np.uint8), timestamp_ms=now + index * 17,
@@ -274,6 +289,24 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
                 if any(begin < start <= end or begin <= until < end for _, start, until in cuts):
                     straddled.append((begin, end, late))
         self.assertTrue(straddled)     # some hits crossed a cut, and still counted once
+
+
+class CoreMLTemp(unittest.TestCase):
+    def test_only_onnx_runtime_temp_copies_of_dead_processes_are_removed(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from gamst.providers.rtmw_pose import clear_dead_coreml_temp
+        with tempfile.TemporaryDirectory() as folder:
+            dead, alive = 999999, os.getpid()
+            names = [f'onnxruntime-510A2ABA-8A23-47E0-8FD0-5F8ADF818781-{dead}-00000212F880E38E',
+                     f'onnxruntime-1786B2EE-CDFB-4A6D-A38A-AD559C1ACB99-{dead}-00000212F5A705E8.mlmodelc',
+                     f'onnxruntime-E0D35E30-F43E-43F3-8312-E9760EF3863B-{alive}-00000212F84DE435',
+                     f'onnxruntime-notes-{dead}-x']
+            for name in names:
+                (Path(folder) / name).mkdir()
+            self.assertEqual(clear_dead_coreml_temp(folder), 2)
+            self.assertEqual(sorted(path.name for path in Path(folder).iterdir()), sorted(names[2:]))
 
 
 class SafetyNet(unittest.TestCase):

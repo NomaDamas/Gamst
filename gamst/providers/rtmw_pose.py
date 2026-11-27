@@ -54,7 +54,7 @@ def _sha256(path):
 def check_config(config):
     """The worker's settings, refused before anything starts."""
     known = {'path', 'sha256', 'det_path', 'det_sha256', 'device', 'compute_units', 'det_every_ms', 'max_poses',
-             'det_score', 'input_size', 'max_crops', 'fixed_batches'}
+             'det_score', 'input_size', 'max_crops', 'fixed_batches', 'cache_dir'}
     if set(config) - known or not {'path', 'sha256', 'det_path', 'det_sha256'} <= set(config):
         raise ValueError(f'rtmw.pose needs path, sha256, det_path, det_sha256; optional {sorted(known)}')
     if config.get('device', 'cpu') not in DEVICES or config.get('compute_units', 'CPUAndGPU') not in COMPUTE_UNITS:
@@ -69,6 +69,48 @@ def check_config(config):
     every = config.get('det_every_ms', 0)
     if type(every) is not int or not 0 <= every <= 10000:
         raise ValueError('det_every_ms is integer milliseconds 0..10000 (0: every frame)')
+
+
+def coreml_cache(weights, cache_dir=None):
+    """Where compiled CoreML models are kept: ``cache_dir``, else ``$GAMST_COREML_CACHE``, else ``cache/coreml`` beside
+    the weights' root (``<root>/models/<name>/file`` -> ``<root>/cache/coreml``); None if it cannot be made."""
+    import os
+    folder = cache_dir or os.environ.get('GAMST_COREML_CACHE') or Path(weights).resolve().parent.parent.parent / 'cache' / 'coreml'
+    try:
+        Path(folder).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return Path(folder)
+
+
+TEMP_NAME = r'onnxruntime-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}-(\d+)-[0-9A-F]+(\.mlmodelc|\.mlpackage)?'
+
+
+def clear_dead_coreml_temp(folder=None):
+    """ONNX Runtime's CoreML temp copies (``$TMPDIR/onnxruntime-<UUID>-<pid>-<hex>[.mlmodelc]``) of processes that no
+    longer run: a killed worker leaves 200-400 MB per session there. Only names of exactly that form are touched."""
+    import os
+    import re
+    import shutil
+    import tempfile
+    removed = 0
+    for entry in Path(folder or tempfile.gettempdir()).glob('onnxruntime-*'):
+        found = re.fullmatch(TEMP_NAME, entry.name)
+        if not found:
+            continue
+        try:
+            os.kill(int(found.group(1)), 0)
+            continue                     # its process still runs
+        except ProcessLookupError:
+            pass
+        except (PermissionError, OverflowError, ValueError):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+        removed += 1
+    return removed
 
 
 def track_box(points, scores, width, height, threshold=MIN_VISIBILITY, scale=1.25):
@@ -87,7 +129,8 @@ class RTMWModels:
     """The worker side: rtmlib's YOLOX and RTMPose sessions (in the ``rtmlib`` environment)."""
 
     def __init__(self, path, sha256, det_path, det_sha256, *, device='cpu', compute_units='CPUAndGPU', det_every_ms=0,
-                 max_poses=4, det_score=None, input_size=(288, 384), max_crops=MAX_CROPS, fixed_batches=FIXED_BATCHES):
+                 max_poses=4, det_score=None, input_size=(288, 384), max_crops=MAX_CROPS, fixed_batches=FIXED_BATCHES,
+                 cache_dir=None):
         check_config(dict(path=path, sha256=sha256, det_path=det_path, det_sha256=det_sha256, device=device,
                           compute_units=compute_units, det_every_ms=det_every_ms, max_poses=max_poses,
                           max_crops=max_crops, fixed_batches=list(fixed_batches)))
@@ -103,16 +146,26 @@ class RTMWModels:
             self.detector.score_thr = float(det_score)
         self.pose = RTMPose(str(path), model_input_size=tuple(input_size), backend='onnxruntime', device='cpu')
         if device == 'coreml':
-            providers = [('CoreMLExecutionProvider', {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units}),
-                         'CPUExecutionProvider']
-            self.detector.session = ort.InferenceSession(str(det_path), providers=providers)
-            self.pose.session = ort.InferenceSession(str(path), providers=providers)
+            cache = coreml_cache(path, cache_dir)
+            clear_dead_coreml_temp()
+
+            def providers(sha, name):
+                # one compiled copy per model, unit and batch size, reused by every run (without it CoreML writes a
+                # 200-400 MB copy per session into $TMPDIR, left behind whenever a worker is killed)
+                options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units}
+                if cache is not None:
+                    folder = cache / f'{sha[:16]}-{compute_units}-{name}'
+                    folder.mkdir(parents=True, exist_ok=True)
+                    options['ModelCacheDirectory'] = str(folder)
+                return [('CoreMLExecutionProvider', options), 'CPUExecutionProvider']
+            self.detector.session = ort.InferenceSession(str(det_path), providers=providers(det_sha256, 'det'))
+            self.pose.session = ort.InferenceSession(str(path), providers=providers(sha256, 'dynamic'))
             # A session whose batch size changes from call to call specializes again for every new size (about
             # 300 ms on CoreML); one session per fixed size never does. The session above takes what is left.
             for size in sorted(set(fixed_batches), reverse=True):
                 options = ort.SessionOptions()
                 options.add_free_dimension_override_by_name('batch', int(size))
-                self._fixed[int(size)] = ort.InferenceSession(str(path), options, providers=providers)
+                self._fixed[int(size)] = ort.InferenceSession(str(path), options, providers=providers(sha256, f'b{size}'))
             # The first call of a CoreML session specializes it (hundreds of ms): done here, not on the first frames.
             height, width = self.pose.model_input_size[1], self.pose.model_input_size[0]
             name = self.pose.session.get_inputs()[0].name
