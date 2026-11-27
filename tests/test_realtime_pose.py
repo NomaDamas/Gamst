@@ -277,6 +277,37 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipIf(np is None, 'numpy')
+class PostChunks(unittest.IsolatedAsyncioTestCase):
+    async def test_a_recording_in_chunks_counts_each_hit_once_and_nothing_is_late(self):
+        async with Gamst(consent=True) as human:
+            pipeline, poser = Pipeline(human, 'file'), Poser(slow=range(0, 150))    # slow everywhere: chunks help
+            base = timestamp() - 60000
+
+            class Recording:
+                modality, live, missed = 'video', False, 0
+
+                async def frames(self):
+                    for index in range(150):
+                        yield InputFrame(np.full((2, 2, 3), index, np.uint8), 'video', base + index * FRAME)
+            pipeline.add_input('camera', Recording())
+            pipeline.add_module('pose', poser, consumes='camera', emits=('joints',), backlog='spill', batch=4,
+                                catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=150, workers=1,
+                                              post_chunk_ms=500))
+            pipeline.add_module('hits', Hits(), consumes='joints', spec=HITS)
+            await pipeline.run()
+            status = pipeline.status()['modules']['pose']
+            rows = human.store.query('local-user', kind='observation.signal', limit=500, registered_only=True,
+                                     capability_id='test.hits')
+            events = [event for row in rows for event in row['observation']['value']['events']]
+            await pipeline.close()
+        ends = sorted(round((event['end_ms'] - base) / FRAME) for event in events)
+        self.assertEqual(ends, [index for index in range(150) if index % 12 == 7])
+        self.assertGreaterEqual(status['catch_up']['done'], 1)                      # some ran as chunks
+        self.assertFalse(any(event.get('correction') for event in events))           # nothing is late in post
+        self.assertEqual(status['gaps'], 0)
+
+
+@unittest.skipIf(np is None, 'numpy')
 class RTMWBatch(unittest.TestCase):
     def models(self, det_every_ms=500):
         from gamst.providers.rtmw_pose import POINTS, RTMWModels
