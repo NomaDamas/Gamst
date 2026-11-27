@@ -7,7 +7,7 @@ For every visible person it scores
 - the **face** (LVFace, MIT code and weights): a 112x112 crop aligned to the ArcFace 5-point template
   with the eye, nose and mouth-corner keypoints the pose model already gives, then cosine against the
   enrolled face centroid;
-- the **body** (whole-body appearance, person re-ID: OSNet-AIN, MIT, :class:`ReIDEmbedder`): a crop of the pose box,
+- the **body** (whole-body appearance, person re-ID: PersonViT ViT-B, or OSNet-AIN, :class:`ReIDEmbedder`): a crop of the pose box,
   cosine against the enrolled body centroid and the body embeddings collected this session while the face confirmed the
   person (clothing changes between sessions, so body re-ID is short-horizon glue between face
   confirmations, never the primary identity).
@@ -252,27 +252,29 @@ class LVFaceEmbedder:
 class ReIDEmbedder:
     """Whole-body appearance (person re-ID) ONNX: a person crop -> an embedding, compared by cosine.
 
-    Default (registry ``vision.body_identity``): OSNet-AIN x1.0 trained on MSMT17 (KaiyangZhou/deep-person-reid,
-    code and weights MIT; weights on the authors' Hugging Face repo with a published sha256), converted once by
-    :mod:`gamst.providers.osnet_export`. Preprocessing follows torchreid's ``FeatureExtractor``: BGR -> RGB, a plain
-    resize to ``height`` x ``width`` (256 x 128), ``/ 255``, ImageNet mean and std. The 512-d feature is not normalised
-    by the model; :func:`cosine` does. Appearance is evidence about one video only (clothes change): the person
-    binding never trusts it across sessions (:mod:`gamst.person_reference`).
+    Default (registry ``vision.body_identity``, owner 2026-11-27 "무조건 SOTA"): PersonViT ViT-B/16 fine-tuned on MSMT17
+    (hustvl/PersonViT; official log: MSMT17 mAP 80.8, Rank-1 92.0 without re-ranking), converted once by
+    :mod:`gamst.providers.personvit_export`: a 256 x 128 crop, mean and std 0.5, the 768-d class token. Option: OSNet-AIN
+    x1.0 MSMT17 (:mod:`gamst.providers.osnet_export`, ImageNet mean and std, 512-d). Both: BGR -> RGB and a plain resize,
+    as in their official test code. The feature is not normalised by the model; :func:`cosine` does. Appearance is
+    evidence about one video only (clothes change): the person binding never trusts it across sessions
+    (:mod:`gamst.person_reference`).
     """
 
-    MEAN, STD = (.485, .456, .406), (.229, .224, .225)
+    IMAGENET = ((.485, .456, .406), (.229, .224, .225))
 
-    def __init__(self, session, model_id, *, height=256, width=128):
+    def __init__(self, session, model_id, *, height=256, width=128, mean=IMAGENET[0], std=IMAGENET[1]):
         self.session, self.model_id, self.height, self.width = session, model_id, int(height), int(width)
+        self.mean, self.std = tuple(float(v) for v in mean), tuple(float(v) for v in std)
         self.input_name = session.get_inputs()[0].name
         self.output_name = session.get_outputs()[0].name
 
     @classmethod
     def from_local(cls, path, *, sha256=None, providers=None, height=256, width=128, name='osnet-ain', device='cpu',
-                   compute_units='ALL', cache_dir=None):
+                   compute_units='ALL', cache_dir=None, mean=IMAGENET[0], std=IMAGENET[1]):
         digest = _verify(path, sha256)
         model = cls(onnx_session(path, device=device, compute_units=compute_units, cache_dir=cache_dir, providers=providers),
-                    f'{name}:{digest[:16]}', height=height, width=width)
+                    f'{name}:{digest[:16]}', height=height, width=width, mean=mean, std=std)
         model.embed(_np().zeros((height, width, 3), 'uint8'))
         return model
 
@@ -284,7 +286,7 @@ class ReIDEmbedder:
             import cv2
             crop = cv2.resize(crop, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
         rgb = crop[:, :, ::-1].astype(np.float32) / 255.
-        tensor = ((rgb - np.array(self.MEAN, np.float32)) / np.array(self.STD, np.float32)).transpose(2, 0, 1)[None]
+        tensor = ((rgb - np.array(self.mean, np.float32)) / np.array(self.std, np.float32)).transpose(2, 0, 1)[None]
         output = self.session.run([self.output_name], {self.input_name: np.ascontiguousarray(tensor, np.float32)})[0]
         return [float(v) for v in output.reshape(-1)]
 

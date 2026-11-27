@@ -96,7 +96,7 @@ class RealModelTest(unittest.IsolatedAsyncioTestCase):
         from gamst.providers.person_match import ReIDEmbedder
         model = ReIDEmbedder.from_local(reid[0])
         crop = np.random.default_rng(0).integers(0, 255, (256, 128, 3), np.uint8)
-        self.assertEqual(len(model.embed(crop)), 512)
+        self.assertIn(len(model.embed(crop)), (512, 768))      # OSNet-AIN 512, PersonViT ViT-B 768
         np.testing.assert_allclose(model.embed(crop), model.embed(crop), rtol=1e-4)
 
     @SAPIENS2

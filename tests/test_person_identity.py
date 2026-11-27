@@ -125,6 +125,13 @@ class BindingDataTest(unittest.TestCase):
         moved = bindings.bind('t2', 'P', 4000, 'face')
         self.assertEqual((released['end_ms'], moved['start_ms'], moved['retroactive']), (3000, 3000, True))
 
+    def test_appearance_thresholds_are_per_model_and_provisional(self):
+        from gamst.providers.person_binding import APPEARANCE, appearance_defaults
+        model = lambda name: argparse.Namespace(model_id=f'{name}:0123456789abcdef')
+        self.assertEqual(appearance_defaults(model('personvit-b')), APPEARANCE['personvit-b'])
+        self.assertEqual(appearance_defaults(model('osnet-ain'))['body_threshold'], .8)
+        self.assertEqual(appearance_defaults(None), APPEARANCE['osnet-ain'])
+
     def test_a_lost_track_ends_its_binding_at_its_last_frame(self):
         bindings = TrackBindings()
         bindings.seen('t', 0)

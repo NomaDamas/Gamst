@@ -150,8 +150,7 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(steps['roles']['vision.pose']['model'], 'rtmw.l_384x288')    # one pose model (decision 37-38)
         self.assertTrue(any(line.startswith('rtmlib==') for entry in steps['install'] for line in entry['packages']))
         self.assertEqual(set(recipes.weight_files(steps)), {      # who: face and whole-body appearance (person_binding)
-            'end2end.onnx', 'yolox_m_humanart.onnx', 'LVFace-B_Glint360K.onnx', 'osnet_ain.py',
-            'osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth'})
+            'end2end.onnx', 'yolox_m_humanart.onnx', 'LVFace-B_Glint360K.onnx', 'vit_pytorch.py', 'transformer_120.pth'})
         anyone = recipes.load('person-action-count', exclude=['person_binding'])   # every track, who unknown
         self.assertEqual(sorted(recipes.weight_files(recipes.plan(anyone, hardware=HOST))),
                          ['end2end.onnx', 'yolox_m_humanart.onnx'])

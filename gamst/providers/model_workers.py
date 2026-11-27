@@ -12,7 +12,7 @@ profile                    worker (real model)                                  
 =========================  ==================================================  ====================
 ``speaker.embedding``      sherpa-onnx CAM++ / WeSpeaker w2v-BERT               ``RemoteEmbedder``
 ``face.embedding``         LVFace ONNX                                          ``RemoteEmbedder``
-``body.embedding``         person re-ID ONNX (OSNet-AIN)                        ``RemoteEmbedder``
+``body.embedding``         person re-ID ONNX (PersonViT, OSNet-AIN)             ``RemoteEmbedder``
 ``target_speech.local``    WeSep / USEF-TFGridNet / SAM-Audio spans             ``RemoteExtractor``
 ``pixit.sources``          pyannote PixIT (diarization + separation)            ``RemoteSeparator``
 ``sepformer.sources``      SpeechBrain SepFormer (two sources)                  ``RemoteSeparator``

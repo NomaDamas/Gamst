@@ -598,7 +598,7 @@ async def body_embedder(options, context):
         return await _open('RemoteEmbedder', (dict(body['config']), body.get('python') or sys.executable, 'body.embedding'))
     try:
         entry = context['installed'](dict(use='role', role='vision.body_identity',
-                                          candidate=options.get('body_candidate', 'osnet.ain_x1_0_msmt17')))
+                                          candidate=options.get('body_candidate', 'personvit.vitb_msmt17')))
     except SystemExit as error:
         context.setdefault('notes', {})['body_identity'] = f'whole-body appearance is off: {error}'
         return None
@@ -627,6 +627,11 @@ async def _person_binding(options, context):
         if face is not None:
             await face.close()
         raise
+    from ..providers.person_binding import appearance_defaults
+    arguments = dict(appearance_defaults(body), **arguments)       # provisional, per re-ID model; the item's values win
+    for name in ('body_reject', 'confirm_every_ms', 'continue_ms', 'continue_iou'):
+        if name in options:
+            arguments[name] = options[name]
     module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
     return dict(module=module, spec=module.spec)
 
@@ -920,7 +925,7 @@ def parts(Part):
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
         'person-binding': Part('module', role='vision.face_identity', candidate='lvface.b', build=_person_binding,
-                               extra_roles=(('body_candidate', 'vision.body_identity', 'osnet.ain_x1_0_msmt17'),)),
+                               extra_roles=(('body_candidate', 'vision.body_identity', 'personvit.vitb_msmt17'),)),
         'sapiens2-pose': Part('module', role='vision.pose', candidate='sapiens2.1b', build=_sapiens2_pose),
         'rtmw-pose': Part('module', role='vision.pose', candidate='rtmw.l_384x288', build=_rtmw_pose),
         'active-speaker': Part('module', role='vision.active_speaker', candidate='lightasd.ava', build=_active_speaker),

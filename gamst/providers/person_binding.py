@@ -62,6 +62,17 @@ from .speaker_verify import centroid, cosine, embed, l2_normalize
 
 CAPABILITY = 'vision.person_binding'
 UNKNOWN = 'unknown'
+# Appearance thresholds per re-ID model (scores of two models are not on one scale). PROVISIONAL until the owner's
+# labelled multi-person clips: read on the shop clip with faces as a proxy for who is who (not labels),
+# docs/measurements/person-identity-2026-11-27.md section 11. body_threshold binds a track by appearance (this session
+# only); body_reject is "clearly someone else" for a continuation.
+APPEARANCE = {'personvit-b': dict(body_threshold=.9, body_reject=.7), 'osnet-ain': dict(body_threshold=.8, body_reject=.6)}
+
+
+def appearance_defaults(body):
+    """The provisional appearance thresholds of a body embedder (by its model id), else the OSNet-AIN ones."""
+    model = str(getattr(body, 'model_id', '') or '').split(':', 1)[0]
+    return dict(APPEARANCE.get(model, APPEARANCE['osnet-ain']))
 
 
 # ---------------------------------------------------------------- bindings as data (no model)
