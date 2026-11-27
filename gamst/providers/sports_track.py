@@ -23,6 +23,7 @@ from ..tracking import intersection_over_union
 TRACKERS = {'bytetrack': 'ByteTrackTracker', 'botsort': 'BoTSORTTracker', 'ocsort.trackers': 'OCSORTTracker',
             'sort': 'SORTTracker', 'cbiou': 'CBIoUTracker'}
 SCALE = 1000        # trackers' IoU and Kalman work in pixels; normalised boxes are scaled when the size is unknown
+KEEP_FRAMES, KEEP_SIDE = 60, 960     # BoT-SORT: camera frames kept until the detector answers them (2 s at 30 fps)
 
 
 class ObjectTracker:
@@ -75,16 +76,20 @@ class ObjectTracker:
     def _trackers(self, items, at_ms, size):
         import numpy as np
         import supervision as sv
-        width, height = size or (SCALE, SCALE)
+        image = self._frames.get(at_ms) if self.tracker_name == 'botsort' else None
+        # Boxes in the pixels of the frame BoT-SORT's camera motion compensation sees (the kept, reduced frame);
+        # otherwise the detector's size, or a nominal scale (IoU and the Kalman filter do not depend on it).
+        width, height = (image.shape[1], image.shape[0]) if image is not None else size or (SCALE, SCALE)
         labels = sorted({box.label for box in items})
         xyxy = np.asarray([[b.x * width, b.y * height, (b.x + b.width) * width, (b.y + b.height) * height]
                            for b in items], dtype=np.float32).reshape(-1, 4)
         detections = sv.Detections(xyxy=xyxy, confidence=np.asarray([b.score for b in items], dtype=np.float32),
                                    class_id=np.asarray([labels.index(b.label) for b in items], dtype=int),
                                    data={'index': np.arange(len(items))})
-        image = self._frames.get(at_ms) if self.tracker_name == 'botsort' else None
-        tracked = self._tracker.update(detections, frame=image) if self.tracker_name == 'botsort' else \
-            self._tracker.update(detections)
+        # timestamp: the capture time in seconds, so a frame the lane did not reach is a longer Kalman step
+        # (trackers 2.7.1: None means one fixed step per call)
+        tracked = self._tracker.update(detections, frame=image, timestamp=at_ms / 1000) \
+            if self.tracker_name == 'botsort' else self._tracker.update(detections, timestamp=at_ms / 1000)
         found = []
         for row, track_id in zip(range(len(tracked)), tracked.tracker_id if tracked.tracker_id is not None else []):
             if track_id is None or int(track_id) < 0:
@@ -105,8 +110,9 @@ class ObjectTracker:
         with self._lock:
             if isinstance(frame.data, np.ndarray):
                 if self.tracker_name == 'botsort' and frame.modality == 'video':
-                    self._frames[frame.timestamp_ms] = frame.data
-                    while len(self._frames) > 8:
+                    step = max(1, -(-max(frame.data.shape[:2]) // KEEP_SIDE))     # reduced: about 960 px
+                    self._frames[frame.timestamp_ms] = frame.data[::step, ::step]
+                    while len(self._frames) > KEEP_FRAMES:
                         self._frames.popitem(last=False)
                 return None
             source = None if frame.sensor is None else frame.sensor.sensor_id

@@ -43,7 +43,7 @@ def _angle(a, b):
 class BallContacts:
     def __init__(self, *, ball, players=None, sound=None, player_labels=('person',), reach=.04, span=2,
                  min_turn_deg=40., speed_ratio=2.5, min_speed=.05, min_contact_ms=120, before_ms=40, after_ms=120,
-                 max_gap_ms=150, court=None, sound_event='audio.onset', capability_id='sports.contacts'):
+                 max_gap_ms=500, court=None, sound_event='audio.onset', capability_id='sports.contacts'):
         if type(span) is not int or not 1 <= span <= 10:
             raise ValueError('span must be 1..10 samples')
         if type(min_contact_ms) is not int or not 1 <= min_contact_ms <= 5000:

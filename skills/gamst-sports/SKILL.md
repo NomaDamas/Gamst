@@ -25,10 +25,11 @@ unmeasured.
 ## 2. Check the camera before anything else
 
 ```bash
-gamst recipe check racket-rally --sport badminton --fps 30     # exits 1: badminton needs 47 fps
+gamst recipe check racket-rally --sport table-tennis --fps 25  # exits 1: table tennis needs 33 fps
 ```
 
 If it fails, tell the person which frame rate the sport needs and why (the numbers in `problems`), instead of running.
+Pass on any `warnings` (the fastest shots may be lost at this frame rate).
 
 ## 3. Choose the stack and the timing
 

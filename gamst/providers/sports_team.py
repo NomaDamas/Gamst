@@ -1,7 +1,7 @@
 """Team split without labels: cluster the players' appearance, then give every track its team.
 
-Reads the video input and players (``players``: an ``objects`` module with track IDs). For a player box it takes the
-torso (the middle of the box, where the shirt is) and describes it:
+Reads the video input and players (``players``: an ``objects`` module with track IDs). For a player box it describes
+the torso (colour) or the whole box (SigLIP, as Roboflow Sports crops):
 
 - ``embed: "color"`` (default, no model): a hue/saturation histogram and the mean value of the torso pixels;
 - ``embed: "siglip"``: an image embedding from a SigLIP worker (``image.embedding``, Roboflow Sports' choice:
@@ -117,9 +117,14 @@ class TeamSplit:
         return np.asarray(await self.embedder.embed(np.ascontiguousarray(crop)), dtype=np.float32)
 
     def _crop(self, image, box):
+        """Colour: the torso (where the shirt is). SigLIP: the whole box, as Roboflow Sports crops players."""
         height, width = image.shape[:2]
-        x0, x1 = int((box.x + .2 * box.width) * width), int((box.x + .8 * box.width) * width)
-        y0, y1 = int((box.y + .15 * box.height) * height), int((box.y + .55 * box.height) * height)
+        if self.embed == 'siglip':
+            x0, x1 = int(box.x * width), int((box.x + box.width) * width)
+            y0, y1 = int(box.y * height), int((box.y + box.height) * height)
+        else:
+            x0, x1 = int((box.x + .2 * box.width) * width), int((box.x + .8 * box.width) * width)
+            y0, y1 = int((box.y + .15 * box.height) * height), int((box.y + .55 * box.height) * height)
         if x1 - x0 < 3 or y1 - y0 < 3:
             return None
         return image[max(0, y0):y1, max(0, x0):x1]

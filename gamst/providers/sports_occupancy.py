@@ -22,8 +22,10 @@ from ..sports.objects import boxes
 class Occupancy:
     def __init__(self, *, players, player_labels=('person',), court=None, cols=12, rows=6, every_ms=1000,
                  min_step=None, speed_window_ms=1000, max_tracks=40, capability_id='sports.occupancy'):
-        if type(cols) is not int or type(rows) is not int or not 1 <= cols <= 64 or not 1 <= rows <= 64:
-            raise ValueError('cols and rows must be 1..64')
+        if type(cols) is not int or type(rows) is not int or not 1 <= cols <= 64 or not 1 <= rows <= 64 \
+                or cols * rows > 256:
+            # a record holds the grid, a grid per team and the tracks within bounded_json's limits
+            raise ValueError('cols and rows must be 1..64 with at most 256 cells')
         if type(every_ms) is not int or not 100 <= every_ms <= 600_000:
             raise ValueError('every_ms must be 100..600000')
         self.players, self.player_labels = identifier(players, 'module name'), tuple(player_labels)

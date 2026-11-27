@@ -61,12 +61,12 @@ Nothing new is needed on the MCP side: every sports module commits events in the
 | `ball-track` | one ball's flight: gating by a constant-velocity prediction, `ball.found` / `ball.lost` | `sports.ball` |
 | `contacts` | breaks of the ball's path (turn ≥ `min_turn_deg` or speed ratio): **hit** near a player box (who, team), **bounce** (down→up, court position, in/out, half), **deflection**; impact sound beside each | `sports.contacts` |
 | `rally` | hits until no contact for `max_gap_ms`, the ball lost, or two bounces on one half | `sports.rally` |
-| `possession` | holder within `reach` for `hold_ms`; pass (same team), turnover (other team), loose; `estimated: true` | `sports.possession` |
+| `possession` | holder within `reach` for `hold_ms`; pass (same team), turnover (other team), loose; a long pass that flew loose is still classified against the last holder (`via_loose`); `estimated: true` | `sports.possession` |
 | `occupancy` | positions (court metres with `--court`), distance, speed, heat-map grid per track and team, every `every_ms` | `sports.occupancy` |
 | `form` | per counted movement: joint-angle ranges reached vs the demonstrated examples, DTW score | `sports.form` |
 | `body-spin` | half turns from the sign of the shoulder/hip line; jumps (ankles off the ground line), airtime, turns in the air | `sports.spin` |
-| `object-motion` | shots (first mover after stillness), object-to-object contacts | `sports.motion` |
-| `ball-sampling` check | `gamst recipe check RECIPE --sport S --fps F`: samples between the fastest two contacts, travel per frame | – |
+| `object-motion` | shots (first mover after `still_ms` of stillness, ended by `still_ms` of stillness; speed over `window_ms`), object-to-object contacts | `sports.motion` |
+| `ball-sampling` check | `gamst recipe check RECIPE --sport S --fps F`: enough samples between the fastest two contacts (a hard bound); the travel per frame at the record speed is a warning (a record is a launch peak; TrackNetV3's badminton set is 30 fps) | – |
 | court map | homography from four marked corners (`gamst/sports/court.py`, normalised DLT) | used by the parts |
 
 ## 3. Recipes
@@ -115,7 +115,7 @@ stated, and the comparison is made on the same dataset clips with the same GAMST
 ```bash
 gamst recipe list                                        # the sports recipes are among them
 gamst recipe stacks racket-rally                         # which models each stack uses, realtime and post
-gamst recipe check racket-rally --sport badminton --fps 30   # physics: exits 1, badminton needs 47 fps
+gamst recipe check racket-rally --sport table-tennis --fps 25   # physics: exits 1, table tennis needs 33 fps
 gamst recipe setup racket-rally --stack ultralytics --dry-run
 gamst recipe run racket-rally --stack sota --sport tennis --video match.mp4 --court court.json --timing post
 gamst recipe run team-field --stack roboflow --camera 0 --court pitch.json

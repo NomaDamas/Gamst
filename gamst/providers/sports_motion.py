@@ -1,9 +1,9 @@
 """Tracked objects that start, stop and touch: shots and ball-to-ball contacts (billiards, bowling, curling, boules).
 
 Reads an ``objects`` module (``objects``, with track IDs; ``labels`` the ones to follow). Per track it keeps the
-centre and its speed (image widths per second, or metres per second on the table with a ``court`` reference, where
-balls roll on the plane). A **shot** starts when any object starts moving after everything was still for
-``still_ms``, and ends when everything is still again; it reports which object moved first (the cue ball), how many
+centre and its speed over the last ``window_ms`` (image widths per second, or metres per second on the table with a
+``court`` reference, where balls roll on the plane). A **shot** starts when any object starts moving after everything was still for
+``still_ms``, and ends after everything was still for ``still_ms`` again; it reports which object moved first (the cue ball), how many
 contacts happened and how many objects moved. A **contact** is two objects whose centres come within ``touch`` times
 their mean size while at least one of them changes velocity by ``min_dv`` (units per second; the collision), once per pair per
 ``refractory_ms``.
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import threading
+from collections import deque
 
 from ..capabilities import CapabilitySpec, OutputField, identifier
 from ..sports.court import court_map
@@ -19,12 +20,12 @@ from ..sports.objects import boxes
 
 
 class ObjectMotion:
-    def __init__(self, *, objects, labels=('sports ball',), court=None, moving=.02, still_ms=600, touch=1.2,
-                 min_dv=.05, refractory_ms=300, capability_id='sports.motion'):
+    def __init__(self, *, objects, labels=('sports ball',), court=None, moving=.05, still_ms=600, touch=1.2,
+                 min_dv=.05, refractory_ms=300, window_ms=150, capability_id='sports.motion'):
         self.objects, self.labels = identifier(objects, 'module name'), tuple(labels)
         self.court = court_map(court)
         self.moving, self.still_ms, self.touch = float(moving), int(still_ms), float(touch)
-        self.min_dv, self.refractory_ms = float(min_dv), int(refractory_ms)
+        self.min_dv, self.refractory_ms, self.window_ms = float(min_dv), int(refractory_ms), int(window_ms)
         self._lock = threading.RLock()
         self.spec = CapabilitySpec(
             capability_id, capability_id, 'video', 'gamst.sports_motion', f'1.{moving}-{still_ms}-{touch}',
@@ -35,7 +36,8 @@ class ObjectMotion:
 
     def reset(self):
         with self._lock:
-            self._tracks = {}           # id -> (ms, x, y, vx, vy, size)
+            self._tracks = {}           # id -> (ms, x, y, vx, vy, size), velocity over the last window_ms
+            self._history = {}          # id -> deque of (ms, x, y)
             self._still_since = None
             self._shot = None           # dict(start_ms, first, contacts, moved)
             self._shots = self._contacts = 0
@@ -50,6 +52,16 @@ class ObjectMotion:
             return None
         return centre[0], centre[1], 2 * math.hypot(corner[0] - centre[0], corner[1] - centre[1])
 
+    def _velocity(self, key, at, x, y):
+        """Displacement over the last ``window_ms`` (box jitter of one frame averages out)."""
+        history = self._history.setdefault(key, deque())
+        history.append((at, x, y))
+        while len(history) > 2 and at - history[1][0] >= self.window_ms:
+            history.popleft()
+        t0, x0, y0 = history[0]
+        dt = (at - t0) / 1000
+        return (0., 0.) if dt <= 0 else ((x - x0) / dt, (y - y0) / dt)
+
     def process(self, frame):
         with self._lock:
             source = None if frame.sensor is None else frame.sensor.sensor_id
@@ -62,12 +74,9 @@ class ObjectMotion:
                     continue
                 x, y, size = point
                 old = self._tracks.get(box.track_id)
-                vx = vy = 0.
-                if old is not None and at > old[0]:
-                    dt = (at - old[0]) / 1000
-                    vx, vy = (x - old[1]) / dt, (y - old[2]) / dt
-                    if math.hypot(vx - old[3], vy - old[4]) >= self.min_dv:
-                        changed.add(box.track_id)
+                vx, vy = self._velocity(box.track_id, at, x, y)
+                if old is not None and math.hypot(vx - old[3], vy - old[4]) >= self.min_dv:
+                    changed.add(box.track_id)
                 now[box.track_id] = (at, x, y, vx, vy, size)
             self._tracks.update(now)
             movers = [key for key, item in now.items() if math.hypot(item[3], item[4]) >= self.moving]
@@ -80,13 +89,15 @@ class ObjectMotion:
                 if self._shot is not None:
                     self._shot['moved'].update(movers)
                 self._still_since = None
-            elif self._still_since is None:
-                self._still_since = at
-                if self._shot is not None:
+            else:
+                if self._still_since is None:
+                    self._still_since = at
+                if self._shot is not None and at - self._still_since >= self.still_ms:
+                    # a shot ends after still_ms of stillness, not at one frame where the moving ball was missed
                     shot, self._shot = self._shot, None
-                    events.append(dict(event='shot.ended', index=self._shots, start_ms=shot['start_ms'], end_ms=at,
-                                       timestamp_ms=at, first=shot['first'], contacts=shot['contacts'],
-                                       moved=len(shot['moved'])))
+                    events.append(dict(event='shot.ended', index=self._shots, start_ms=shot['start_ms'],
+                                       end_ms=self._still_since, timestamp_ms=self._still_since, first=shot['first'],
+                                       contacts=shot['contacts'], moved=len(shot['moved'])))
             keys = sorted(now)
             for i, a in enumerate(keys):
                 for b in keys[i + 1:]:
@@ -103,7 +114,5 @@ class ObjectMotion:
                     if self._shot is not None:
                         self._shot['contacts'] += 1
                     events.append(dict(event='contact.objects', index=self._contacts, timestamp_ms=at, a=a, b=b))
-            if self._still_since is None and not movers:
-                self._still_since = at
             return self.spec.validate(dict(shots=self._shots, contacts=self._contacts, moving=len(movers),
                                            events=events)) if events else None

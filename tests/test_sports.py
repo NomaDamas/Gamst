@@ -84,12 +84,15 @@ class CourtTest(unittest.TestCase):
 
 
 class PresetTest(unittest.TestCase):
-    def test_badminton_needs_more_than_30_fps_and_tennis_does_not(self):
+    def test_contacts_bound_is_hard_and_record_speed_only_warns(self):
         from gamst.sports.presets import ball_sampling
-        badminton = ball_sampling({}, 30, sport='badminton')
-        self.assertFalse(badminton['ok'])
-        self.assertIn('badminton needs', badminton['problem'])
+        badminton = ball_sampling({}, 30, sport='badminton')      # TrackNetV3's own set is 30 fps: allowed
+        self.assertTrue(badminton['ok'])
+        self.assertIn('fastest shots may be lost', badminton['warning'])
         self.assertAlmostEqual(badminton['travel_m_per_frame'], 565 / 3.6 / 30, places=2)
+        table = ball_sampling({}, 25, sport='table-tennis')        # 3 frames between the fastest two contacts
+        self.assertFalse(table['ok'])
+        self.assertIn('table-tennis needs 33 fps', table['problem'])
         self.assertTrue(ball_sampling({}, 60, sport='tennis')['ok'])
         self.assertEqual(ball_sampling({}, None, sport='tennis').get('ok'), None)
 
@@ -227,6 +230,21 @@ class RallyTest(unittest.TestCase):
         self.assertIsNone(rally.finish())
 
 
+class LongPassTest(unittest.TestCase):
+    def test_a_pass_that_flies_loose_is_still_a_pass(self):
+        from gamst.providers.sports_possession import Possession
+        holder = Possession(ball='ball', players='teams', hold_ms=100, loose_ms=300, hidden_ms=200)
+        players = objects(('a1', 'person', .10, .40, .05, .1, 'A'), ('a2', 'person', .80, .40, .05, .1, 'A'))
+        out, ms = [], 0
+        for x in [.12] * 5 + [.3 + .01 * i for i in range(30)] + [.82] * 5:     # 1.2 s in the air, far from both
+            out.append(holder.process(record('teams', players, ms)))
+            out.append(holder.process(record('ball', dict(state='tracking', at_ms=ms, x=x, y=.45, flight=1, events=[]), ms)))
+            ms += 40
+        kinds = [event['event'] for event in events(out)]
+        self.assertEqual(kinds, ['possession.started', 'possession.loose', 'possession.pass'])
+        self.assertTrue(events(out, 'possession.pass')[0]['via_loose'])
+
+
 class PossessionTest(unittest.TestCase):
     def ball(self, x, y, ms):
         return record('ball', dict(state='tracking', at_ms=ms, x=x, y=y, flight=1, events=[]), ms)
@@ -357,15 +375,16 @@ class MotionTest(unittest.TestCase):
             out.append(motion.process(record('balls', objects(('cue', 'sports ball', *cue, .04, .04),
                                                              ('red', 'sports ball', *red, .04, .04)), ms)))
             ms += 20
-        for _ in range(40):
+        for step in range(40):
             if cue[0] < red[0] - .045:
                 cue[0] += .01                      # 0.5 widths per second towards the red
             else:
                 red[0] += .01                      # the red takes over, the cue stops
-            out.append(motion.process(record('balls', objects(('cue', 'sports ball', *cue, .04, .04),
-                                                             ('red', 'sports ball', *red, .04, .04)), ms)))
+            seen = [('red', 'sports ball', *red, .04, .04)] if step in (5, 6) else \
+                [('cue', 'sports ball', *cue, .04, .04), ('red', 'sports ball', *red, .04, .04)]   # the cue missed twice
+            out.append(motion.process(record('balls', objects(*seen), ms)))
             ms += 20
-        for _ in range(10):
+        for _ in range(15):
             out.append(motion.process(record('balls', objects(('cue', 'sports ball', *cue, .04, .04),
                                                              ('red', 'sports ball', *red, .04, .04)), ms)))
             ms += 20
@@ -406,7 +425,8 @@ class TrackerTest(unittest.TestCase):
             def __init__(self, frame_rate=30.):
                 self.frame_rate = frame_rate
 
-            def update(self, detections):
+            def update(self, detections, frame=None, timestamp=None):
+                self.timestamp = timestamp
                 detections.tracker_id = np.arange(len(detections)) + 41
                 return detections
         modules = {'supervision': SimpleNamespace(Detections=Detections),
@@ -419,6 +439,7 @@ class TrackerTest(unittest.TestCase):
                                                           summary=dict(width=1280, height=720)), 0))
         person = next(item for item in value['objects'] if item['label'] == 'person')
         self.assertEqual(person['track_id'], 'track-41')
+        self.assertEqual(tracker._tracker.timestamp, 0.)
         self.assertAlmostEqual(person['location']['bbox']['x'], .1, places=5)
         self.assertEqual(value['summary']['width'], 1280)
 
@@ -457,10 +478,26 @@ class TrackNetStreamTest(unittest.TestCase):
 
     def test_weighted_ensemble_answers_seq_len_minus_one_frames_later_and_finish_flushes(self):
         ball = self.ball('weight')
-        answers = [ball.process(self.frame(ms))['frames'] for ms in (0, 10, 20, 30)]
-        self.assertEqual([[item['frame_ms'] for item in found] for found in answers], [[], [], [0], [10]])
+        answers = [ball.process(self.frame(ms))['frames'] for ms in (0, 10, 20, 30, 40)]
+        self.assertEqual([[item['frame_ms'] for item in found] for found in answers], [[], [], [0], [10], [20]])
         rest = ball.finish()['frames']
-        self.assertEqual([item['frame_ms'] for item in rest], [20, 30])
+        self.assertEqual([item['frame_ms'] for item in rest], [30, 40])
+
+    def test_edge_frames_get_the_plain_mean_and_full_ones_the_weights(self):
+        from gamst.providers.tracknet_ball import TrackNetBall
+        calls = []
+
+        def infer(stacked):
+            calls.append(1)
+            maps = np.zeros((3, 288, 512), np.float32)
+            maps[:, 10:15, 10:15] = [[[.4]], [[.9]], [[.4]]]     # the middle of each window sees the ball best
+            return maps
+        ball = TrackNetBall(None, seq_len=3, ensemble='weight', infer=infer)
+        out = [ball.process(self.frame(ms))['frames'] for ms in (0, 10, 20, 30, 40)]
+        first, full = out[2][0], out[4][0]          # frame 0: one window, plain .4; frame 20: three windows
+        self.assertEqual(first['balls'], [])         # .4 is below the authors' 0.5 threshold
+        self.assertEqual(full['balls'][0]['score'], round((.4 * 1 + .9 * 2 + .4 * 1) / 4, 4))
+        self.assertEqual(len(calls), 3)              # padded start windows are not run in post
 
     def test_ensemble_weights_are_the_authors(self):
         from gamst.providers.tracknet_ball import ensemble_weight, input_channels
@@ -502,25 +539,38 @@ class UltralyticsAdapterTest(unittest.TestCase):
 
         class Boxes:
             xyxy, conf = Tensor([[10, 20, 30, 60], [50, 50, 54, 54]]), Tensor([.9, .6])
-            cls, id = Tensor([0, 32]), Tensor([3, 4])
+            cls, id = Tensor([0, 32]), None
 
             def __len__(self):
                 return 2
 
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return self
+
         class Model:
             names = {0: 'person', 32: 'sports ball'}
 
-            def track(self, image, **options):
+            def predict(self, image, **options):
                 self.options = options
                 return [SimpleNamespace(boxes=Boxes(), names=self.names)]
+
+        class Tracker:      # Ultralytics' tracker: only the person is a confirmed track; the fast ball is not
+            def update(self, det, image):
+                return np.asarray([[10, 20, 30, 60, 3, .9, 0, 0]])
+
+            def reset(self):
+                self.was_reset = True
         config = dict(path='-', sha256='0' * 64, tracker='botsort')
-        provider = UltralyticsObjects(Model(), config)
+        provider = UltralyticsObjects(Model(), config, tracker=Tracker())
         value = provider.process(InputFrame(np.zeros((100, 100, 3), np.uint8), 'video', 0))
-        self.assertEqual([item['track_id'] for item in value['objects']], ['track-3', 'track-4'])
-        self.assertEqual(value['objects'][1]['label'], 'sports ball')
+        self.assertEqual([item['track_id'] for item in value['objects']], ['track-3', 'object-1'])
+        self.assertEqual(value['objects'][1]['label'], 'sports ball')      # kept although its track is unconfirmed
         self.assertAlmostEqual(value['objects'][0]['location']['bbox']['height'], .4)
-        self.assertTrue(provider.model.options['persist'])
-        self.assertEqual(provider.model.options['tracker'], 'botsort.yaml')
+        provider.reset()
+        self.assertTrue(provider._tracker.was_reset)
 
     def test_config_is_checked(self):
         from gamst.providers.ultralytics_sports import check_config
@@ -528,6 +578,8 @@ class UltralyticsAdapterTest(unittest.TestCase):
             check_config(dict(path='x', sha256='0' * 64, tracker='deepsort'))
         with self.assertRaises(ValueError):
             check_config(dict(path='x', sha256='0' * 64, imgsz=641))
+        with self.assertRaises(ValueError):
+            check_config(dict(path='x', sha256='0' * 64, max_poses=8), pose=True)
 
 
 RECIPES = ('racket-rally', 'team-field', 'body-reps', 'swing', 'body-rotation', 'billiards')
@@ -573,8 +625,13 @@ class SportsRecipesTest(unittest.TestCase):
 
     def test_frame_rate_check_uses_the_sport(self):
         from gamst.recipes import check, load
-        self.assertFalse(check(load('racket-rally', sport='badminton'), fps=30)['ok'])
+        self.assertFalse(check(load('racket-rally', sport='table-tennis'), fps=25)['ok'])
+        verdict = check(load('racket-rally', sport='badminton'), fps=30)
+        self.assertTrue(verdict['ok'])
+        self.assertEqual(len(verdict['warnings']), 1)
         self.assertTrue(check(load('racket-rally', sport='tennis'), fps=60)['ok'])
+        with self.assertRaises(SystemExit):
+            load('racket-rally', stack='default')
 
     def test_stacks_table(self):
         from gamst.recipes import stacks_table

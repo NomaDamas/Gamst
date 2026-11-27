@@ -40,10 +40,11 @@ def _points(pose, mapping, min_visibility):
 
 class BodySpin:
     def __init__(self, *, mapping=None, min_visibility=.3, min_width=.15, lift=.25, ground_ms=1500, min_air_ms=120,
-                 capability_id='sports.spin'):
+                 aspect=1., capability_id='sports.spin'):
         self.mapping = None if mapping is None else MAPPINGS[mapping] if isinstance(mapping, str) else dict(mapping)
         self.min_visibility, self.min_width, self.lift = float(min_visibility), float(min_width), float(lift)
         self.ground_ms, self.min_air_ms = int(ground_ms), int(min_air_ms)
+        self.aspect = float(aspect)     # image width / height when the poses do not say
         self._lock = threading.RLock()
         self.spec = CapabilitySpec(
             capability_id, capability_id, 'video', 'gamst.sports_spin', f'1.{min_width}-{lift}',
@@ -75,9 +76,13 @@ class BodySpin:
             at, events = frame.timestamp_ms, []
             shoulders_y = (points['left_shoulder'][1] + points['right_shoulder'][1]) / 2
             hips_y = (points['left_hip'][1] + points['right_hip'][1]) / 2
+            # in pixels: x is normalised by the image width and y by its height (a landscape frame would otherwise
+            # shrink the width against the torso by height / width)
+            aspect = (float(pose.get('image_width') or 1) / float(pose.get('image_height') or 1)) \
+                if pose.get('image_width') and pose.get('image_height') else self.aspect
             torso = max(1e-6, abs(hips_y - shoulders_y))
-            width = ((points['right_shoulder'][0] - points['left_shoulder'][0]) +
-                     (points['right_hip'][0] - points['left_hip'][0])) / (2 * torso)
+            width = aspect * ((points['right_shoulder'][0] - points['left_shoulder'][0]) +
+                              (points['right_hip'][0] - points['left_hip'][0])) / (2 * torso)
             side = 1 if width > self.min_width else -1 if width < -self.min_width else 0
             if side and self._side and side != self._side:
                 self._half_turns += 1

@@ -383,6 +383,8 @@ def variant(raw, *, stack=None, sport=None, timing=None):
     {"summary", "modules", "realtime": {"modules"}, "post": {"modules"}}} plus ``"default"``. A recipe without them is
     returned unchanged (asking for a stack or sport it does not have is an error)."""
     sports, stacks = raw.get('sports') or {}, raw.get('stacks') or {}
+    if sport == 'default' or stack == 'default':
+        raise SystemExit('"default" is not a sport or stack name; leave the option out for the default')
     if sport is not None and sport not in sports:
         raise SystemExit(f"{raw['name']} has no sport {sport!r}; sports: {', '.join(k for k in sports if k != 'default') or 'none'}")
     if stack is not None and stack not in stacks:
@@ -510,8 +512,10 @@ def check(recipe, *, fps=None, max_rev_s=None, symmetry=None, max_reps_s=None):
     for item in _sampled(recipe):
         verdict = PARTS[item['use']].sampling(item, _camera_fps(recipe, item, fps), symmetry=symmetry, max_rev_s=max_rev_s,
                                               max_reps_s=max_reps_s)
-        result.update({key: value for key, value in verdict.items() if key not in ('ok', 'problem')},
+        result.update({key: value for key, value in verdict.items() if key not in ('ok', 'problem', 'warning')},
                       count=item['use'])
+        if verdict.get('warning'):
+            result.setdefault('warnings', []).append(verdict['warning'])
         required = max(required, verdict['required_fps'])
         if verdict.get('ok') is False:
             ok = False
@@ -1178,6 +1182,17 @@ def slowdowns(values):
         except ValueError:
             raise SystemExit(f'--debug-slowdown {value!r}: write MODULE=MS@FROM-TO[,FROM-TO] (seconds)') from None
     return found
+
+
+def _transformed(recipe, args):
+    """The command line's ``--asr``, ``--pose`` and ``--set`` applied to a loaded recipe."""
+    if getattr(args, 'asr', None):
+        recipe = with_asr(recipe, args.asr)
+    if getattr(args, 'pose', None):
+        recipe = with_pose(recipe, args.pose)
+    if getattr(args, 'settings', None):
+        recipe = with_settings(recipe, args.settings)
+    return recipe
 
 
 def stacks_table(name):
@@ -1911,12 +1926,19 @@ def main(argv=None):
         # Both timing variants of the stack (or the one named), and the realtime fallbacks a start benchmark may pick;
         # setup skips what an earlier pass installed.
         for each in [args.timing] if getattr(args, 'timing', None) else TIMINGS:
-            each_recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()),
-                               getattr(args, 'with_roles', ()), None, **variants, timing=each)
-            fallbacks = {item['name']: item['choose']['fallback'] for item in each_recipe['modules']
-                         if each == 'realtime' and item['use'] in MEASURED_PARTS
-                         and (item.get('choose') or {}).get('fallback')}
-            for one in [each_recipe] + ([with_candidates(each_recipe, fallbacks)] if fallbacks else []):
+            each_recipe = _transformed(load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()),
+                                            getattr(args, 'with_roles', ()), None, **variants, timing=each), args)
+            passes = [each_recipe]
+            if each == 'realtime':      # what a start benchmark may switch to must be set up too
+                fallbacks = {item['name']: item['choose']['fallback'] for item in each_recipe['modules']
+                             if item['use'] in MEASURED_PARTS and (item.get('choose') or {}).get('fallback')}
+                if fallbacks:
+                    passes.append(with_candidates(each_recipe, fallbacks))
+                pose = next((item for item in each_recipe['modules'] if item['use'] in POSE_SOURCES
+                             and (item.get('choose') or {}).get('fallback')), None)
+                if pose is not None and not getattr(args, 'pose', None):
+                    passes.append(with_pose(each_recipe, pose['choose']['fallback'], module=pose['name']))
+            for one in passes:
                 setup(one, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile,
                       isolation=args.isolation)
         return
@@ -1924,12 +1946,7 @@ def main(argv=None):
         variants['timing'] = getattr(args, 'timing', None)
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
                   _kept(args) if args.action == 'run' else None, **variants)
-    if getattr(args, 'asr', None):
-        recipe = with_asr(recipe, args.asr)
-    if getattr(args, 'pose', None):
-        recipe = with_pose(recipe, args.pose)
-    if getattr(args, 'settings', None):
-        recipe = with_settings(recipe, args.settings)
+    recipe = _transformed(recipe, args)
     if getattr(args, 'timing', None) == 'realtime' and not getattr(args, 'realtime', None) and \
             not any(name in LIVE for name in _given(args)):
         args.as_live = True        # a file counted in realtime: given at its own pace, as a camera would

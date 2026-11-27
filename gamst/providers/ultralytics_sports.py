@@ -5,9 +5,12 @@ shows YOLO models with Ultralytics' trackers (BoT-SORT, ByteTrack) and its pose 
 weights. This adapter runs exactly that combination on the COCO weights of the ``v8.4.0`` release (``sports ball``,
 ``person``, ``tennis racket`` ... are COCO classes), each in its own environment:
 
-- :class:`UltralyticsObjects` (worker profile ``ultralytics.objects``): ``model.track(persist=True,
-  tracker="botsort.yaml" | "bytetrack.yaml")`` per frame, or ``model.predict`` with ``tracker: null``. It commits the
-  ``objects`` contract of every GAMST detector (``docs/vision-detection.md``), track IDs from Ultralytics' tracker.
+- :class:`UltralyticsObjects` (worker profile ``ultralytics.objects``): ``model.predict`` per frame, then Ultralytics'
+  own tracker (``botsort.yaml`` / ``bytetrack.yaml`` through ``ultralytics.trackers.track.TRACKER_MAP``) updated with
+  those detections, as ``model.track`` does. Unlike ``model.track``, every detection is committed: ``model.track``
+  hides detections whose track is not confirmed yet (8.4.212 ``on_predict_postprocess_end``), and a fast ball that
+  never overlaps itself between frames would never appear. Tracked detections carry ``track-<id>``, the others
+  ``object-<n>``. It commits the ``objects`` contract of every GAMST detector (``docs/vision-detection.md``).
 - :class:`UltralyticsPoseModels` (model worker ``ultralytics.pose``): YOLO26-pose, 17 COCO keypoints per person;
   joints leave the worker only as a private payload, like RTMW's (``gamst/providers/rtmw_pose.py``), and the same
   ``RTMWPosePlugin`` follows the people in this process.
@@ -28,6 +31,7 @@ from ..capabilities import CapabilitySpec, OutputField
 TRACKERS = ('botsort', 'bytetrack')
 DEVICES = ('cpu', 'mps', 'cuda')
 POINTS = 17
+MAX_POSES = 4      # as RTMW: up to 16 frames of 4 people in one private payload (gamst/private_payload.py)
 VERSION = '8.4.212'
 
 
@@ -56,6 +60,8 @@ def check_config(config, *, pose=False):
     for key, default in (('conf', .25), ('iou', .7)):
         if type(config.get(key, default)) not in (int, float) or not 0 < config.get(key, default) <= 1:
             raise ValueError(f'{key} must be in (0, 1]')
+    if pose and (type(config.get('max_poses', 4)) is not int or not 1 <= config.get('max_poses', 4) <= MAX_POSES):
+        raise ValueError(f'max_poses is 1..{MAX_POSES} (the private joints payload holds 16 frames of {MAX_POSES})')
     labels = config.get('labels')
     if labels is not None and (not isinstance(labels, list) or not labels or not all(isinstance(v, str) for v in labels)):
         raise ValueError('labels is a list of class names to keep')
@@ -94,20 +100,29 @@ class UltralyticsObjects:
         config = check_config(dict(config))
         return cls(_load(config['path'], config['sha256'], config.get('device', 'cpu')), config)
 
-    def __init__(self, model, config):
+    def __init__(self, model, config, tracker=None):
         self.model, self.config = model, dict(config)
         self.spec = self.capability(config)
         self.tracker = config.get('tracker', 'botsort')
+        self._tracker = tracker if tracker is not None or self.tracker is None else self._ultralytics_tracker(self.tracker)
         names = getattr(model, 'names', {}) or {}
         labels = config.get('labels')
         self.classes = None if labels is None else [index for index, name in names.items() if name in labels]
         if labels is not None and not self.classes:
             raise ValueError(f'none of {labels} is a class of this model')
 
+    @staticmethod
+    def _ultralytics_tracker(name):
+        """Ultralytics' tracker of ``name`` with its default YAML, as ``on_predict_start`` makes it (8.4.212)."""
+        from ultralytics.trackers.track import TRACKER_MAP
+        from ultralytics.utils import YAML, IterableSimpleNamespace
+        from ultralytics.utils.checks import check_yaml
+        cfg = IterableSimpleNamespace(**YAML.load(check_yaml(f'{name}.yaml')))
+        return TRACKER_MAP[cfg.tracker_type](args=cfg)
+
     def reset(self):
-        predictor = getattr(self.model, 'predictor', None)
-        for tracker in getattr(predictor, 'trackers', None) or ():
-            tracker.reset()
+        if self._tracker is not None:
+            self._tracker.reset()
 
     def close(self):
         self.model = None
@@ -121,24 +136,24 @@ class UltralyticsObjects:
         options = dict(imgsz=self.config.get('imgsz', 640), conf=self.config.get('conf', .25),
                        iou=self.config.get('iou', .7), classes=self.classes, verbose=False,
                        device=self.config.get('device', 'cpu'), max_det=self.config.get('max_objects', 64))
-        if self.tracker is None:
-            result = self.model.predict(image, **options)[0]
-        else:
-            result = self.model.track(image, persist=True, tracker=f'{self.tracker}.yaml', **options)[0]
+        result = self.model.predict(image, **options)[0]
         found = result.boxes
         objects = []
         if found is not None and len(found):
             xyxy = found.xyxy.cpu().numpy()
             scores = found.conf.cpu().numpy()
             classes = found.cls.cpu().numpy().astype(int)
-            ids = None if found.id is None else found.id.cpu().numpy().astype(int)
+            ids = None
+            if self._tracker is not None:       # tracks rows: x1, y1, x2, y2, id, score, cls, detection index
+                tracks = self._tracker.update(found.cpu().numpy(), image)
+                ids = {int(row[-1]): int(row[4]) for row in tracks} if len(tracks) else {}
             for row, (box, score, cls) in enumerate(zip(xyxy, scores, classes)):
                 x0, y0, x1, y1 = (float(v) for v in box)
                 x0, x1 = max(0., x0 / width), min(1., x1 / width)
                 y0, y1 = max(0., y0 / height), min(1., y1 / height)
                 if x1 <= x0 or y1 <= y0 or not math.isfinite(float(score)):
                     continue
-                track = None if ids is None else f'track-{int(ids[row])}'
+                track = f'track-{ids[row]}' if ids and row in ids else None
                 objects.append(dict(track_id=track or f'object-{row}', label=str(result.names[int(cls)]),
                                     attributes=dict(class_id=int(cls), score=round(float(score), 4),
                                                     association='ultralytics.' + (self.tracker or 'none'),

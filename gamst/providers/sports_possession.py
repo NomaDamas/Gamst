@@ -9,7 +9,8 @@ changes from A to B:
 - ``possession.turnover``: other team;
 - ``possession.changed``: teams unknown.
 
-No holder for ``loose_ms`` makes the ball loose (``possession.loose``). The ball is often hidden by the player who
+No holder for ``loose_ms`` makes the ball loose (``possession.loose``). A long pass flies loose: the next holder within
+``max_pass_ms`` of the last one is still classified against that last holder (``via_loose: true``). The ball is often hidden by the player who
 holds it; ``hidden_ms`` keeps the holder while the ball is missing near them. These are estimates from one camera,
 never official statistics: every event says so (``estimated: true``).
 """
@@ -24,13 +25,13 @@ from ..sports.objects import boxes
 
 class Possession:
     def __init__(self, *, ball, players, player_labels=('person',), reach=.03, hold_ms=200, loose_ms=800,
-                 hidden_ms=1000, capability_id='sports.possession'):
+                 hidden_ms=1000, max_pass_ms=6000, capability_id='sports.possession'):
         for name, value in (('hold_ms', hold_ms), ('loose_ms', loose_ms), ('hidden_ms', hidden_ms)):
             if type(value) is not int or not 0 <= value <= 30_000:
                 raise ValueError(f'{name} must be 0..30000 milliseconds')
         self.ball, self.players = identifier(ball, 'module name'), identifier(players, 'module name')
         self.player_labels, self.reach = tuple(player_labels), float(reach)
-        self.hold_ms, self.loose_ms, self.hidden_ms = hold_ms, loose_ms, hidden_ms
+        self.hold_ms, self.loose_ms, self.hidden_ms, self.max_pass_ms = hold_ms, loose_ms, hidden_ms, int(max_pass_ms)
         self._lock = threading.RLock()
         self.spec = CapabilitySpec(
             capability_id, capability_id, 'events', 'gamst.sports_possession', f'1.{reach}-{hold_ms}-{loose_ms}',
@@ -45,6 +46,7 @@ class Possession:
         with self._lock:
             self._players = deque(maxlen=32)
             self._holder = None         # (track_id, team, since_ms, last_ms)
+            self._previous = None       # the holder before the ball went loose
             self._candidate = None      # (track_id, team, since_ms)
             self._passes = self._turnovers = 0
             self._team_time = {}
@@ -72,7 +74,10 @@ class Possession:
 
     def _change(self, track, team, at_ms):
         events = []
-        old = self._holder
+        old, via_loose = self._holder, False
+        if old is None and self._previous is not None and at_ms - self._previous[3] <= self.max_pass_ms:
+            old, via_loose = self._previous, True       # a pass that flew loose for a while
+        self._previous = None
         if old is not None and old[0] != track:
             kind = 'changed' if not (old[1] and team) else 'pass' if old[1] == team else 'turnover'
             if kind == 'pass':
@@ -82,8 +87,8 @@ class Possession:
             events.append(dict(event=f'possession.{kind}', timestamp_ms=int(at_ms), start_ms=int(old[3]),
                                end_ms=int(at_ms), **{'from': old[0], 'to': track}, from_team=old[1], to_team=team,
                                index=self._passes if kind == 'pass' else self._turnovers if kind == 'turnover' else 0,
-                               estimated=True))
-        elif old is None:
+                               via_loose=via_loose, estimated=True))
+        elif old is None or via_loose:
             events.append(dict(event='possession.started', timestamp_ms=int(at_ms), who=track, team=team, estimated=True))
         self._holder = (track, team, at_ms, at_ms)
         self._loose_reported = False
@@ -122,5 +127,5 @@ class Possession:
             if self._holder is not None and not self._loose_reported and at_ms - self._holder[3] >= self.loose_ms:
                 events.append(dict(event='possession.loose', timestamp_ms=int(self._holder[3]), last=self._holder[0],
                                    team=self._holder[1], estimated=True))
-                self._holder, self._loose_reported = None, True
+                self._previous, self._holder, self._loose_reported = self._holder, None, True
             return self._value(events) if events else None

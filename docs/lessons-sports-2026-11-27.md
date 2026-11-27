@@ -27,3 +27,11 @@ Keep adding to this file. Each lesson says what happened, the evidence, and what
    (`TrackNetV3_ckpts.zip`), not the `.pt` file.
 8. **Run the suite the way CI does.** `pytest tests` fails at collection (`from tests.x import` without a package);
    CI runs `python -m unittest discover -s tests`.
+9. **An independent review found 13 defects that 39 green synthetic tests did not.** Examples: Ultralytics'
+   `model.track` hides detections whose track is not confirmed, so a fast ball would never reach the ball module;
+   the record-speed bound refused 30 fps badminton, the frame rate of TrackNetV3's own data; a long pass that flew
+   loose was never counted; one missed detection ended a billiards shot; a 60-frame median stalled realtime for
+   about 500 ms. Evidence: the review report and the fixes in this branch (tests added for each). Now: an unanchored
+   review runs before every sports PR, and synthetic tests include missed detections and long gaps.
+10. **`str.replace` replaces every occurrence.** A fix meant for `check_config` also landed in a constructor with the
+    same line and broke the module. Now: edits by script assert `count(old) == 1`.

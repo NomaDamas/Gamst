@@ -59,8 +59,11 @@ def preset(sport):
 
 
 def ball_sampling(options, fps, *, sport=None, **_):
-    """The frame rate a ball recipe needs: enough samples between two contacts, and a per-frame travel the tracker can
-    follow. Returns the verdict for ``fps`` (``ok``, ``problem``) and what each bound requires."""
+    """The frame rate a ball recipe needs (``required_fps``, a hard bound): enough samples between the two fastest
+    contacts to see the ball's path break. The travel per frame at the record speed is reported beside it
+    (``recommended_fps``, a warning only): a record is a launch peak (a smash leaves at 565 km/h and slows within
+    metres), and TrackNetV3's own badminton set is 30 fps. Returns the verdict for ``fps`` (``ok``, ``problem``,
+    ``warning``)."""
     from .court import COURTS
     chosen = preset(sport or options.get('sport') or 'tennis')
     speed = float(options.get('max_ball_kmh') or chosen['max_ball_kmh']) / 3.6
@@ -69,17 +72,18 @@ def ball_sampling(options, fps, *, sport=None, **_):
     frames = int(options.get('frames_per_contact', FRAMES_PER_CONTACT))
     share = float(options.get('max_travel_share', MAX_TRAVEL_SHARE))
     by_contact, by_travel = frames / contact, speed / (share * length)
-    required = max(by_contact, by_travel)
     result = dict(sport=chosen['sport'], max_ball_kmh=round(speed * 3.6), min_contact_s=contact,
-                  required_fps=round(required, 1), required_by_contacts_fps=round(by_contact, 1),
-                  required_by_travel_fps=round(by_travel, 1), speed_source=chosen['speed_source'],
-                  contact_source=chosen['contact_source'])
+                  required_fps=round(by_contact, 1), recommended_fps=round(max(by_contact, by_travel), 1),
+                  speed_source=chosen['speed_source'], contact_source=chosen['contact_source'])
     if fps:
         travel = speed / fps
         result.update(travel_m_per_frame=round(travel, 2), contact_time_error_ms=round(500 / fps, 1),
-                      ok=fps >= required,
-                      problem=None if fps >= required else
-                      f"{fps:g} fps: the {chosen['ball']} moves up to {travel:.2f} m between frames "
-                      f"({travel / length:.0%} of the court) and {contact * fps:.1f} frames lie between its fastest "
-                      f"two contacts; {chosen['sport']} needs {required:.0f} fps")
+                      ok=fps >= by_contact,
+                      problem=None if fps >= by_contact else
+                      f"{fps:g} fps: only {contact * fps:.1f} frames lie between the {chosen['ball']}'s fastest two "
+                      f"contacts ({frames} are needed to see its path break); {chosen['sport']} needs {by_contact:.0f} fps")
+        if fps < by_travel:
+            result['warning'] = (f"at its record speed the {chosen['ball']} moves {travel:.2f} m between frames "
+                                 f"({travel / length:.0%} of the court): the fastest shots may be lost; "
+                                 f"{by_travel:.0f} fps or more is better")
     return result

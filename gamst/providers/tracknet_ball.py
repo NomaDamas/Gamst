@@ -12,14 +12,18 @@ qaz812345), rewritten here so the checkpoint loads without its training code; th
 Realtime and post differ here (docs/sports.md):
 
 - ``ensemble: "causal"`` (realtime): each new frame closes a window ending at it; the window's last heatmap is the
-  answer for that frame, at once.
-- ``ensemble: "weight"`` (post, the authors' default ``eval_mode=weight``): every frame is in ``seq_len`` windows;
-  their heatmaps are averaged with the authors' positional weights. The answer for a frame comes ``seq_len - 1``
-  frames later (``frame_ms`` says which frame it is). InpaintNet trajectory rectification (also post-only) is not
-  wired yet.
+  answer for that frame, at once. Before ``seq_len`` frames have come, the window is padded with the first frame (a
+  live start; the authors never feed a padded window).
+- ``ensemble: "weight"`` (post, the authors' default ``eval_mode=weight``, ``predict.py``): only full windows run.
+  A frame that was in all ``seq_len`` windows gets the positional weights; the first and last ``seq_len - 1`` frames,
+  in fewer windows, the plain mean of the windows they were in, as the authors do. The answer for a frame comes
+  ``seq_len - 1`` frames later (``frame_ms`` says which frame it is). InpaintNet trajectory rectification (also
+  post-only) is not wired yet.
 
-The background is the median of frames sampled every ``median_every_ms`` (up to ``median_frames``), recomputed as
-samples come in; the authors compute it over the whole video before the first frame, which a live camera cannot.
+The background is the median of frames sampled every ``median_every_ms`` (up to ``median_frames``, 15 by default),
+recomputed when the sample count reaches 1, 3, 7 and 15 (one median of 15 frames at 512 x 288 is a fraction of the
+500 ms that 60 took); the authors compute it over the whole video before the first frame, which a stream cannot,
+so the first frames see a background of few samples.
 """
 from __future__ import annotations
 
@@ -174,7 +178,7 @@ class TrackNetBall:
                    version=config['sha256'][:16])
 
     def __init__(self, model, *, seq_len, bg_mode='concat', device='cpu', ensemble='causal', threshold=.5,
-                 median_frames=60, median_every_ms=500, version='custom', infer=None):
+                 median_frames=15, median_every_ms=500, version='custom', infer=None):
         if bg_mode not in BG_MODES:
             raise ValueError(f'bg_mode is one of {BG_MODES}')
         self.model, self.seq_len, self.bg_mode, self.device = model, int(seq_len), bg_mode, device
@@ -206,7 +210,9 @@ class TrackNetBall:
         if self._last_sample_ms is None or ms - self._last_sample_ms >= self.median_every_ms:
             if len(self._samples) < self.median_frames:
                 self._samples.append(image)
-                self._median = np.median(np.stack(self._samples), 0).astype(np.uint8)
+                count = len(self._samples)
+                if self._median is None or count == self.median_frames or count & (count + 1) == 0:   # 1, 3, 7, 15
+                    self._median = np.median(np.stack(self._samples), 0).astype(np.uint8)
             self._last_sample_ms = ms
         return self._median
 
@@ -245,34 +251,35 @@ class TrackNetBall:
         ms = frame.timestamp_ms
         self._frames.append((ms, rgb))
         median = self._background(ms, rgb)
-        heatmaps = self._infer(self._stacked(median))           # (seq_len, H, W): one per frame of the window
         if self.ensemble == 'causal':
-            answers = [self._answer(ms, heatmaps[-1])]
-        else:
-            window = [item[0] for item in self._frames]
-            offset = self.seq_len - len(window)
-            for position, at in enumerate(window):
-                weight = self.weight[position + offset]
-                total = self._pending.get(at)
-                if total is None:
-                    self._pending[at] = [heatmaps[position + offset].astype(np.float32) * weight, weight]
-                    self._order.append(at)
-                else:
-                    total[0] += heatmaps[position + offset] * weight
-                    total[1] += weight
-            answers = []
-            while self._order and (len(self._order) > self.seq_len - 1):
-                at = self._order.popleft()
-                total = self._pending.pop(at)
-                answers.append(self._answer(at, total[0] / total[1]))
+            heatmaps = self._infer(self._stacked(median))       # (seq_len, H, W): one per frame of the window
+            return self.spec.validate(dict(frames=[self._answer(ms, heatmaps[-1])],
+                                           model=f'tracknetv3:{self.version}:{self.ensemble}'))
+        if len(self._frames) < self.seq_len:                    # post: full windows only, as the authors
+            return self.spec.validate(dict(frames=[], model=f'tracknetv3:{self.version}:{self.ensemble}'))
+        heatmaps = self._infer(self._stacked(median))
+        for position, (at, _) in enumerate(self._frames):
+            total = self._pending.get(at)
+            if total is None:
+                total = self._pending[at] = [np.zeros_like(heatmaps[0], dtype=np.float32),
+                                             np.zeros_like(heatmaps[0], dtype=np.float32), 0]
+                self._order.append(at)
+            total[0] += heatmaps[position] * self.weight[position]      # positional weights
+            total[1] += heatmaps[position]                              # plain sum
+            total[2] += 1
+        # the window's first frame is in no later window: it is decided now
+        answers = [self._decided(self._order.popleft())]
         return self.spec.validate(dict(frames=answers, model=f'tracknetv3:{self.version}:{self.ensemble}'))
+
+    def _decided(self, at):
+        weighted, plain, windows = self._pending.pop(at)
+        # all seq_len windows: the weighted ensemble; fewer (the first and last frames): their plain mean (predict.py)
+        return self._answer(at, weighted if windows == self.seq_len else plain / windows)
 
     def finish(self):
         """Post: the last ``seq_len - 1`` frames, from the windows that reached them."""
         answers = []
         while self._order:
-            at = self._order.popleft()
-            total = self._pending.pop(at)
-            answers.append(self._answer(at, total[0] / total[1]))
+            answers.append(self._decided(self._order.popleft()))
         return self.spec.validate(dict(frames=answers, model=f'tracknetv3:{self.version}:{self.ensemble}')) \
             if answers else None

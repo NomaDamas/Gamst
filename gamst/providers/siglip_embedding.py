@@ -1,8 +1,9 @@
 """SigLIP image embeddings of player crops (the Roboflow Sports team split's model), in the worker's environment.
 
-Roboflow Sports (MIT, ``sports/common/team.py``) embeds player crops with ``google/siglip-base-patch16-224``
-(Apache-2.0), reduces them with UMAP and clusters them with k-means. Here the worker returns the pooled vision
-embedding; :class:`gamst.providers.sports_team.TeamSplit` reduces (PCA) and clusters. Only the pinned
+Roboflow Sports (MIT, ``sports/common/team.py``) embeds whole player crops with ``google/siglip-base-patch16-224``
+(Apache-2.0) as the mean of the vision tower's last hidden state, reduces them with UMAP and clusters them with
+k-means. Here the worker returns that same embedding; :class:`gamst.providers.sports_team.TeamSplit` reduces (PCA)
+and clusters. Only the pinned
 ``model.safetensors`` is read: the vision tower's configuration is SigLIP base/16 at 224 px (the defaults of
 ``transformers.SiglipVisionConfig``), and the pre-processing is that checkpoint's (``preprocessor_config.json``:
 resize to 224 x 224, scale to [0, 1], normalise with mean 0.5 and std 0.5), so no unpinned file is needed.
@@ -54,5 +55,6 @@ class SigLIPEmbedder:
         image = np.asarray(Image.fromarray(np.ascontiguousarray(image_bgr[:, :, ::-1])).resize((224, 224), Image.BICUBIC),
                            dtype=np.float32) / 255.
         tensor = torch.from_numpy(((image - .5) / .5).transpose(2, 0, 1)[None]).to(self.device)
-        output = self.model(pixel_values=tensor).pooler_output[0]
-        return torch.nn.functional.normalize(output, dim=0).cpu().numpy().astype('<f4').tolist()
+        # Roboflow Sports (sports/common/team.py): the mean of the last hidden state over the patches
+        output = self.model(pixel_values=tensor).last_hidden_state[0].mean(dim=0)
+        return output.cpu().numpy().astype('<f4').tolist()
