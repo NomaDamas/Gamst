@@ -199,9 +199,9 @@ class ScenePropagationTest(unittest.TestCase):
         self.assertEqual(found, [])
 
     def test_the_face_confirmed_later_in_the_scene_reaches_back_to_the_ended_track_over_its_own_span(self):
-        from gamst.providers.person_binding import intervals_of, resolve
         found, module = self.replay(scene_threshold=.9)
-        self.assertEqual([item[:3] for item in found], [('person.bound', 'a', 'scene'), ('person.unbound', 'a', 'scene_ended')])
+        self.assertEqual([item[:3] for item in found],
+                         [('person.bound', 'a', 'scene'), ('person.unbound', 'a', 'scene_ended')])
         self.assertEqual(found[1][3:], (0, 1000))
         self.assertEqual(module.counts['scene_propagated'], 1)
 
@@ -321,3 +321,13 @@ class WaitForScoresTest(unittest.IsolatedAsyncioTestCase):
         replaced, bound = await run(True)
         self.assertEqual(replaced, 0)
         self.assertEqual([(item['track_id'], item['start_ms']) for item in bound], [('b', 0)])
+
+
+class WithBindingsTest(unittest.TestCase):
+    def test_a_replays_bindings_replace_the_recorded_ones_after_the_poses_of_their_frame(self):
+        from gamst.eval.binding_replay import with_bindings
+        dump = dict(header={}, events=[], frames=[('poses', 0, []), ('binding', 0, ['old']), ('poses', 33, []),
+                                                   ('binding', 33, ['old'])])
+        out = with_bindings(dump, [(33, ['new']), (99, ['end'])])
+        self.assertEqual(out['frames'], [('poses', 0, []), ('poses', 33, []), ('binding', 33, ['new']),
+                                         ('binding', 99, ['end'])])

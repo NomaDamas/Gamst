@@ -633,6 +633,8 @@ async def _person_binding(options, context):
                  'appearance_across_cuts', 'scene_threshold', 'reject_after', 'reach_back', 'wait_for_scores'):
         if name in options:
             arguments[name] = options[name]
+    # a finished file (--timing post): each frame waits for its face and body scores, none is dropped (accuracy first)
+    arguments.setdefault('wait_for_scores', context.get('timing') == 'post')
     module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
     return dict(module=module, spec=module.spec)
 
