@@ -33,8 +33,10 @@ folds across the palm in a fist and stays out) divided by the palm length (hand 
 the wrist, the middle MCP and at least two of the four tips visible, and averages the visible tips. It does not depend
 on how large the hand appears, so it needs no shoulders. Measured with RTMW-l on the owner's 맨까송 clip (hands judged by
 eye, docs/measurements/testbed-2026-11-26.md "Hand joints"): fists 0.65-0.92 in 7 of 9, open hands 1.0-2.1 (median
-1.62); below 1.0 held 7 of 9 fists and 0 of 28 open hands, but also 12 of 43 crops where no hand was in view (RTMW
-scores are clipped to 1 on the wire, so its 0.3 gate passes such hands): require the arm's own movement as well.
+1.62); with the 0.3 gate below 1.0 held 7 of 9 fists and 0 of 28 open hands, but also 12 of 43 crops where no hand was
+in view (RTMW scores are clipped to 1 on the wire, so that gate passed such hands). RTMW hands are now gated on the raw
+score (3.0, :data:`gamst.providers.rtmw_pose.HAND_MIN_RAW_SCORE`): 9/9 fists and 27/28 open hands stay known, 25 of the
+43 crops without a hand become unknown, and below 1.0 holds 3 of them. Still require the arm's own movement as well.
 
 One step is a *hold*: it matches after ``hold_ms`` and ends when its violation exceeds ``margin``. Several
 steps are an *ordered movement*: each later step must be reached ``within_ms`` of the step before it, else

@@ -6,7 +6,7 @@ from gamst.plugins import InputFrame
 from gamst.private_payload import PrivatePoses
 from gamst.providers.movement_rule import RuleScorer, hand_open, validate_rule
 from gamst.providers.pose_exemplar import (COCO_WHOLEBODY_HANDS, GOLIATH_HANDS, HAND_JOINTS, MEDIAPIPE_BODY,
-                                           ExemplarEvents, body_points, keypoint_reading)
+                                           ExemplarEvents, body_points, keypoint_reading, raw_score_gates)
 
 
 def hand(side, opened, wrist=(.6, .5), scale=.05, visibility=.9, tips_visible=4):
@@ -39,7 +39,15 @@ def pose(points, keypoint_set='coco_wholebody133'):
 
 def points_of(item, hands=True):
     own, gate = keypoint_reading(item, MEDIAPIPE_BODY, .5, hands=hands)
-    return body_points(item['landmarks'], own, min_visibility=gate)
+    return body_points(item['landmarks'], own, min_visibility=gate, raw_gates=raw_score_gates(item, own))
+
+
+def with_raw(item, raw):
+    """``item`` with every landmark's ``raw_score`` set to ``raw`` and its visibility clipped from it, as the worker
+    sends RTMW's scores."""
+    for point in item['landmarks']:
+        point.update(raw_score=raw, visibility=min(1., max(0., raw)))
+    return item
 
 
 class HandJoints(unittest.TestCase):
@@ -71,6 +79,28 @@ class HandJoints(unittest.TestCase):
         dim = pose(hand('right', 0, visibility=.35))
         self.assertIn('right_index_tip', points_of(dim))
         self.assertNotIn('right_index_tip', body_points(dim['landmarks'], COCO_WHOLEBODY_HANDS, min_visibility=.5))
+
+
+    def test_rtmw_hands_are_gated_on_the_raw_score_and_the_body_as_before(self):
+        from gamst.providers.rtmw_pose import COCO_WHOLEBODY_BODY, HAND_MIN_RAW_SCORE
+        self.assertEqual(HAND_MIN_RAW_SCORE, 3.)
+        # a hand not in view: RTMW scores it about 2.5 raw, which clips to 1 and passed the 0.3 gate
+        unseen = with_raw(pose(hand('right', 1)), 2.5)
+        self.assertTrue(all(point['visibility'] == 1. for point in unseen['landmarks']))
+        self.assertEqual(set(HAND_JOINTS) & set(points_of(unseen)), set())
+        self.assertIsNone(hand_open(points_of(unseen), 'right'))
+        seen = with_raw(pose(hand('right', 1)), 4.2)
+        self.assertGreater(hand_open(points_of(seen), 'right'), 1.9)
+        # body joints keep the 0.3 gate (rtmlib's, on the raw score: clipping changes nothing below 1)
+        body = with_raw(pose({}), .5)
+        own, gate = keypoint_reading(body, hands=True)
+        self.assertTrue(set(COCO_WHOLEBODY_BODY) <= set(body_points(body['landmarks'], own, min_visibility=gate,
+                                                                     raw_gates=raw_score_gates(body, own))))
+        self.assertEqual(set(raw_score_gates(body, own)), set(COCO_WHOLEBODY_HANDS))
+        # a worker without raw_score: the visibility gate as before; Sapiens2 and MediaPipe have no raw gate
+        self.assertIn('right_index_tip', points_of(pose(hand('right', 0, visibility=.35))))
+        self.assertIsNone(raw_score_gates(pose(hand('right', 1), 'goliath308'), GOLIATH_HANDS))
+        self.assertIsNone(raw_score_gates(dict(landmarks=[]), MEDIAPIPE_BODY))
 
 
 class HandOpen(unittest.TestCase):

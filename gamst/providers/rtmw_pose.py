@@ -38,6 +38,13 @@ COCO_WHOLEBODY_BODY = dict(left_shoulder=5, right_shoulder=6, left_elbow=7, righ
                            right_wrist=10, left_hip=11, right_hip=12, left_knee=13, right_knee=14,
                            left_ankle=15, right_ankle=16)
 MIN_VISIBILITY = .3     # rtmlib's keypoint threshold (``format_result``, ``draw_skeleton``)
+# Hand joints are gated on RTMW's raw keypoint score (``raw_score``), not the 0..1 ``visibility`` it is clipped to:
+# hands not in view score about 1.6-6.7 raw, so the clipped value (1) passed them all. Measured on the owner's 맨까송
+# clip (80 hand crops judged by eye, docs/measurements/testbed-2026-11-26.md "Hand joints"): 3.0 keeps 9 of 9 fists
+# and 26 of 28 open hands and drops 27 of 43 crops with no hand in view. Body joints keep 0.3: rtmlib's gate is on the
+# raw score too, and below 1 clipping changes nothing.
+HAND_MIN_RAW_SCORE = 3.
+RAW_LIMIT = 100.        # the private payload's bound (``private_payload.CONTRACTS``); raw scores measured are below 12
 DEVICES = ('cpu', 'coreml')
 COMPUTE_UNITS = ('ALL', 'CPUAndGPU', 'CPUOnly', 'CPUAndNeuralEngine')
 # One call of the worker: at most MAX_FRAMES consecutive frames and MAX_POSES people in each (the private payload
@@ -296,7 +303,8 @@ def to_poses(boxes, keypoints, scores, width, height):
     poses = []
     for index, (box, points, values) in enumerate(zip(boxes, keypoints, scores)):
         landmarks = [dict(x=float(x) / width, y=float(y) / height, visibility=float(min(1., max(0., score))),
-                          presence=1.) for (x, y), score in zip(points, values)]
+                          presence=1., raw_score=float(min(RAW_LIMIT, max(-RAW_LIMIT, score))))
+                     for (x, y), score in zip(points, values)]
         x0, y0, x1, y1 = (float(v) for v in box)
         x0, x1 = max(0., x0 / width), min(1., x1 / width)
         y0, y1 = max(0., y0 / height), min(1., y1 / height)

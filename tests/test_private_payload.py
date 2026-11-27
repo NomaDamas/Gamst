@@ -99,7 +99,8 @@ class ContractTest(unittest.TestCase):
         block = dict(layout=dict(shape=[160]))
         good = [('mediapipe.body.video', dict(poses=[{}]), np.zeros((1, 33, 4))), ('sapiens2.pose', dict(poses=[{}, {}]), np.zeros((2, 308, 3))),
                 ('face.embedding', dict(usable=True), np.ones(512)), ('speaker.embedding', dict(usable=False), np.zeros(0)),
-                ('target_speech.local', dict(samples_returned=160), np.zeros(160)), ('target_speech.local', dict(samples_returned=0), np.zeros(0))]
+                ('target_speech.local', dict(samples_returned=160), np.zeros(160)), ('target_speech.local', dict(samples_returned=0), np.zeros(0)),
+                ('rtmw.pose', dict(poses=[{}]), np.zeros((1, 133, 3))), ('rtmw.pose', dict(poses=[{}]), np.zeros((1, 133, 4)))]
         for profile, public, value in good:
             descriptor, payload = pack(profile, public, value, block)
             array = unpack(profile, public, descriptor, payload, block).take(CONTRACTS[profile].kind)
@@ -108,7 +109,8 @@ class ContractTest(unittest.TestCase):
                ('mediapipe.body.video', dict(poses=[{}] * 5), np.zeros((5, 33, 4))), ('sapiens2.pose', dict(poses=[{}]), np.zeros((1, 133, 3))),
                ('face.embedding', dict(usable=True), np.ones(5000)), ('face.embedding', dict(usable=True), np.ones(3)),
                ('face.embedding', dict(usable=False), np.ones(512)), ('face.embedding', dict(usable=True), np.full(512, np.inf)),
-               ('target_speech.local', dict(samples_returned=161), np.zeros(161)), ('target_speech.local', dict(samples_returned=160), np.full(160, 1e5))]
+               ('target_speech.local', dict(samples_returned=161), np.zeros(161)), ('target_speech.local', dict(samples_returned=160), np.full(160, 1e5)),
+               ('rtmw.pose', dict(poses=[{}]), np.zeros((1, 133, 5))), ('sapiens2.pose', dict(poses=[{}]), np.zeros((1, 308, 4)))]
         for profile, public, value in bad:
             with self.assertRaises(ValueError):
                 pack(profile, public, value, block)

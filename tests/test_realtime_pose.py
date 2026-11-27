@@ -515,6 +515,37 @@ class RTMWBatch(unittest.TestCase):
             found = asyncio.run(remote.infer_batch(batch, list(range(len(batch)))))
             self.assertEqual([len(poses) for poses in found], [0] if len(batch) == 1 else [0, 1, 0])
 
+    def test_the_raw_keypoint_score_crosses_the_contract_beside_the_clipped_one(self):
+        from gamst.private_payload import CONTRACTS, pack, unpack
+        from gamst.providers.model_workers import RemoteRTMW, _RTMW, capability
+        models = self.models(det_every_ms=0)
+        models.version = 'rtmw:test'
+        postprocess = models.pose.postprocess
+
+        def raw(outputs, center, scale):        # RTMW's SimCC maxima: not probabilities (about 0.4-12 measured)
+            points, _ = postprocess(outputs, center, scale)
+            return points, np.linspace(.2, 6.7, 133, dtype='f4')[None]
+        models.pose.postprocess = raw
+        image = np.full((480, 640, 3), 7, np.uint8)
+        public, joints = _RTMW(models).query(SimpleNamespace(data=image), dict(frames=1, timestamps_ms=[0]))
+        self.assertEqual(joints.shape, (1, 133, 4))
+        self.assertAlmostEqual(float(joints[0, 132, 2]), 1.)              # visibility: clipped as before
+        self.assertAlmostEqual(float(joints[0, 132, 3]), 6.7, places=5)   # raw_score: as RTMW gave it
+        spec = capability('rtmw.pose', dict(path='p', sha256='0' * 64, det_path='d', det_sha256='1' * 64))
+        public = spec.validate(public)
+        for width in (4, 3):        # a worker from before raw_score still answers, without it
+            descriptor, payload = pack('rtmw.pose', public, joints[:, :, :width], None)
+            private = unpack('rtmw.pose', public, descriptor, payload, None)
+
+            class Worker:
+                async def query(self, frame, request):
+                    return public, private
+            remote = object.__new__(RemoteRTMW)
+            remote.worker, remote._sequence = Worker(), 0
+            point = asyncio.run(remote.infer_batch([image], [0]))[0][0]['landmarks'][132]
+            self.assertEqual(set(point), {'x', 'y', 'visibility', 'presence'} | ({'raw_score'} if width == 4 else set()))
+        self.assertEqual(CONTRACTS['rtmw.pose'].columns_for(4)[-1], 'raw_score')
+
     def test_the_module_tracks_through_frames_without_a_person(self):
         from gamst.pipeline import Derived
         from gamst.providers.rtmw_pose import RTMWPosePlugin
@@ -547,7 +578,7 @@ class RTMWBatch(unittest.TestCase):
         stacked = np.concatenate([np.full((480, 640, 3), index, np.uint8) for index in range(3)])
         public, joints = _RTMW(models).query(SimpleNamespace(data=stacked), dict(frames=3, timestamps_ms=[0, 17, 33]))
         self.assertEqual([pose['in_batch'] for pose in public['poses']], [0, 1, 2])
-        self.assertEqual((public['image_height'], public['frames'], joints.shape), (480, 3, (3, 133, 3)))
+        self.assertEqual((public['image_height'], public['frames'], joints.shape), (480, 3, (3, 133, 4)))
         from gamst.providers.model_workers import capability
         spec = capability('rtmw.pose', dict(path='p', sha256='0' * 64, det_path='d', det_sha256='1' * 64))
         self.assertEqual(spec.validate(public)['frames'], 3)     # what the worker answers passes its contract

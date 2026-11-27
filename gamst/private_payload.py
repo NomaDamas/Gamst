@@ -34,13 +34,20 @@ class Contract:
     max_items: int = 0        # joints: people; embedding: vector length; sources: speakers
     limit: float = 1e6        # largest absolute value
     private_only: bool = True # the profile has no use without its private payload
+    optional_columns: tuple = ()  # joints: further columns a newer worker may add after ``columns`` (all or none)
+
+    def columns_for(self, width):
+        """The columns of joint rows ``width`` values wide: ``columns``, or with the optional ones."""
+        return self.columns + self.optional_columns if width == len(self.columns) + len(self.optional_columns) \
+            else self.columns
 
     def check_shape(self, shape, frame):
         """``frame``: the request's wire frame header. Returns the byte count."""
         if type(shape) is not list or any(type(size) is not int or size < 0 for size in shape):
             raise ValueError('private payload shape must be a list of sizes')
         if self.kind == 'joints':
-            valid = len(shape) == 3 and shape[0] <= self.max_items and shape[1:] == [self.points, len(self.columns)]
+            valid = len(shape) == 3 and shape[0] <= self.max_items and shape[1] == self.points \
+                and shape[2] in {len(self.columns), len(self.columns) + len(self.optional_columns)}
         elif self.kind == 'embedding':
             valid = len(shape) == 1 and (shape[0] == 0 or 16 <= shape[0] <= self.max_items)
         elif self.kind == 'sources':  # one source per speaker of one block: none, or each as long as the block
@@ -71,7 +78,9 @@ class Contract:
 CONTRACTS = {
     'mediapipe.body.video': Contract('joints', 33, ('x', 'y', 'visibility', 'presence'), 4, 100., private_only=False),
     'sapiens2.pose': Contract('joints', 308, ('x', 'y', 'visibility'), 8, 100.),
-    'rtmw.pose': Contract('joints', 133, ('x', 'y', 'visibility'), 64, 100.),   # up to 16 frames of 4 people
+    # up to 16 frames of 4 people; ``raw_score``: RTMW's own keypoint score before it is clipped to 0..1 (about
+    # 0.4-12 measured), which gates hand joints (rtmw_pose.HAND_MIN_RAW_SCORE); a worker without it still answers
+    'rtmw.pose': Contract('joints', 133, ('x', 'y', 'visibility'), 64, 100., optional_columns=('raw_score',)),
     'mediapipe.face.video': Contract('joints', 9, ('x', 'y'), 4, 100., private_only=False),
     'speaker.embedding': Contract('embedding', max_items=4096),
     'face.embedding': Contract('embedding', max_items=4096),

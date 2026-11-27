@@ -241,7 +241,7 @@ class _RTMW(_Worker):
         self.models = models
 
     def query(self, frame, request):
-        from .rtmw_pose import MAX_FRAMES, POINTS
+        from .rtmw_pose import MAX_FRAMES, POINTS, RAW_LIMIT
         np = _numpy()
         request = request or {}
         if request.get('benchmark'):
@@ -252,7 +252,7 @@ class _RTMW(_Worker):
             images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
             measured = self.models.benchmark(images, detect=bool(request.get('detect')))
             return dict(poses=[], model=self.models.version, image_width=int(frame.data.shape[1]), image_height=rows,
-                        benchmark=measured), np.zeros((0, POINTS, 3), dtype='<f4')
+                        benchmark=measured), np.zeros((0, POINTS, 4), dtype='<f4')
         count = request.get('frames', 1)
         times = request.get('timestamps_ms') or [request.get('timestamp_ms')]
         if type(count) is not int or not 1 <= count <= MAX_FRAMES or len(times) != count \
@@ -264,15 +264,16 @@ class _RTMW(_Worker):
         public, joints = [], []
         for index, (boxes, keypoints, scores) in enumerate(self.models.infer_batch(images, times)):
             for box, points, values in zip(boxes, keypoints, scores):
-                rows_ = np.zeros((POINTS, 3), dtype='<f4')
+                rows_ = np.zeros((POINTS, 4), dtype='<f4')     # x, y, visibility, raw_score
                 rows_[:, 0], rows_[:, 1], rows_[:, 2] = points[:, 0] / width, points[:, 1] / height, np.clip(values, 0., 1.)
+                rows_[:, 3] = np.clip(values, -RAW_LIMIT, RAW_LIMIT)
                 joints.append(rows_)
                 box = [float(value) for value in box]
                 x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
                 x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
                 public.append(dict(in_batch=index, bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
                                    if x1 > x0 and y1 > y0 else None))
-        joints = np.stack(joints) if joints else np.zeros((0, POINTS, 3), dtype='<f4')
+        joints = np.stack(joints) if joints else np.zeros((0, POINTS, 4), dtype='<f4')
         return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height),
                     frames=count), joints
 
@@ -551,9 +552,10 @@ class RemoteRTMW(_Client):
         frame = self._stacked(images, timestamps_ms[0])
         result, private = await self.worker.query(
             frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
-        columns = CONTRACTS['rtmw.pose'].columns
+        joints = private.take('joints')
+        columns = CONTRACTS['rtmw.pose'].columns_for(joints.shape[2])    # raw_score when the worker sends it
         found = [[] for _ in images]
-        for pose, rows in zip(result['poses'], private.take('joints')):
+        for pose, rows in zip(result['poses'], joints):
             poses = found[pose.get('in_batch', 0)]
             poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set='coco_wholebody133',
                               track_id=None, association_quality='unavailable', identity_verified=False,

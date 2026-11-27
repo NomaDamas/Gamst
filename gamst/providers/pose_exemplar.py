@@ -83,7 +83,8 @@ def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=MEDIAPIPE_MIN_
     """(mapping, min_visibility) to read this pose's joints with: its own ``keypoint_set`` decides when it names a
     known one (RTMW ``coco_wholebody133``, Sapiens2 ``goliath308``), so joints are never read by another model's
     indices; a pose without one (MediaPipe) is read with the given mapping. Each model's joints are gated by its own
-    score threshold (RTMW 0.3, rtmlib's; Sapiens2 0.3, its demo's; MediaPipe 0.5, its own), hands as the body.
+    score threshold (RTMW 0.3, rtmlib's; Sapiens2 0.3, its demo's; MediaPipe 0.5, its own), hands as the body, except
+    RTMW's hands, gated on their raw score (:func:`raw_score_gates`).
 
     ``hands``: the mapping also holds the 42 hand joints (:data:`HAND_JOINTS`) where the model has them; MediaPipe Pose
     has none (its 33 landmarks end the hand at the wrist and three finger points), so there they are unknown."""
@@ -100,6 +101,17 @@ def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=MEDIAPIPE_MIN_
     return mapping, min_visibility
 
 
+def raw_score_gates(pose, mapping):
+    """{joint: least raw score} for the joints of ``mapping`` this pose's model gates on its raw keypoint score, or
+    None: RTMW's hand joints (:data:`gamst.providers.rtmw_pose.HAND_MIN_RAW_SCORE`). A landmark without
+    ``raw_score`` (a worker from before it was sent) keeps the ``visibility`` gate."""
+    if not isinstance(pose, dict) or pose.get('keypoint_set') != 'coco_wholebody133':
+        return None
+    from .rtmw_pose import HAND_MIN_RAW_SCORE
+    gates = {name: HAND_MIN_RAW_SCORE for name in mapping if name in COCO_WHOLEBODY_HANDS}
+    return gates or None
+
+
 def joint_angle(a, vertex, b):
     """Angle at ``vertex`` in units of pi radians, None for a zero-length side."""
     ax, ay, bx, by = a[0] - vertex[0], a[1] - vertex[1], b[0] - vertex[0], b[1] - vertex[1]
@@ -110,13 +122,20 @@ def joint_angle(a, vertex, b):
     return math.acos(cosine) / math.pi
 
 
-def body_points(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
-    """{joint: (x, y)} of the visible mapped joints, x scaled so both axes have one unit."""
+def body_points(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1., raw_gates=None):
+    """{joint: (x, y)} of the visible mapped joints, x scaled so both axes have one unit.
+
+    ``raw_gates`` (:func:`raw_score_gates`): joints read by their ``raw_score`` instead, where a landmark has one."""
     points = {}
     for name, index in mapping.items():
         if index < len(landmarks):
             point = landmarks[index]
-            if point.get('visibility', 1.) >= min_visibility:
+            gate = raw_gates.get(name) if raw_gates else None
+            if gate is not None and type(point.get('raw_score')) in (int, float):
+                visible = point['raw_score'] >= gate
+            else:
+                visible = point.get('visibility', 1.) >= min_visibility
+            if visible:
                 points[name] = (float(point['x']) * aspect, float(point['y']))
     return points
 
@@ -441,7 +460,8 @@ class ExemplarEvents:
             own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility,
                                                hands=self.rule.needs_hands)
             return channels, mask, body_points(poses[index]['landmarks'], own, min_visibility=visibility,
-                                               aspect=1. if aspect is None else aspect)
+                                               aspect=1. if aspect is None else aspect,
+                                               raw_gates=raw_score_gates(poses[index], own))
         value = frame.data if isinstance(frame.data, dict) else {}
         channels, mask = value.get('channels'), value.get('mask')
         if not isinstance(channels, list) or not isinstance(mask, list):
