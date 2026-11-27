@@ -66,19 +66,30 @@ It prints how many face and body crops were kept, how many were dropped, the agr
 ```bash
 gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --person gamst.json            # every track, with who
 gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --person gamst.json --who 감스트 # count = 감스트's
-gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --without person_binding       # every track, who unknown
+gamst recipe run person-action-count --video clip.mp4 --exemplar move.json                               # nobody yet: enroll over MCP
 gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --person gamst.json --with target_person   # one person only (before)
 ```
 
 - **Binding.** A track is bound to the person when its face scores at least 0.35 and beats every other enrolled person by
-  0.05; without a face, by appearance (>= 0.8) of this run only. A face that contradicts (< 0.15) releases the track. A
-  pose the tracker gave no track is never bound. A person moves to another track only when that track's face beats the
-  holder's face in the same frame.
-- **Retroactive.** The first binding of a track reaches back to the track's first frame: what the track did before its
-  face was seen is that person's. Readers resolve it at read time (`count_events`, `get_timeline`), so a count of a
-  person can grow after the fact.
-- **Limits.** A track switch by the tracker (two people crossing) can move an identity; retroactivity never crosses a
-  track break. On the shop clip the tracker started 49 tracks for about 2 people in 54 s (measurements).
+  0.05; without a face, by appearance (>= 0.8, **provisional**: read from one unlabelled clip) of this run only. A face
+  that contradicts (< 0.15) releases the track. A pose the tracker gave no track is never bound. A person moves to
+  another track only when that track's face beats the holder's face in the same frame.
+- **Where it runs.** The binding module sits in the pose lane (it pairs each camera frame with its joints, and an L2
+  chain forks it with the pose model), but no face or body model runs there: crops of the tracks that are due go to a
+  scorer beside the lane, and the scores are decided on at the first frame after they return (100 ms median on the
+  shop clip). A track's face is looked at every 200 ms while it is unconfirmed and every 1 s once it is bound: every
+  track is confirmed, no face on every frame.
+- **Tracker swaps.** When the track that holds the person leaves the frame and a never-bound track appears where it
+  was within 1 s (box overlap >= 0.3), the person continues on it (`by: continuation`) unless its face or appearance of
+  that frame contradicts; the face confirms it like any track.
+- **Retroactive.** The first binding of a track reaches back to the track's first frame, but never before the person was
+  released from another track (one person is on one track at a time, also in the past). Readers resolve it at read
+  time (`count_events`, `get_timeline`), so a count of a person can grow after the fact. A binding ends when its track
+  was last seen; at the end of input every open binding is closed.
+- **Nobody enrolled.** Without `--person` the binding still runs and binds nobody; a person enrolled while the run goes
+  on (MCP `enroll_person`) is bound from then on, and back to the first frame of tracks that are still followed.
+- **Limits.** A track switch between two people crossing can move an identity until a face corrects it; retroactivity
+  never crosses a track break except by continuation.
 
 ## MCP
 
@@ -90,5 +101,5 @@ gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --per
 | `get_timeline` | events of a track show `who`; with `who` only that person's events are left and `who.seen` says when the person was on screen |
 | `list_instructions` | `persons`: enrolled names, whether usable, what identifies them |
 
-The run must have been started with a person reference (`--person`) for the binding module to run; `enroll_person` adds
-more people to it while it runs.
+The binding runs also without `--person`, so an LLM can enroll a person and set `who` on a run that started with
+nobody (measured on the shop clip: [measurements](measurements/person-identity-2026-11-27.md) section 9).

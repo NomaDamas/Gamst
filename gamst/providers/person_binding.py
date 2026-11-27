@@ -202,6 +202,61 @@ class _Person:
         return max(scores) if scores else None
 
 
+class _Scorer:
+    """The face and body models beside the lane, shared by a binding module and its L2 forks. One job per track waits
+    (a newer crop replaces it); the live lane's jobs go first, newest first (fresh evidence; a result older than a second
+    is not decided on), then the forks'."""
+
+    def __init__(self, face, body):
+        self.face, self.body, self.jobs, self.task, self.wake = face, body, {}, None, None
+        self.done = 0
+
+    def submit(self, owner, key, ts, face, body):
+        import asyncio
+        whole = (id(owner), key)
+        if whole in self.jobs:
+            owner.counts['replaced_jobs'] = owner.counts.get('replaced_jobs', 0) + 1
+        self.jobs[whole] = (1 if getattr(owner, '_forked', False) else 0, ts, face, body, owner, key)
+        owner.counts['jobs'] = owner.counts.get('jobs', 0) + 1
+        if self.wake is None:
+            self.wake = asyncio.Event()
+        self.wake.set()
+        if self.task is None or self.task.done():
+            self.task = asyncio.get_running_loop().create_task(self.run())
+
+    def waiting(self, owner):
+        return sum(1 for item in self.jobs.values() if item[4] is owner)
+
+    async def run(self):
+        import asyncio
+        while True:
+            if not self.jobs:
+                self.wake.clear()
+                try:
+                    await asyncio.wait_for(self.wake.wait(), 2.)
+                except asyncio.TimeoutError:
+                    return          # idle: started again by the next job
+                continue
+            whole = min(self.jobs, key=lambda item: (self.jobs[item][0], -self.jobs[item][1]))
+            _, ts, face, body, owner, key = self.jobs.pop(whole)
+            found = await asyncio.gather(_embedded(self.face, face), _embedded(self.body, body))
+            self.done += 1
+            owner._deliver(key, ts, *found)
+
+    def busy(self):
+        return bool(self.jobs) or (self.task is not None and not self.task.done() and self.wake is not None
+                                   and self.wake.is_set())
+
+
+async def _embedded(embedder, crop):
+    if embedder is None or crop is None:
+        return None
+    try:
+        return await embed(embedder, crop)
+    except ValueError:      # too small or unclear for the model
+        return None
+
+
 class PersonBinding:
     """Pipeline module: camera + every person's joints in, ``vision.person_binding`` records out."""
 
@@ -235,6 +290,7 @@ class PersonBinding:
             'frame', stateful=True, freshness_ms=1000, interpretation='estimate', devices=('cpu',), license='Apache-2.0')
         self.persons, self._values = [], {}
         self.counts = dict(face_embeddings=0, body_embeddings=0, unpaired_images=0, frames=0, scored_frames=0)
+        self.scorer = _Scorer(face, body)
         self.reset()
 
     # ------------------------------------------------------------------ references
@@ -282,7 +338,7 @@ class PersonBinding:
 
     def fork(self):
         twin = type(self)(self.face, self.body, **self._args)
-        twin._shares_models, twin._forked = True, True
+        twin._shares_models, twin._forked, twin.scorer = True, True, self.scorer
         if self._values:
             twin.set_references(self._values)
         return twin
@@ -345,17 +401,17 @@ class PersonBinding:
         self._collect = getattr(self, '_collect', None)
         self.bindings, self._scores, self._poses, self._boxes = TrackBindings(), {}, {}, {}
         self._images, self._camera_ms, self._kept_ms = {}, None, None
-        self._jobs, self._results, self._wake, self._task = {}, [], None, None    # the scorer (beside the lane)
+        self._results = []      # what the scorer (beside the lane) gave back
         self.delays = []      # ms from a frame to the frame where its face result is decided on
         self._handover, self._namespace = [], None
         for person in self.persons:
             person.session.clear()
 
     async def close(self):
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
         if getattr(self, '_shares_models', False):
             return
+        if self.scorer.task is not None and not self.scorer.task.done():
+            self.scorer.task.cancel()
         for embedder in (self.face, self.body):
             close = getattr(embedder, 'close', None)
             value = close() if callable(close) else None
@@ -370,14 +426,6 @@ class PersonBinding:
             self._namespace = ts if self._namespace is None else self._namespace
             track = f'{track}@{self._namespace}'
         return track
-
-    async def _embed(self, embedder, crop):
-        if embedder is None or crop is None:
-            return None
-        try:
-            return await embed(embedder, crop)
-        except ValueError:      # too small or unclear for the model
-            return None
 
     def _due(self, track, ts, kind):
         """Whether a track's face (or body) is looked at in this frame: often while it is unconfirmed, again only after
@@ -428,51 +476,28 @@ class PersonBinding:
     # ------------------------------------------------------------------ the scorer: models beside the lane
 
     def _submit(self, key, ts, face, body):
-        """A newer job of the same track replaces one that has not started (the newest face is the evidence)."""
-        import asyncio
-        if key in self._jobs:
-            self.counts['replaced_jobs'] = self.counts.get('replaced_jobs', 0) + 1
-        self._jobs[key] = (ts, face, body)
-        self.counts['jobs'] = self.counts.get('jobs', 0) + 1
-        if self._wake is None:
-            self._wake = asyncio.Event()
-        self._wake.set()
-        if self._task is None or self._task.done():
-            self._task = asyncio.get_running_loop().create_task(self._scorer())
+        self.scorer.submit(self, key, ts, face, body)
 
-    async def _scorer(self):
-        import asyncio
-        while True:
-            if not self._jobs:
-                self._wake.clear()
-                try:
-                    await asyncio.wait_for(self._wake.wait(), 2.)
-                except asyncio.TimeoutError:
-                    return          # idle: started again by the next job
-                continue
-            key = min(self._jobs, key=lambda item: self._jobs[item][0])      # the oldest first
-            ts, face, body = self._jobs.pop(key)
-            found = await asyncio.gather(self._embed(self.face, face), self._embed(self.body, body))
-            self.counts['face_embeddings'] += found[0] is not None
-            self.counts['body_embeddings'] += found[1] is not None
-            if isinstance(key, tuple) and key[0] == 'collect':
-                job = self._collect
-                if job is not None:
-                    for name, value in zip(('face', 'body'), found):
-                        if value is not None:
-                            job[name].append(value)
-                    job['samples'].append(dict(source='camera', at=ts, persons=1, face=found[0] is not None,
-                                               body=found[1] is not None))
-                    job['pending'] -= 1
-                    self._finish_collect()
-                continue
-            self._results.append((key, ts, *found))
+    def _deliver(self, key, ts, face, body):
+        """The scorer's answer for one job of this module (applied at its next frame; a collect job at once)."""
+        self.counts['face_embeddings'] += face is not None
+        self.counts['body_embeddings'] += body is not None
+        if isinstance(key, tuple) and key[0] == 'collect':
+            job = self._collect
+            if job is not None:
+                for name, value in (('face', face), ('body', body)):
+                    if value is not None:
+                        job[name].append(value)
+                job['samples'].append(dict(source='camera', at=ts, persons=1, face=face is not None, body=body is not None))
+                job['pending'] -= 1
+                self._finish_collect()
+            return
+        self._results.append((key, ts, face, body))
 
     async def settled(self):
         """Until the scorer has nothing left (tests; a run never waits for it)."""
         import asyncio
-        while self._jobs or (self._task is not None and not self._task.done() and self._wake is not None
-                             and self._wake.is_set()):
+        while self.scorer.busy():
             await asyncio.sleep(0)
         for _ in range(3):
             await asyncio.sleep(0)
@@ -682,5 +707,5 @@ class PersonBinding:
     def status(self):
         delays = sorted(self.delays)
         return dict(self.counts, persons=[person.name for person in self.persons], waiting_images=len(self._images),
-                    tracks=len(self.bindings.tracks), waiting_jobs=len(self._jobs),
+                    tracks=len(self.bindings.tracks), waiting_jobs=self.scorer.waiting(self), scored_jobs=self.scorer.done,
                     decision_delay_ms=dict(p50=delays[len(delays) // 2], max=delays[-1], n=len(delays)) if delays else None)
