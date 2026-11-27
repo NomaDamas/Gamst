@@ -4,8 +4,11 @@ The video counterpart of :mod:`gamst.providers.audio_memory`. A lane declared ``
 (:meth:`gamst.pipeline.Pipeline.add_module`) may fall far behind its live input (a verification lane that runs a
 slower, more accurate model over every frame): its waiting frames are not thinned or given up. Up to
 ``memory_bytes`` of them stay in memory (as the arrays the camera gave, not copied); the rest are written to an
-unnamed temporary file (deleted by the system when it is closed) and read back when the lane reaches them. The file
-is emptied whenever nothing is spilled. ``disk_bytes`` bounds the file: a frame beyond it is not kept (``dropped``,
+unnamed temporary file (deleted by the system when it is closed) and read back when the lane reaches them. The place
+of a frame the lane is done with is written again by the next frame of the same size, so the file is as large as the
+most frames spilled at once, not as all frames ever spilled (a lane that always has a few spilled frames, as one that
+keeps a pre-roll in memory, never empties it: before, the file grew by every frame until the disk bound dropped frames);
+it is emptied whenever nothing is spilled. ``disk_bytes`` bounds the file: a frame beyond it is not kept (``dropped``,
 and the Pipeline declares it a ``backlog`` gap), so a lane that can never catch up does not fill the disk. The disk is
 part of the budget: the bound is at most what is free beyond ``disk_floor_bytes`` (10 GB) when the memory is made
 (``disk_limited`` says it was smaller than asked), and every write checks the floor again.
@@ -49,6 +52,7 @@ class VideoMemory:
                                                                                free - self.disk_floor_bytes))
         self.disk_limited = self.disk_bytes < self.asked_disk_bytes
         self._file, self._end, self._outstanding = None, 0, 0
+        self._free_slots = {}      # nbytes -> offsets in the file whose frames were released
         self.frames = self.spilled_frames = self.dropped = 0
         self.in_memory = self.spilled = self.max_in_memory = self.max_spilled = 0
 
@@ -62,20 +66,26 @@ class VideoMemory:
             self.in_memory += size
             self.max_in_memory = max(self.max_in_memory, self.in_memory)
             return Kept(array=array, nbytes=size)
-        free = self._free()
-        if self._end + size > self.disk_bytes or free is not None and free - size < self.disk_floor_bytes:
-            self.dropped += 1
-            return None
+        slots = self._free_slots.get(size)
+        offset = slots.pop() if slots else None
+        if offset is None:      # the file grows: within its bound and the disk's floor
+            free = self._free()
+            if self._end + size > self.disk_bytes or free is not None and free - size < self.disk_floor_bytes:
+                self.dropped += 1
+                return None
         try:
             if self._file is None:
                 self._file = tempfile.TemporaryFile(dir=self.spill_dir)
-            self._file.seek(self._end)
+            self._file.seek(self._end if offset is None else offset)
             self._file.write(np.ascontiguousarray(array).tobytes())
         except OSError:
+            if offset is not None:
+                slots.append(offset)
             self.dropped += 1
             return None
-        kept = Kept(offset=self._end, shape=array.shape, dtype=array.dtype.str, nbytes=size)
-        self._end += size
+        kept = Kept(offset=self._end if offset is None else offset, shape=array.shape, dtype=array.dtype.str, nbytes=size)
+        if offset is None:
+            self._end += size
         self._outstanding += 1
         self.spilled += size
         self.spilled_frames += 1
@@ -99,12 +109,14 @@ class VideoMemory:
             return
         if kept.offset is None:
             return
+        self._free_slots.setdefault(kept.nbytes, []).append(kept.offset)
         kept.offset = None
         self.spilled -= kept.nbytes
         self._outstanding -= 1
         if not self._outstanding and self._file is not None:   # nothing spilled any more: start the file over
             self._file.truncate(0)
             self._end = 0
+            self._free_slots.clear()
 
     def _free(self):
         """Free bytes on the spill file's disk (None if unknown)."""
@@ -119,7 +131,7 @@ class VideoMemory:
         return dict(disk_limited=self.disk_limited, asked_disk_bytes=self.asked_disk_bytes,
                     disk_floor_bytes=self.disk_floor_bytes, frames=self.frames, in_memory_bytes=self.in_memory, spilled_bytes=self.spilled,
                     max_in_memory_bytes=self.max_in_memory, max_spilled_bytes=self.max_spilled,
-                    spilled_frames=self.spilled_frames, dropped=self.dropped,
+                    spilled_frames=self.spilled_frames, dropped=self.dropped, file_bytes=self._end,
                     memory_bytes=self.memory_bytes, disk_bytes=self.disk_bytes)
 
     def close(self):

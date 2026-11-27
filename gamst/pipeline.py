@@ -59,7 +59,8 @@ the whole chain (pose -> person -> channels -> count) in capture order, also whe
 the input itself. A module with ``replicas`` (stateless workers of one spec) works on several frames of
 its lane at once; results are still committed in capture order. Recorded inputs (``live = False``) wait
 for the lanes, so nothing builds up and nothing is given up; several recorded inputs are read in capture order
-(one frame of each is held), and live and recorded inputs cannot run together, having no common clock. An
+(one frame of each is held; a ``backlog="spill"`` lane is waited for too: video memory and L2 are for realtime only),
+and live and recorded inputs cannot run together, having no common clock. An
 input's ``offset_ms`` is the owner's measured correction, added to its capture times.
 ``PipelineIntake`` feeds a host-fed input from the engine's own intake (``push_video`` /
 ``push_audio``, MCP ``start_capture``, the dashboard), which is how ``ProfileRuntime`` runs the
@@ -94,13 +95,12 @@ from .plugins import InputFrame
 from .redact import public_error, public_text
 
 CATCH_UP = dict(lag_ms=2000, max_lookback_ms=10000, tail_ms=1500, workers=2, speed=None, min_free_pct=None,
-                replica_mb=None, post_chunk_ms=None)
+                replica_mb=None)
 # Video (L2 for video, see Pipeline._skip_video): ``lag_ms`` is the deadline of a waiting frame, ``max_lookback_ms`` the
 # pre-roll (frames before the cut that only build state), ``tail_ms`` how far past the newest waiting frame the worker
 # owns (the live lane's own warm-up after it resumes), ``workers`` the L2 chains; ``min_free_pct`` / ``replica_mb``: a
-# chain is started only while free system memory stays above that share after taking ``replica_mb`` more.
-# ``post_chunk_ms``: a recording that is not paced (timing post) is also cut, into chunks of this length, whenever an L2
-# chain is free: chunks run in parallel with the lane (their events are not corrections: nothing is late in post).
+# chain is started only while free system memory stays above that share after taking ``replica_mb`` more. L2 is for
+# realtime only: a recording read at the pace of its processing (timing post) is never behind, so it is never cut.
 
 GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipeline', '1',
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
@@ -246,6 +246,7 @@ class Pipeline:
         self.memories: dict[str, Any] = {}   # input id -> AudioMemory: audio kept for catch-up and verification
         self._video_memory = None            # VideoMemory of the ``backlog="spill"`` lanes (created by the first one)
         self._keeping_up = False             # a recording replayed at its pace: sampling and spilling lanes are not waited for
+        self._post = False                   # timing post: a recording read at the pace of its processing; no spill, no L2
         human.pipeline = self
 
     # ------------------------------------------------------------------ composition
@@ -418,7 +419,10 @@ class Pipeline:
         right at the lower frame rate. ``backlog="spill"``: a lane of its own that never gives a frame up: waiting
         video frames are kept in the Pipeline's :class:`gamst.providers.video_memory.VideoMemory` (memory, then a
         spill file), so a slower module behind a live input (a verification lane) still processes every frame. A
-        recording replayed at its own pace (``--realtime``) does not wait for either kind of lane.
+        recording replayed at its own pace (``--realtime``) does not wait for either kind of lane. A recording that is
+        not paced (timing post) has no realtime constraint: it is read at the pace of its processing (the reader waits
+        while a batch is waiting), so a spilling lane there is an ordinary lane: nothing is spilled, no L2 interval is
+        cut, and no frame is given up, however long the file and however slow the module.
 
         ``batch=N`` (a module with ``process_batch(frames)``, which answers one output per frame, in order): its lane
         hands it up to N frames at once, the frames that are waiting when it is free (it never waits for more, so a
@@ -521,8 +525,6 @@ class Pipeline:
                              '0 <= tail_ms <= 30000 and 1 <= workers <= 16')
         if config['speed'] is not None and not float(config['speed']) > 0:
             raise ValueError('catch_up speed must be positive (None: as fast as the module goes)')
-        if config['post_chunk_ms'] is not None and not 100 <= float(config['post_chunk_ms']) <= 600000:
-            raise ValueError('catch_up post_chunk_ms is 100..600000 (None: a recording is not cut)')
         if config['min_free_pct'] is not None and not 0 <= float(config['min_free_pct']) < 100 or \
                 config['replica_mb'] is not None and not 0 <= float(config['replica_mb']) <= 1 << 20:
             raise ValueError('catch_up min_free_pct is 0..100 and replica_mb 0..1048576 (None: not checked)')
@@ -551,16 +553,10 @@ class Pipeline:
         if head is None or not head.media:
             return False
         if head.frame.modality == 'video':   # L2 for video: by the input's newest frame (a paced replay has its own clock)
-            if lane.get('backlog') != 'spill' or entry['paused']:
-                return False
+            if lane.get('backlog') != 'spill' or entry['paused'] or self._paced and not self._keeping_up:
+                return False    # timing post, or the input ended: what waits is worked off by the lane, nothing is late
             newest = self.inputs.get(head.source, {}).get('last_ms')
-            if self._paced and not self._keeping_up:      # timing post: chunks, only while an L2 chain is free
-                if not config.get('post_chunk_ms') or not self._chain_free(lane['name']):
-                    return False
-                due = config['post_chunk_ms']
-            else:
-                due = config['lag_ms']
-            return newest is not None and newest - head.frame.timestamp_ms > due and \
+            return newest is not None and newest - head.frame.timestamp_ms > config['lag_ms'] and \
                 self._video_chain(lane) is not None
         return not self._paced and head.frame.modality == 'audio' and \
             _now_ms() - head.frame.timestamp_ms > config['lag_ms']
@@ -657,19 +653,6 @@ class Pipeline:
             if mine:
                 kept.append(item if len(mine) == len(events) else _with_events(item, mine))
         return kept if isinstance(output, list) else (kept[0] if kept else None)
-
-    def _chain_free(self, name):
-        entry = self.modules[name]
-        width = min(int(entry['catch_up']['workers']), int(getattr(entry['module'], 'max_forks', 1) or 1))
-        return sum(not task.done() for task in entry['workers']) < width
-
-    def _post_chunks(self, lane):
-        """A recording read ahead for chunks (timing post): how far ahead, or None."""
-        config = self.modules[lane['name']]['catch_up']
-        if not config or not config.get('post_chunk_ms') or not self._paced or self._keeping_up or \
-                not self._chain_free(lane['name']):
-            return None
-        return config['post_chunk_ms']
 
     def _video_chain(self, lane):
         """The modules of a video lane that an L2 chain runs (each needs ``fork()``), in order; None if one cannot
@@ -789,8 +772,7 @@ class Pipeline:
                 forks[member] = await _call(self.modules[member]['module'].fork)
                 if member in todo['snapshots'] and callable(getattr(forks[member], 'restore', None)):
                     await _call(forks[member].restore, todo['snapshots'][member])
-            context = _Context(lane, forks=forks, keep=keep, correction=not (self._paced and not self._keeping_up),
-                               owner=todo['id'])
+            context = _Context(lane, forks=forks, keep=keep, correction=True, owner=todo['id'])   # L2: realtime only
             leader, width = forks[name], int(lane.get('batch') or 1)
             source = self.inputs.get(todo['source'], {})
             while not self._closed:
@@ -1172,7 +1154,8 @@ class Pipeline:
     def _enqueue(self, lane, item):
         if item.media and lane['lost']:
             item.gap, lane['lost'] = True, False
-        if lane.get('backlog') == 'spill' and item.media and item.frame.modality == 'video' and item.frame.data is not None:
+        if lane.get('backlog') == 'spill' and not self._post and item.media and item.frame.modality == 'video' \
+                and item.frame.data is not None:
             item.kept = self.video_memory().keep(item.frame.data)
             if item.kept is None:      # beyond the memory's disk bound: declared, as a frame the lane could not take
                 lane['lost'] = True
@@ -1725,23 +1708,21 @@ class Pipeline:
                      and not (keep_up and (lane.get('sample') or lane.get('backlog')))]
             filling = [lane for lane in lanes if batching and lane.get('batch')]
             tasks = [lane['task'] for lane in lanes if lane not in filling]
-            # an L2 chain of a batching lane runs beside it while frames are read (chunks, intervals); others are waited for
+            # an L2 chain of a batching lane runs beside it while frames are read (realtime); others are waited for
             tasks += [task for entry in self.modules.values()
                       if not (batching and entry['lane'] is not None and entry['lane'].get('batch'))
                       for task in entry['workers'] if not task.done()]
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             elif any(self._full(lane) for lane in filling):
-                await asyncio.sleep(.001)    # a full batch (or chunk) waits: let the lane take it before the next frame
+                await asyncio.sleep(.001)    # a full batch waits: let the lane take it before the next frame
             else:
                 return
 
-    def _full(self, lane):
-        """A batching lane of a recording has enough waiting: a batch, or, read ahead for chunks, a chunk."""
-        ahead = self._post_chunks(lane)
-        if ahead is None or not lane['frames']:
-            return len(lane['frames']) >= lane['batch']
-        return lane['frames'][-1].frame.timestamp_ms - lane['frames'][0].frame.timestamp_ms > ahead
+    @staticmethod
+    def _full(lane):
+        """A batching lane of a recording has a batch waiting: the reader waits until the lane takes it."""
+        return len(lane['frames']) >= lane['batch']
 
     async def _run_module(self, name, entry, frame, context, *, media=False, gap=False, task=None):
         """Process and commit one frame; a failure is counted, declared a gap and left in ``context``."""
@@ -1919,6 +1900,7 @@ class Pipeline:
         self._paced = self._recorded = bool(sources) and not any(live)
         from .inputs import Paced
         self._keeping_up = self._paced and any(isinstance(source, Paced) for source in sources)
+        self._post = self._paced and not self._keeping_up
         self._collected = None if on_frame is None else []
         self._running, self._failure = True, None
 
@@ -2061,7 +2043,7 @@ class Pipeline:
             for task in (*tasks, stopping):
                 task.cancel()
             await asyncio.gather(*tasks, stopping, return_exceptions=True)
-            self._running = self._paced = self._keeping_up = False
+            self._running = self._paced = self._keeping_up = self._post = False
         for name, entry in self.modules.items():     # an L2 interval that never ran is declared, never counted complete
             for todo in list(entry['todos']):
                 if todo.get('video') and todo['state'] in ('waiting', 'cancelled'):
