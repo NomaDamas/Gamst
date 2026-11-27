@@ -34,7 +34,7 @@
 | 단계 | rotation (기존) | **pose-count** (신규) | **voice-keyword** (신규) |
 |---|---|---|---|
 | capture | camera / video / take | camera / video / take | **microphone / audio / take** (16 kHz mono, 캡처 시계 포함) |
-| find | roi / motion / yoloe | **사람 키포인트**: RTMW(기본), Sapiens2(호스팅) | **발화 구간**: Silero VAD (기존 `vad.py`) |
+| find | roi / motion / yoloe | **사람 키포인트**: RTMW(기본), Sapiens2(선택, 라이선스 동의 필요) | **발화 구간**: Silero VAD (기존 `vad.py`) |
 | follow | fixed / shape-tracks / efficienttam | **같은 사람 유지**: 트랙 ID와 One-Euro 필터 | **같은 목소리 유지**: 등록 목소리 화자 검증 (ReDimNet2 또는 CAM++) |
 | count | in-plane / flip | **exemplar**(시연 매칭과 subsequence DTW), **period**(기존 `repetition.py`) | **keyword**: Qwen3-ASR-1.7B, Qwen3-ForcedAligner, 정규화 텍스트 매칭 |
 | record | `vision.rotation(.refined)` | `temporal.repetitions` (기존 출력 타입 재사용) | `speech.keyword_count` (신규) |
@@ -43,7 +43,7 @@
 
 | 역할 | 정확도 SOTA | 레시피 기본값 | 이유 |
 |---|---|---|---|
-| 2D 전신 포즈 | Sapiens2-5B (Meta 자체 테스트셋 82.3 mAP) | **RTMW-x** (COCO-WholeBody 70.2 AP, Apache-2.0)와 rtmlib | Sapiens2 라이선스는 "biometric processing"을 금지합니다. 특정 인물을 대상으로 하는 카운팅이 여기에 걸리는지는 법적 검토가 필요하므로, `find: sapiens2`는 호스팅 옵션으로만 둡니다. |
+| 2D 전신 포즈 | Sapiens2-5B (Meta 자체 테스트셋 82.3 mAP) | **RTMW-x** (COCO-WholeBody 70.2 AP, Apache-2.0)와 rtmlib | Sapiens2 라이선스는 "biometric processing"을 금지합니다. 특정 인물을 대상으로 하는 카운팅이 여기에 걸리는지는 법적 검토가 필요합니다. 그래서 Sapiens2는 사용자가 고르는 선택지(`--pose sapiens2.1b`)로만 둡니다. GAMST는 가중치를 넣거나 내려받지 않습니다. 사용자가 Meta 공식 배포본을 직접 받아 경로와 sha256을 주고, `accept_license: true`로 라이선스(생체정보 처리와 감시 금지, Meta의 감사·삭제 요구 권한)를 받아들였다고 밝혀야 합니다. 이 Mac에서 잰 속도는 `docs/measurements/testbed-2026-11-26.md`에 있습니다. |
 | 반복 카운터 | Count What Repeats/PAMS (RepCount OBO 0.842, 자체 보고) | **exemplar 매칭 + 기존 period 카운터** | PAMS는 코드를 찾지 못했습니다. ESCounts(MIT, OBO 0.563)는 비교 기준선으로만 씁니다. "이 동작"을 지정해서 셀 수 있는 것은 exemplar 매칭과 ESCounts뿐입니다. |
 | 화자 검증 | w2v-BERT 2.0 SV (Vox1-O EER 0.12%) | **ReDimNet2-B6** (0.29/0.52/0.99, MIT 코드). 경량 대안은 sherpa-onnx의 **CAM++** | w2v-BERT 2.0 repo에 라이선스가 없습니다. 가중치 라이선스는 학습 데이터에 따라 정해지므로, VoxCeleb2로만 학습한 가중치를 고릅니다. |
 | 한국어 ASR | Qwen3-ASR-1.7B (FLEURS-ko CER 2.57) | **Qwen3-ASR-1.7B**와 **Qwen3-ForcedAligner-0.6B** (한국어 AAS 37.2 ms) | SOTA와 기본값이 같습니다. 다만 스트리밍 모드에서는 타임스탬프가 나오지 않으므로, VAD 세그먼트 단위 준실시간으로 처리합니다. |
