@@ -216,6 +216,12 @@ camera ─▶ pose lane (RTMW-l, batch: the frames that wait, up to 8 per call) 
 - **Memory budget** (`gamst/memory_budget.py`): an L2 chain starts only while free system memory stays at or above
   `min_free_pct` after `replica_mb` more (person-action-count: 25 %, 2500 MB); else the frames stay in video memory
   (latency grows, nothing is lost). Checked at every cut.
+- **Disk budget** (`gamst/providers/video_memory.py`): the spill file keeps 10 GB of the disk free (`disk_floor_bytes`):
+  its bound is min(8 GB, free - 10 GB) when the memory is made, checked again at every write; a frame beyond it is a
+  declared `backlog` gap. When the bound is smaller than asked, `status()['notes']['video_memory']` (report, MCP
+  `get_pipeline`) and the HUD say so. CoreML sessions compile once into `<root>/cache/coreml/<sha>-<unit>-<batch>`
+  (`ModelCacheDirectory`) instead of a temp copy per session; temp copies of dead processes are removed at start
+  (lesson 38).
 - **Pose model by measured speed** (`recipes.choose_pose`, recipe item `"choose"`): realtime without `--pose`, the live
   worker and (budget allowing) an L2 worker are benchmarked at the same time at start (synthetic frames through the real
   transfer path, one person, the detector at its interval). If together they reach the input frame rate RTMW counts, else
