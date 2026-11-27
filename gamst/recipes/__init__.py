@@ -1198,7 +1198,9 @@ async def run_pipeline(recipe, args):
         if callable(getattr(view, 'idle', None)):
             idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
         try:
+            began = time.monotonic()
             keep(await pipeline.run(on_frame=on_frame, stop_on_failure=bool(getattr(args, 'stop_on_failure', False))) or [])
+            report['run_s'] = round(time.monotonic() - began, 2)   # the run itself: models were loaded before
             now = timestamp()
             for capability in wanted:   # plus the records of modules that commit their own
                 keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
