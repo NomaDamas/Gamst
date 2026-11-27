@@ -10,7 +10,7 @@ most frames spilled at once, not as all frames ever spilled (a lane that always 
 keeps a pre-roll in memory, never empties it: before, the file grew by every frame until the disk bound dropped frames);
 it is emptied whenever nothing is spilled. ``disk_bytes`` bounds the file: a frame beyond it is not kept (``dropped``,
 and the Pipeline declares it a ``backlog`` gap), so a lane that can never catch up does not fill the disk. The disk is
-part of the budget: the bound is at most what is free beyond ``disk_floor_bytes`` (10 GB) when the memory is made
+part of the budget: the bound is at most what is free beyond ``disk_floor_bytes`` (5 GB; ``GAMST_SPILL_FLOOR_GB`` overrides it) when the memory is made
 (``disk_limited`` says it was smaller than asked), and every write checks the floor again.
 
 Frames stay inside the process and the spill file: they never become records or enter any context.
@@ -21,7 +21,7 @@ import tempfile
 
 MEMORY_BYTES = 256 * 1024 * 1024      # about 90 frames of 1280x720 BGR
 DISK_BYTES = 8 * 1024 ** 3            # about 2,900 such frames (48 s of 60 fps)
-DISK_FLOOR_BYTES = 10 * 1024 ** 3     # the spill file never takes the disk below this much free space
+DISK_FLOOR_BYTES = 5 * 1024 ** 3      # the spill file never takes the disk below this much free space
 FLOOR_ENV = 'GAMST_SPILL_FLOOR_GB'    # an owner's override of that floor for one run (GB), e.g. a short test clip
 
 

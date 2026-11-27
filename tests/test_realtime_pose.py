@@ -60,6 +60,19 @@ class VideoMemoryTest(unittest.TestCase):
         finally:
             video_memory.VideoMemory._free = original
 
+    def test_the_disk_floor_is_5_gb_unless_the_owner_overrides_it(self):
+        import os
+        from unittest import mock
+        from gamst.providers import video_memory
+        with mock.patch.object(video_memory.VideoMemory, '_free', lambda self: None):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(video_memory.FLOOR_ENV, None)
+                self.assertEqual(video_memory.VideoMemory().disk_floor_bytes, 5 * 1024 ** 3)
+            with mock.patch.dict(os.environ, {video_memory.FLOOR_ENV: '2.5'}):
+                self.assertEqual(video_memory.VideoMemory().disk_floor_bytes, int(2.5 * 1024 ** 3))
+            with mock.patch.dict(os.environ, {video_memory.FLOOR_ENV: '2.5'}):   # an explicit argument wins
+                self.assertEqual(video_memory.VideoMemory(disk_floor_bytes=7).disk_floor_bytes, 7)
+
     def test_a_released_place_in_the_file_is_written_again(self):
         from gamst.providers.video_memory import VideoMemory
         memory = VideoMemory(memory_bytes=0, disk_bytes=2 * 300, disk_floor_bytes=0)
