@@ -949,8 +949,10 @@ class PersonBinding:
     def _continue(self, candidates, ts, events):
         """A tracker that starts a new track for the same person (a swap): when the track that holds a person has just
         left the frame (within ``continue_ms``) and a track that was never bound appears where it was (box overlap
-        ``continue_iou``), the person goes over to it (``by: continuation``), unless its face or appearance of this
-        frame says otherwise (below ``face_reject`` or ``body_reject``). The face confirms it later as for any track."""
+        ``continue_iou``), the person goes over to it (``by: continuation``) when its face (at least
+        ``face_threshold``) or its appearance of this scene (at least ``body_threshold``, the last second's) says it is
+        the person, and nothing of this frame says otherwise. A box where the person was is never proof on its own:
+        faces decide, appearance only within the scene."""
         bindings = self.bindings
         for person in self.persons:
             holder = bindings.holder(person.key)
@@ -970,11 +972,17 @@ class PersonBinding:
                 if face.get(person.key) is not None and face[person.key] < self.face_reject or \
                         body.get(person.key) is not None and body[person.key] < self.body_reject:
                     continue
-                options.append((box_iou(pose.get('bbox'), self._boxes[holder]), track))
-            iou, track = max(options, default=(0., None))
+                seen_face, seen_body = (scores.get('face') or {}).get(person.key), (scores.get('body') or {}).get(person.key)
+                proof = 'face_seen_ms' if seen_face is not None and seen_face >= self.face_threshold else \
+                    'body_seen_ms' if seen_body is not None and seen_body >= self.body_threshold else None
+                if proof is None:
+                    continue        # no face or appearance that says so (yet): a box alone does not carry a person
+                options.append((box_iou(pose.get('bbox'), self._boxes[holder]), track, scores.get(proof)))
+            iou, track, at = max(options, default=(0., None, None), key=lambda item: item[0])
             if track is not None and iou >= self.continue_iou:
                 events.append(bindings.unbind(holder, ts, 'track_replaced'))
                 events.append(bindings.bind(track, person.key, ts, 'continuation', iou=iou))
+                bindings.confirm(track, at)
 
     def _hand_over(self, candidates, ts, events):
         """An L2 fork's first frame: each bound person of the cut goes to the track whose box overlaps theirs most."""
