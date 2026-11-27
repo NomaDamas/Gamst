@@ -128,8 +128,8 @@ class TrackBindings:
         if state['who'] == who:
             return None
         events = []
-        if state['who'] is not None:
-            events.append(self.unbind(track, ts, 'another_person', before=True))
+        if state['who'] is not None:     # the track's own face says someone else: not that person since the last proof
+            events.append(self.unbind(track, ts, 'another_person', before=True, end_ms=state.get('confirmed_at')))
         holder = self.holder(who)
         if holder is not None:      # one person, one track: the person leaves the track that holds them first
             events.append(self.unbind(holder, ts, 'another_track', before=True))
@@ -141,15 +141,17 @@ class TrackBindings:
             start = released + 1
         start = min(start, ts)
         retroactive = start < ts
-        state.update(who=who, from_ms=start, by=by, bound_before=True)
+        state.update(who=who, from_ms=start, by=by, bound_before=True, confirmed_at=None)
         event = self._event('person.bound', track, who, start_ms=start, end_ms=ts, by=by, retroactive=retroactive,
                             **{key: round(value, 5) for key, value in scores.items() if value is not None})
         return [*events, event] if events else event
 
-    def unbind(self, track, ts, reason, *, before=False):
+    def unbind(self, track, ts, reason, *, before=False, end_ms=False):
         """A ``person.unbound`` event: the binding ends when the track was last seen (``ts`` at the latest). ``before``:
         another track takes the person at ``ts``, so this binding ends at its track's last frame before ``ts`` (a
-        binding that began at ``ts`` itself is then empty: ``end_ms`` < ``start_ms``, it covers no time)."""
+        binding that began at ``ts`` itself is then empty: ``end_ms`` < ``start_ms``, it covers no time). ``end_ms``
+        (not False): the binding is withdrawn back to then, the last time the person was confirmed on the track
+        (None: never confirmed, the whole binding is withdrawn)."""
         state = self.tracks.get(track)
         if state is None or state['who'] is None:
             return None
@@ -157,6 +159,8 @@ class TrackBindings:
         if before and end >= ts:
             prev = state.get('prev_ms')
             end = prev if prev is not None and prev < ts else ts - 1
+        if end_ms is not False:
+            end = min(end, state['from_ms'] - 1 if end_ms is None else end_ms)
         end = max(state['from_ms'] - 1, end)
         self.released[state['who']] = max(end, self.released.get(state['who'], end))
         self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=end, by=state['by']))
@@ -749,7 +753,10 @@ class PersonBinding:
         for track, scores in tracks.items():
             current, face = bindings.who(track), self._fresh(scores, 'face')
             if current is not None and face.get(current) is not None and face[current] < self.face_reject:
-                events.append(bindings.unbind(track, ts, 'face_contradicts', before=True))
+                # released at once, and within the track back to the last time the person was confirmed on it
+                events.append(bindings.unbind(track, ts, 'face_contradicts', before=True,
+                                              end_ms=bindings.tracks[track].get('confirmed_at')))
+                self.counts['withdrawn'] = self.counts.get('withdrawn', 0) + 1
         # faces: rounds of claims; a track that loses a person may claim its next best person in the next round
         open_tracks = {track for track, scores in tracks.items() if scores.get('new_face') is not None}
         decided = set()
@@ -779,7 +786,7 @@ class PersonBinding:
                         events.append(bindings.unbind(holder, ts, 'seen_on_another_track', before=True))
                     events.append(bindings.bind(winner, name, ts, 'face', face_score=face.get(name),
                                                 body_score=body.get(name)))
-                bindings.tracks[winner]['confirmed_ms'] = ts
+                bindings.tracks[winner].update(confirmed_ms=ts, confirmed_at=scores.get('face_seen_ms', ts))
                 person = self._person(name)
                 if scores.get('face_embedding') is not None:
                     person.add_face(scores['face_embedding'])
@@ -806,6 +813,7 @@ class PersonBinding:
                 scores = tracks[winner]
                 events.append(bindings.bind(winner, name, ts, 'body', body_score=self._fresh(scores, 'body').get(name),
                                             face_score=self._fresh(scores, 'face').get(name)))
+                bindings.tracks[winner]['confirmed_at'] = scores.get('body_seen_ms', ts)
 
     def _newcomer(self, track, scores, ts, events):
         """A face that is nobody known: clearly not any person of the run (below ``face_reject`` for all) on a track
@@ -831,7 +839,7 @@ class PersonBinding:
         self.persons.append(person)
         self.counts['new_persons'] = self.counts.get('new_persons', 0) + 1
         events.append(bindings.bind(track, person.key, ts, 'face', face_score=round(max(agree), 5)))
-        bindings.tracks[track]['confirmed_ms'] = ts
+        bindings.tracks[track].update(confirmed_ms=ts, confirmed_at=scores.get('face_seen_ms', ts))
         if scores.get('body_embedding') is not None:
             person.session.append(l2_normalize(scores['body_embedding']))
 
@@ -1063,8 +1071,9 @@ class PersonBinding:
                 for key in ('face', 'body', 'body_embedding', 'face_embedding'):
                     scores.pop(key, None)
                 scores.pop('pending_faces', None)
-            elif person is not None:
+            elif person is not None:     # the face confirmed the person after the cut: a fresh confirmation
                 events.append(bindings.bind(track, person, ts, 'scene_cut'))
+                state['confirmed_at'] = scores.get('face_seen_ms')
         if not self.appearance_across_cuts:
             for person in self.persons:
                 person.session.clear()

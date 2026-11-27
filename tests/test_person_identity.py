@@ -930,6 +930,20 @@ class EveryoneTest(PersonBindingTest):
         self.assertEqual(later['persons'], {'P1': 'a'})
         self.assertIn(dict(event='person.named', person_id='P1', who='P', end_ms=1200), later['events'])
 
+    async def test_a_face_that_contradicts_withdraws_the_binding_back_to_the_last_confirmation(self):
+        module = self.everyone(anonymous=False)
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        events = []
+        events += (await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED)))['events']      # confirmed
+        events += (await self.step(module, 2000, [person(.75, 'b', face=False)], frame_of(BLUE, RED)))['events']
+        late = await self.step(module, 3000, [person(.75, 'b')], frame_of(RED, BLUE))     # b's face: not P
+        events += late['events']
+        ended = next(item for item in late['events'] if item['event'] == 'person.unbound')
+        self.assertEqual((ended['reason'], ended['end_ms']), ('face_contradicts', 1001))     # last face that said P
+        intervals = intervals_of(events)
+        self.assertEqual(resolve(dict(track_id='b', end_ms=2500), intervals), 'unknown')     # withdrawn, not only ended
+        self.assertEqual(resolve(dict(track_id='b', end_ms=1000), intervals), 'P')
+
     async def test_a_track_carried_over_a_scene_cut_onto_someone_else_is_split_there(self):
         module, events = self.everyone(scene_cuts=True), []
         for ts in (1000, 1100, 1200):    # scene 1: red face on track a
