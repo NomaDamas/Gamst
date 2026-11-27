@@ -151,6 +151,12 @@ class CountView(_Window):
         lines = [(f'GAMST  {self.pipeline.name}   mode: {mode}', (80, 220, 255)), ('', None)]
         if mode == 'search':
             lines.insert(1, ('SEARCH: unclear words count as candidates', STATE_COLOR['provisional']))
+        choice = (getattr(self.pipeline, 'notes', None) or {}).get('pose_choice')
+        if isinstance(choice, dict):      # which pose model counts, as measured at start (recipes.choose_pose)
+            kept = choice['chosen'] == choice['model']
+            lines.insert(1, (f"pose {choice['chosen']}: {choice['live_fps']:g}+{choice['l2_fps']:g} fps measured, "
+                             f"input {choice['input_fps']:g}" + ('' if kept else f" ({choice['model']} too slow)"),
+                             (150, 150, 150) if kept else STATE_COLOR['revoked']))
         quality = getattr(self.pipeline, 'voice_quality', None)
         if isinstance(quality, dict) and quality.get('low'):      # gamst/voice_quality.py (ASCII: cv2 text)
             lines += [(f"VOICE REFERENCE QUALITY LOW {quality['quality']['mean']:.2f} -> {quality['used']}",
@@ -170,7 +176,8 @@ class CountView(_Window):
                 lines.append((f"  distance {value['distance']:.3f}", None))
             for event in reversed(self.recent.get(capability, ())[-4:]):      # newest first
                 state = event.get('state') or 'final'
-                lines.append(('  ' + event_line(event)[:60], STATE_COLOR.get(state)))
+                late = 'LATE ' if event.get('correction') else ''     # an L2 correction, counted after the live lane
+                lines.append(('  ' + late + event_line(event)[:60], STATE_COLOR.get(state)))
             lines.append(('', None))
         lost = [self.pipeline.lost(capability) for capability in self.capabilities]
         if any(item['gaps'] for item in lost):
