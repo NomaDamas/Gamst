@@ -106,6 +106,13 @@ GAPS = CapabilitySpec('pipeline.gaps', 'pipeline.gaps', 'events', 'gamst.pipelin
                       (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
 INSTRUCTIONS = CapabilitySpec('pipeline.instructions', 'pipeline.instructions', 'events', 'gamst.pipeline', '1',
                               (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+# Where each input of a run began: one ``pipeline.input_start`` event when its first frame arrives. ``start_ms`` is that
+# frame's capture time; ``position_ms`` where it is in its recording (None for a live source), so a capture time t is
+# ``position_ms + t - start_ms`` into the recording; ``source``, ``name`` (a file's name, never its folder), ``fps``,
+# ``frames_in_source`` (the container's count) and ``sample_rate`` as the source says (``describe()``).
+INPUTS = CapabilitySpec('pipeline.inputs', 'pipeline.inputs', 'events', 'gamst.pipeline', '1',
+                        (OutputField('events', 'array'),), 'frame', interpretation='measurement', license='Apache-2.0')
+START_FIELDS = ('source', 'name', 'live', 'paced', 'fps', 'frames_in_source', 'sample_rate', 'position_ms')
 INSTRUCTABLE = ('terms', 'exemplar')     # reference kinds that may change while a run goes on; the others identify a person
 BACKLOG = 900                            # frames a lane holds (30 s of 30 fps video) ...
 BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline hold together
@@ -267,7 +274,7 @@ class Pipeline:
         self.inputs[input_id] = dict(source=source, modality=modality or getattr(source, 'modality', None),
                                      derived_from=derived_from, frames=0, first_ms=None, last_ms=None, done_ms=None, missed=0, gaps=0, off=None,
                                      offset_ms=offset_ms, ended=False, error=None, down=None, retries=0, opened=None,
-                                     outages=deque(maxlen=16), intervals=deque(maxlen=64), size=None)
+                                     outages=deque(maxlen=16), intervals=deque(maxlen=64), size=None, start=None)
         return self
 
     def add_reference(self, name, kind, value, *, label=None, consent=None):
@@ -1107,6 +1114,8 @@ class Pipeline:
             entry['last_ms'], entry['size'] = frame.timestamp_ms, getattr(frame.data, 'shape', (None, None))[:2]
             if entry['first_ms'] is None:
                 entry['first_ms'] = frame.timestamp_ms
+                if entry['derived_from'] is None:      # a module's derived input begins where its own input did
+                    await self._commit_start(source, entry, frame)
             if entry['off'] is not None:
                 off, entry['off'] = entry['off'], None
                 gap = True
@@ -1460,6 +1469,37 @@ class Pipeline:
         pending['reasons'].add(reason)
         pending['modules'].update(affected)
         pending['capabilities'].update(filter(None, (self._capability(self.modules[name]) for name in affected)))
+
+    def _start_of(self, input_id, entry, frame):
+        """The ``pipeline.input_start`` event of an input's first frame (:data:`INPUTS`)."""
+        source = entry['source']
+        describe = getattr(source, 'describe', None)
+        try:
+            said = describe() if callable(describe) else {}
+        except Exception:      # a source that cannot say is still an input that began
+            said = {}
+        said = said if isinstance(said, dict) else {}
+        if source is None:
+            said = dict(source='host', **said)
+        event = dict(event='pipeline.input_start', input=input_id, modality=frame.modality, start_ms=frame.timestamp_ms,
+                     offset_ms=entry['offset_ms'])
+        for key in START_FIELDS:
+            value = said.get(key)
+            if key == 'name' and isinstance(value, str):
+                value = public_text(value.replace('\\', '/').rsplit('/', 1)[-1])[:200] or None
+            if type(value) in (int, float, bool) or isinstance(value, str) and key in ('source', 'name'):
+                event[key] = value
+        event.setdefault('source', type(source).__name__)
+        event.setdefault('position_ms', None)
+        return event
+
+    async def _commit_start(self, input_id, entry, frame):
+        """Commit where ``input_id`` began, once per run (:data:`INPUTS`); also kept for :meth:`status`."""
+        event = entry['start'] = self._start_of(input_id, entry, frame)
+        self.human.register_capability(INPUTS)
+        return await self.human.push_observation(
+            INPUTS.id, dict(events=[dict(event)]), subject_id=frame.subject_id, timestamp_ms=frame.timestamp_ms,
+            sensor=SensorMetadata(source_id=self.name, sensor_id=input_id, sequence=0))
 
     async def commit_gaps(self, *, force=False):
         """Commit what was lost as ``pipeline.gaps`` records (one per place and second, merged in between)."""
@@ -2156,6 +2196,7 @@ class Pipeline:
                               derived_from=value['derived_from'], host_fed=value['source'] is None,
                               missed=value['missed'], gaps=value['gaps'],
                               offset_ms=value['offset_ms'], ended=value['ended'],
+                              **({'start': dict(value['start'])} if value['start'] else {}),
                               **({'error': value['error']} if value['error'] else {}),
                               **({'down_since_ms': value['down']['since']} if value['down'] is not None else {}),
                               **({'outages': [dict(item) for item in value['outages']]} if value['outages'] else {}),

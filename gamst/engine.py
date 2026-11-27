@@ -20,7 +20,7 @@ from .semantic_state import SemanticStateChain
 from .context_memory import ContextMemory, sync_records
 from .transcripts import TranscriptMemory, TRANSCRIPT_OUTPUT
 from .watch import WatchManager
-from .counting import INSTRUCTION_CAPABILITY
+from .counting import INPUT_CAPABILITY, INSTRUCTION_CAPABILITY
 from .revisions import RETRACTION, identity, revision_fields
 from .temporal import TemporalAligner
 from dataclasses import asdict
@@ -912,6 +912,13 @@ class Gamst:
                 with_known=True) for event in record['observation']['value']['events']]
         return [item for item in self._instruction_log if known_until is None or (item[0] or 0) <= known_until]
 
+    def input_starts(self, subject_id='local-user', known_until=None, limit=8):
+        """The newest ``limit`` ``pipeline.input_start`` events (oldest first): where each input of a run began, so a
+        capture time t is ``position_ms + t - start_ms`` into its recording (:data:`gamst.pipeline.INPUTS`)."""
+        found = self.store.query(subject_id, kind='observation.signal', capability_id=INPUT_CAPABILITY,
+                                 registered_only=True, limit=limit, known_until=known_until)
+        return [dict(event) for record in found for event in record['observation']['value']['events']][-limit:]
+
     def _instructed(self):
         if self.instructions is None:
             raise ValueError('no recipe is running here; instructions belong to a running recipe (gamst recipe run ... --serve)')
@@ -988,6 +995,10 @@ class Gamst:
                     raise
             if self.closed or self.store._cursor_key != key:
                 raise RuntimeError('timeline discarded after deletion or close')
+            if isinstance(answer, dict) and not answer.get('restart'):
+                starts = self.input_starts(subject_id, known_until=as_of_ms)
+                if starts:
+                    answer['input_starts'] = starts
             return answer
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,

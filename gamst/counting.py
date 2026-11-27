@@ -44,6 +44,7 @@ from .revisions import depends_on
 MAX_SCAN = 20000
 GAP_CAPABILITY = 'pipeline.gaps'   # records of gamst.pipeline: captured frames that never reached a module
 INSTRUCTION_CAPABILITY = 'pipeline.instructions'    # records of gamst.pipeline: other words or another movement
+INPUT_CAPABILITY = 'pipeline.inputs'    # records of gamst.pipeline: where each input of a run began (its first frame)
 IDENTITY = ('reference_id', 'reference_revision')
 REVISION = 'event.revision'        # marks an earlier event (``revises``: its ``event_id``) final or revoked
 STATES = ('heard', 'provisional', 'final', 'revoked', 'uncertain')

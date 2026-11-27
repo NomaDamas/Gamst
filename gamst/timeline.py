@@ -38,7 +38,7 @@ from types import SimpleNamespace
 
 from .capabilities import is_raw_key as _is_raw_key
 from .context import compact_observation, is_context_observation
-from .counting import GAP_CAPABILITY as GAPS, INSTRUCTION_CAPABILITY as INSTRUCTIONS, REVISION
+from .counting import GAP_CAPABILITY as GAPS, INPUT_CAPABILITY as INPUTS, INSTRUCTION_CAPABILITY as INSTRUCTIONS, REVISION
 from .observation_pages import _encode as seal_cursor, _open as open_cursor
 from .revisions import LATE_MS, RETRACTION, depends_on, record_span, span_of, time_ms
 
@@ -663,7 +663,7 @@ class _Query:
         if not record.context:
             return False
         if self.wanted is None:
-            return record.capability not in (GAPS, INSTRUCTIONS)
+            return record.capability not in (GAPS, INSTRUCTIONS, INPUTS)
         return bool({record.capability, record.name} & self.wanted) or not record.capability and record.model in self.wanted
 
     def table(self, known_ms, state, stop=None):
