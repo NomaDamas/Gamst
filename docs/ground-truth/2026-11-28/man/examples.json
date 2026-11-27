@@ -1,0 +1,7 @@
+{
+ "video": "감스트 맨까송 - 맨가대(가습기X김바쏘).mp4",
+ "action": "맨까송",
+ "examples": [],
+ "enroll": "gamst recipe enroll person-action-count --without target_person --mode sequence --name '맨까송' --profile <try-it>/testbed/identity/profile-identity.json --out <try-it>/testbed/multi/man/ex_man_fewshot.json",
+ "enroll_clicked": "ex_man_fewshot.json"
+}
