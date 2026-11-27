@@ -325,6 +325,40 @@ class TrackExemplarTest(unittest.TestCase):
         self.assertEqual(list(twin._tracks), ['a@500'])
 
 
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class OwnLaneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_spilling_lane_reading_derived_joints_gets_them_as_they_are_and_pairs_them_with_the_frame(self):
+        from gamst import Gamst
+        from gamst.pipeline import Derived, Pipeline
+        from gamst.private_payload import PrivatePoses
+        from gamst.providers.person_binding import PersonBinding
+        from tests.test_speaker_verify import now
+
+        class Pose:
+            def process(self, frame):
+                return [Derived('joints', PrivatePoses([person(.75, 'b')]), 'video')]
+
+        async with Gamst(consent=True) as human:
+            pipeline = Pipeline(human, 'lanes')
+            pipeline.add_input('camera')
+            pipeline.add_module('pose', Pose(), consumes='camera', emits=('joints',), backlog='spill')
+            binding = PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, session='file:s')
+            pipeline.add_reference('person', 'person', reference(name='P') | dict(face=[[0., 0., 1.]] * 3), consent=CONSENT)
+            pipeline.add_module('person_binding', binding, consumes=['camera', 'joints'], spec=binding.spec, backlog='spill')
+            pipeline.video_memory(memory_bytes=1 << 24, disk_bytes=0, disk_floor_bytes=0)
+            start = now() - 5000
+            for index in range(6):
+                await pipeline.push('camera', frame_of(BLUE, RED), timestamp_ms=start + 100 * index, modality='video')
+            await pipeline.drain()
+            rows = human.store.query('local-user', kind='observation.signal', registered_only=True,
+                                     capability_id='vision.person_binding')
+            await pipeline.close()
+        self.assertEqual(binding.counts['frames'], 6, binding.counts)
+        self.assertEqual(binding.counts['face_embeddings'], 1, binding.counts)
+        events = [event for row in rows for event in row['observation']['value']['events']]
+        self.assertEqual([(event['event'], event['who']) for event in events], [('person.bound', 'P')])
+
+
 # ---------------------------------------------------------------- command line, store and MCP
 
 class CommandLineTest(unittest.TestCase):

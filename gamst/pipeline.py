@@ -1163,8 +1163,9 @@ class Pipeline:
     def _enqueue(self, lane, item):
         if item.media and lane['lost']:
             item.gap, lane['lost'] = True, False
+        # an image only: a derived video input that carries joints (PrivatePoses) stays as it is
         if lane.get('backlog') == 'spill' and not self._post and item.media and item.frame.modality == 'video' \
-                and item.frame.data is not None:
+                and hasattr(item.frame.data, 'shape'):
             item.kept = self.video_memory().keep(item.frame.data)
             if item.kept is None:      # beyond the memory's disk bound: declared, as a frame the lane could not take
                 lane['lost'] = True
