@@ -294,6 +294,27 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
                          [('person.unbound', 'end_of_input', 2001)])
         self.assertIsNone(module.finish())
 
+    async def test_closing_waits_for_the_scorer_and_tolerates_a_worker_that_already_ended(self):
+        class Slow(Color):
+            async def embed(self, image):
+                await asyncio.sleep(.05)
+                return super().embed(image)
+
+            def close(self):
+                raise RuntimeError('provider worker is closed; explicitly reopen its stream')
+
+        from gamst.plugins import InputFrame
+        from gamst.private_payload import PrivatePoses
+        from gamst.providers.person_binding import PersonBinding
+        module = PersonBinding(Slow('face'), Slow('body'), face_threshold=.9, face_reject=.5, session='file:s')
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        await module.process(InputFrame(PrivatePoses([person(.75, 'b')]), 'video', 0))
+        await module.process(InputFrame(frame_of(BLUE, RED), 'video', 0))
+        await asyncio.sleep(.01)                  # a job is in flight
+        await module.close()
+        self.assertTrue(module.scorer.task.done())
+        self.assertEqual(module.counts['face_embeddings'], 1)
+
     async def test_a_reference_below_the_check_is_refused_at_bind(self):
         from gamst.providers.person_binding import PersonBinding
         module = PersonBinding(Color('face'), Color('body'))

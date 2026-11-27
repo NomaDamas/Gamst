@@ -220,10 +220,12 @@ class _Scorer:
 
     def __init__(self, face, body):
         self.face, self.body, self.jobs, self.task, self.wake = face, body, {}, None, None
-        self.done = 0
+        self.done, self.stopping = 0, False
 
     def submit(self, owner, key, ts, face, body):
         import asyncio
+        if self.stopping:
+            return
         whole = (id(owner), key)
         if whole in self.jobs:
             owner.counts['replaced_jobs'] = owner.counts.get('replaced_jobs', 0) + 1
@@ -242,6 +244,8 @@ class _Scorer:
         import asyncio
         while True:
             if not self.jobs:
+                if self.stopping:
+                    return
                 self.wake.clear()
                 try:
                     await asyncio.wait_for(self.wake.wait(), 2.)
@@ -253,6 +257,22 @@ class _Scorer:
             found = await asyncio.gather(_embedded(self.face, face), _embedded(self.body, body))
             self.done += 1
             owner._deliver(key, ts, *found)
+
+    async def stop(self, wait_s=5.):
+        """No new job is started; the one in flight finishes (a request cut off mid-way closes its worker's stream)."""
+        import asyncio
+        self.jobs.clear()
+        self.stopping = True
+        if self.task is None or self.task.done():
+            return
+        if self.wake is not None:
+            self.wake.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(self.task), wait_s)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self.task.cancel()
+        except Exception:
+            pass
 
     def busy(self):
         return bool(self.jobs) or (self.task is not None and not self.task.done() and self.wake is not None
@@ -421,13 +441,15 @@ class PersonBinding:
     async def close(self):
         if getattr(self, '_shares_models', False):
             return
-        if self.scorer.task is not None and not self.scorer.task.done():
-            self.scorer.task.cancel()
+        await self.scorer.stop()
         for embedder in (self.face, self.body):
             close = getattr(embedder, 'close', None)
-            value = close() if callable(close) else None
-            if hasattr(value, '__await__'):
-                await value
+            try:
+                value = close() if callable(close) else None
+                if hasattr(value, '__await__'):
+                    await value
+            except RuntimeError:        # its worker already ended (e.g. a cancelled request closed its stream)
+                pass
 
     # ------------------------------------------------------------------ frames
 
