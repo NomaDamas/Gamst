@@ -34,9 +34,24 @@ Output, capability ``vision.person_binding`` (records, so count_events, get_time
 was decided, ``by: face | body | handover``, scores, ``retroactive``) and ``person.unbound`` (``track_id, who, start_ms,
 end_ms, reason``). Embeddings and crops never leave this process.
 
+Where it runs: in the pose module's lane (it pairs each camera frame with the joints of the same capture), so an L2
+chain of that lane forks it too. The face and body models never run in the lane: crops of the tracks that are due go
+to a scorer beside it (an asyncio task feeding the models' own worker processes), and their scores are decided on at
+the first frame after they come back (``decision_delay_ms`` in its status). A newer crop of the same track replaces one
+that has not started, so the scorer never builds a backlog. A track's face is looked at every ``face_every_ms`` while it
+is unconfirmed and every ``confirm_every_ms`` once it is bound: every track is confirmed, no face on every frame.
+It also works in a lane of its own (the camera frame then comes before its joints and is kept only when faces are due).
+
+Tracker swaps: when the track holding a person leaves the frame and a never-bound track appears where it was within
+``continue_ms`` (box overlap ``continue_iou``), the person continues on it (``by: continuation``) unless its face or
+appearance contradicts; the face confirms it as for any track.
+
 L2 (gamst.pipeline): a fork names its tracks ``<track>@<first frame ms>`` (a forked pose tracker numbers its tracks
 again) and takes over the bindings of the cut by box overlap (:meth:`snapshot`, :meth:`restore`); a track it cannot hand
 over stays unknown until its own face confirms it, never a guess.
+
+With nobody enrolled it runs and binds nobody; a person enrolled while the run goes on (MCP ``enroll_person``) is bound
+from then on, and back to the first frame of a track that is still followed (retroactive).
 """
 from __future__ import annotations
 
@@ -286,7 +301,7 @@ class PersonBinding:
             raise ValueError('a person is being enrolled from the camera already')
         future = asyncio.get_running_loop().create_future()
         self._collect = dict(seconds=float(seconds), until=None, last=None, every=every_ms, face=[], body=[], samples=[],
-                             skipped=0, future=future)
+                             skipped=0, pending=0, future=future)
         try:
             return await asyncio.wait_for(asyncio.shield(future), seconds + 30)
         except asyncio.TimeoutError:
@@ -294,12 +309,14 @@ class PersonBinding:
         finally:
             self._collect = None
 
-    async def _collected(self, candidates, image, ts):
+    def _collected(self, candidates, image, ts):
+        """Crops of the one person in view go to the scorer (tag ``collect``); the job ends after its seconds, once
+        its crops are embedded."""
         job = self._collect
         job['until'] = ts + 1000 * job['seconds'] if job['until'] is None else job['until']
         if ts > job['until']:
-            if not job['future'].done():
-                job['future'].set_result({key: job[key] for key in ('face', 'body', 'samples', 'skipped')})
+            job['closing'] = True
+            self._finish_collect()
             return
         if job['last'] is not None and ts - job['last'] < job['every']:
             return
@@ -308,25 +325,28 @@ class PersonBinding:
             return
         job['last'] = ts
         pose = next(iter(candidates.values()))[0]
-        height, width = image.shape[:2]
-        indices, visibility = face_reading(pose, self.face_indices)
-        face = await self._embed(self.face, align_face(image, face_points(pose.get('landmarks') or [], width, height,
-                                                                        indices, min_visibility=visibility)))
-        body = await self._embed(self.body, body_crop(image, pose['bbox']))
-        for key, value in (('face', face), ('body', body)):
-            if value is not None:
-                job[key].append(value)
-        job['samples'].append(dict(source='camera', at=ts, persons=1, face=face is not None, body=body is not None))
+        face, body = self._crops(pose, image, True, True)
+        job['pending'] += 1
+        self._submit(('collect', ts), ts, face, body)
+
+    def _finish_collect(self):
+        job = self._collect
+        if job is not None and job.get('closing') and not job['pending'] and not job['future'].done():
+            job['future'].set_result({key: job[key] for key in ('face', 'body', 'samples', 'skipped')})
 
     def reset(self):
         self._collect = getattr(self, '_collect', None)
         self.bindings, self._scores, self._poses, self._boxes = TrackBindings(), {}, {}, {}
         self._images, self._camera_ms, self._kept_ms = {}, None, None
+        self._jobs, self._results, self._wake, self._task = {}, [], None, None    # the scorer (beside the lane)
+        self.delays = []      # ms from a frame to the frame where its face result is decided on
         self._handover, self._namespace = [], None
         for person in self.persons:
             person.session.clear()
 
     async def close(self):
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
         if getattr(self, '_shares_models', False):
             return
         for embedder in (self.face, self.body):
@@ -361,34 +381,112 @@ class PersonBinding:
             self.face_every_ms if kind == 'face' else self.body_every_ms
         return last is None or ts - last >= every
 
-    async def _score(self, track, pose, image, ts):
-        state = self._scores.setdefault(track, dict(face=None, face_ms=None, body=None, body_ms=None, body_embedding=None))
-        if image is not None and self.persons:
-            height, width = image.shape[:2]
-            if self.face is not None and any(person.face is not None for person in self.persons) and self._due(track, ts, 'face'):
-                indices, visibility = face_reading(pose, self.face_indices)
-                crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
+    def _crops(self, pose, image, face, body):
+        height, width = image.shape[:2]
+        found = [None, None]
+        if face and self.face is not None:
+            indices, visibility = face_reading(pose, self.face_indices)
+            found[0] = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
                                                      min_visibility=visibility))
-                state['face_ms'] = ts      # tried: a turned head is tried again at the same pace, not on the next frame
-                embedding = await self._embed(self.face, crop)
-                if embedding is not None:
-                    self.counts['face_embeddings'] += 1
-                    state['face'] = {person.name: person.face_score(embedding) for person in self.persons}
-                    state['face_seen_ms'] = ts
-            if self.body is not None and pose.get('bbox') and self._due(track, ts, 'body'):
-                state['body_ms'] = ts
-                embedding = await self._embed(self.body, body_crop(image, pose['bbox']))
-                if embedding is not None:
-                    self.counts['body_embeddings'] += 1
-                    state['body_embedding'] = embedding
-                    state['body'] = {person.name: person.body_score(embedding) for person in self.persons}
-                    state['body_seen_ms'] = ts
+        if body and self.body is not None and pose.get('bbox'):
+            found[1] = body_crop(image, pose['bbox'])
+        return found
+
+    def _state(self, track, ts):
+        state = self._scores.setdefault(track, dict(face=None, face_ms=None, body=None, body_ms=None, body_embedding=None))
         for key in ('face', 'body'):     # a score is evidence about now, not about a minute ago
             if state.get(key + '_seen_ms') is not None and ts - state[key + '_seen_ms'] > 1000:
                 state[key] = None
                 if key == 'body':
                     state['body_embedding'] = None
         return state
+
+    def _request(self, track, pose, image, ts):
+        """After this frame's decisions: crops of a track whose face (or body) is due go to the scorer; nothing waits
+        for a model here."""
+        state = self._scores[track]
+        if image is None or not self.persons or track.startswith('frame:'):
+            return
+        face = any(person.face is not None for person in self.persons) and self._due(track, ts, 'face')
+        body = self._due(track, ts, 'body')
+        if face:
+            state['face_ms'] = ts      # tried: a turned head is tried again at the same pace, not on the next frame
+        if body:
+            state['body_ms'] = ts
+        if face or body:
+            crops = self._crops(pose, image, face, body)
+            if crops[0] is not None or crops[1] is not None:
+                self._submit(track, ts, *crops)
+
+    # ------------------------------------------------------------------ the scorer: models beside the lane
+
+    def _submit(self, key, ts, face, body):
+        """A newer job of the same track replaces one that has not started (the newest face is the evidence)."""
+        import asyncio
+        if key in self._jobs:
+            self.counts['replaced_jobs'] = self.counts.get('replaced_jobs', 0) + 1
+        self._jobs[key] = (ts, face, body)
+        self.counts['jobs'] = self.counts.get('jobs', 0) + 1
+        if self._wake is None:
+            self._wake = asyncio.Event()
+        self._wake.set()
+        if self._task is None or self._task.done():
+            self._task = asyncio.get_running_loop().create_task(self._scorer())
+
+    async def _scorer(self):
+        import asyncio
+        while True:
+            if not self._jobs:
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), 2.)
+                except asyncio.TimeoutError:
+                    return          # idle: started again by the next job
+                continue
+            key = min(self._jobs, key=lambda item: self._jobs[item][0])      # the oldest first
+            ts, face, body = self._jobs.pop(key)
+            found = await asyncio.gather(self._embed(self.face, face), self._embed(self.body, body))
+            self.counts['face_embeddings'] += found[0] is not None
+            self.counts['body_embeddings'] += found[1] is not None
+            if isinstance(key, tuple) and key[0] == 'collect':
+                job = self._collect
+                if job is not None:
+                    for name, value in zip(('face', 'body'), found):
+                        if value is not None:
+                            job[name].append(value)
+                    job['samples'].append(dict(source='camera', at=ts, persons=1, face=found[0] is not None,
+                                               body=found[1] is not None))
+                    job['pending'] -= 1
+                    self._finish_collect()
+                continue
+            self._results.append((key, ts, *found))
+
+    async def settled(self):
+        """Until the scorer has nothing left (tests; a run never waits for it)."""
+        import asyncio
+        while self._jobs or (self._task is not None and not self._task.done() and self._wake is not None
+                             and self._wake.is_set()):
+            await asyncio.sleep(0)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    def _take_results(self, now):
+        """Finished scores become this frame's evidence (each is decided on once); older than a second: dropped."""
+        results, self._results = self._results, []
+        for track, ts, face, body in results:
+            state = self._scores.get(track)
+            if state is None or now - ts > 1000:
+                self.counts['stale_results'] = self.counts.get('stale_results', 0) + 1
+                continue
+            self.delays.append(now - ts)
+            del self.delays[:-4096]
+            if face is not None:
+                state['face'] = state['new_face'] = {person.name: person.face_score(face) for person in self.persons}
+                state['face_seen_ms'] = ts
+            if body is not None:
+                state['body_embedding'] = body
+                state['body'] = state['new_body'] = {person.name: person.body_score(body) for person in self.persons}
+                state['body_seen_ms'] = ts
 
     def _best(self, scores, threshold):
         """(name, score) of the person above ``threshold`` who beats every other by ``margin``, else None."""
@@ -399,9 +497,10 @@ class PersonBinding:
             return None
         return ranked[0][1], ranked[0][0]
 
-    def _fresh(self, scores, kind, ts):
-        """The scores of this frame only (a decision is made on what was just seen)."""
-        return (scores.get(kind) or {}) if scores.get(kind + '_seen_ms') == ts else {}
+    @staticmethod
+    def _fresh(scores, kind, ts=None):
+        """Scores that arrived for this frame's decision (each result is decided on once)."""
+        return scores.get('new_' + kind) or {}
 
     def _decide(self, track, scores, ts, events, candidates):
         bindings = self.bindings
@@ -524,19 +623,20 @@ class PersonBinding:
                 self.counts['unpaired_images'] += 1
         self.counts['frames'] += 1
         self.counts['scored_frames'] += image is not None
+        self._take_results(ts)
         candidates, events = {}, []
         for index, pose in enumerate(poses):
             if not isinstance(pose, dict) or not pose.get('bbox'):
                 continue
             track = self._track(pose, ts, index)
             self.bindings.seen(track, ts)
-            candidates[track] = (pose, await self._score(track, pose, image, ts))
+            candidates[track] = (pose, self._state(track, ts))
         for track in [key for key, state in self.bindings.tracks.items() if ts - state['last_ms'] > self.lost_ms]:
             events.append(self.bindings.forget(track))
             self._scores.pop(track, None)
             self._boxes.pop(track, None)
         if self._collect is not None and image is not None:
-            await self._collected(candidates, image, ts)
+            self._collected(candidates, image, ts)
         if self._handover:
             self._hand_over(candidates, ts, events)
         for track, (_, scores) in candidates.items():
@@ -544,6 +644,7 @@ class PersonBinding:
         self._continue(candidates, ts, events)
         for track, (pose, _) in candidates.items():
             self._boxes[track] = pose['bbox']
+            self._request(track, pose, image, ts)
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
@@ -557,9 +658,14 @@ class PersonBinding:
                 if value is not None:
                     entry[key + '_score'] = round(value, 5)
             tracks.append(entry)
+        for state in self._scores.values():
+            state.pop('new_face', None)
+            state.pop('new_body', None)
         bound = {person.name: self.bindings.holder(person.name) for person in self.persons}
         return self.spec.validate(dict(tracks=tracks[:16], bound=bound, events=flat))
 
     def status(self):
+        delays = sorted(self.delays)
         return dict(self.counts, persons=[person.name for person in self.persons], waiting_images=len(self._images),
-                    tracks=len(self.bindings.tracks))
+                    tracks=len(self.bindings.tracks), waiting_jobs=len(self._jobs),
+                    decision_delay_ms=dict(p50=delays[len(delays) // 2], max=delays[-1], n=len(delays)) if delays else None)

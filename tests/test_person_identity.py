@@ -168,13 +168,19 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         return module
 
     async def step(self, module, ts, poses, image):
+        """A frame, then (faces are scored beside the lane) the next frame 1 ms later, where its scores are decided on."""
         from gamst.plugins import InputFrame
         from gamst.private_payload import PrivatePoses
         await module.process(InputFrame(PrivatePoses(poses), 'video', ts))
-        return await module.process(InputFrame(image, 'video', ts))
+        first = await module.process(InputFrame(image, 'video', ts))
+        await module.settled()
+        await module.process(InputFrame(PrivatePoses(poses), 'video', ts + 1))
+        second = await module.process(InputFrame(image, 'video', ts + 1))
+        await module.settled()
+        return dict(second, events=first['events'] + second['events'])
 
     async def test_a_face_binds_its_track_from_the_track_start_and_another_face_releases_it(self):
-        module = self.module()
+        module = self.module(confirm_every_ms=0)     # a bound face looked at on every frame here
         first = await self.step(module, 1000, [person(.25, 'a', face=False), person(.75, 'b', face=False)], frame_of(BLUE, RED))
         self.assertEqual(first['events'], [])
         self.assertEqual({item['who'] for item in first['tracks']}, {'unknown'})
@@ -211,7 +217,7 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
                 poses = [person(.75, 'b')] if ts != 400 else [person(.25, 'a'), person(.75, 'b')]
                 await self.step(module, 10000 + ts, poses, frame_of(BLUE, RED))
         collected, _ = await asyncio.gather(module.collect(1.), feed())
-        self.assertEqual(collected['skipped'], 1)
+        self.assertEqual(collected['skipped'], 2)      # the crowded frame and the one after it (step: two frames)
         self.assertEqual(len(collected['face']), 5)
         self.assertTrue(all(sample['persons'] == 1 for sample in collected['samples']))
 
@@ -224,11 +230,15 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         for ts in range(0, 1400, 100):
             await module.process(InputFrame(image, 'video', ts))                       # camera first
             found.append(await module.process(InputFrame(PrivatePoses([person(.75, 'b')]), 'video', ts)))
+            await module.settled()
         self.assertTrue(all(value is not None for value in found))                    # every frame decided
-        self.assertEqual(found[0]['events'][0]['who'], 'P')
+        events = [event for value in found for event in value['events']]
+        self.assertEqual([(event['event'], event['who'], event['start_ms'], event['end_ms']) for event in events],
+                         [('person.bound', 'P', 0, 100)])         # scored beside the lane, decided on the next frame
         self.assertEqual(module.counts['face_embeddings'], 2)        # bound at 0, confirmed again at 1000, not in between
         self.assertEqual(module.counts['unpaired_images'], 0)
         self.assertLessEqual(len(module._images), 1)
+        self.assertEqual(module.status()['decision_delay_ms']['max'], 100)
 
     async def test_nobody_enrolled_binds_nobody_and_a_person_enrolled_later_reaches_back_over_live_tracks(self):
         from gamst.providers.person_binding import PersonBinding
@@ -349,7 +359,8 @@ class OwnLaneTest(unittest.IsolatedAsyncioTestCase):
             start = now() - 5000
             for index in range(6):
                 await pipeline.push('camera', frame_of(BLUE, RED), timestamp_ms=start + 100 * index, modality='video')
-            await pipeline.drain()
+                await pipeline.drain()
+                await binding.settled()
             rows = human.store.query('local-user', kind='observation.signal', registered_only=True,
                                      capability_id='vision.person_binding')
             await pipeline.close()

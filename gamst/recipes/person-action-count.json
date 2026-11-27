@@ -75,8 +75,7 @@
         "camera",
         "pose_joints"
       ],
-      "runs_without_reference": true,
-      "backlog": "spill"
+      "runs_without_reference": true
     },
     {
       "name": "target_person",
