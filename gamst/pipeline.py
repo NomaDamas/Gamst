@@ -112,6 +112,7 @@ BACKLOG_BYTES = 512 * 1024 * 1024        # ... and what all lanes of a Pipeline 
 SPILL_FRAMES = 1_000_000                 # frames a ``backlog="spill"`` lane may hold (bounded by its video memory)
 SAMPLES = ('newest',)                    # ``sample``: how a lane that is busy takes frames (declared, not lost)
 BACKLOGS = ('spill',)                    # ``backlog``: how a lane keeps the frames it has not processed
+SAME_EVENT_MS = 100                      # two lanes' events this close (same label, person) are one (L2 safety net)
 MAX_OFFSET_MS = 600_000                  # an input's declared clock correction
 LOG = 512                                # gap intervals and timings kept per module
 GAP_RECORD_S = 1.                        # at most one gap record per place and second; merged in between
@@ -627,6 +628,32 @@ class Pipeline:
                 entry['workers'].append(asyncio.create_task(work(name, entry, todo)))
 
     # ------------------------------------------------------------------ L2 for video
+
+    def _once(self, entry, output, late):
+        """Drop an event the other lane (live or L2) already committed with the same label and person and an end within
+        ``SAME_EVENT_MS``: ownership by end time makes this rare; it is the stored record's safety net."""
+        seen = entry.setdefault('ends', deque(maxlen=256))
+
+        def fresh(event):
+            if not isinstance(event, dict) or type(event.get('end_ms')) not in (int, float):
+                return True
+            key = (event.get('event'), event.get('label'), str(event.get('person')))
+            if any(other_key == key and other_late != late and abs(end - event['end_ms']) <= SAME_EVENT_MS
+                   for end, other_key, other_late in seen):
+                return False
+            seen.append((event['end_ms'], key, late))
+            return True
+        kept = []
+        for item in output if isinstance(output, list) else [output]:
+            value = item['value'] if isinstance(item, dict) and isinstance(item.get('value'), dict) else item
+            events = value.get('events') if isinstance(value, dict) else None
+            if isinstance(item, Derived) or not isinstance(events, list) or not events:
+                kept.append(item)
+                continue
+            mine = [event for event in events if fresh(event)]
+            if mine:
+                kept.append(item if len(mine) == len(events) else _with_events(item, mine))
+        return kept if isinstance(output, list) else (kept[0] if kept else None)
 
     def _chain_free(self, name):
         entry = self.modules[name]
@@ -1783,6 +1810,8 @@ class Pipeline:
                 at = end_ms if by_end else (start_ms + end_ms) / 2
                 return not any(low <= at <= high for low, high in claims)
         output = self._trim(entry, output, keep)
+        if entry.get('claim_by') == 'end' and output:     # the safety net of L2 ownership: no event twice
+            output = self._once(entry, output, bool(context.forks))
         if context.correction and output:
             output = [_corrected(item) for item in output] if isinstance(output, list) else _corrected(output)
         if output is None or output == []:

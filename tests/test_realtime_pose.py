@@ -276,6 +276,17 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(straddled)     # some hits crossed a cut, and still counted once
 
 
+class SafetyNet(unittest.TestCase):
+    def test_the_same_event_from_the_other_lane_within_100_ms_is_stored_once(self):
+        pipeline = Pipeline(SimpleNamespace(register_capability=lambda spec: None, pipeline=None), 'x')
+        entry = {}
+        hit = lambda end: dict(count=1, events=[dict(event='hit', label='slam', start_ms=end - 200, end_ms=end)])  # noqa
+        self.assertEqual(pipeline._once(entry, hit(1000), False)['events'][0]['end_ms'], 1000)
+        self.assertIsNone(pipeline._once(entry, hit(1060), True))                 # L2 found the live one again
+        self.assertIsNotNone(pipeline._once(entry, hit(1060), False))             # the same lane twice: two hits
+        self.assertIsNotNone(pipeline._once(entry, hit(1300), True))              # another hit
+
+
 @unittest.skipIf(np is None, 'numpy')
 class PostChunks(unittest.IsolatedAsyncioTestCase):
     async def test_a_recording_in_chunks_counts_each_hit_once_and_nothing_is_late(self):
