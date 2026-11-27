@@ -22,7 +22,7 @@ profile                    worker (real model)                                  
 ``hosted.asr.words``       a hosted ASR API's phrases (audio leaves the device) ``RemoteWhisper``
 ``streaming.asr.words``     a local streaming recogniser (sherpa-onnx, Voxtral)  ``RemoteStreamingWords``
 ``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
-``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
+``sapiens2.pose``          Sapiens2 + YOLOX (transformers port, opt-in licence) ``RemotePose``
 ``rtmw.pose``              RTMW whole-body + YOLOX (rtmlib ONNX)                ``RemoteRTMW``
 =========================  ==================================================  ====================
 
@@ -85,8 +85,9 @@ def capability(profile, config):
     modality, fields = FIELDS[profile]
     if profile == 'target_speech.local' and config.get('backend') == 'usef' and config.get('allow_noncommercial') is not True:
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
-    if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
-        raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
+    if profile == 'sapiens2.pose':
+        from .sapiens2_pose import check_config as check_sapiens2
+        check_sapiens2(config)
     if profile == 'rtmw.pose':
         from .rtmw_pose import check_config as check_rtmw
         check_rtmw(config)
@@ -218,21 +219,9 @@ class _Whisper(_Worker):
         self.loop.close()
 
 
-class _Pose(_Worker):
-    def __init__(self, plugin):
-        self.plugin = plugin
-
-    def query(self, frame, request):
-        np, found = _numpy(), self.plugin.infer(frame.data)
-        height, width = frame.data.shape[:2]
-        joints = np.asarray([[[point['x'], point['y'], point['visibility']] for point in pose['landmarks']]
-                             for pose in found], dtype='<f4').reshape(len(found), 308, 3)
-        return dict(poses=[dict(bbox=pose['bbox']) for pose in found], model=self.plugin.version,
-                    image_width=int(width), image_height=int(height)), joints
-
-
 class _RTMW(_Worker):
-    """One frame (``request["timestamp_ms"]``: its capture time, for the detection interval) -> boxes and joints."""
+    """RTMW or Sapiens2 (top-down over YOLOX): one frame (``request["timestamp_ms"]``: its capture time, for the
+    detection interval) -> boxes and joints."""
 
     def __init__(self, models):
         self.models = models
@@ -241,7 +230,7 @@ class _RTMW(_Worker):
         np = _numpy()
         height, width = frame.data.shape[:2]
         boxes, keypoints, scores = self.models.infer(frame.data, (request or {}).get('timestamp_ms'))
-        joints = np.zeros((len(boxes), keypoints.shape[1] if len(boxes) else 133, 3), dtype='<f4')
+        joints = np.zeros((len(boxes), keypoints.shape[1], 3), dtype='<f4')
         if len(boxes):
             joints[..., 0], joints[..., 1] = keypoints[..., 0] / width, keypoints[..., 1] / height
             joints[..., 2] = np.clip(scores, 0., 1.)
@@ -339,9 +328,8 @@ def load(profile, config):
     if profile == 'rtmw.pose':
         from .rtmw_pose import RTMWModels
         return _RTMW(RTMWModels(**config))
-    from .sapiens2_pose import Sapiens2PosePlugin
-    config['pose_sha256'] = config.pop('sha256')
-    return _Pose(Sapiens2PosePlugin.from_local(**config))
+    from .sapiens2_pose import Sapiens2Models
+    return _RTMW(Sapiens2Models(**config))
 
 
 # ---------------------------------------------------------------- client side
@@ -488,31 +476,17 @@ class RemoteStreamingWords(RemoteWhisper):
         await super().reset()
 
 
-class RemotePose(_Client):
-    """Async stand-in for ``Sapiens2PosePlugin.infer``; tracking stays in this process."""
-
-    async def infer(self, image):
-        from ..crew.modules import bounded_image
-        from ..private_payload import CONTRACTS, landmarks
-        result, private = await self.worker.query(self._frame(bounded_image(image), 'video'))
-        columns = CONTRACTS['sapiens2.pose'].columns
-        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='goliath308', track_id=None,
-                     association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
-                     image_width=result['image_width'], image_height=result['image_height'],
-                     landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
-                for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
-
-
 class RemoteRTMW(_Client):
     """Async stand-in for :class:`gamst.providers.rtmw_pose.RTMWModels`; tracking stays in this process."""
+    PROFILE, KEYPOINT_SET = 'rtmw.pose', 'coco_wholebody133'
 
     async def infer(self, image, timestamp_ms):
         from ..crew.modules import bounded_image
         from ..private_payload import CONTRACTS, landmarks
         result, private = await self.worker.query(self._frame(bounded_image(image), 'video', timestamp_ms=timestamp_ms),
                                                   {'timestamp_ms': int(timestamp_ms)})
-        columns = CONTRACTS['rtmw.pose'].columns
-        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='coco_wholebody133', track_id=None,
+        columns = CONTRACTS[self.PROFILE].columns
+        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set=self.KEYPOINT_SET, track_id=None,
                      association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
                      image_width=result['image_width'], image_height=result['image_height'],
                      landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
@@ -520,6 +494,11 @@ class RemoteRTMW(_Client):
 
     async def reset(self):
         await self.worker.reset()
+
+
+class RemotePose(RemoteRTMW):
+    """Async stand-in for :class:`gamst.providers.sapiens2_pose.Sapiens2Models` (same answer as RTMW, 308 points)."""
+    PROFILE, KEYPOINT_SET = 'sapiens2.pose', 'goliath308'
 
 
 class RemoteActiveSpeaker(_Client):

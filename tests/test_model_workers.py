@@ -36,16 +36,20 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
                 def align(self, samples, rate, text, language):
                     return [dict(text=text, start_s=0.0, end_s=len(samples) / rate)]
             class Pose:
-                version = 'stand-in'
-                def infer(self, image):
-                    return [dict(bbox=dict(x=0., y=0., width=1., height=1.),
-                                 landmarks=[dict(x=.5, y=.25, visibility=.9)] * 308)] * 4
+                version, points = 'stand-in', 308
+                def infer(self, image, timestamp_ms=None):
+                    import numpy as np
+                    height, width = image.shape[:2]
+                    keypoints = np.tile(np.asarray([width * .5, height * .25], 'f4'), (4, 308, 1))
+                    return [[0., 0., width, height]] * 4, keypoints, np.full((4, 308), 1.7, 'f4')
+                def reset(self):
+                    pass
             def embed(frame):
                 if abs(frame.data).max() == 0:
                     raise ValueError('silent')
                 return [float(frame.data.mean())] * 1024
             def load(profile, config):
-                return {'speaker.embedding': lambda: m._Embedding(embed), 'sapiens2.pose': lambda: m._Pose(Pose()),
+                return {'speaker.embedding': lambda: m._Embedding(embed), 'sapiens2.pose': lambda: m._RTMW(Pose()),
                         'qwen3.forced_aligner': lambda: m._Aligner(Aligner()),
                         'target_speech.local': lambda: m._Extraction(Extractor()),
                         'pixit.sources': lambda: m._Separation(Separator())}[profile]()
@@ -97,10 +101,13 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await aligner.close()
             pose = await model_workers.RemotePose.open(python, 'sapiens2.pose', dict(
-                pose_dir='/p', detector_dir='/d', sha256=SHA, accept_license=True))
+                path='/p', sha256=SHA, det_path='/d', det_sha256=SHA, accept_license=True))
             try:
-                poses = await pose.infer(np.zeros((64, 48, 3), np.uint8))   # 4 people x 308 keypoints fit the wire
+                poses = await pose.infer(np.zeros((64, 48, 3), np.uint8), 0)   # 4 people x 308 keypoints fit the wire
                 self.assertEqual((len(poses), len(poses[0]['landmarks'])), (4, 308))
+                self.assertEqual(poses[0]['keypoint_set'], 'goliath308')
+                self.assertEqual(poses[0]['landmarks'][0], dict(x=.5, y=.25, visibility=1., presence=1.))
+                self.assertEqual(pose.model_id, f'sapiens2:{SHA[:16]}')
             finally:
                 await pose.close()
 
@@ -114,7 +121,7 @@ class WorkerProtocolTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PermissionError, 'NC'):
             capability('target_speech.local', dict(backend='usef', source='s', checkpoint='c', sha256=SHA))
         with self.assertRaisesRegex(PermissionError, 'Sapiens2'):
-            capability('sapiens2.pose', dict(pose_dir='/p', detector_dir='/d', sha256=SHA))
+            capability('sapiens2.pose', dict(path='/p', sha256=SHA, det_path='/d', det_sha256=SHA))
         with self.assertRaisesRegex(ValueError, 'sha256'):
             capability('face.embedding', dict(path='/m.onnx'))
 
