@@ -30,9 +30,11 @@ none, so a hand joint or ``hand_open`` is unknown there.
 
 ``hand_open`` is the mean distance from the hand's wrist to its fingertips (index, middle, ring, pinky; the thumb
 folds across the palm in a fist and stays out) divided by the palm length (hand wrist to middle-finger MCP); it needs
-the wrist, the middle MCP and at least two of the four tips visible, and averages the visible tips. A stretched hand
-is about 1.8-2 (palm plus finger), a fist about 1 or less (the tips curl back to the palm). It does not depend on how
-large the hand appears, so it needs no shoulders.
+the wrist, the middle MCP and at least two of the four tips visible, and averages the visible tips. It does not depend
+on how large the hand appears, so it needs no shoulders. Measured with RTMW-l on the owner's 맨까송 clip (hands judged by
+eye, docs/measurements/testbed-2026-11-26.md "Hand joints"): fists 0.65-0.92 in 7 of 9, open hands 1.0-2.1 (median
+1.62); below 1.0 held 7 of 9 fists and 0 of 28 open hands, but also 12 of 43 crops where no hand was in view (RTMW
+scores are clipped to 1 on the wire, so its 0.3 gate passes such hands): require the arm's own movement as well.
 
 One step is a *hold*: it matches after ``hold_ms`` and ends when its violation exceeds ``margin``. Several
 steps are an *ordered movement*: each later step must be reached ``within_ms`` of the step before it, else
