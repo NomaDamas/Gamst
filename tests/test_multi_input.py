@@ -256,8 +256,12 @@ class Choosing(Recipes):
             recipes._source(recipes.load('person-action-count'), argparse.Namespace(microphone=True))
         for name in recipes.names():
             recipe = recipes.load(name)
-            if name != 'scene':
-                self.assertEqual(len(recipe['inputs']), 1, name)
+            if name == 'scene':
+                continue
+            if name in ('racket-rally', 'swing'):    # sports: a camera and its sound, the sound optional
+                self.assertEqual([item['id'] for item in recipe['inputs']], ['camera', 'microphone'], name)
+                continue
+            self.assertEqual(len(recipe['inputs']), 1, name)
 
     def test_recordings_of_different_files_relate_as_the_owner_says(self):
         samples = np.zeros(16000, np.float32)
