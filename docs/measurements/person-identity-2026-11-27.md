@@ -219,8 +219,88 @@ nobody) and calls the MCP tools in the run's process through `MCPServer.call_too
 
 - Whether a continuation or any other binding is right (no labelled multi-person clip).
 - How much the identity models slow the pose model, apart from run-to-run variance.
-- The appearance threshold 0.8 is **provisional**: it was read from one unlabelled clip.
+- The appearance thresholds (PersonViT 0.9, OSNet-AIN 0.8) are **provisional**: read from one unlabelled clip.
 - Realtime on the slam clip with binding. Post mode `b_post3` still counts 16 of 16, all who = 감스트, with no move.
+
+## 11. The state-of-the-art appearance model: PersonViT vs OSNet-AIN (owner: "무조건 SOTA")
+
+**Choice.** The owner accepts non-commercial terms and Google Drive releases (GAMST is not used commercially). The ranking
+uses published same-domain results without re-ranking, for models whose authors released an MSMT17 checkpoint
+(research by subagent and by hand, 2026-11-27; sources in the PR and design doc).
+
+| model | MSMT17 mAP / R1 | Market-1501 mAP / R1 | weights |
+|---|---|---|---|
+| **PersonViT ViT-B/16** (hustvl/PersonViT, 55 stars) | **80.8 / 92.0** (official `train_log.txt`: `RE_RANKING: False`) | 95.0 / 97.6 | authors' HF `lakeAGI/PersonViTReID`, 349,329,029 B |
+| SOLIDER-REID Swin-B | 77.1 / 90.7 | 93.9 / 96.9 | Google Drive |
+| CLIP-ReID ViT-B/16 (+SIE, needs camera IDs) | 75.8 / 89.7 | about 90.5 / 95.4 | Google Drive |
+| TransReID-SSL ViT-B (384) | 75.0 / 89.6 | 93.2 / 96.7 | Google Drive |
+| PASS ViT-B (384) | 74.3 / 89.7 | 93.3 / 96.9 | Google Drive |
+
+Higher published numbers without released weights were left out: CLIP-SCGI 88.2, PromptSG 87.2 (empty repo),
+PersonMAE 79.8, HPL 79.0, DRFormer 78.7.
+
+**Download and conversion.**
+- Checkpoint `transformer_120.pth`: sha256 `e1562c57…b4`. This digest was computed here, and it equals the HF LFS digest.
+- Loaded with `torch.load(weights_only=True)`.
+- Built from the official `vit_pytorch.py` at 7dc5b37d (sha256 `21435d31…a4`), with the configuration of its MSMT17
+  log: 256x128, stride 16, no SIE / JPM, the feature before the BN neck, mean and std 0.5.
+- Exported to ONNX by `gamst/providers/personvit_export.py`: 343,087,913 B, sha256 `46810e4b…2a`, largest difference to
+  PyTorch 2.2e-05.
+- Speed per crop, the same benchmark as section 3:
+
+  | | CPU | CoreML ALL | Neural Engine |
+  |---|---|---|---|
+  | PersonViT p50 / p95 | 59.2 / 83.7 ms | 35.6 / 39.1 ms (first compile 151 s, 1.5 GB cache, removed) | 37.2 ms |
+  | OSNet-AIN p50 | 9.6 ms | 4.1 ms | – |
+
+**Separation on the shop clip.**
+- Script: `scratchpad/identity/separation.py`, after the enrollment range.
+- Who is who: LVFace score ≥ 0.40 is the person, ≤ 0.10 is someone else. **This is a proxy, not labels.** A turned head
+  of the person can land on the "someone else" side.
+- 404 pose samples: 169 the person, 222 others.
+
+| model | AUC | person p10 / median | others median / p90 / p99 |
+|---|---|---|---|
+| OSNet-AIN | 0.952 | 0.663 / 0.781 | 0.615 / 0.676 / 0.759 |
+| PersonViT | **0.971** | 0.891 / 0.940 | 0.713 / 0.812 / 0.938 |
+
+The two models' scores are on different scales, so the appearance thresholds are now per model and **provisional**
+(`APPEARANCE` in `person_binding.py`):
+
+| model | binds by appearance at | clearly someone else at |
+|---|---|---|
+| PersonViT | 0.9 | 0.7 |
+| OSNet-AIN | 0.8 | 0.6 |
+
+**In the pipeline** (same reference range, `gamst_a_0-10.json` for OSNet and `gamst_a_personvit.json` for PersonViT):
+
+| run | model | frames bound | track-id moves (continuation / face / body) | body AUC, bound vs other track |
+|---|---|---|---|---|
+| `osn_a_post` | OSNet, post | 74.4 % | 14 (6 / 8 / 0) | 0.903 |
+| `pvit_a_post` | PersonViT, threshold 0.8 | 77.3 % | 16 (7 / 8 / 1) | 0.925 |
+| `pvit_a_post3` | PersonViT, its thresholds | 81.8 % | 17 (7 / 9 / 1) | 0.926 |
+| `osn_a_live` | OSNet, realtime | 76.6 % | 26 (11 / 14 / 1) | 0.911 |
+| `pvit_a_live` | PersonViT, threshold 0.8, realtime | 78.1 % | 17 (8 / 7 / 2) | 0.979 |
+| `osn_a_live2` | OSNet, realtime, loaded Mac | 75.6 % | 21 (12 / 8 / 1) | 0.939 |
+| `pvit_a_live3` | PersonViT, its thresholds, realtime, loaded Mac | 86.1 % | 18 (9 / 9 / 0) | 0.937 |
+| `osn_b_post` / `pvit_b_post2` | slam clip, post | 98.7 % / 98.7 % | 0 / 0 | – (one person) |
+
+- In every run: pose 0 lost and 0 gaps, the binding 0 lost.
+- The slam clip still counts 16 of 16 with both models, all events who = 감스트.
+- "Loaded Mac": the last two realtime runs ran while other programs on the Mac (outside GAMST) kept the load average at
+  13-20. The pose model's live lane then covered only about 720 of 1,628 frames (about 1,170 before); L2 caught up the
+  rest.
+- The pipeline AUCs come from a few dozen fresh scores per run and vary from run to run.
+- The offline measurement above (404 samples) is the better comparison of the two models, and it still rests on a face
+  proxy.
+
+**Conclusion.**
+- On this clip PersonViT separates the person from the others better than OSNet: AUC 0.971 vs 0.952 offline.
+- With its own threshold it bound the person in more frames: 81.8 % vs 74.4 % in post mode, 86.1 % vs 75.6 % in
+  realtime under the same load.
+- It costs 59 ms per crop on the CPU instead of 10 ms. That cost is off the pose lane (the scorer), and bodies are
+  looked at only when due.
+- Not measured: accuracy against labels.
 
 ## 7. Unmeasured (first round)
 

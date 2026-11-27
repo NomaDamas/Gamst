@@ -118,7 +118,11 @@ Identity looks at the whole person, not the face only. The score combines:
 Clothes change between broadcasts, so appearance is trusted within one video only. In a new video the person is confirmed again by face or voice.
 
 The appearance model registered today, SOLIDER, is a problem. It is on Google Drive only, has no digest, has a CUDA-only adapter, and its training-data terms need review. It will be replaced by a model chosen by these criteria: official release, permissive licence, published digest, 500 MB or less (decision 44).
-Chosen (2026-11-27): OSNet-AIN x1.0 trained on MSMT17, from the authors' own Hugging Face repository (`kaiyangzhou/osnet`,
+Replaced the same day by the owner's decision "무조건 SOTA" (non-commercial terms and Google Drive releases accepted, GAMST
+is not used commercially): **PersonViT ViT-B/16 MSMT17** (official MSMT17 mAP 80.8 / R1 92.0 without re-ranking, the best
+same-domain result with released weights; measured against OSNet in
+[measurements/person-identity-2026-11-27.md](measurements/person-identity-2026-11-27.md) section 11). OSNet stays an
+option. First choice (2026-11-27, under the earlier criteria): OSNet-AIN x1.0 trained on MSMT17, from the authors' own Hugging Face repository (`kaiyangzhou/osnet`,
 MIT model card, sha256 published, 17.3 MB), converted once to ONNX. It is the only candidate that met every criterion; the
 more accurate ones (SOLIDER, CLIP-ReID, TransReID, PASS: Google Drive only, no digest; PersonViT: weights "cc" without a
 variant and LUPerson non-commercial pretraining; fast-reid: no published digest) did not. Its published number is

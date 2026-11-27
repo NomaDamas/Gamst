@@ -12,12 +12,16 @@ Measurements: [measurements/person-identity-2026-11-27.md](measurements/person-i
 | evidence | model | trusted where |
 |---|---|---|
 | face | LVFace-B (`lvface.b`, MIT, 455,533,594 bytes, sha256 pinned) on an ArcFace-aligned crop from the pose model's own face points | everywhere |
-| whole-body appearance (body and clothes) | OSNet-AIN x1.0, MSMT17 (`osnet.ain_x1_0_msmt17`, MIT code and weights, sha256 published by the authors), converted once to ONNX | only in the video or live run it was seen in: clothes change |
+| whole-body appearance (body and clothes) | **PersonViT ViT-B/16, MSMT17** (`personvit.vitb_msmt17`, the default since the owner's decision "무조건 SOTA", 2026-11-27): official MSMT17 mAP 80.8 / Rank-1 92.0 without re-ranking, the best published same-domain result with released weights; converted once to ONNX (`gamst/providers/personvit_export.py`). Option: OSNet-AIN x1.0 MSMT17 (`--set person_binding.body_candidate=osnet.ain_x1_0_msmt17`) | only in the video or live run it was seen in: clothes change |
 | voice | the voice enrollment (CAM++), kept in the person reference | binds speakers (words), not tracks |
 
 A person reference is one JSON file (embeddings only, never images, mode 600): `face`, `body`, optional `voice`, the
 `samples` it came from (each showed exactly one person), the `session` (which recording the body samples came from), the
 `consent` record and its `quality`.
+
+**Terms.** PersonViT's weights are pretrained on LUPerson (non-commercial) and fine-tuned on MSMT17 (research terms);
+its Hugging Face card says only "cc". OSNet-AIN is MIT but trained on MSMT17 too. Both are used because GAMST is not used
+commercially and the datasets serve tests and demos only (owner, 2026-11-27): non-commercial / research.
 
 ## The check (enforced)
 
@@ -71,7 +75,9 @@ gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --per
 ```
 
 - **Binding.** A track is bound to the person when its face scores at least 0.35 and beats every other enrolled person by
-  0.05; without a face, by appearance (>= 0.8, **provisional**: read from one unlabelled clip) of this run only. A face
+  0.05; without a face, by appearance of this run only (PersonViT >= 0.9, OSNet-AIN >= 0.8: **provisional**, read
+  from one unlabelled clip with faces as a proxy; all thresholds stay provisional until the owner's labelled
+  multi-person clips). A face
   that contradicts (< 0.15) releases the track. A pose the tracker gave no track is never bound. A person moves to
   another track only when that track's face beats the holder's face in the same frame.
 - **Where it runs.** The binding module sits in the pose lane (it pairs each camera frame with its joints, and an L2
