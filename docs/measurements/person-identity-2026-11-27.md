@@ -122,6 +122,12 @@ the owner's). Who: the only person in all 714 frames, assumed to be 감스트 fr
 | wall, peak RSS | 40.9 s; 4,126 MB |
 | busy | pose 11.5 s, person_binding 4.6 s (6.4 ms per frame on average; p95 14.8 ms) |
 
+## 6b. Repeat with the final code
+
+`a_post3` and `b_post2` (after the last commit: untracked poses continue a counter by box overlap): the binding results
+are identical to `a_post2` and `b_post` (same bindings, releases, frames bound, resolved who of every event); `b_post2`
+again 16 counted, 16 right, 8.6 ms. Wall 105.7 s and 20.4 s (the first `b_post` included compiling CoreML models).
+
 ## 7. Unmeasured
 
 - How often a binding is right or wrong, on any clip (no labelled multi-person clip).
