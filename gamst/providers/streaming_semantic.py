@@ -162,6 +162,7 @@ class StreamingSemanticContext:
         self.previous_state: dict[str, Any] | None = None
         self.segment_id = None
         self.context, self.evidence = context, None
+        self.chain_previous = None      # {state_id, state, end_ms} of the state before (gamst.state_chain)
 
     @staticmethod
     def capability(**config):
@@ -179,6 +180,7 @@ class StreamingSemanticContext:
                 OutputField("evidence_ids", "array"),
                 OutputField("window", "object"),
                 OutputField("model", "object"),
+                OutputField("chain", "object", required=False),
                 *((OutputField("context", "object"), OutputField("depends_on", "array")) if config.get("context") else ()),
             ), "window", window_ms=window_ms, freshness_ms=2000,
             stateful=True, interpretation="semantic_description",
@@ -192,6 +194,7 @@ class StreamingSemanticContext:
         self.previous_state = None
         self.segment_id = None
         self.evidence = None
+        self.chain_previous = None      # a reset or a gap starts a new chain
 
     def close(self):
         if not self.closed:
@@ -295,6 +298,13 @@ class StreamingSemanticContext:
             raise ValueError("invalid streaming semantic result")
         self.previous_state = deepcopy(result["state"])
         evidence = list(result["evidence_ids"])[-self.window_frames:]
+        from ..state_chain import link
+        model = [getattr(self.backend, "model_id", "streaming-vlm"), getattr(self.backend, "model_version", "unverified")]
+        given_records = [] if given is None else [
+            dict(item, capability=item.get("capability", "transcript")) for item in given["events"]]
+        chain = link(self.chain_previous, result["state"], identity=model, start_ms=self.timestamps[0],
+                     end_ms=self.timestamps[-1], candidates=given_records)
+        self.chain_previous = dict(state_id=chain["state_id"], state=deepcopy(result["state"]), end_ms=self.timestamps[-1])
         value = {
             "state": result["state"], "events": self._events(result["events"]),
             "summary": str(result["summary"])[:8192], "evidence_ids": evidence,
@@ -303,6 +313,7 @@ class StreamingSemanticContext:
                            json.dumps(self.timestamps).encode()).hexdigest()},
             "model": {"id": getattr(self.backend, "model_id", "streaming-vlm"),
                       "version": getattr(self.backend, "model_version", "unverified")},
+            "chain": chain,
         }
         if given is not None:
             value.update(context=given, depends_on=list(dict.fromkeys(

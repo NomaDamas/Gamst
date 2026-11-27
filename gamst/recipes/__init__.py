@@ -352,6 +352,13 @@ def load(name, include=(), exclude=(), with_roles=(), keep=None):
     ``keep(input item)``: an input that stays although nothing reads it (a camera that is only shown).
     """
     path, raw = read_recipe(name)
+    return validate(raw, path, include, exclude, with_roles, keep)
+
+
+def validate(raw, path, include=(), exclude=(), with_roles=(), keep=None):
+    """A recipe's content (from a file, or composed: :mod:`gamst.recipes.compose`) validated, optional modules resolved:
+    every input is a known part read from sources it supports, every module a known part whose ``consumes`` an input or
+    an earlier module provides, the view a view. ``path`` names it in messages."""
     recipe = choose(raw, include, exclude)
     for wanted in with_roles:
         recipe = add_role(recipe, wanted)
@@ -1159,8 +1166,22 @@ class _LiveMCP:
         await self.server.close()
 
 
-async def run_pipeline(recipe, args):
+async def run_pipeline(recipe, args, *, human=None, out=None):
+    """Run a loaded recipe to the end of its input and return its report.
+
+    ``human``: run on this runtime (an MCP session's, so that its tools read this run's records; it stays open), else on
+    a new one with the run's store. ``out``: where JSON lines go (default stdout; an MCP stdio server passes stderr).
+    """
     from .. import Gamst
+    if human is not None:
+        return await _run_pipeline(recipe, args, human, out)
+    # Every record is committed; the engine's human.inference record is made once a second instead of with every
+    # one. Not for speed (0.3 ms): each is stored, so it would halve how long a run's own records are retained.
+    async with Gamst(consent=True, sensor_inference_interval_ms=1000, **store_options(args)) as human:
+        return await _run_pipeline(recipe, args, human, out)
+
+
+async def _run_pipeline(recipe, args, human, out):
     from ..counting import MAX_SCAN, REVISION, count_events, current_instructions, is_current, newest_instructions, \
         revisions, with_state
     from ..engine import timestamp
@@ -1190,154 +1211,152 @@ async def run_pipeline(recipe, args):
                     observation.get('value'), dict) and observation['value'].get('events'):
                 committed[record['id']] = record
 
-    # Every record is committed; the engine's human.inference record is made once a second instead of with every
-    # one. Not for speed (0.3 ms): each is stored, so it would halve how long a run's own records are retained.
-    async with Gamst(consent=True, sensor_inference_interval_ms=1000, **store_options(args)) as human:
-        stored = [record for capability in wanted for record in human.store.query(
-            'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
-        earlier = {record['id'] for record in stored}   # a store file may hold other runs
-        pipeline = await build_pipeline(recipe, args, human)
-        report['timing'] = timing(args)
-        choice = await choose_pose(recipe, args, pipeline)
-        if choice is not None:
-            print(json.dumps(dict(pose_choice={key: choice[key] for key in choice if key != 'measured'})),
-                  file=sys.stderr, flush=True)
-            if choice['chosen'] != choice['model']:
-                await pipeline.close()
-                recipe = with_pose(recipe, choice['chosen'])
-                pipeline = await build_pipeline(recipe, args, human)
-            report['pose_choice'] = choice
-            pipeline.notes['pose_choice'] = choice
-        pipeline.notes['timing'] = report['timing']
-        view, idle, live, warned = None, None, None, dict(at=0., seen=set())
-        pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
-
-        def added(capability):      # an instruction added a counting module
-            wanted.add(capability)
-            if capability not in recipe['records']:
-                recipe['records'].append(capability)
-            if view is not None:
-                view.capabilities = tuple(dict.fromkeys((*view.capabilities, capability)))
-
-        try:
-            human.instructions = Instructions(recipe, args, pipeline, folders=getattr(args, 'clips', None) or (),
-                                              proposals=getattr(args, 'proposals', None), on_capability=added)
-            if getattr(args, 'serve', None):
-                live = _LiveMCP(human, args.serve, getattr(args, 'proposals', None))
-                await live.start()
-            view = _view_class(recipe['view'])(pipeline, headless=args.headless,
-                                               capabilities=recipe.get('records', ()))
-        except BaseException:
-            if live is not None:
-                await live.close()
+    stored = [record for capability in wanted for record in human.store.query(
+        'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
+    earlier = {record['id'] for record in stored}   # a store file may hold other runs
+    pipeline = await build_pipeline(recipe, args, human)
+    report['timing'] = timing(args)
+    choice = await choose_pose(recipe, args, pipeline)
+    if choice is not None:
+        print(json.dumps(dict(pose_choice={key: choice[key] for key in choice if key != 'measured'})),
+              file=sys.stderr, flush=True)
+        if choice['chosen'] != choice['model']:
             await pipeline.close()
-            raise
+            recipe = with_pose(recipe, choice['chosen'])
+            pipeline = await build_pipeline(recipe, args, human)
+        report['pose_choice'] = choice
+        pipeline.notes['pose_choice'] = choice
+    pipeline.notes['timing'] = report['timing']
+    view, idle, live, warned = None, None, None, dict(at=0., seen=set())
+    pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
 
-        async def on_frame(input_id, frame, records):
-            started = frame.timestamp_ms - (
-                round(1000 * len(frame.data) / frame.sample_rate) if frame.sample_rate else 0)
-            if len(inputs) > 1:     # the run starts with the input that starts first
-                if not report['input_frames'][input_id]:
-                    report['start_ms'] = min(started, report.get('start_ms', started))
-                report['input_frames'][input_id] += 1
-            if 'start_ms' not in report and getattr(args, 'realtime', None):
-                # replayed at its pace on the recording's own clock: knowledge time - this = capture clock
-                report.update(realtime=args.realtime, clock_shift_ms=timestamp() - frame.timestamp_ms)
-            report.setdefault('start_ms', started)
-            report['frames'] += input_id == first
-            keep(records)
-            if time.monotonic() - warned['at'] > 5:
-                warned['at'] = time.monotonic()
-                for warning in pipeline.warnings():
-                    if (warning['lane'], warning['input']) not in warned['seen']:
-                        warned['seen'].add((warning['lane'], warning['input']))
-                        print(f"warning: {warning['text']}", file=sys.stderr, flush=True)
-            shown = await view.update(input_id, frame, records)
-            if len(inputs) > 1 and args_frames and report['input_frames'][counted] >= args_frames:
-                return False
-            return shown
+    def added(capability):      # an instruction added a counting module
+        wanted.add(capability)
+        if capability not in recipe['records']:
+            recipe['records'].append(capability)
+        if view is not None:
+            view.capabilities = tuple(dict.fromkeys((*view.capabilities, capability)))
 
-        if callable(getattr(view, 'idle', None)):
-            idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
-        try:
-            began = time.monotonic()
-            keep(await pipeline.run(on_frame=on_frame, stop_on_failure=bool(getattr(args, 'stop_on_failure', False))) or [])
-            report['run_s'] = round(time.monotonic() - began, 2)   # the run itself: models were loaded before
-            now = timestamp()
-            for capability in wanted:   # plus the records of modules that commit their own
-                keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
-                                       limit=MAX_SCAN, registered_only=True, capability_id=capability))
-            report['counts'], report['events'], report['lost'] = {}, {}, {}
-            rows = sorted(committed.values(), key=lambda record: record['timestamp_ms'])
-            for capability in recipe.get('records', ()):
-                own = [row for row in rows if row['observation']['capability']['id'] == capability]
-                changes = [change for _, change in human.instruction_changes() if change['start_ms'] >= report.get('start_ms', 0)]
-                counted = count_events(own, group_by='@event', max_evidence=100, current=current_instructions(
-                    [change for change in changes if capability in change['capabilities']]))
-                report['counts'][capability] = counted['groups']
-                if counted.get('other_instructions'):   # what was looked for before: never added to the count
-                    report.setdefault('other_instructions', {})[capability] = counted['other_instructions']
-                report['events'][capability] = [item['event'] for item in counted['evidence']]
-                if counted.get('states'):   # provisional + final are counted; revoked ones are not
-                    report.setdefault('states', {})[capability] = counted.get('group_states') or counted['states']
-                    report.setdefault('event_states', {})[capability] = event_states(
-                        own, human.store.known_times([row['id'] for row in own]), paced=bool(report.get('paced')))
-                    report['decision_clock'] = 'capture (paced as live: knowledge time)' if report.get('paced') else \
-                        'capture (record time: the run was not paced, knowledge times are on another clock)'
-                elif (report.get('paced') or 'clock_shift_ms' in report) and counted['groups']:   # when each was known
-                    report.setdefault('event_states', {})[capability] = event_states(
-                        own, human.store.known_times([row['id'] for row in own]), paced=True,
-                        events=set(counted['groups']) - {'exemplar.ended'})
-                    report['decision_clock'] = 'capture (paced as live: knowledge time)'
-                report['lost'][capability] = pipeline.lost(capability)
-            # Complete: no frame the count depends on was lost, failed or captured while a module was off.
-            report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
-            report['failures'], optional = pipeline.failures(), {key for key, item in pipeline.modules.items() if item['optional']}
-            if any(item.get('module') not in optional for item in report['failures']):
-                report['complete'] = False
-            report['warnings'] = pipeline.warnings()
-            built = (getattr(pipeline, 'recipe_context', None) or {}).get('notes') or {}
-            if built:       # what a module left out while it was built (e.g. appearance off: its model is not set up)
-                report['setup_notes'] = dict(built)
-            report['mode'] = pipeline.mode            # gamst.counting; an instruction may have switched it
-            if pipeline.mode_changes:
-                report['mode_changes'] = [dict(item) for item in pipeline.mode_changes]
-            if human.instruction_changes():
-                report['instruction_changes'] = [change for _, change in human.instruction_changes()]
-            if truth:
-                from ..scoring import score
-                own = [row for row in rows if row['observation']['capability']['id'] == truth['capability']]
-                newest = newest_instructions(own, current_instructions(
-                    [change for _, change in human.instruction_changes() if truth['capability'] in change['capabilities']]))
-                found = [event for row in own for event in row['observation']['value']['events']
-                         if is_current(event, newest) and event.get('event') != REVISION]
-                revised = revisions(own)
-                current = [event for event in (with_state(item, revised) for item in found)
-                           if event.get('state') not in ('revoked', 'uncertain')]
-                report['score'] = dict(score(truth, current, start_ms=report.get('start_ms', 0)),
-                                       complete=not pipeline.lost(truth['capability'])['gaps'])
-                if revised or any('state' in event for event in found):     # what was counted at once, before revisions
-                    report['score_provisional'] = score(truth, [event for event in found if 'replaces' not in event],
-                                                        start_ms=report.get('start_ms', 0))
-            if any(PARTS[item['use']].transcribes or item['use'] == 'prosody' for item in recipe['modules']):
-                report['speaker'] = 'enrolled' if speaker_bound(recipe['modules']) else 'not_bound'
-                if getattr(args, 'voice_quality', None):    # how self-consistent the voice reference is
-                    report['voice_quality'] = args.voice_quality      # (gamst/voice_quality.py)
-            report['pipeline'] = pipeline.status()
-            report['errors'] = {name: item['last_error'] for name, item in report['pipeline']['modules'].items()
-                                if item['errors']}
-        finally:
-            if idle is not None:
-                idle.cancel()
-            view.close()
-            if live is not None:
-                await live.close()
-            await pipeline.close()
+    try:
+        human.instructions = Instructions(recipe, args, pipeline, folders=getattr(args, 'clips', None) or (),
+                                          proposals=getattr(args, 'proposals', None), on_capability=added)
+        if getattr(args, 'serve', None):
+            live = _LiveMCP(human, args.serve, getattr(args, 'proposals', None))
+            await live.start()
+        view = _view_class(recipe['view'])(pipeline, headless=args.headless,
+                                           capabilities=recipe.get('records', ()))
+        view.out = out
+    except BaseException:
+        if live is not None:
+            await live.close()
+        await pipeline.close()
+        raise
+
+    async def on_frame(input_id, frame, records):
+        started = frame.timestamp_ms - (
+            round(1000 * len(frame.data) / frame.sample_rate) if frame.sample_rate else 0)
+        if len(inputs) > 1:     # the run starts with the input that starts first
+            if not report['input_frames'][input_id]:
+                report['start_ms'] = min(started, report.get('start_ms', started))
+            report['input_frames'][input_id] += 1
+        if 'start_ms' not in report and getattr(args, 'realtime', None):
+            # replayed at its pace on the recording's own clock: knowledge time - this = capture clock
+            report.update(realtime=args.realtime, clock_shift_ms=timestamp() - frame.timestamp_ms)
+        report.setdefault('start_ms', started)
+        report['frames'] += input_id == first
+        keep(records)
+        if time.monotonic() - warned['at'] > 5:
+            warned['at'] = time.monotonic()
+            for warning in pipeline.warnings():
+                if (warning['lane'], warning['input']) not in warned['seen']:
+                    warned['seen'].add((warning['lane'], warning['input']))
+                    print(f"warning: {warning['text']}", file=sys.stderr, flush=True)
+        shown = await view.update(input_id, frame, records)
+        if len(inputs) > 1 and args_frames and report['input_frames'][counted] >= args_frames:
+            return False
+        return shown
+
+    if callable(getattr(view, 'idle', None)):
+        idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
+    try:
+        began = time.monotonic()
+        keep(await pipeline.run(on_frame=on_frame, stop_on_failure=bool(getattr(args, 'stop_on_failure', False))) or [])
+        report['run_s'] = round(time.monotonic() - began, 2)   # the run itself: models were loaded before
+        now = timestamp()
+        for capability in wanted:   # plus the records of modules that commit their own
+            keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
+                                   limit=MAX_SCAN, registered_only=True, capability_id=capability))
+        report['counts'], report['events'], report['lost'] = {}, {}, {}
+        rows = sorted(committed.values(), key=lambda record: record['timestamp_ms'])
+        for capability in recipe.get('records', ()):
+            own = [row for row in rows if row['observation']['capability']['id'] == capability]
+            changes = [change for _, change in human.instruction_changes() if change['start_ms'] >= report.get('start_ms', 0)]
+            counted = count_events(own, group_by='@event', max_evidence=100, current=current_instructions(
+                [change for change in changes if capability in change['capabilities']]))
+            report['counts'][capability] = counted['groups']
+            if counted.get('other_instructions'):   # what was looked for before: never added to the count
+                report.setdefault('other_instructions', {})[capability] = counted['other_instructions']
+            report['events'][capability] = [item['event'] for item in counted['evidence']]
+            if counted.get('states'):   # provisional + final are counted; revoked ones are not
+                report.setdefault('states', {})[capability] = counted.get('group_states') or counted['states']
+                report.setdefault('event_states', {})[capability] = event_states(
+                    own, human.store.known_times([row['id'] for row in own]), paced=bool(report.get('paced')))
+                report['decision_clock'] = 'capture (paced as live: knowledge time)' if report.get('paced') else \
+                    'capture (record time: the run was not paced, knowledge times are on another clock)'
+            elif (report.get('paced') or 'clock_shift_ms' in report) and counted['groups']:   # when each was known
+                report.setdefault('event_states', {})[capability] = event_states(
+                    own, human.store.known_times([row['id'] for row in own]), paced=True,
+                    events=set(counted['groups']) - {'exemplar.ended'})
+                report['decision_clock'] = 'capture (paced as live: knowledge time)'
+            report['lost'][capability] = pipeline.lost(capability)
+        # Complete: no frame the count depends on was lost, failed or captured while a module was off.
+        report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
+        report['failures'], optional = pipeline.failures(), {key for key, item in pipeline.modules.items() if item['optional']}
+        if any(item.get('module') not in optional for item in report['failures']):
+            report['complete'] = False
+        report['warnings'] = pipeline.warnings()
+        built = (getattr(pipeline, 'recipe_context', None) or {}).get('notes') or {}
+        if built:       # what a module left out while it was built (e.g. appearance off: its model is not set up)
+            report['setup_notes'] = dict(built)
+        report['mode'] = pipeline.mode            # gamst.counting; an instruction may have switched it
+        if pipeline.mode_changes:
+            report['mode_changes'] = [dict(item) for item in pipeline.mode_changes]
+        if human.instruction_changes():
+            report['instruction_changes'] = [change for _, change in human.instruction_changes()]
+        if truth:
+            from ..scoring import score
+            own = [row for row in rows if row['observation']['capability']['id'] == truth['capability']]
+            newest = newest_instructions(own, current_instructions(
+                [change for _, change in human.instruction_changes() if truth['capability'] in change['capabilities']]))
+            found = [event for row in own for event in row['observation']['value']['events']
+                     if is_current(event, newest) and event.get('event') != REVISION]
+            revised = revisions(own)
+            current = [event for event in (with_state(item, revised) for item in found)
+                       if event.get('state') not in ('revoked', 'uncertain')]
+            report['score'] = dict(score(truth, current, start_ms=report.get('start_ms', 0)),
+                                   complete=not pipeline.lost(truth['capability'])['gaps'])
+            if revised or any('state' in event for event in found):     # what was counted at once, before revisions
+                report['score_provisional'] = score(truth, [event for event in found if 'replaces' not in event],
+                                                    start_ms=report.get('start_ms', 0))
+        if any(PARTS[item['use']].transcribes or item['use'] == 'prosody' for item in recipe['modules']):
+            report['speaker'] = 'enrolled' if speaker_bound(recipe['modules']) else 'not_bound'
+            if getattr(args, 'voice_quality', None):    # how self-consistent the voice reference is
+                report['voice_quality'] = args.voice_quality      # (gamst/voice_quality.py)
+        report['pipeline'] = pipeline.status()
+        report['errors'] = {name: item['last_error'] for name, item in report['pipeline']['modules'].items()
+                            if item['errors']}
+    finally:
+        if idle is not None:
+            idle.cancel()
+        view.close()
+        if live is not None:
+            await live.close()
+        await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'mode', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
                                                    'states', 'failures', 'warnings', 'setup_notes', 'errors', 'score', 'score_provisional')
                       if key in report and (key not in ('lost', 'errors', 'failures', 'warnings', 'mode') or key == 'lost' and not report['complete']
                                             or key == 'mode' and report[key] != 'count' or key not in ('lost', 'mode') and report[key])},
-                     ensure_ascii=False), flush=True)
+                     ensure_ascii=False), file=out, flush=True)
     if getattr(args, 'report', None):
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
     failed = [item for item in report['failures'] if 'input' in item]
@@ -1640,7 +1659,8 @@ def _max_rev_s(args):
     return args.max_rpm / 60 if getattr(args, 'max_rpm', None) else getattr(args, 'max_rev_s', None)
 
 
-def main(argv=None):
+def _parser():
+    """(parser, its subcommands) of ``gamst recipe``."""
     parser = argparse.ArgumentParser(prog='gamst recipe', description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     actions = parser.add_subparsers(dest='action', required=True)
@@ -1776,11 +1796,21 @@ def main(argv=None):
     takes.add_argument('--all-throws', action='store_true',
                        help='count every throw of a take, one process per take (default: the best-named throw, '
                             'models kept loaded)')
+    return parser, actions
+
+
+def main(argv=None):
+    parser, actions = _parser()
     given = sys.argv[1:] if argv is None else list(argv)
     if given[:1] == ['bench']:       # its own options; the rest goes to each run
         from .bench import main as bench
         return bench(given[1:])
+    if given[:1] == ['compose']:     # a structured request in, a recipe out (gamst/recipes/compose.py)
+        from .compose import main as compose
+        return compose(given[1:])
     actions.add_parser('bench', help='one recipe on several owner clips, paced as live, one table (gamst/recipes/bench.py)')
+    actions.add_parser('compose', help='compose a recipe from a structured request (inputs, who, what, mode, timing): '
+                                       'gamst recipe compose REQUEST.json [--out FILE] [--start] (gamst/recipes/compose.py)')
     args = parser.parse_args(argv)
     if getattr(args, 'all_throws', False):
         args.fast = False
@@ -1797,6 +1827,55 @@ def main(argv=None):
     if args.action in ('proposals', 'export'):
         from . import movement
         return getattr(movement, args.action)(args)
+    recipe = _customised(parser, args)
+    if args.action in ('find', 'propose'):
+        from . import movement
+        return asyncio.run(getattr(movement, args.action)(recipe, args))
+    if args.action == 'show':
+        print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
+    elif args.action == 'setup':
+        setup(recipe, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile,
+              isolation=args.isolation)
+    elif args.action == 'check':
+        verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args), symmetry=args.symmetry,
+                        max_reps_s=args.max_reps_s)
+        print(json.dumps(verdict, indent=2))
+        if verdict.get('ok') is False:
+            raise SystemExit(1)
+    elif args.action == 'enroll':
+        return asyncio.run(enroll(recipe, args))
+    else:
+        _sampled_ok(recipe, args)
+        from . import voice_sample
+        args.voice_sample = asyncio.run(voice_sample.prepare(recipe, args))
+        try:
+            return asyncio.run(run_pipeline(recipe, args))
+        finally:
+            voice_sample.cleanup(args)
+
+
+def _sampled_ok(recipe, args, out=None):
+    """A run's sampling verdict for its source, printed; refused when the frame rate is below the limit."""
+    args.max_rev_s = _max_rev_s(args)
+    verdict = check(recipe, fps=_source_fps(args), max_rev_s=args.max_rev_s, symmetry=args.symmetry,
+                    max_reps_s=args.max_reps_s)
+    if verdict.get('ok') is False:
+        raise SystemExit('; '.join(verdict['problems']))
+    print(json.dumps(dict(recipe=recipe['name'], sampling=verdict)), file=out, flush=True)
+
+
+def prepare_run(argv, *, out=None):
+    """(recipe, args) of ``gamst recipe run`` arguments (``argv`` starts with the recipe), checked as the command checks
+    them; nothing is opened or run. ``out``: where the sampling verdict is printed (default stdout)."""
+    parser, _ = _parser()
+    args = parser.parse_args(['run', *argv])
+    recipe = _customised(parser, args)
+    _sampled_ok(recipe, args, out)
+    return recipe, args
+
+
+def _customised(parser, args):
+    """The recipe an action names, with what its options choose: parts left out or added, models, settings, timing."""
     if args.action in ('run', 'find'):     # an optional person or voice not given: the parts that need it stay out
         args.exclude = [*getattr(args, 'exclude', ()), *not_given(read_recipe(args.recipe)[1], args,
                                                                   getattr(args, 'include', ()))]
@@ -1820,32 +1899,4 @@ def main(argv=None):
         parser.error(' and '.join('--' + name for name in _given(args)) + f": {recipe['name']} reads one source")
     if args.action == 'enroll' and not args.out and args.kind != 'terms':
         parser.error('the following arguments are required: --out')
-    if args.action in ('find', 'propose'):
-        from . import movement
-        return asyncio.run(getattr(movement, args.action)(recipe, args))
-    if args.action == 'show':
-        print(json.dumps(dict(recipe, setup=plan(recipe), sampling=check(recipe)), indent=2, ensure_ascii=False))
-    elif args.action == 'setup':
-        setup(recipe, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile,
-              isolation=args.isolation)
-    elif args.action == 'check':
-        verdict = check(recipe, fps=args.fps, max_rev_s=_max_rev_s(args), symmetry=args.symmetry,
-                        max_reps_s=args.max_reps_s)
-        print(json.dumps(verdict, indent=2))
-        if verdict.get('ok') is False:
-            raise SystemExit(1)
-    elif args.action == 'enroll':
-        return asyncio.run(enroll(recipe, args))
-    else:
-        args.max_rev_s = _max_rev_s(args)
-        verdict = check(recipe, fps=_source_fps(args), max_rev_s=args.max_rev_s, symmetry=args.symmetry,
-                        max_reps_s=args.max_reps_s)
-        if verdict.get('ok') is False:
-            raise SystemExit('; '.join(verdict['problems']))
-        print(json.dumps(dict(recipe=recipe['name'], sampling=verdict)), flush=True)
-        from . import voice_sample
-        args.voice_sample = asyncio.run(voice_sample.prepare(recipe, args))
-        try:
-            return asyncio.run(run_pipeline(recipe, args))
-        finally:
-            voice_sample.cleanup(args)
+    return recipe

@@ -186,6 +186,20 @@ def tool_definitions() -> list[dict]:
          {"reference": identifier_field, "window": WINDOW, "max_events": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, ("reference",)),
         ("configure_pipeline_module", "Switch one module of the running Pipeline on or off while capture runs. A module switched off is reset when it is switched on again, so it never joins evidence across the gap. Optional options go to the module itself, e.g. a MediaPipe graph module: {\"branches\": {\"face\": false}} or {\"side_packets\": {\"model_complexity\": 2}}.",
          {"name": identifier_field, "enabled": {"type": "boolean"}, "options": {"type": "object"}}, ("name", "enabled")),
+        ("compose_recipe", "Compose a recipe from a structured request when no recipe fits, and optionally start it. GAMST has no hidden LLM: you fill in the request. inputs: {camera: index | video: file, microphone: true | audio: file, sensors: [{id, file, modality, columns, time}]}, each optional; who: {name, person: an enrolled person file, voice: an enrolled voice file (for words)} or null: few-shot identity is required and checked (refused with what to enroll); what: {movement: {text, rule (JSON of gamst/providers/movement_rule.py, written by you)} or {exemplar: an enrolled movement file}, words: [words] or a terms file, rhythm: {input, channel, band}}; mode count|search; timing realtime|post (default: realtime for a camera or microphone, else post). Optional recipe: a built-in recipe used as it is or customised (with, without, set, pose, asr). GAMST picks the lanes for each capability (the pose model by the measured rule: RTMW-l, benchmarked at a realtime start with MediaPipe full as fallback), links them by consumes and validates the graph. Returns the recipe (saved in the first --clips folder under recipes/, re-runnable with the returned run command), the reason for every choice, or ok=false with one sentence per missing piece. Files are named by their path inside the owner's --clips folders. start=true runs it in this session at once, like gamst recipe run (a camera or microphone needs consent.capture=true, a hosted recogniser consent.remote_asr=true); wait=true waits for a finished file's run and returns its counts. Then read it with count_events, get_timeline (who), get_pipeline. One run at a time.",
+         {"name": {"type": "string", "minLength": 1, "maxLength": 64}, "recipe": identifier_field,
+          "inputs": {"type": "object"}, "who": {"type": ["object", "string", "null"]}, "what": {"type": "object"},
+          "mode": {"type": "string", "enum": ["count", "search"]}, "timing": {"type": "string", "enum": ["realtime", "post"]},
+          "pose": identifier_field, "asr": identifier_field,
+          "with": {"type": "array", "maxItems": 16, "items": identifier_field},
+          "without": {"type": "array", "maxItems": 16, "items": identifier_field},
+          "set": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 3, "maxLength": 256}},
+          "consent": _schema({"capture": {"type": "boolean"}, "remote_asr": {"type": "boolean"}}),
+          "start": {"type": "boolean"}, "wait": {"type": "boolean"}, "actor": WATCH_ACTOR}, ()),
+        ("explain_state", "Walk the semantic state chain backwards from one state: each state links the state before it (previous_state_id), says what changed (a diff of the state fields) and names the records it is attributed to (caused_by: movement events, words, person bindings, utterances of the same or earlier time, with record_id, capability, event, start_ms, end_ms, who). The attribution is co-occurrence in the interval since the previous state, not a proven cause. Read-only and bounded: at most steps states (default 8, at most 32), never a model call, no media. Without state_id or at_ms it starts at the newest state. The semantic lane is OFF unless the recipe runs it (--with semantic).",
+         {"subject_id": SUBJECT, "state_id": {"type": "string", "minLength": 4, "maxLength": 64}, "at_ms": TIME,
+          "steps": {"type": "integer", "minimum": 1, "maximum": 32, "default": 8},
+          "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144, "default": 65536}}, ()),
         ("set_count_mode", "How the running recipe decides from now on. 'count' (default): words or moments whose voice or identity is unclear are shown as uncertain or revoked. 'search' (when looking for the person: never miss them, over-count rather than miss): those are counted as candidates (candidate: true, with the reason they would not have counted); only a heard word the recogniser withdrew, or a voice clearly another person's by a large margin, leaves the count. What was decided before stays. get_pipeline and every report say the mode.",
          {"mode": {"type": "string", "enum": ["count", "search"]}, "actor": WATCH_ACTOR}, ("mode", "actor")),
     ]
@@ -248,9 +262,15 @@ def _setup_tool(name: str, args: dict) -> Any:
 class MCPServer:
     """All tools share the supplied runtime and optional active device session."""
 
-    def __init__(self, human: Any, *, movement_proposals: str | None = None):
+    def __init__(self, human: Any, *, movement_proposals: str | None = None, clips: list | tuple = ()):
         self.human = human
         self.movement_proposals = movement_proposals
+        self.clips = [Path(folder).expanduser().resolve(strict=True) for folder in clips]
+        for folder in self.clips:
+            if not folder.is_dir():
+                raise ValueError(f"--clips {folder}: not a folder")
+        self.run_task = None        # a recipe started by compose_recipe in this session
+        self.last_run = None        # what that run reported when it ended
         self.capture = None
         self.tools = {t["name"]: t for t in tool_definitions()}
         self._capture_plugins: dict[str, tuple[tuple, Any]] = {}
@@ -312,7 +332,7 @@ class MCPServer:
         # A timeline read waits for a thread and is void when data is deleted meanwhile.
         # Reading example clips takes as long as they take; the recipe itself allows one change at a time.
         if name in ("analyze", "finish_sensor_stream", "endpoint_sensor_stream", "get_timeline", "set_instruction", "search_retained",
-                    "enroll_person"):
+                    "enroll_person", "compose_recipe"):
             return await self._call_tool(name, arguments)
         async with self._tool_lock:
             return await self._call_tool(name, arguments)
@@ -332,10 +352,17 @@ class MCPServer:
             return await asyncio.to_thread(_setup_tool, name, args)
         if name == "count_events":
             return await self.human.count_events(**args)
+        if name == "compose_recipe":
+            return await self._compose(args)
+        if name == "explain_state":
+            return await self.human.explain_state(**args)
         if name in ("get_pipeline", "configure_pipeline_module", "set_count_mode"):
             pipeline = getattr(self.human, "pipeline", None)
+            if pipeline is None and name == "get_pipeline" and (self.last_run is not None or self.run_task is not None):
+                return {"running": False, "starting": self.run_task is not None and not self.run_task.done(),
+                        "last_run": self.last_run}
             if pipeline is None:
-                raise ValueError("no Pipeline is running; start one with a recipe (gamst recipe run …)")
+                raise ValueError("no Pipeline is running; start one with a recipe (gamst recipe run …) or compose_recipe start=true")
             if name == "get_pipeline":
                 return pipeline.status()
             if name == "set_count_mode":
@@ -465,6 +492,65 @@ class MCPServer:
             await self.human.release_capture("mcp")
         return await getattr(self.human, name)(**args)
 
+    def _folders(self) -> list:
+        """The owner's folders files may come from: this server's --clips, else the running recipe's."""
+        if self.clips:
+            return self.clips
+        instructions = getattr(self.human, "instructions", None)
+        return list(getattr(instructions, "folders", None) or ())
+
+    async def _compose(self, args: dict) -> dict:
+        """compose_recipe: the same composition as gamst recipe compose; files only from the owner's folders."""
+        from .recipes.compose import compose
+        folders = self._folders()
+        if not folders:
+            raise ValueError("compose_recipe reads files only from the owner's folders: start the server with "
+                             "gamst mcp --clips DIR")
+        request = dict(args)
+        actor = request.pop("actor", "user")
+        start, wait = request.get("start") is True, request.get("wait") is True
+        running = getattr(self.human, "pipeline", None) is not None or self.run_task is not None and not self.run_task.done()
+        if start and running:
+            raise ValueError("a recipe is already running in this session: compose without start, or wait until it ends")
+        result = await asyncio.to_thread(compose, request, folders=folders, out_dir=folders[0] / "recipes", actor=actor)
+        if not result["ok"] or not start:
+            return result
+        if result["before_run"]:
+            return dict(result, ok=False, started=False, missing=result["before_run"])
+        from .recipes import prepare_run
+        argv = [*result["run"][3:], *[item for folder in folders for item in ("--clips", str(folder))],
+                *(["--proposals", self.movement_proposals] if self.movement_proposals else [])]
+        try:
+            recipe, run_args = await asyncio.to_thread(prepare_run, argv, out=sys.stderr)
+        except SystemExit as error:
+            return dict(result, ok=False, started=False, missing=[str(error) or "the run did not start (see stderr)"])
+        self.last_run = None
+        self.run_task = asyncio.create_task(self._run_recipe(recipe, run_args))
+        if wait:
+            await asyncio.shield(self.run_task)
+            return dict(result, started=True, finished=True, report=self.last_run)
+        await asyncio.sleep(0)
+        return dict(result, started=True, finished=False,
+                    read="get_pipeline (progress), count_events, get_timeline; the run ends with its input")
+
+    async def _run_recipe(self, recipe, run_args) -> None:
+        from .recipes import run_pipeline, voice_sample
+        began = {"recipe": recipe["name"]}
+        try:
+            run_args.voice_sample = await voice_sample.prepare(recipe, run_args)
+            try:
+                report = await run_pipeline(recipe, run_args, human=self.human, out=sys.stderr)
+            finally:
+                voice_sample.cleanup(run_args)
+        except (Exception, SystemExit) as error:     # the session goes on; the error is the run's result
+            from .redact import public_text
+            self.last_run = dict(began, ok=False, error=public_text(error) or type(error).__name__)
+            return
+        keys = ("recipe", "timing", "mode", "frames", "start_ms", "run_s", "counts", "complete", "lost", "warnings",
+                "errors")
+        self.last_run = dict(ok=True, **{key: report[key] for key in keys if key in report},
+                             **({"pose_choice": report["pose_choice"].get("reason")} if report.get("pose_choice") else {}))
+
     @staticmethod
     async def _close_plugin(plugin):
         close = getattr(plugin, "close", None)
@@ -537,6 +623,9 @@ class MCPServer:
     async def close(self) -> None:
         if getattr(self.human, "watches", None) is not None:
             self.human.watches.remove_sink(self._queue_alarm)
+        if self.run_task is not None and not self.run_task.done():      # a composed run ends with its session
+            self.run_task.cancel()
+            await asyncio.gather(self.run_task, return_exceptions=True)
         async with self._tool_lock:
             if self.capture:
                 await self.capture.stop()
@@ -583,12 +672,14 @@ async def serve_stdio(server: MCPServer) -> None:
 
 async def _main(args: argparse.Namespace) -> None:
     from .engine import Gamst
-    async with Gamst(consent=True, store=args.store, retention_hours=args.retention_hours) as human:
+    async with Gamst(consent=True, store=args.store, retention_hours=args.retention_hours,
+                     **({"max_records": args.max_records, "max_payload_bytes": max(32 << 20, 8192 * args.max_records)}
+                        if args.max_records else {})) as human:
         from .reasoning import backend_from_env
         backend = backend_from_env()
         if backend is not None:
             human.set_analysis_backend(backend)
-        adapter = MCPServer(human, movement_proposals=args.proposals)
+        adapter = MCPServer(human, movement_proposals=args.proposals, clips=args.clips or ())
         runtime = None
         if args.profile is not None:
             from .profile import ProfileRuntime
@@ -609,6 +700,12 @@ def main() -> None:
                         help="run the roles in a gamst setup profile (default ~/.config/gamst/profile.json)")
     parser.add_argument("--proposals", metavar="FILE",
                         help="movement proposals file (gamst recipe propose) that agents may list and add to")
+    parser.add_argument("--clips", action="append", metavar="DIR",
+                        help="a folder whose files compose_recipe may read (videos, enrolled persons, voices, "
+                             "movements) and where it saves recipes; repeat it")
+    parser.add_argument("--max-records", type=int, metavar="N",
+                        help="records the store retains (default 5000; a pose run started by compose_recipe commits "
+                             "several per frame)")
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     try:

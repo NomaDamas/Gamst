@@ -778,17 +778,65 @@ class SegmentModule(WorkerModule):
         result['events'] = result['events'][-32:]
         return result
 
+    def candidates(self, subject_id, since_ms, end_ms):
+        """Records that may have caused a state change: events of the recipe's records (movements, words, person
+        bindings) and utterances, current revisions only, that end in the interval (:mod:`gamst.state_chain`)."""
+        store = self.human.store
+        replaced = store.superseded(subject_id)
+        found = []
+
+        def current(**arguments):
+            return [record for record in store.query(subject_id, start=max(0, since_ms - 30_000), end=end_ms + 30_000,
+                                                     kind='observation.signal', registered_only=True, **arguments)
+                    if record['id'] not in replaced]
+
+        for capability in self.capabilities:
+            for record in current(limit=256, capability_id=capability):
+                value = record['observation']['value']
+                for event in (value.get('events') or ()) if isinstance(value, dict) else ():
+                    if isinstance(event, dict) and event.get('event') != 'event.revision':
+                        first, last = (event.get(key) if type(event.get(key)) is int else record['timestamp_ms']
+                                       for key in ('start_ms', 'end_ms'))
+                        found.append(dict(record_id=record['id'], capability=capability, start_ms=first, end_ms=last,
+                                          event=str(event.get('event', event.get('type')))[:100],
+                                          **{key: str(event[key])[:100] for key in ('label', 'term', 'who', 'track_id',
+                                                                                    'state') if event.get(key) is not None}))
+        from ..revisions import record_span
+        for record in current(limit=64, any_of=list(TRANSCRIPTS)):
+            value, span = record['observation']['value'], record_span(record)
+            if isinstance(value, dict) and value.get('text') and span:
+                found.append(dict(record_id=record['id'], capability=record['observation'].get('name', 'transcript'),
+                                  event='utterance', start_ms=span[0], end_ms=span[1], text=str(value['text'])[:200]))
+        return found
+
+    def _attributed(self, subject_id, value):
+        """The chain of a state with its causes read from the Store (also what was not given to the model)."""
+        from ..state_chain import attributed, is_change
+        chain, window = value.get('chain'), value.get('window') or {}
+        if self.human is None or not isinstance(chain, dict) or not is_change(chain.get('changed')) \
+                or type(window.get('end_ms')) is not int:
+            return value
+        since = chain.get('since_ms') if chain.get('previous_state_id') else None
+        causes = attributed(self.candidates(subject_id, chain.get('since_ms') or window['start_ms'],
+                                            window['end_ms']), since, window['end_ms'], start_ms=window.get('start_ms'))
+        return dict(value, chain=dict(chain, caused_by=causes, attribution='interval' if causes else 'none'))
+
     async def process(self, frame):
         if self.pending_since_ms is None:
             self.pending_since_ms = frame.timestamp_ms
         value = await self._ask(self.worker, frame, self.evidence(frame) if self.declared else None)
         if value is not None:
             self.pending_since_ms = None
+            value = self._attributed(frame.subject_id, value)
+        self.subject_id = frame.subject_id
         return value
 
     async def finish(self):
         self.pending_since_ms = None
-        return await self.worker.finish()
+        value = await self.worker.finish()
+        if isinstance(value, dict) and getattr(self, 'subject_id', None):
+            value = self._attributed(self.subject_id, value)
+        return value
 
     async def reset(self):
         self.pending_since_ms = None

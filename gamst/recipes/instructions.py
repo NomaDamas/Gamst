@@ -41,6 +41,30 @@ def _media(head):
     return head[4:8] in (b'ftyp', b'moov', b'mdat', b'free', b'wide', b'skip') or head[:4] in (b'RIFF', b'\x1aE\xdf\xa3')
 
 
+def inside(folders, file, suffixes, limit):
+    """The one regular file of that name in the owner's folders (resolved), links resolved; anything else is refused."""
+    if not folders:
+        raise ValueError('no folder to read from: the owner starts the run with --clips DIR')
+    if not isinstance(file, str) or not 1 <= len(file) <= 1024 or '://' in file or '\0' in file:
+        raise ValueError('a file is named by its path inside a --clips folder')
+    found = set()
+    for folder in folders:
+        try:
+            path = (folder / file).resolve(strict=True)
+            if path.is_relative_to(folder) and path.is_file():
+                found.add(path)
+        except (OSError, RuntimeError):
+            continue
+    if len(found) != 1:
+        raise ValueError(f"{file}: {'in more than one' if found else 'no such file in a'} --clips folder")
+    path = found.pop()
+    if path.suffix.lower() not in suffixes:
+        raise ValueError(f"{file}: give one of {', '.join(suffixes)}")
+    if path.stat().st_size > limit:
+        raise ValueError(f'{file} is larger than {limit >> 20} MB')
+    return path
+
+
 class Instructions:
     """The instructions of one running recipe (``human.instructions``)."""
 
@@ -147,27 +171,7 @@ class Instructions:
     # ------------------------------------------------------------------ files of the owner's folders
 
     def _inside(self, file, suffixes, limit):
-        """The one regular file of that name in the owner's folders, links resolved; anything else is refused."""
-        if not self.folders:
-            raise ValueError('no folder to read from: the owner starts the run with --clips DIR')
-        if not isinstance(file, str) or not 1 <= len(file) <= 1024 or '://' in file or '\0' in file:
-            raise ValueError('a file is named by its path inside a --clips folder')
-        found = set()
-        for folder in self.folders:
-            try:
-                path = (folder / file).resolve(strict=True)
-                if path.is_relative_to(folder) and path.is_file():
-                    found.add(path)
-            except (OSError, RuntimeError):
-                continue
-        if len(found) != 1:
-            raise ValueError(f"{file}: {'in more than one' if found else 'no such file in a'} --clips folder")
-        path = found.pop()
-        if path.suffix.lower() not in suffixes:
-            raise ValueError(f"{file}: give one of {', '.join(suffixes)}")
-        if path.stat().st_size > limit:
-            raise ValueError(f'{file} is larger than {limit >> 20} MB')
-        return path
+        return inside(self.folders, file, suffixes, limit)
 
     def _clip(self, item, place):
         from .movement import MAX_CLIP_S, Clip

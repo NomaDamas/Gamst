@@ -28,7 +28,11 @@ class SemanticStateChain:
     def append(self, subject_id: str, *, timestamp_ms: int | None = None,
                state: dict[str, Any], events: list[dict[str, Any]] | None = None,
                evidence_ids: list[str] | None = None, sources: list[str] | None = None,
-               model_id: str = "semantic_state.rules", model_version: str = "1") -> dict[str, Any]:
+               model_id: str = "semantic_state.rules", model_version: str = "1",
+               caused_by: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """One state update, linked to the subject's previous one (:mod:`gamst.state_chain`): ``chain`` says its id, the
+        previous state's id, what changed and ``caused_by`` (records the caller attributes the change to:
+        ``{record_id, capability?, event?, start_ms?, end_ms?, ...}``, at most 16, of the same or earlier time)."""
         if not isinstance(subject_id, str) or not subject_id:
             raise ValueError("subject_id must be nonempty")
         if type(state) is not dict:
@@ -38,6 +42,18 @@ class SemanticStateChain:
         ts = int(time.time() * 1000) if timestamp_ms is None else timestamp_ms
         if type(ts) is not int or ts < 0:
             raise ValueError("timestamp_ms must be a nonnegative integer")
+        if caused_by is not None and (type(caused_by) is not list or any(
+                type(cause) is not dict or not isinstance(cause.get("record_id"), str) for cause in caused_by)):
+            raise ValueError("caused_by must be an array of objects with a record_id")
+        from .state_chain import attributed, link
+        chain = self._items.get(subject_id)
+        previous = chain[-1] if chain else None
+        linked = link(None if previous is None else dict(state_id=previous["chain"]["state_id"], state=previous["state"],
+                                                         end_ms=previous["timestamp_ms"]),
+                      state, identity=[model_id, model_version, subject_id], start_ms=ts, end_ms=ts)
+        if caused_by:
+            linked["caused_by"] = attributed(caused_by, None, ts)
+            linked["attribution"] = "caller" if linked["caused_by"] else "none"
         item = {
             "timestamp_ms": ts,
             "state": deepcopy(state),
@@ -46,6 +62,7 @@ class SemanticStateChain:
             "sources": list(sources or []),
             "model_id": model_id,
             "model_version": model_version,
+            "chain": linked,
         }
         encoded = json.dumps(item, ensure_ascii=False, allow_nan=False).encode()
         if len(encoded) > self.max_bytes:
@@ -88,6 +105,9 @@ class SemanticStateChain:
             "retention_ms": self.retention_ms,
             "scope": "semantic_state_chain",
         }
+
+    def items(self, subject_id: str) -> list[dict[str, Any]]:
+        return deepcopy(list(self._items.get(subject_id, ())))
 
     def clear(self, subject_id: str | None = None) -> None:
         if subject_id is None:
