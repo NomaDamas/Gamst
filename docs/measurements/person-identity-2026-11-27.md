@@ -319,7 +319,9 @@ The owner saw "감스트" as several people at the same moment in the label tool
 (`try-it/testbed/multi/gwan` = 감스트-관제탑 모음집, 522 s, a compilation joined by one-second dissolves;
 `try-it/testbed/multi/man` = 맨까송, 63 s, hard cuts). Runs: post mode, the label tool's runner unchanged
 (`label_video/run_multi.py`, its options: `--person 감스트.person.json --mode search`, profile `profile-identity.json`:
-MediaPipe pose, LVFace-B face, OSNet-AIN appearance) and a copy of it in the scratchpad that also writes the per-frame
+MediaPipe pose, LVFace-B face; that profile sets up OSNet-AIN for appearance while the binding asks for PersonViT, so
+**the runs `base`, `base2`, `fix` and `final` ran on faces only** (appearance off, found after the fact, see 12.7; the
+label tool's own runs `cand_*` used OSNet-AIN with its older code)) and a copy of it in the scratchpad that also writes the per-frame
 face readings, the duplicate boxes and `NAME.persons.json`; outputs in `try-it/testbed/multi_fix/` only. Statistics:
 `scratchpad/overlap/*.py`. Labels: the owner's labels in `truth_identity.json` (4 tracks 감스트, 12 others, read while the
 owner was still labelling) and Claude's proposals (`claude_proposals.json`, not truth). **No claim of correctness rests
@@ -407,8 +409,8 @@ man 69 of 124), so box overlap alone is not "the same body".
   offline run of the same detector found it at 1.5 s; the pipeline run found 2.1 s).
 - Track switches detected (`track.split`), all by a contradicting face, none by appearance: 관제탑 38 (e.g. 35.6, 50.2,
   71.6, 80.6, 88.0, 126.8-138.2 (track 25, 5 times), 182.0, 189.0, 192.2, 220.6-237.8, 316.8, 318.4, 372.6, 412.8, 465.0,
-  477.0, 517.2 s), 맨까송 8 (21.2, 23.2, 52.3, 53.5, 56.5, 58.9, 61.3, 61.3 s). The appearance test (OSNet-AIN, 0.6) did
-  not fire on these clips.
+  477.0, 517.2 s), 맨까송 8 (21.2, 23.2, 52.3, 53.5, 56.5, 58.9, 61.3, 61.3 s). In `final` appearance was off, so the
+  appearance test could not fire; with PersonViT (12.7, threshold 0.7) it did not fire either.
 - Duplicate boxes suppressed (pose-frame pairs, `duplicate_of`): 관제탑 438, 맨까송 68; a person moved to the kept
   track (`by: duplicate`) 15 / 4 times.
 - Action candidates (label-tool merge, loose rule) per person, final: 관제탑 P1 (감스트) 33, P4 9, P7 3, P3 2, P10 2,
@@ -476,3 +478,35 @@ from the `final` run's bindings (the tracker is deterministic: the same track id
   apart (`MERGE_S` in `run_multi.py`), e.g. 5 events of person-88 at 470.8-473.6 s became one candidate. GAMST's own
   events never exceeded 2.5 s here. With quick repetitions (fold, then the next extend within 0.3 s) a 0.3 s merge
   joins separate repetitions.
+
+### 12.7 Appearance model: PersonViT (decision 56) vs OSNet-AIN vs none
+
+The runs above (`base`, `base2`, `fix`, `final`) used `profile-identity.json`, which sets up OSNet-AIN for
+`vision.body_identity` while the binding asks for PersonViT (the registry default): the appearance model was not set
+up and the binding ran on **faces only** (no appearance score in any record; the reason stayed in the build context,
+now reported as `setup_notes`). The registry was right; the run profile pinned OSNet. Re-runs with the same code:
+`final_pv` with `profile-identity-personvit.json` (PersonViT ViT-B, appearance thresholds 0.9 / 0.7) and `final_osnet`
+with `--set person_binding.body_candidate=osnet.ain_x1_0_msmt17` (0.8 / 0.6). `final_pv` was run again after the
+retroactive-floor fix (aa3ebd5, below); the first `final_pv` (926c922) is given in brackets.
+
+| clip | run | appearance scores in events | 감스트 on a track whose face says not 감스트 | frames with 감스트 bound | 감스트 track moves (face / continuation / duplicate) | track splits | persons (>= 1 s) | owner: G->G / missed / O->G |
+|---|---|---|---|---|---|---|---|---|
+| 관제탑 | final (faces only) | 0 | 2.47 s | 84.8 % | 46 (34 / 8 / 4) | 38 | 10 (8) | 172.2 / 13.1 / 0 s |
+| 관제탑 | final_osnet | 57 | 3.33 s | 85.0 % | 46 (35 / 7 / 4) | 45 | 10 (8) | 171.9 / 13.4 / 0 s |
+| 관제탑 | final_pv | 75 [60] | 3.97 s [3.33] | 85.6 % [84.9] | 51 (40 / 7 / 4) [46] | 37 [42] | 10 (9) [10 (8)] | 171.9 / 13.5 / 0 s [172.2 / 13.1 / 0] |
+| 맨까송 | final (faces only) | 0 | 1.63 s | 52.7 % | 8 (7 / 0 / 1) | 8 | 7 (5) | – |
+| 맨까송 | final_osnet | 8 | 1.63 s | 52.7 % | 8 (7 / 0 / 1) | 8 | 7 (5) | – |
+| 맨까송 | final_pv | 9 | 1.37 s | 52.7 % | 6 (6 / 0 / 0) | 6 | 7 (5) | – |
+
+- The three are close on both clips. Appearance binds little here: it is dropped at every scene cut (관제탑 11,
+  맨까송 17) and binds a track only without a contradicting face (관제탑 2-6 appearance bindings, 맨까송 0). The owner's
+  25 관제탑 segments come out the same within 0.4 s.
+- The differences (2.5-4.0 s on 관제탑) are not separated from run-to-run variation: the scorer runs beside the lane
+  and its results arrive at slightly different frames in each run (not repeated here).
+- Found with PersonViT and fixed (aa3ebd5): a face binding reached back over a face of the same track that said
+  "not 감스트" (track 40, 232.2-233.3 s). The first binding of a track part now starts after the last such face. Track
+  40 still shows 0.7 s because a face at 232.3 s said not 감스트, later faces were unclear (0.27) and one at 233.9 s
+  said 감스트; the binding starts right after the contradicting face.
+- The appearance-jump split did not fire with either model.
+- Persons files: `gwan/final_pv.persons.json`, `man/final_pv.persons.json` (and `final_osnet.persons.json`,
+  `final.persons.json`).
