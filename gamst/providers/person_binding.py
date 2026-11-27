@@ -123,7 +123,7 @@ class TrackBindings:
     def holder(self, who):
         return next((track for track, state in self.tracks.items() if state['who'] == who), None)
 
-    def bind(self, track, who, ts, by, **scores):
+    def bind(self, track, who, ts, by, *, floor=None, **scores):
         """A ``person.bound`` event (a list, with the ``person.unbound`` events it caused), or None when the track is
         already ``who``'s."""
         state = self.seen(track, ts)
@@ -141,6 +141,8 @@ class TrackBindings:
         released = self.released.get(who)
         if released is not None and start <= released:
             start = released + 1
+        if floor is not None and start <= floor:     # never back over a face of this track that said someone else
+            start = floor + 1
         start = min(start, ts)
         retroactive = start < ts
         state.update(who=who, from_ms=start, by=by, bound_before=True, confirmed_at=None, confirmations=[])
@@ -751,6 +753,10 @@ class PersonBinding:
                 state['face'] = state['new_face'] = {person.key: person.face_score(face) for person in self.persons}
                 state['face_embedding'] = face
                 state['face_seen_ms'] = ts
+                against = state.setdefault('against', {})      # the last face of this track that was not that person
+                for key, value in state['face'].items():
+                    if value is not None and value < self.face_reject:
+                        against[key] = ts
             if body is not None:
                 state['body_embedding'] = body
                 state['body'] = state['new_body'] = {person.key: person.body_score(body) for person in self.persons}
@@ -855,7 +861,8 @@ class PersonBinding:
                     holder = bindings.holder(name)
                     if holder is not None:
                         events.append(bindings.unbind(holder, ts, 'seen_on_another_track', before=True))
-                    events.append(bindings.bind(winner, name, ts, 'face', face_score=face.get(name),
+                    events.append(bindings.bind(winner, name, ts, 'face', floor=(scores.get('against') or {}).get(name),
+                                                face_score=face.get(name),
                                                 body_score=body.get(name)))
                 bindings.tracks[winner]['confirmed_ms'] = ts
                 bindings.confirm(winner, scores.get('face_seen_ms', ts))
@@ -883,7 +890,8 @@ class PersonBinding:
             winner = self._winner(name, claimants, candidates)
             if winner is not None:
                 scores = tracks[winner]
-                events.append(bindings.bind(winner, name, ts, 'body', body_score=self._fresh(scores, 'body').get(name),
+                events.append(bindings.bind(winner, name, ts, 'body', floor=(scores.get('against') or {}).get(name),
+                                            body_score=self._fresh(scores, 'body').get(name),
                                             face_score=self._fresh(scores, 'face').get(name)))
                 bindings.confirm(winner, scores.get('body_seen_ms', ts))
 
@@ -983,7 +991,8 @@ class PersonBinding:
             iou, track, at = max(options, default=(0., None, None), key=lambda item: item[0])
             if track is not None and iou >= self.continue_iou:
                 events.append(bindings.unbind(holder, ts, 'track_replaced'))
-                events.append(bindings.bind(track, person.key, ts, 'continuation', iou=iou))
+                events.append(bindings.bind(track, person.key, ts, 'continuation', iou=iou,
+                                            floor=(candidates[track][1].get('against') or {}).get(person.key)))
                 bindings.confirm(track, at)
 
     def _hand_over(self, candidates, ts, events):

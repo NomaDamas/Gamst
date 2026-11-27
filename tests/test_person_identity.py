@@ -957,6 +957,17 @@ class EveryoneTest(PersonBindingTest):
             events += (value or {}).get('events', [])
         return events
 
+    async def test_a_late_face_never_reaches_back_over_a_face_of_the_track_that_said_someone_else(self):
+        module = self.everyone(anonymous=False)
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        events = await self.frames(module, [(1000, [person(.75, 'b')], frame_of(BLUE, BLUE)),      # b's face: not P
+                                            (1100, [person(.75, 'b')], frame_of(BLUE, BLUE)),
+                                            (2000, [person(.75, 'b')], frame_of(BLUE, RED)),       # now P's face
+                                            (2100, [person(.75, 'b')], frame_of(BLUE, RED))])
+        bound = next(item for item in events if item['event'] == 'person.bound')
+        self.assertGreater(bound['start_ms'], 1100)      # not back to the track's first frame (1000)
+        self.assertEqual(resolve(dict(track_id='b', end_ms=1050), intervals_of(events)), 'unknown')
+
     async def test_two_people_crossing_with_swapped_boxes_split_the_tracks_where_they_swapped(self):
         module = self.everyone(anonymous=False)
         module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
