@@ -688,6 +688,7 @@ class Pipeline:
             self._release(item)
             return
         recent = lane.setdefault('recent', deque())
+        item.frame = replace(item.frame, data=None)      # its data stays in the video memory (``kept``) only
         recent.append(item)
         while recent and item.frame.timestamp_ms - recent[0].frame.timestamp_ms > config['max_lookback_ms']:
             self._release(recent.popleft())
