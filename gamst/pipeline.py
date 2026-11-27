@@ -233,6 +233,7 @@ class Pipeline:
         self._stop, self._stop_on_failure = None, False
         self.reopen_s = REOPEN_S
         self.notify = None                   # the application's hook: what failed or came back, as a line of text
+        self.notes = {}                      # what a run decided before it started (e.g. which pose model, measured)
         self.mode, self.search, self.mode_changes = 'count', None, []    # counting mode (gamst.counting, set_mode)
         self._gaps: dict[str, dict] = {}     # not yet committed, by place
         self._gap_at: dict[str, float] = {}
@@ -679,7 +680,13 @@ class Pipeline:
             lane['frames'].remove(item)
         catch = entry['catch']
         catch['skips'] += 1
+        snapshots = {}
+        for member in chain:        # the state a fork takes over (a person lock), where a module can give it
+            snapshot = getattr(self.modules[member]['module'], 'snapshot', None)
+            if callable(snapshot):
+                snapshots[member] = await _call(snapshot)
         todo = dict(id=catch['skips'], video=True, source=items[0].source, names=list(items[0].names), chain=chain,
+                    snapshots=snapshots,
                     start_ms=start, end_ms=until, from_ms=pre[0].frame.timestamp_ms if pre else start, until_ms=until,
                     frames=len(items), items=pre + items, created=time.monotonic(), state='waiting', snapshot=None)
         catch['skipped_ms'] += until - start
@@ -722,6 +729,8 @@ class Pipeline:
         try:
             for member in todo['chain']:
                 forks[member] = await _call(self.modules[member]['module'].fork)
+                if member in todo['snapshots'] and callable(getattr(forks[member], 'restore', None)):
+                    await _call(forks[member].restore, todo['snapshots'][member])
             context = _Context(lane, forks=forks, keep=keep, correction=True)
             leader, width = forks[name], int(lane.get('batch') or 1)
             source = self.inputs.get(todo['source'], {})
@@ -771,12 +780,15 @@ class Pipeline:
             todo['items'] = []
             if todo in (lane.get('collecting') or ()):
                 lane['collecting'].remove(todo)
-            for fork in forks.values():
-                if callable(getattr(fork, 'close', None)):
-                    try:
+            for member, fork in forks.items():
+                back = getattr(self.modules[member]['module'], 'give_back', None)
+                try:
+                    if callable(back):          # kept for the next interval (its model stays loaded)
+                        await _call(back, fork)
+                    elif callable(getattr(fork, 'close', None)):
                         await _call(fork.close)
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
             took = time.monotonic() - started
             catch['busy_ms'] += 1000 * took
             catch['wait_ms'].append(round(1000 * (time.monotonic() - todo['created'])))
@@ -2071,6 +2083,7 @@ class Pipeline:
         return dict(
             name=self.name, complete=not any(value['gaps'] for value in self.modules.values()) and not self.failures(),
             failures=self.failures(), warnings=self.warnings(), mode=self.mode,
+            **({'notes': dict(self.notes)} if self.notes else {}),
             **({'search': dict(self.search)} if self.mode == 'search' and self.search else {}),
             **({'mode_changes': [dict(item) for item in self.mode_changes]} if self.mode_changes else {}),
             backlog_bytes=self._held_bytes, max_backlog_bytes=self.max_backlog_bytes,

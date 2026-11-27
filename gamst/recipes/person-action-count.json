@@ -47,7 +47,20 @@
       ],
       "det_every_ms": 500,
       "backlog": "spill",
-      "batch": 8
+      "batch": 8,
+      "choose": {
+        "fallback": "mediapipe.pose_full",
+        "persons": 1,
+        "seconds": 2
+      },
+      "catch_up": {
+        "lag_ms": 1000,
+        "max_lookback_ms": "pre_roll",
+        "tail_ms": "pre_roll",
+        "workers": 1,
+        "min_free_pct": 25,
+        "replica_mb": 2500
+      }
     },
     {
       "name": "target_person",

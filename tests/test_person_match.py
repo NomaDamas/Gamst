@@ -109,6 +109,42 @@ class TargetTest(unittest.IsolatedAsyncioTestCase):
         value = await self.step(module, 5100, [person(.25, 'a')], frame_of(BLUE, BLUE))   # track now another person
         self.assertEqual(value['state'], 'absent')
 
+    async def test_an_l2_fork_takes_over_the_lock_by_box_overlap_or_waits_for_a_face(self):
+        live = self.module(hold_ms=3000)
+        live.body = None
+        two = frame_of(RED, BLUE)
+        await self.step(live, 1000, [person(.25, 'a'), person(.75, 'b')], two)          # the face locks a
+        cut = live.snapshot()
+        self.assertEqual((cut['bbox']['x'], cut['confirmed_ms']), (.25 - .1, 1000))
+        fork = live.fork()
+        fork.body = None
+        fork.restore(cut)
+        value = await self.step(fork, 1200, [person(.26, 'x', face=False), person(.75, 'y')], two)   # new track ids
+        self.assertEqual((value['track_id'], value['state']), ('x', 'held'))         # the overlapping box: held
+        other = live.fork()
+        other.body = None
+        other.restore(dict(cut, bbox=dict(x=.5, y=.5, width=.05, height=.05)))        # nobody where the lock was
+        value = await self.step(other, 1200, [person(.26, 'x', face=False)], two)
+        self.assertEqual(value['state'], 'absent')                                    # unattributed until a face
+        value = await self.step(other, 1300, [person(.26, 'x')], two)
+        self.assertEqual((value['track_id'], value['state']), ('x', 'face'))
+        await other.close()     # a fork never closes the models it shares
+        self.assertIsNotNone(live.face)
+
+    async def test_an_rtmw_shaped_pose_is_matched_by_its_own_face_points(self):
+        module = self.module()
+        module.body = None
+        landmarks = [dict(x=.25, y=.5, visibility=0., presence=1.) for _ in range(133)]
+        for index, dx, dy in ((2, -.04, 0), (1, .04, 0), (0, 0, .04), (71, -.03, .08), (77, .03, .08)):
+            landmarks[index] = dict(x=.25 + dx, y=.2 + dy, visibility=.9, presence=1.)
+        pose = dict(landmarks=landmarks, keypoint_set='coco_wholebody133', bbox=dict(x=.15, y=.1, width=.2, height=.8),
+                    track_id='a')
+        value = await self.step(module, 1000, [pose], frame_of(RED, BLUE))
+        self.assertEqual((value['track_id'], value['state']), ('a', 'face'))
+        wrong = dict(pose, keypoint_set=None)            # read as MediaPipe: those indices are not its face
+        value = await self.step(self.module(), 1000, [dict(wrong, track_id='b')], frame_of(RED, BLUE))
+        self.assertNotEqual(value['state'], 'face')
+
     async def test_body_bridges_without_a_face_but_not_over_another_face(self):
         module = self.module()
         value = await self.step(module, 1000, [person(.25, 'a', face=False)], frame_of(RED, BLUE))

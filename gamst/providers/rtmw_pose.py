@@ -127,6 +127,35 @@ class RTMWModels:
     def reset(self):
         self._boxes, self._detected_ms = None, None
 
+    def benchmark(self, images, detect=False):
+        """The pose path of :meth:`infer_batch` (crop, normalize, model, keypoints) on ``images`` with one fixed box
+        each (no detector), and, with ``detect``, the time of one detection of the first image (None if the detector
+        fails on it). Synthetic input; what it measures is this machine's speed, not accuracy."""
+        import time
+        detect_ms = None
+        if detect:
+            try:
+                started = time.perf_counter()
+                self.detector(images[0])
+                detect_ms = round((time.perf_counter() - started) * 1000, 1)
+            except Exception:
+                detect_ms = None
+        height, width = images[0].shape[:2]
+        box = [width / 4, height / 8, 3 * width / 4, 7 * height / 8]
+        name = self.pose.session.get_inputs()[0].name
+        started = time.perf_counter()
+        crops = [self._crop(image, box) for image in images]
+        start = 0
+        while start < len(crops):
+            size = next((size for size in self._fixed if size <= len(crops) - start), 1)
+            session = self._fixed.get(size, self.pose.session)
+            outputs = session.run(None, {name: self._normalized([crop[0] for crop in crops[start:start + size]])})
+            for row, (_, center, scale) in enumerate(crops[start:start + size]):
+                self.pose.postprocess([outputs[0][row:row + 1], outputs[1][row:row + 1]], center, scale)
+            start += size
+        return dict(ms_per_frame=round((time.perf_counter() - started) * 1000 / len(images), 2), detect_ms=detect_ms,
+                    det_every_ms=self.det_every_ms, frames=len(images), version=self.version)
+
     def infer(self, image, timestamp_ms=None):
         """BGR image -> (boxes xyxy, keypoints (n, 133, 2) pixels, scores (n, 133))."""
         return self.infer_batch([image], [timestamp_ms])[0]
@@ -231,16 +260,37 @@ class RTMWPosePlugin(PerceptionPlugin):
             raise ValueError(f'rtmw pose batch is 1..{MAX_FRAMES} frames')
         self.remote, self.joints, self.version = remote, joints, remote.model_id
         self.tracker, self.tracker_name, self.batch = create_tracker(tracker), tracker, batch
-        self._opener, self._fork_settings = opener, dict(fork_settings or {})
+        self._opener, self._fork_settings, self.spare = opener, dict(fork_settings or {}), None
         if opener is None:
             self.fork = None
 
     async def fork(self):
         """Another worker of the same model (the same weights; ``fork_settings`` may place it on another compute
-        unit) with a fresh tracker."""
+        unit) with a fresh tracker: the one :meth:`prestart` opened, else a new one."""
+        if self.spare is not None:
+            spare, self.spare = self.spare, None
+            return spare
         remote = await self._opener(self._fork_settings)
         return type(self)(remote, joints=self.joints, tracker=self.tracker_name, batch=self.batch, opener=self._opener,
                           fork_settings=self._fork_settings)
+
+    async def prestart(self):
+        """Open the next fork now (an L2 worker that starts later does not wait for its model to load)."""
+        if self.spare is None and self._opener is not None:
+            self.spare = await self.fork()
+        return self.spare
+
+    async def give_back(self, fork):
+        """A fork that finished its interval: kept (reset) as the next one, or closed if one is kept already."""
+        if self.spare is None and not getattr(self, '_closed', False):
+            await fork.reset()
+            self.spare = fork
+        else:
+            await fork.close()
+
+    async def benchmark(self, **options):
+        """This module's worker speed now (``RemoteRTMW.benchmark``)."""
+        return await self.remote.benchmark(**options)
 
     async def process(self, frame):
         return (await self.process_batch([frame]))[0]
@@ -259,4 +309,8 @@ class RTMWPosePlugin(PerceptionPlugin):
         await self.remote.reset()
 
     async def close(self):
+        self._closed = True
+        spare, self.spare = self.spare, None
+        if spare is not None:
+            await spare.close()
         await self.remote.close()

@@ -61,7 +61,8 @@ FIELDS = {
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
     'rtmw.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                             OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
-                            OutputField('frames', 'integer', required=False))),
+                            OutputField('frames', 'integer', required=False),
+                            OutputField('benchmark', 'object', required=False))),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
@@ -243,6 +244,15 @@ class _RTMW(_Worker):
         from .rtmw_pose import MAX_FRAMES, POINTS
         np = _numpy()
         request = request or {}
+        if request.get('benchmark'):
+            count = request.get('frames', 1)
+            if type(count) is not int or not 1 <= count <= MAX_FRAMES or frame.data.shape[0] % count:
+                raise ValueError(f'rtmw.pose benchmarks 1..{MAX_FRAMES} stacked frames')
+            rows = frame.data.shape[0] // count
+            images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
+            measured = self.models.benchmark(images, detect=bool(request.get('detect')))
+            return dict(poses=[], model=self.models.version, image_width=int(frame.data.shape[1]), image_height=rows,
+                        benchmark=measured), np.zeros((0, POINTS, 3), dtype='<f4')
         count = request.get('frames', 1)
         times = request.get('timestamps_ms') or [request.get('timestamp_ms')]
         if type(count) is not int or not 1 <= count <= MAX_FRAMES or len(times) != count \
@@ -522,19 +532,23 @@ class RemoteRTMW(_Client):
     async def infer(self, image, timestamp_ms):
         return (await self.infer_batch([image], [timestamp_ms]))[0]
 
+    def _stacked(self, images, timestamp_ms=0):
+        """One wire frame of consecutive images: through shared memory without stacking them first, else stacked."""
+        import numpy as np
+        from dataclasses import replace
+        if len(images) == 1:
+            return self._frame(images[0], 'video', timestamp_ms=timestamp_ms)
+        if getattr(self.worker, '_frames', None) is not None:
+            return replace(self._frame(images[0], 'video', timestamp_ms=timestamp_ms), data=tuple(images))
+        return self._frame(np.concatenate(images), 'video', timestamp_ms=timestamp_ms)
+
     async def infer_batch(self, images, timestamps_ms):
         """Consecutive frames of one size -> one list of poses per frame (one worker call: the frames go stacked)."""
         import numpy as np
         from ..crew.modules import bounded_image
         from ..private_payload import CONTRACTS, landmarks
-        from dataclasses import replace
         images = [np.ascontiguousarray(bounded_image(image)) for image in images]
-        if len(images) == 1:
-            frame = self._frame(images[0], 'video', timestamp_ms=timestamps_ms[0])
-        elif getattr(self.worker, '_frames', None) is not None:     # shared memory: written there without stacking
-            frame = replace(self._frame(images[0], 'video', timestamp_ms=timestamps_ms[0]), data=tuple(images))
-        else:
-            frame = self._frame(np.concatenate(images), 'video', timestamp_ms=timestamps_ms[0])
+        frame = self._stacked(images, timestamps_ms[0])
         result, private = await self.worker.query(
             frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
         columns = CONTRACTS['rtmw.pose'].columns
@@ -547,6 +561,25 @@ class RemoteRTMW(_Client):
                               image_height=result['image_height'],
                               landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)]))
         return found
+
+    async def benchmark(self, *, seconds=2., frames=8, size=(720, 1280)):
+        """This worker's speed now, as a live lane would get it (shared-memory transfer included): calls of ``frames``
+        synthetic frames for ``seconds``; ms per frame of the pose path, and one detection's ms. Several workers
+        measured at the same time show what they give together."""
+        import time
+        import numpy as np
+        frame = self._stacked([np.full((*size, 3), 127, np.uint8) for _ in range(frames)])
+        result, private = await self.worker.query(frame, {'benchmark': True, 'frames': frames, 'detect': True})
+        private.take('joints')
+        first, calls, started = result['benchmark'], 0, time.perf_counter()    # the first call also warms up
+        while not calls or time.perf_counter() - started < seconds:
+            result, private = await self.worker.query(frame, {'benchmark': True, 'frames': frames})
+            private.take('joints')
+            calls += 1
+        wall = (time.perf_counter() - started) * 1000 / (calls * frames)
+        detect = dict(result['benchmark'], detect_ms=first['detect_ms'])
+        return dict(ms_per_frame=round(wall, 2), model_ms_per_frame=detect['ms_per_frame'], detect_ms=detect['detect_ms'],
+                    det_every_ms=detect['det_every_ms'], frames=frames, seconds=seconds, version=detect['version'])
 
     async def reset(self):
         await self.worker.reset()

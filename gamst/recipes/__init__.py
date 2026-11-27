@@ -188,6 +188,40 @@ def with_pose(recipe, candidate, *, module=None):
     return dict(recipe, modules=[changed(item) for item in items])
 
 
+WARM_UP_MS = 200      # a pose model's own state after a cut (tracking boxes, VIDEO mode): about 12 frames at 60 fps
+
+
+def pre_roll_ms(movement):
+    """How much video before a cut an L2 worker (or the live lane after its jump) needs to see a movement that ends
+    after the cut: an ordered rule's ``within_ms`` and ``hold_ms`` summed plus three rate windows, or the longest
+    example; plus the pose model's warm-up."""
+    from ..providers.movement_rule import RATE_MS
+    rule = movement.get('rule') if isinstance(movement, dict) else None
+    if isinstance(rule, dict) and isinstance(rule.get('steps'), list):
+        steps = rule['steps']
+        return int(sum(step.get('within_ms', 0) + step.get('hold_ms', 0) for step in steps) + 3 * RATE_MS + WARM_UP_MS)
+    spans = [example.get('span_ms') for example in (movement.get('positives') or ()) if isinstance(example, dict)] \
+        if isinstance(movement, dict) else []
+    spans = [span for span in spans if type(span) in (int, float)]
+    return int(max(spans) + 3 * RATE_MS + WARM_UP_MS) if spans else 1000
+
+
+def with_pre_roll(recipe, exemplar):
+    """``catch_up`` of a module item with ``"max_lookback_ms": "pre_roll"`` / ``"tail_ms": "pre_roll"``: the
+    movement's :func:`pre_roll_ms`."""
+    wanted = [item for item in recipe['modules'] if 'pre_roll' in (item.get('catch_up') or {}).values()]
+    if not wanted:
+        return recipe
+    try:
+        movement = json.loads(Path(exemplar).read_text())
+    except (OSError, ValueError):
+        movement = {}
+    pre = pre_roll_ms(movement)
+    return dict(recipe, modules=[dict(item, catch_up={key: pre if value == 'pre_roll' else value
+                                                      for key, value in item['catch_up'].items()})
+                                 if item in wanted else item for item in recipe['modules']])
+
+
 def with_settings(recipe, settings):
     """``MODULE.KEY=VALUE`` settings of module items (VALUE as JSON, else as text)."""
     modules = [dict(item) for item in recipe['modules']]
@@ -566,6 +600,59 @@ def _given(args):
     return [name for name in SOURCES if getattr(args, name, None) is not None and getattr(args, name) is not False]
 
 
+TIMINGS = ('realtime', 'post')
+
+
+def timing(args):
+    """``realtime`` (a camera, ``--as-live``, ``--realtime``: counts as frames arrive; frames the live lane cannot
+    reach in time go to L2 and are counted late, as corrections) or ``post`` (a finished file: every frame, the
+    largest batches, nothing is late). ``--timing`` names it; without it a live input or pacing is realtime."""
+    live = any(name in LIVE for name in _given(args)) or getattr(args, 'as_live', False) or getattr(args, 'realtime', None)
+    wanted = getattr(args, 'timing', None)
+    if wanted == 'post' and live:
+        raise SystemExit('--timing post counts a finished file; a camera, --as-live or --realtime is realtime')
+    return wanted or ('realtime' if live else 'post')
+
+
+async def choose_pose(recipe, args, pipeline):
+    """Realtime, when the owner did not name ``--pose``: measure the recipe's pose model now (its live worker and, as
+    far as the memory budget allows, an L2 worker, at the same time) and keep it if together they give at least the
+    input's frame rate; else the item's ``choose.fallback`` (never both in one run). Returns what was measured and
+    decided, or None when nothing was chosen."""
+    import asyncio
+    from ..memory_budget import budget, free_pct
+    item = next((item for item in recipe['modules'] if item['use'] in POSE_SOURCES and item.get('choose')), None)
+    if item is None or getattr(args, 'pose', None) or timing(args) != 'realtime':
+        return None
+    module = pipeline.modules[item['name']]['module']
+    if not callable(getattr(module, 'benchmark', None)):
+        return None
+    choose, catch = item['choose'], item.get('catch_up') or {}
+    fps = _source_fps(args) or float(choose.get('camera_fps', 30))
+    persons, seconds = int(choose.get('persons', 1)), float(choose.get('seconds', 2))
+    replicas = budget(replica_mb=float(catch.get('replica_mb') or 0), min_free_pct=float(catch.get('min_free_pct') or 0),
+                      most=1) if catch else 0
+    spare = await module.prestart() if replicas else None
+    measured = await asyncio.gather(module.benchmark(seconds=seconds),
+                                    *([spare.benchmark(seconds=seconds)] if spare is not None else []))
+
+    def rate(found):     # frames per second for ``persons`` people, the detector at its interval
+        detect = found['detect_ms'] or 0.
+        per_frame = found['ms_per_frame'] * persons + (detect * 1000. / fps / found['det_every_ms']
+                                                      if found['det_every_ms'] else detect)
+        return 1000. / per_frame
+    live = rate(measured[0])
+    late = rate(measured[1]) if len(measured) > 1 else 0.
+    keeps = live + late >= fps
+    chosen = item['candidate'] if keeps else choose['fallback']
+    reason = (f"{item['candidate']} gives {live:.1f} fps live" + (f" + {late:.1f} fps on an L2 worker" if late else "") +
+              f" measured now for {persons} person(s); the input is {fps:g} fps: " +
+              ('it keeps up' if keeps else f"too heavy for this machine, {choose['fallback']} counts instead"))
+    return dict(model=item['candidate'], chosen=chosen, input_fps=fps, live_fps=round(live, 1), l2_fps=round(late, 1),
+                l2_workers=len(measured) - 1, persons=persons, free_memory_pct=free_pct(), measured=list(measured),
+                reason=reason)
+
+
 def _pairs(values, option):
     """``ID=VALUE`` options as a dict."""
     result = {}
@@ -933,12 +1020,19 @@ async def build_module(item, context):
         raise SystemExit(f"{item['name']} did not start: {public_text(error)}") from error
 
 
+def _catch_up(config):
+    """A module item's ``catch_up``; a ``pre_roll`` that no movement resolved (:func:`with_pre_roll`) is 1 s."""
+    if not isinstance(config, dict):
+        return config
+    return {key: 1000 if value == 'pre_roll' else value for key, value in config.items()}
+
+
 def module_options(item, built, *, lanes=True):
     """How the Pipeline runs a built module item (``Pipeline.add_module``)."""
     return dict(consumes=item['consumes'], spec=built.get('spec'), every_ms=built.get('every_ms'),
                 queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
                 optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
-                enabled=item.get('enabled', True), catch_up=item.get('catch_up') if lanes else False,
+                enabled=item.get('enabled', True), catch_up=_catch_up(item.get('catch_up')) if lanes else False,
                 slowdown=item.get('slowdown'), sample=item.get('sample') if lanes else None,
                 backlog=item.get('backlog') if lanes else None, batch=item.get('batch') if lanes else None)
 
@@ -1041,6 +1135,18 @@ async def run_pipeline(recipe, args):
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
         pipeline = await build_pipeline(recipe, args, human)
+        report['timing'] = timing(args)
+        choice = await choose_pose(recipe, args, pipeline)
+        if choice is not None:
+            print(json.dumps(dict(pose_choice={key: choice[key] for key in choice if key != 'measured'})),
+                  file=sys.stderr, flush=True)
+            if choice['chosen'] != choice['model']:
+                await pipeline.close()
+                recipe = with_pose(recipe, choice['chosen'])
+                pipeline = await build_pipeline(recipe, args, human)
+            report['pose_choice'] = choice
+            pipeline.notes['pose_choice'] = choice
+        pipeline.notes['timing'] = report['timing']
         view, idle, live, warned = None, None, None, dict(at=0., seen=set())
         pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
 
@@ -1338,6 +1444,10 @@ def _source_options(parser, *, clips=False):
     parser.add_argument('--frames', type=int, help='stop after this many frames (several inputs: of the video)')
     parser.add_argument('--as-live', action='store_true',
                         help='give a recording at its own pace, as a live capture: nothing waits for slow modules')
+    parser.add_argument('--timing', choices=TIMINGS,
+                        help='realtime: count as frames arrive, frames the live lane cannot reach in time are counted '
+                             'late by L2 (corrections); post: a finished file, every frame in the largest batches, '
+                             'nothing late (default: realtime for a camera, --as-live or --realtime, else post)')
     parser.add_argument('--models', help='weight root or an existing flat weights directory (default: the setup profile)')
     parser.add_argument('--worker-python', help='python for model worker processes (default: the setup profile)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'])
@@ -1619,6 +1729,11 @@ def main(argv=None):
         recipe = with_pose(recipe, args.pose)
     if getattr(args, 'settings', None):
         recipe = with_settings(recipe, args.settings)
+    if getattr(args, 'timing', None) == 'realtime' and not getattr(args, 'realtime', None) and \
+            not any(name in LIVE for name in _given(args)):
+        args.as_live = True        # a file counted in realtime: given at its own pace, as a camera would
+    if getattr(args, 'exemplar', None):
+        recipe = with_pre_roll(recipe, args.exemplar)
     if len(recipe['inputs']) == 1 and args.action in ('run', 'enroll', 'find') and len(_given(args)) > 1:
         unread = [name for name in _given(args) if name not in recipe['inputs'][0]['sources']]
         if unread and len(read_recipe(args.recipe)[1]['inputs']) > 1:
