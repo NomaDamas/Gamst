@@ -19,6 +19,7 @@ import tempfile
 MEMORY_BYTES = 256 * 1024 * 1024      # about 90 frames of 1280x720 BGR
 DISK_BYTES = 8 * 1024 ** 3            # about 2,900 such frames (48 s of 60 fps)
 DISK_FLOOR_BYTES = 10 * 1024 ** 3     # the spill file never takes the disk below this much free space
+FLOOR_ENV = 'GAMST_SPILL_FLOOR_GB'    # an owner's override of that floor for one run (GB), e.g. a short test clip
 
 
 class Kept:
@@ -34,7 +35,11 @@ class Kept:
 
 class VideoMemory:
     def __init__(self, *, memory_bytes=MEMORY_BYTES, disk_bytes=DISK_BYTES, spill_dir=None,
-                 disk_floor_bytes=DISK_FLOOR_BYTES):
+                 disk_floor_bytes=None):
+        if disk_floor_bytes is None:
+            import os
+            given = os.environ.get(FLOOR_ENV)
+            disk_floor_bytes = DISK_FLOOR_BYTES if not given else int(float(given) * 1024 ** 3)
         if int(memory_bytes) < 0 or int(disk_bytes) < 0 or int(disk_floor_bytes) < 0:
             raise ValueError('memory_bytes, disk_bytes and disk_floor_bytes must not be negative')
         self.memory_bytes, self.spill_dir, self.disk_floor_bytes = int(memory_bytes), spill_dir, int(disk_floor_bytes)
