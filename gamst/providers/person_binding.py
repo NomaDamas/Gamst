@@ -66,8 +66,7 @@ from then on, and back to the first frame of a track that is still followed (ret
 from __future__ import annotations
 
 from ..capabilities import CapabilitySpec, OutputField
-from .person_match import (HANDOVER_IOU, MEDIAPIPE_FACE_POINTS, align_face, body_crop, box_iou, duplicates,
-                           face_points, face_reading)
+from .person_match import HANDOVER_IOU, MEDIAPIPE_FACE_POINTS, body_crop, box_iou, duplicates, face_crop
 from .speaker_verify import centroid, cosine, embed, l2_normalize
 
 CAPABILITY = 'vision.person_binding'
@@ -95,7 +94,8 @@ class TrackBindings:
     ``start_ms`` of the same person), a retroactive start never reaches back to or before the end of any earlier
     binding of the person, and binding a person moves them off the track that holds them."""
 
-    def __init__(self, names=None):
+    def __init__(self, names=None, *, reach_back=False):
+        self.reach_back = bool(reach_back)
         self.tracks = {}       # track -> {first_ms, last_ms, prev_ms, who, from_ms, by, bound_before}; who: a person id
         self.closed = []       # finished intervals {track_id, who, from_ms, to_ms, by}
         self.released = {}     # person -> when their latest binding ended (the end of every earlier one, at the latest)
@@ -138,6 +138,10 @@ class TrackBindings:
         # The first binding of a track reaches back to its first frame, but never to or before the end of the person's
         # earlier bindings: one person is on one track at a time, also in the past.
         start = state['first_ms'] if not state['bound_before'] else ts
+        if state['bound_before'] and self.reach_back and state.get('ended_ms') is not None:
+            # bound again: back to the end of the track's last binding (of anyone), within its segment; the person's
+            # other bindings and a face of this track that said someone else still bound it below (released, floor)
+            start = max(state['first_ms'], state['ended_ms'] + 1)
         released = self.released.get(who)
         if released is not None and start <= released:
             start = released + 1
@@ -167,6 +171,7 @@ class TrackBindings:
             end = min(end, state['from_ms'] - 1 if end_ms is None else end_ms)
         end = max(state['from_ms'] - 1, end)
         self.released[state['who']] = max(end, self.released.get(state['who'], end))
+        state['ended_ms'] = end
         self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=end, by=state['by']))
         event = self._event('person.unbound', track, state['who'], start_ms=state['from_ms'], end_ms=end, reason=reason)
         state.update(who=None, from_ms=None, by=None)
@@ -436,7 +441,8 @@ class PersonBinding:
                  face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, confirm_every_ms=1000,
                  body_every_ms=500, lost_ms=5000, continue_ms=1000, continue_iou=.3, body_reject=.6, session_size=32,
                  max_images=32, face_indices=MEDIAPIPE_FACE_POINTS, anonymous=True, scene_cuts=True,
-                 appearance_across_cuts=False, switch_threshold=None, switch_after=2):
+                 appearance_across_cuts=False, switch_threshold=None, switch_after=2, scene_threshold=None,
+                 reject_after=1, reach_back=False, wait_for_scores=False):
         """Without a face and a body model it binds nobody (no person can be enrolled into it either).
 
         ``anonymous``: every face that is nobody known yet starts a person of its own (P1, P2, ...), so everyone is
@@ -445,7 +451,17 @@ class PersonBinding:
         another recording, and appearance is trusted within one recording only). ``switch_threshold`` (default
         ``body_reject``) and ``switch_after``: a track whose appearance falls below ``switch_threshold`` against its
         own recent appearance ``switch_after`` times in a row, the new looks agreeing with each other, followed
-        someone else from the first of them (the tracker swapped people): the track is split there."""
+        someone else from the first of them (the tracker swapped people): the track is split there.
+        ``scene_threshold`` (None: off): a person the face confirmed in this scene reaches, by appearance of this scene,
+        the scene's other track segments that no face confirmed, also those that already ended (backward) and those that
+        come later (forward), never over a cut (:meth:`_propagate`). ``reject_after``: how many contradicting faces in a
+        row (looked at again at the unconfirmed pace after the first) release a bound person; the release still reaches
+        back to the last confirmation (1: the first one releases, as before). ``reach_back``: a track bound again (it held
+        someone before in this segment) reaches back to the end of its last binding, as a first binding reaches back to
+        the track's start, never over the person's other bindings or a face of the track that said someone else.
+        ``wait_for_scores`` (a finished file, ``--timing post``): each frame waits until the face and body scores it asked
+        for are back, so none is replaced or dropped as stale; they are decided on at the next frame. Realtime keeps
+        the scorer beside the lane (off)."""
         if not face_reject <= face_threshold:
             raise ValueError('require face_reject <= face_threshold')
         import secrets
@@ -463,7 +479,12 @@ class PersonBinding:
                           lost_ms=lost_ms, continue_ms=continue_ms, continue_iou=continue_iou, body_reject=body_reject,
                           session_size=session_size, max_images=max_images, face_indices=self.face_indices,
                           anonymous=anonymous, scene_cuts=scene_cuts, appearance_across_cuts=appearance_across_cuts,
-                          switch_threshold=switch_threshold, switch_after=switch_after)
+                          switch_threshold=switch_threshold, switch_after=switch_after, scene_threshold=scene_threshold,
+                          reject_after=reject_after, reach_back=reach_back, wait_for_scores=wait_for_scores)
+        self.wait_for_scores = bool(wait_for_scores)
+        self.reject_after = max(1, int(reject_after))
+        self.reach_back = bool(reach_back)
+        self.scene_threshold = None if scene_threshold is None else float(scene_threshold)
         self.switch_threshold = float(body_reject if switch_threshold is None else switch_threshold)
         self.switch_after = max(2, int(switch_after))
         self.anonymous, self.scene_cuts, self.appearance_across_cuts = bool(anonymous), bool(scene_cuts), \
@@ -631,7 +652,8 @@ class PersonBinding:
 
     def reset(self):
         self._collect = getattr(self, '_collect', None)
-        self.bindings, self._scores, self._poses, self._boxes = TrackBindings(self.names), {}, {}, {}
+        self.bindings = TrackBindings(self.names, reach_back=self.reach_back)
+        self._scores, self._poses, self._boxes = {}, {}, {}
         self._named, self._cut_ms, self._pending_cuts = [], None, []
         from .scene_cut import SceneCuts
         self._cuts = SceneCuts() if self.scene_cuts else None
@@ -639,6 +661,7 @@ class PersonBinding:
         self._results = []      # what the scorer (beside the lane) gave back
         self.delays = []      # ms from a frame to the frame where its face result is decided on
         self._handover, self._namespace = [], None
+        self._scene = {}      # track -> its segment in this scene: first, last, looks, faces, bound (_propagate)
         for person in self.persons:
             person.session.clear()
 
@@ -669,17 +692,14 @@ class PersonBinding:
         ``confirm_every_ms`` once it is bound. Every track is looked at; nothing is looked at on every frame."""
         state = self._scores.get(track) or {}
         last = state.get(kind + '_ms')
-        every = self.confirm_every_ms if self.bindings.who(track) is not None else \
+        every = self.confirm_every_ms if self.bindings.who(track) is not None and state.get('doubt') is None else \
             self.face_every_ms if kind == 'face' else self.body_every_ms
         return last is None or ts - last >= every
 
     def _crops(self, pose, image, face, body):
-        height, width = image.shape[:2]
         found = [None, None]
         if face and self.face is not None:
-            indices, visibility = face_reading(pose, self.face_indices)
-            found[0] = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
-                                                     min_visibility=visibility))
+            found[0] = face_crop(self.face, image, pose, self.face_indices)
         if body and self.body is not None and pose.get('bbox'):
             found[1] = body_crop(image, pose['bbox'])
         return found
@@ -731,6 +751,12 @@ class PersonBinding:
             return
         self._results.append((key, ts, face, body))
 
+    async def _wait_scores(self):
+        """Until the scorer has answered every job of this frame (post mode: nothing is dropped)."""
+        import asyncio
+        while self.scorer.waiting(self) or self.scorer.busy():
+            await asyncio.sleep(.002)
+
     async def settled(self):
         """Until the scorer has nothing left (tests; a run never waits for it)."""
         import asyncio
@@ -757,11 +783,20 @@ class PersonBinding:
                 for key, value in state['face'].items():
                     if value is not None and value < self.face_reject:
                         against[key] = ts
+                    if value is not None and track in self._scene:      # the segment's best face for each person
+                        best = self._scene[track]['faces']
+                        best[key] = max(value, best.get(key, value))
             if body is not None:
                 state['body_embedding'] = body
                 state['body'] = state['new_body'] = {person.key: person.body_score(body) for person in self.persons}
                 state['body_seen_ms'] = ts
                 self._watch_look(state, ts, body)
+                segment = self._scene.get(track)
+                if segment is not None and self.scene_threshold is not None:
+                    segment['looks'].append(l2_normalize(body))
+                    del segment['looks'][:-16]
+                    segment['look'] = None
+                    self._scene_new = True
 
     def _watch_look(self, state, ts, body):
         """A track's appearance over time: a sustained jump (``switch_after`` looks in a row below
@@ -825,12 +860,22 @@ class PersonBinding:
                   if not track.startswith('frame:')}       # the tracker gave a pose no track: nothing to bind over time
         for track, scores in tracks.items():
             current, face = bindings.who(track), self._fresh(scores, 'face')
+            if current is None or face.get(current) is not None and face[current] >= self.face_reject:
+                scores.pop('doubt', None)       # not a contradiction: an earlier odd face was noise
+                scores.pop('doubts', None)
             if current is not None and face.get(current) is not None and face[current] < self.face_reject:
-                # released at once, and within the track back to the last time the person was confirmed on it
+                scores['doubts'] = scores.get('doubts', 0) + 1
+                scores.setdefault('doubt', scores.get('face_seen_ms', ts))
+                if scores['doubts'] < self.reject_after:
+                    self.counts['doubted'] = self.counts.get('doubted', 0) + 1
+                    continue        # looked at again at the unconfirmed pace before it counts
+                at = scores.pop('doubt')
+                scores.pop('doubts', None)
+                # released, and within the track back to the last time the person was confirmed on it
                 events.append(bindings.unbind(track, ts, 'face_contradicts', before=True,
                                               end_ms=bindings.tracks[track].get('confirmed_at')))
                 self.counts['withdrawn'] = self.counts.get('withdrawn', 0) + 1
-                at = scores.get('face_seen_ms', ts)     # the track is someone else from this face on: a new part
+                # the track is someone else from the first contradicting face on: a new part
                 bindings.tracks[track].update(first_ms=max(bindings.tracks[track]['first_ms'], at), bound_before=False)
                 self.counts['track_switches'] = self.counts.get('track_switches', 0) + 1
                 events.append(dict(event='track.split', track_id=track, start_ms=at, end_ms=ts, reason='face'))
@@ -995,6 +1040,67 @@ class PersonBinding:
                                             floor=(candidates[track][1].get('against') or {}).get(person.key)))
                 bindings.confirm(track, at)
 
+    def _propagate(self, candidates, ts, events):
+        """A person the face bound in this scene goes, by the appearance of this scene, to its other track segments
+        that nothing bound (owner, 2026-11-28: re-confirmation after a cut was the slow part): backward to segments
+        that ended before the face was seen, and forward to segments that come later. Only within the scene (a cut
+        clears the segments); never onto a segment whose own faces all contradicted the person (its best face below
+        ``face_reject``), nor over a time when the person was on another track (one person, one track, also in the
+        past). The person's appearance is the looks of this scene's segments bound to them (at least two); a segment
+        needs two looks of its own, a score of at least ``scene_threshold`` and to beat every other person's by
+        ``margin``. A segment that is still in view is bound as usual (``by: scene``, retroactive to its start); one
+        that ended gets its binding over its own span (``person.bound`` then ``person.unbound``, ``reason:
+        scene_ended``)."""
+        if not getattr(self, '_scene_new', False):
+            return
+        self._scene_new = False
+        bindings = self.bindings
+        for track, segment in self._scene.items():
+            if bindings.who(track) is not None:
+                segment['bound'] = True
+                segment.setdefault('who', set()).add(bindings.who(track))
+        gathered = {}       # person -> the looks of this scene's segments bound to them
+        for segment in self._scene.values():
+            for person in segment.get('who') or ():
+                gathered.setdefault(person, []).extend(segment['looks'])
+        looks = {person: centroid(items) for person, items in gathered.items() if len(items) >= 2}
+        if not looks:
+            return
+        cut = self._cut_ms if self._cut_ms is not None else -1
+        options = []
+        for track, segment in self._scene.items():
+            if segment['bound'] or len(segment['looks']) < 2 or (bindings.tracks.get(track) or {}).get('who') is not None:
+                continue
+            if segment['look'] is None:
+                segment['look'] = centroid(segment['looks'])
+            faces = segment['faces']        # every face of the segment said "not this person": not theirs
+            scores = {key: cosine(segment['look'], value) for key, value in looks.items()
+                      if faces.get(key, 1.) >= self.face_reject}
+            chosen = self._best(scores, self.scene_threshold)
+            if chosen is not None:
+                options.append((chosen[1], track, chosen[0]))
+        for score, track, person in sorted(options, reverse=True):
+            segment = self._scene[track]
+            low, high = segment['first'], segment['last']
+            spans = [(item['from_ms'], item['to_ms']) for item in bindings.closed
+                     if item['who'] == person and item['to_ms'] >= max(cut, low)]
+            spans += [(state['from_ms'], ts) for other, state in bindings.tracks.items()
+                      if state['who'] == person and state.get('from_ms') is not None]
+            if any(a <= high and low <= b for a, b in spans):
+                continue        # the person was on another track then
+            segment['bound'] = True
+            self.counts['scene_propagated'] = self.counts.get('scene_propagated', 0) + 1
+            if track in candidates:
+                found = bindings.bind(track, person, ts, 'scene', body_score=score)
+                events.extend(found if isinstance(found, list) else [found] if found else [])
+                continue
+            events.append(bindings._event('person.bound', track, person, start_ms=low, end_ms=ts, by='scene',
+                                          retroactive=True, body_score=round(score, 5)))
+            events.append(bindings._event('person.unbound', track, person, start_ms=low, end_ms=high,
+                                          reason='scene_ended'))
+            bindings.closed.append(dict(track_id=track, who=person, from_ms=low, to_ms=high, by='scene'))
+            bindings.released[person] = max(high, bindings.released.get(person, high))
+
     def _hand_over(self, candidates, ts, events):
         """An L2 fork's first frame: each bound person of the cut goes to the track whose box overlaps theirs most."""
         for item in self._handover:
@@ -1090,6 +1196,10 @@ class PersonBinding:
             track = self._track(pose, ts, index)
             self.bindings.seen(track, ts)
             candidates[track] = (pose, self._state(track, ts))
+            if self.scene_threshold is not None and not track.startswith('frame:'):
+                segment = self._scene.setdefault(track, dict(first=self.bindings.tracks[track]['first_ms'], last=ts,
+                                                             looks=[], look=None, faces={}, bound=False))
+                segment['last'] = ts
         for track in [key for key, state in self.bindings.tracks.items() if ts - state['last_ms'] > self.lost_ms]:
             events.append(self.bindings.forget(track))
             self._scores.pop(track, None)
@@ -1105,9 +1215,13 @@ class PersonBinding:
                 self._split_track(track, scores['switch_at'], ts, events, 'appearance')
         self._assign(candidates, ts, events)
         self._continue(candidates, ts, events)
+        if self.scene_threshold is not None:
+            self._propagate(candidates, ts, events)
         for track, (pose, _) in candidates.items():
             self._boxes[track] = pose['bbox']
             self._request(track, pose, image, ts)
+        if self.wait_for_scores:
+            await self._wait_scores()
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
@@ -1177,6 +1291,7 @@ class PersonBinding:
         if not self.appearance_across_cuts:
             for person in self.persons:
                 person.session.clear()
+        self._scene = {}        # a new scene: no segment of the old one is reached from it
 
     def finish(self):
         """End of input: every open binding ends at its track's last frame (so "when was P on screen" has an end)."""

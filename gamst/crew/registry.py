@@ -426,6 +426,23 @@ def _lvface(size, sha, count, verification):
         environment="lvface", config={})
 
 
+INSIGHTFACE_BUFFALO_L = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+SCRFD_10G_KPS = _weight("det_10g.onnx", INSIGHTFACE_BUFFALO_L, "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+                        16923827, "measured on the unpacked file (buffalo_l.zip sha256 80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f)")
+
+
+def _lvface_scrfd():
+    """LVFace-B with SCRFD-10GF (five landmarks) finding and aligning the face (gamst/providers/face_detect.py)."""
+    base = _lvface("B", "9d834ed8e927fd35b9123b2bf97c40aad05785b1f9ecfb1c4c1f6242d38d1382", 455533594, "")
+    return _candidate(
+        "lvface.b_scrfd", "face.embedding", base.packages, base.devices, 2560, 0, 450,
+        ESTIMATED, "LVFace: MIT (code and weights), Glint360K training-data terms require review; SCRFD: InsightFace code MIT, "
+        "pretrained models non-commercial research only (accepted: GAMST is not used commercially, owner 2026-11-27)",
+        "SCRFD-10GF-KPS WIDER FACE val 95.40 / 94.01 / 82.80 (InsightFace model zoo). GAMST: the owner's labelled clips, "
+        "docs/measurements/identity-recall-2026-11-28.md",
+        (*base.weights, SCRFD_10G_KPS), environment="lvface", automatic=False, config={})
+
+
 def _sapiens2(size, revision, sha, count):
     return _candidate(
         "sapiens2." + size, "sapiens2.pose", ("transformers>=5.10.3", "torch>=2.7", "torchvision", "timm", "safetensors", "numpy>=1.24"),
@@ -665,6 +682,7 @@ ROLES = {
     "vision.face_identity": Role("vision.face_identity", "Is this visible face the enrolled person (needs a consent record)", {
         "lvface.t": _lvface("T", "bf8da0e1e93c432d9a1d874a9ba0990f5859f970e8864b3990f2f33d11f9cdb3", 76653813, "Not run"),
         "lvface.b": _lvface("B", "9d834ed8e927fd35b9123b2bf97c40aad05785b1f9ecfb1c4c1f6242d38d1382", 455533594, "Not run; same adapter as lvface.t"),
+        "lvface.b_scrfd": _lvface_scrfd(),
     }, _defaults("lvface.b")),
     "vision.active_speaker": Role("vision.active_speaker", "Which visible face is speaking: lips that move with the sound (with vision.face and, for the enrolled person, vision.face_identity)", {
         "lightasd.ava": _light_asd("lightasd.ava", "pretrain_AVA_CVPR.model", "d44bc3ea7baa8e0946fa3921311714a630ed8b90a1928fab0dbe30d918909317",

@@ -7,7 +7,7 @@ cannot reach it.
 
   python -m gamst.eval.pose_dump record OUT.jsonl.gz -- [gamst recipe run person-action-count arguments]
       runs the recipe unchanged and keeps every frame its exemplar module was given: the poses of every tracked person
-      (track, box, the 12 body joints and 42 hand joints with visibility and raw score) and the person binding's
+      (track, box, the 12 body joints, 42 hand joints and 7 face points with visibility and raw score) and the person binding's
       records, in the order they arrived; the run's own events are kept as well (``kind: "events"`` lines).
 
 :func:`replay` feeds the frames to a fresh :class:`gamst.providers.track_exemplar.TrackExemplar` with any movement
@@ -25,11 +25,15 @@ VERSION = 1
 COLUMNS = ('x', 'y', 'visibility', 'raw_score')
 
 
+FACE_JOINTS = dict(nose=0, left_eye=1, right_eye=2, left_ear=3, right_ear=4, mouth_right=71, mouth_left=77)
+
+
 def kept_indices():
-    """{joint name: landmark index} of RTMW (COCO-WholeBody 133) that a rule or the channels can read."""
+    """{joint name: landmark index} of RTMW (COCO-WholeBody 133) that a rule or the channels can read, and the face points
+    the person binding aligns a face with (:data:`gamst.providers.person_match.COCO_WHOLEBODY_FACE_POINTS`, and the ears)."""
     from ..providers.pose_exemplar import COCO_WHOLEBODY_HANDS
     from ..providers.rtmw_pose import COCO_WHOLEBODY_BODY
-    return {**COCO_WHOLEBODY_BODY, **COCO_WHOLEBODY_HANDS}
+    return {**FACE_JOINTS, **COCO_WHOLEBODY_BODY, **COCO_WHOLEBODY_HANDS}
 
 
 def _r(value, digits=4):
@@ -93,7 +97,8 @@ class Recorder:
             value = frame.data if isinstance(frame.data, dict) else None
             if value is not None and isinstance(value.get('tracks'), list) and isinstance(value.get('bound'), dict):
                 recorder.bindings += 1
-                recorder.write(dict(kind='binding', ts=frame.timestamp_ms, events=value.get('events') or []))
+                recorder.write(dict(kind='binding', ts=frame.timestamp_ms, events=value.get('events') or [],
+                                    tracks=value.get('tracks') or []))
             else:
                 poses = poses_of(frame.data)
                 if poses is not None:
@@ -126,8 +131,9 @@ def record(out_path, argv):
 
 
 def load(path):
-    """``{header, frames: [(kind, ts, payload)], events}`` of a recorded file."""
-    header, frames, events = None, [], []
+    """``{header, frames: [(kind, ts, payload)], events, binding_tracks}`` of a recorded file (``binding_tracks``: the
+    binding's per-track scores of each frame, ``[(ts, tracks)]``, when the file has them)."""
+    header, frames, events, tracks = None, [], [], []
     with gzip.open(path, 'rt', encoding='utf-8') as source:
         for line in source:
             item = json.loads(line)
@@ -137,11 +143,13 @@ def load(path):
                 frames.append(('poses', item['ts'], item['poses']))
             elif item['kind'] == 'binding':
                 frames.append(('binding', item['ts'], item['events']))
+                if item.get('tracks'):
+                    tracks.append((item['ts'], item['tracks']))
             elif item['kind'] == 'events':
                 events = item['events']
     if header is None or header.get('version') != VERSION:
         raise ValueError(f'{path}: not a pose dump of version {VERSION}')
-    return dict(header=header, frames=frames, events=events)
+    return dict(header=header, frames=frames, events=events, binding_tracks=tracks)
 
 
 def binding_events(dump):

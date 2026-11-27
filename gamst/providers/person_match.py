@@ -173,6 +173,80 @@ def align_face(image, points, *, min_eye_px=12.):
     return cv2.warpAffine(image, matrix, (112, 112), borderValue=0.0)
 
 
+# Head points (nose, eyes, ears) and shoulders of each keypoint set, for the region a face detector looks in.
+HEAD_POINTS = {'coco_wholebody133': ((0, 1, 2, 3, 4), (5, 6)), 'mediapipe33': ((0, 2, 5, 7, 8), (11, 12))}
+HEAD_REGION = 1.3       # the region's side, in shoulder widths (a frontal face is about 0.4 of it)
+
+
+def head_region(image, pose, *, min_visibility=.1, scale=HEAD_REGION, min_px=24, max_px=448, points=None):
+    """A square crop centred on a pose's head (the mean of its visible nose, eye and ear points), ``scale`` shoulder
+    widths a side (without both shoulders: four times the spread of the head points, at least a third of the box
+    width), for a face detector (:class:`gamst.providers.face_detect.DetectedFaceEmbedder`); larger than ``max_px``:
+    shrunk to it. None without a visible head point, or when the square is smaller than ``min_px`` or mostly outside."""
+    import cv2
+    np = _np()
+    heads, shoulders = (points or HEAD_POINTS).get(pose.get('keypoint_set') or 'mediapipe33', (None, None))
+    marks, box = pose.get('landmarks') or [], pose.get('bbox')
+    if heads is None or not box:
+        return None
+    height, width = image.shape[:2]
+
+    def point(index):
+        if index >= len(marks):
+            return None
+        mark = marks[index]
+        if min(mark.get('visibility', 1.), mark.get('presence', 1.)) < min_visibility:
+            return None
+        return float(mark['x']) * width, float(mark['y']) * height
+    head = [p for p in (point(i) for i in heads) if p is not None]
+    if not head:
+        return None
+    cx, cy = sum(p[0] for p in head) / len(head), sum(p[1] for p in head) / len(head)
+    sides = [point(i) for i in shoulders]
+    if sides and all(sides):
+        side = scale * math.dist(*sides)
+    else:
+        spread = max(max(p[0] for p in head) - min(p[0] for p in head), max(p[1] for p in head) - min(p[1] for p in head))
+        side = 4 * spread
+    side = max(side, float(box['width']) * width / 3)
+    half = side / 2
+    x0, y0, x1, y1 = int(round(cx - half)), int(round(cy - half)), int(round(cx + half)), int(round(cy + half))
+    if x1 - x0 < min_px:
+        return None
+    cx0, cy0, cx1, cy1 = max(0, x0), max(0, y0), min(width, x1), min(height, y1)
+    if (cx1 - cx0) * (cy1 - cy0) < .4 * (x1 - x0) * (y1 - y0):
+        return None
+    region = np.zeros((y1 - y0, x1 - x0, 3), image.dtype)      # outside the frame: black, so the head stays centred
+    region[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0] = image[cy0:cy1, cx0:cx1]
+    if region.shape[0] > max_px:
+        region = cv2.resize(region, (max_px, max_px), interpolation=cv2.INTER_AREA)
+    return region
+
+
+def points_region(image, points, *, scale=3.):
+    """A square crop centred on five face points, ``scale`` times their extent a side (for a region face embedder given
+    a face another model found, e.g. the active speaker's)."""
+    if points is None:
+        return None
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    side = scale * max(max(xs) - min(xs), max(ys) - min(ys), 1.)
+    landmarks = [dict(x=(sum(xs) / len(xs)) / image.shape[1], y=(sum(ys) / len(ys)) / image.shape[0], visibility=1.)]
+    box = dict(width=side / image.shape[1])
+    return head_region(image, dict(keypoint_set='single', landmarks=landmarks, bbox=box), scale=1., points={'single': ((0,), ())})
+
+
+def face_crop(embedder, image, pose, indices=MEDIAPIPE_FACE_POINTS):
+    """What a face embedder is given for one pose: the ArcFace-aligned crop from the pose model's own face points
+    (``face_input`` 'aligned', LVFace alone), or the region around the head (``face_input`` 'region': the embedder finds
+    the face and its five points itself, :class:`gamst.providers.face_detect.DetectedFaceEmbedder`). None: nothing to
+    look at."""
+    if getattr(embedder, 'face_input', 'aligned') == 'region':
+        return head_region(image, pose)
+    height, width = image.shape[:2]
+    chosen, visibility = face_reading(pose, indices)
+    return align_face(image, face_points(pose.get('landmarks') or [], width, height, chosen, min_visibility=visibility))
+
+
 def body_box(bbox, width, height, *, pad=.1):
     """Pixel box (x0, y0, x1, y1) of a normalized pose box grown by ``pad`` of its size, clipped."""
     x, y, w, h = (float(bbox[key]) for key in ('x', 'y', 'width', 'height'))
@@ -205,10 +279,11 @@ def _verify(path, expected):
     return value
 
 
-def onnx_session(path, *, device='cpu', compute_units='ALL', cache_dir=None, providers=None):
+def onnx_session(path, *, device='cpu', compute_units='ALL', cache_dir=None, providers=None, free_size=1):
     """ONNX Runtime session on the CPU, or on Apple's CoreML execution provider (``device='coreml'``: ML Program format,
     ``compute_units`` ALL / CPUAndGPU / CPUAndNeuralEngine). ``cache_dir`` keeps CoreML's compiled model there
-    (``ModelCacheDirectory``) instead of a new temporary folder per session."""
+    (``ModelCacheDirectory``) instead of a new temporary folder per session. Free input dimensions are fixed to
+    ``free_size`` (one crop per call; a detector's free height and width: its input size)."""
     import onnxruntime
     if providers is None and device == 'coreml':
         options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units}
@@ -223,7 +298,7 @@ def onnx_session(path, *, device='cpu', compute_units='ALL', cache_dir=None, pro
     for item in probe.get_inputs():     # one crop per call: a fixed batch, which CoreML compiles whole
         for dimension in item.shape:
             if isinstance(dimension, str):
-                options.add_free_dimension_override_by_name(dimension, 1)
+                options.add_free_dimension_override_by_name(dimension, free_size)
     del probe
     return onnxruntime.InferenceSession(str(path), options, providers=providers or ['CPUExecutionProvider'])
 
@@ -262,6 +337,8 @@ class LVFaceEmbedder:
     Preprocessing follows the official ``inference_onnx.py``: BGR -> RGB, CHW, ``(x / 255 - 0.5) / 0.5``.
     The model does not normalise its output; :func:`cosine` does.
     """
+
+    face_input = 'aligned'      # it is given an aligned 112 x 112 face (person_match.face_crop)
 
     def __init__(self, session, model_id):
         self.session, self.model_id = session, model_id
@@ -334,13 +411,13 @@ async def enroll_person(face_embedder, body_embedder, images, poses, face_indice
     """Face/body embeddings of the owner's enrollment frames (one visible person each). Images are not kept."""
     faces, bodies = [], []
     for image, pose in zip(images, poses):
-        height, width = image.shape[:2]
-        landmarks = pose.get('landmarks') or []
         if face_embedder is not None:
-            indices, visibility = face_reading(pose, face_indices)
-            face = align_face(image, face_points(landmarks, width, height, indices, min_visibility=visibility))
+            face = face_crop(face_embedder, image, pose, face_indices)
             if face is not None:
-                faces.append(await embed(face_embedder, face))
+                try:
+                    faces.append(await embed(face_embedder, face))
+                except ValueError:      # no face the model can use
+                    pass
         if body_embedder is not None and pose.get('bbox'):
             crop = body_crop(image, pose['bbox'])
             if crop is not None:
@@ -445,16 +522,16 @@ class TargetPerson:
             self.gallery.session.clear()
 
     async def _score(self, track, pose, image, ts):
-        height, width = image.shape[:2]
         state = self._tracks.setdefault(track, dict(face=None, face_ms=None, body=None, body_ms=None))
         state['seen_ms'] = ts
         if self.face is not None and self.gallery.face is not None and \
                 (state['face_ms'] is None or ts - state['face_ms'] >= self.face_every_ms):
-            indices, visibility = face_reading(pose, self.face_indices)
-            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
-                                                 min_visibility=visibility))
+            crop = face_crop(self.face, image, pose, self.face_indices)
             if crop is not None:
-                state['face'], state['face_ms'] = self.gallery.face_score(await embed(self.face, crop)), ts
+                try:
+                    state['face'], state['face_ms'] = self.gallery.face_score(await embed(self.face, crop)), ts
+                except ValueError:      # the region had no usable face
+                    pass
         if self.body is not None and pose.get('bbox') and \
                 (state['body_ms'] is None or ts - state['body_ms'] >= self.body_every_ms):
             crop = body_crop(image, pose['bbox'])

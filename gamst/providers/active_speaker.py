@@ -291,7 +291,11 @@ class ActiveSpeaker:
                 track.usable[slot], track.sizes[slot] = why, face['size']
             if self.gallery is not None and usable and (
                     track.last_identity_ms is None or ts - track.last_identity_ms >= self.identity_every_ms):
-                aligned = align_face(image, face['points5'])
+                if getattr(self.identity_model, 'face_input', 'aligned') == 'region':     # it finds the face itself
+                    from .person_match import points_region
+                    aligned = points_region(image, face['points5'])
+                else:
+                    aligned = align_face(image, face['points5'])
                 if aligned is not None:
                     started = time.perf_counter()
                     try:

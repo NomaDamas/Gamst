@@ -630,7 +630,7 @@ async def _person_binding(options, context):
     from ..providers.person_binding import appearance_defaults
     arguments = dict(appearance_defaults(body), **arguments)       # provisional, per re-ID model; the item's values win
     for name in ('body_reject', 'confirm_every_ms', 'continue_ms', 'continue_iou', 'anonymous', 'scene_cuts',
-                 'appearance_across_cuts'):
+                 'appearance_across_cuts', 'scene_threshold', 'reject_after', 'reach_back', 'wait_for_scores'):
         if name in options:
             arguments[name] = options[name]
     module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
