@@ -453,3 +453,26 @@ Tracker tracks that reach over a scene cut: 20 / 19; person segments over a cut:
 The per-run persons file the label tool reads: `try-it/testbed/multi_fix/{gwan,man}/final.persons.json`,
 `{start_ms, cuts, persons: [{person_id, name, segments: [{track_id, start, end, start_ms, end_ms}]}]}` (seconds from
 the first frame; `end: null` = to the end of the clip). Field name: `person_id`.
+
+### 12.6 관제탑 events per repetition (rule runs, counter only)
+
+Runs `rule_{strict,loose}_{before,after}` in `try-it/testbed/multi_fix/gwan/`: the same post-mode pipeline without the
+person binding (`--without person_binding`), the strict rule (`ex_gwan_rule.json` = `rule_gwan.json`) and the loose
+one (`ex_gwan_search.json` = `rule_gwan_search.json`), before (2885bb5) and after (017532e) the repetition fix. Persons
+from the `final` run's bindings (the tracker is deterministic: the same track ids).
+
+| rule | events | per person | longest event | events > 2.5 s | label-tool candidates joining several events (0.3 s merge) | candidates > 2.5 s |
+|---|---|---|---|---|---|---|
+| strict, before | 3 | P1 감스트 2, P7 1 | 0.63 s | 0 | 0 | 0 |
+| strict, after | 3 | P1 감스트 2, P7 1 | 0.63 s | 0 | 0 | 0 |
+| loose, before | 66 | P1 감스트 35, P4 9, P7 6, P3 2, P10 2, unknown 12 | 1.97 s | 0 | 3 | 1 (person-88, 470.8-473.6 s, 5 events) |
+| loose, after | 66 | the same | 1.53 s | 0 | 4 | 0 |
+
+- The state machine: the restart after the last step was already immediate; the event started at the first step's
+  onset; `within_ms` was counted from the first step's completion. A series where the fold was not reached between
+  two extends was one event from the first extend; now the event starts at the repetition's own extend (an extend let
+  go for 100 ms and held again). On these runs that shortened the longest event (1.97 -> 1.53 s); the count is the same.
+- The long spans the owner saw are mostly the label tool's: it joins matches of one track that are less than 0.3 s
+  apart (`MERGE_S` in `run_multi.py`), e.g. 5 events of person-88 at 470.8-473.6 s became one candidate. GAMST's own
+  events never exceeded 2.5 s here. With quick repetitions (fold, then the next extend within 0.3 s) a 0.3 s merge
+  joins separate repetitions.

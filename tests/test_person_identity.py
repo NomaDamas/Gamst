@@ -1025,6 +1025,7 @@ class PersonCountTest(TrackExemplarTest):
         self.assertEqual(value['by_person'], {'P3': 2})
 
 
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')      # tests.test_speaker_verify imports numpy
 class StorePersonTest(unittest.IsolatedAsyncioTestCase):
     async def test_count_events_and_get_timeline_take_a_person_id(self):
         from gamst import Gamst
