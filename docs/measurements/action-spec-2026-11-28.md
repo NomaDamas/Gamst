@@ -11,7 +11,7 @@ measured; thresholds chosen while looking at these labels are **in-sample**, and
   - 맨까송: 글(펀치 규칙)만. 사장님 예시가 없어 few-shot은 해당 없음.
 - **방법:** 실제 recipe 실행(post 모드, RTMW-l, PersonViT 인물 연결) 한 번에서 각 사람의 관절을 기록했습니다. 같은 카운터 코드로 다시 돌려 방법마다 쟀습니다(replay).
   - 같은 규칙의 replay는 실제 실행과 관제탑 37/37, 맨까송 159/162 사건이 같았습니다. 나머지 3개는 소수 4자리 반올림 때문입니다.
-  - 고른 설정은 실제 실행으로 한 번 더 확인했습니다(아래 "실제 실행 확인").
+  - 고른 설정은 실제 실행으로 한 번 더 확인했습니다. 관제탑은 58/58 사건이 replay와 같았고, 맨까송은 52/54가 같았습니다. 감스트 점수는 두 영상 모두 replay와 같았습니다.
 - **채점:**
   - 사장님 채점기(score_multi.py)의 규칙 그대로입니다. 시간으로 1:1 짝을 짓고, 0.5초 허용입니다.
   - 예시 7개 구간과 겹치는 정답·사건은 뺐습니다. 그래서 관제탑 감스트 정답은 46개가 아니라 39개, 모두는 68개가 아니라 61개입니다.
@@ -301,3 +301,18 @@ is in every clip), so the fix changes almost nothing here: the click and the bin
 `enter` still differs (0.163 vs 0.138) and so do one or two events per row; the cause was not traced (the frames and
 the track are the same). The selector matters where someone else is larger than the person meant; that was not
 the case in these examples.
+
+## The chosen configuration in a real run (not a replay)
+
+The two chosen movement files (관제탑: the count-mode best, text + few-shot with the rule numbers as written, enter 0.35;
+맨까송: the best punch rule) were run by `gamst recipe run person-action-count` itself (post mode, count mode, the same
+models and person file), recorded again, and scored the same way. `try-it/testbed/action_eval/verify.sh`,
+`compare_verify.py`.
+
+| clip | events: real run / replay | identical (event, start, end) | 감스트: matched / events / truth | 모두 |
+|---|---|---|---|---|
+| 관제탑 (rule + 7 examples, count = both) | 58 / 58 | 58 | 29 / 31 / 39 (P 93.5 %, R 74.4 %), as the replay | 46 / 51 / 61, as the replay |
+| 맨까송 (punch rule) | 52 / 54 | 52 | 6 / 10 / 16 (P 60 %, R 37.5 %), as the replay | 12 / 26 / 16 (replay 12 / 27) |
+
+On 맨까송 the replay has 2 events more than the run (one punch-length event pair at a rate threshold, the dump's
+rounding, as in the first check). The person binding of the second run gave the same 감스트 numbers.
