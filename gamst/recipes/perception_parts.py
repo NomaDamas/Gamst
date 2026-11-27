@@ -652,11 +652,15 @@ async def _rtmw_pose(options, context):
     """RTMW whole-body pose (rtmlib ONNX) in its own environment; joints on the derived ``joints`` input."""
     from ..providers.rtmw_pose import RTMWPosePlugin
     config, python, profile = _entry(options, context, 'rtmw.pose')
-    for key in ('device', 'compute_units', 'det_every_ms', 'max_poses'):   # the item's own settings win
+    for key in ('device', 'compute_units', 'det_every_ms', 'max_poses', 'fixed_batches'):   # the item's settings win
         if key in options:
             config[key] = options[key]
-    remote = await _open('RemoteRTMW', (config, python, profile))
-    return dict(module=RTMWPosePlugin(remote, joints=options.get('joints'), tracker=options.get('tracker', 'ocsort')))
+    async def opener(settings):
+        return await _open('RemoteRTMW', (dict(config, **settings), python, profile))
+    remote = await opener({})
+    return dict(module=RTMWPosePlugin(remote, joints=options.get('joints'), tracker=options.get('tracker', 'ocsort'),
+                                      batch=int(options.get('batch') or 1), opener=opener,
+                                      fork_settings=options.get('l2_settings')))
 
 
 TRANSCRIPTS = ('speech.transcript_words', 'speech.transcript_update')    # signal names of utterances

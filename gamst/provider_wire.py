@@ -15,6 +15,7 @@ DTYPES = {'|u1': 1, '<i2': 2, '>i2': 2, '<f4': 4, '>f4': 4, '<f8': 8, '>f8': 8}
 # The owner asks for it at start; a worker that does not answer with the same name keeps the pipe.
 FRAME_MEMORY = 'gamst.frame_memory.v1'
 FRAME_MEMORY_MIN = 256 * 1024
+SHARED_LIMIT = 64*1024*1024     # a frame in shared memory (e.g. consecutive video frames stacked for a batch)
 
 
 def spec_value(spec):
@@ -72,13 +73,13 @@ def encode_frame(frame):
     return dict(metadata=metadata, layout=layout), payload
 
 
-def array_size(dtype, shape):
+def array_size(dtype, shape, limit=PAYLOAD_LIMIT):
     if dtype not in DTYPES or not isinstance(shape, list) or not 1 <= len(shape) <= 3:
         raise ValueError('unsupported sensor array dtype/dimensions')
     if any(type(dim) is not int or not 1 <= dim <= 192000 for dim in shape):
         raise ValueError('invalid sensor array dimensions')
     size = math.prod(shape)*DTYPES[dtype]
-    if size > PAYLOAD_LIMIT:
+    if size > limit:
         raise ValueError('sensor array exceeds byte limit')
     return size
 
@@ -90,22 +91,33 @@ class FrameMemory:
         self.segment = None
 
     def put(self, frame):
-        """(header, b'') of a frame whose array is written into the segment, or None when it goes by the pipe."""
+        """(header, b'') of a frame whose array is written into the segment, or None when it goes by the pipe.
+
+        ``frame.data`` may also be a tuple of arrays of one shape and type (consecutive video frames): they are
+        written one after another, as one array stacked along the first axis, without stacking them first."""
         import sys
         np = sys.modules.get('numpy')    # a frame can only be an ndarray when numpy is already loaded
         data = frame.data
-        if np is None or type(data) is not np.ndarray or data.nbytes < FRAME_MEMORY_MIN or data.nbytes > PAYLOAD_LIMIT:
+        parts = data if type(data) is tuple and data else (data,)
+        if np is None or any(type(part) is not np.ndarray for part in parts) or \
+                any(part.shape != parts[0].shape or part.dtype != parts[0].dtype for part in parts):
+            return None
+        nbytes = sum(part.nbytes for part in parts)
+        if nbytes < FRAME_MEMORY_MIN or nbytes > SHARED_LIMIT:
             return None
         header, _ = encode_frame(replace_data(frame, None))
-        dtype, shape = data.dtype.str, list(data.shape)
-        if array_size(dtype, shape) != data.nbytes:
+        dtype, shape = parts[0].dtype.str, [len(parts) * parts[0].shape[0], *parts[0].shape[1:]]
+        if array_size(dtype, shape, SHARED_LIMIT) != nbytes:
             raise ValueError('invalid sensor array layout')
-        if self.segment is None or self.segment.size < data.nbytes:
+        if self.segment is None or self.segment.size < nbytes:
             from multiprocessing import shared_memory
             self.close()
-            self.segment = shared_memory.SharedMemory(create=True, size=data.nbytes)
+            self.segment = shared_memory.SharedMemory(create=True, size=nbytes)
             _OWNED.add(self.segment._name)
-        np.ndarray(data.shape, dtype=data.dtype, buffer=self.segment.buf)[...] = data
+        offset = 0
+        for part in parts:
+            np.ndarray(part.shape, dtype=part.dtype, buffer=self.segment.buf, offset=offset)[...] = part
+            offset += part.nbytes
         header['layout'] = dict(kind='shared', name=self.segment.name, dtype=dtype, shape=shape)
         return header, b''
 
@@ -154,7 +166,7 @@ def decode_frame(header, payload):
     if kind == 'shared' and not payload:
         if type(layout.get('name')) is not str or len(layout['name']) > 64:
             raise ValueError('invalid shared frame name')
-        size = array_size(layout['dtype'], layout['shape'])
+        size = array_size(layout['dtype'], layout['shape'], SHARED_LIMIT)
         import numpy as np
         segment = _attached(layout['name'], size)
         data = np.ndarray(layout['shape'], dtype=layout['dtype'], buffer=segment.buf).copy()

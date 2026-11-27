@@ -157,7 +157,8 @@ POSE_SOURCES = {'mediapipe-pose': None, 'rtmw-pose': 'rtmw', 'sapiens2-pose': 's
 
 def with_pose(recipe, candidate, *, module=None):
     """The recipe with ``candidate`` (a vision.pose candidate) as its pose module (``module``: by name, default the
-    first pose item that is not a verification lane's); the modules that read its joints read them that way."""
+    first pose item); the modules that read its joints read them that way. One pose model counts: the parts it
+    selects are :data:`POSE_PARTS` (a new pose model adds its part there and in ``POSE_SOURCES``)."""
     from ..crew.registry import ROLES
     if candidate not in ROLES['vision.pose'].candidates:
         raise SystemExit(f"--pose: no vision.pose candidate {candidate!r}; candidates: "
@@ -165,7 +166,7 @@ def with_pose(recipe, candidate, *, module=None):
     part = POSE_PARTS[candidate.split('.', 1)[0]]
     items = recipe['modules']
     target = next((item for item in items if item['use'] in POSE_SOURCES and (
-        item['name'] == module if module else not item.get('verifies'))), None)
+        item['name'] == module if module else True)), None)
     if target is None:
         raise SystemExit(f"--pose: {recipe['name']} has no pose module")
     joints = set(target.get('emits', ())) | {target['name']}
@@ -450,8 +451,6 @@ def roles(recipe):
         chosen = ROLES[role].candidates.get(model) if role in ROLES and model else None
         if item.get('votes_for') and chosen is not None and 'api' in (chosen.config or {}):
             continue        # a hosted voter: nothing to set up, and its role keeps the recipe's own recogniser
-        if item.get('verifies'):
-            continue        # a verification lane's second model of a role: set up beside it (profile "candidates")
         for role, model in [_role(item)] + [(role, item.get(key, default)) for key, role, default in part.extra_roles]:
             if role is None:
                 continue
@@ -508,13 +507,9 @@ def installed(recipe, item, profile=None):
         read = {}
     entry = (read.get('roles') or {}).get(role)
     if model is not None and (entry is None or entry.get('model') != model):
-        # another candidate of the role, set up beside the default one (a verification lane runs two pose models)
+        # another candidate of the role, set up beside the profile's default one
         entry = (read.get('candidates') or {}).get(model)
         entry = entry if isinstance(entry, dict) and entry.get('model') == model else None
-    if entry is None and item.get('verifies'):
-        raise SystemExit(f"{item['name']} needs {model} beside the {role} default: add it to the profile's \"candidates\" "
-                         f'({{"{model}": {{"model": "{model}", "provider_profile": ..., "python": ..., "config": ...}}}}; '
-                         'docs/measurements/testbed-2026-11-26.md has the one used on the shotgun clip)')
     if entry is None or model is not None and entry.get('model') != model:
         raise SystemExit(f"{role}{' ' + model if model else ''} is not set up; run: gamst recipe setup {recipe['name']}" + (
             f' --with-role {role}' if item['use'] == 'role' else ''))
@@ -831,7 +826,7 @@ def _reference_value(reference, args):
         if not args.exemplar:
             raise SystemExit(f"this recipe needs a demonstrated exemplar: run 'gamst recipe enroll' and pass "
                              f'--exemplar FILE ({name})')
-        path = (getattr(args, 'verify_exemplar', None) if name == 'verify_exemplar' else None) or args.exemplar
+        path = args.exemplar
         saved = json.loads(Path(path).read_text())
         if isinstance(saved, dict) and 'value' in saved:
             _check_exemplar(saved, path)
@@ -945,7 +940,7 @@ def module_options(item, built, *, lanes=True):
                 optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
                 enabled=item.get('enabled', True), catch_up=item.get('catch_up') if lanes else False,
                 slowdown=item.get('slowdown'), sample=item.get('sample') if lanes else None,
-                backlog=item.get('backlog') if lanes else None)
+                backlog=item.get('backlog') if lanes else None, batch=item.get('batch') if lanes else None)
 
 
 def slowdowns(values):
@@ -1286,11 +1281,13 @@ def _optional_options(parser):
 
 def _module_options(parser):
     parser.add_argument('--pose', metavar='CANDIDATE',
-                        help='the vision.pose candidate of the movement lane (e.g. mediapipe.pose_full, mediapipe.pose_heavy, '
-                             'rtmw.l_384x288); the part that builds it replaces the recipe\'s, joints are read its way')
+                        help='the vision.pose candidate that counts (person-action-count: rtmw.l_384x288 by default; '
+                             'e.g. mediapipe.pose_full, mediapipe.pose_heavy); the part that builds it replaces the '
+                             'recipe\'s, joints are read its way')
     parser.add_argument('--set', dest='settings', action='append', default=[], metavar='MODULE.KEY=VALUE',
                         help='one setting of a module item (VALUE is JSON, else text), e.g. pose.delegate=gpu, '
-                             'pose.sample=newest (a lane that takes the newest frame while busy), verify_pose.device=cpu')
+                             'pose.batch=4 (frames per pose call), pose.device=cpu, pose.sample=newest (a lane that skips to the '
+                             'newest frame while busy; not the default: every frame is counted)')
 
 
 def _asr_options(parser, consent=True):
@@ -1359,8 +1356,6 @@ def _store_options(parser):
 def _movement_options(parser):
     """What a run and a search need to know the movement and the person."""
     parser.add_argument('--exemplar', help='movement JSON from gamst recipe enroll')
-    parser.add_argument('--verify-exemplar', help="the movement as the verification lane's pose model sees it (enrolled "
-                                                  'with --pose of that model; default: --exemplar)')
     parser.add_argument('--person', help='person JSON from gamst recipe enroll --kind person')
     parser.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
     parser.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")

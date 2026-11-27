@@ -1,12 +1,16 @@
-"""Realtime pose lanes: a lane that samples the newest frame, a lane that keeps every frame in the video memory,
-the count verification lane, shared-memory frames for workers, and the recipe options that select them."""
+"""Realtime pose lanes: a lane that samples the newest frame, a lane that keeps every frame in the video memory, a
+lane that batches waiting frames, RTMW batches, keypoint-set-aware joint reading, shared-memory frames for workers,
+and the recipe options that select them."""
 import argparse
 import asyncio
 from types import SimpleNamespace
 import unittest
 
 from gamst import CapabilitySpec, Gamst, OutputField
-from gamst.pipeline import Pipeline
+import time
+
+from gamst.pipeline import Derived, Pipeline
+from gamst.plugins import InputFrame
 from gamst.schema import timestamp
 try:
     import numpy as np
@@ -100,52 +104,264 @@ class Lanes(unittest.IsolatedAsyncioTestCase):
             pipeline.add_module('b', Slow(), consumes='camera', sample='newest', backlog='spill')
 
 
-SPEC = CapabilitySpec('test.events', 'test.events', 'video', 'test', '1',
-                      (OutputField('count', 'integer'), OutputField('status', 'string'), OutputField('events', 'array'),
-                       OutputField('reference_id', 'string', required=False)), 'native')
+class Batching:
+    """process_batch answers one output per frame; each call waits until released."""
+
+    def __init__(self, seconds=0.):
+        self.release, self.calls, self.seconds = asyncio.Event(), [], seconds
+
+    async def process(self, frame):
+        return (await self.process_batch([frame]))[0]
+
+    async def process_batch(self, frames):
+        await self.release.wait()
+        await asyncio.sleep(self.seconds)
+        self.calls.append([frame.timestamp_ms for frame in frames])
+        return [[] for _ in frames]
 
 
-def frame(source, ms, events=(), **value):
-    return SimpleNamespace(data=dict(events=list(events), **value), timestamp_ms=ms,
-                           sensor=SimpleNamespace(sensor_id=source))
+@unittest.skipIf(np is None, 'numpy')
+class BatchLanes(unittest.IsolatedAsyncioTestCase):
+    async def test_a_batching_lane_takes_what_waits_and_processes_every_frame_in_order(self):
+        async with Gamst(consent=True) as human:
+            pipeline, module = Pipeline(human, 'live'), Batching()
+            pipeline.add_input('camera')
+            pipeline.add_module('pose', module, consumes='camera', backlog='spill', batch=4)
+            now = timestamp() - 5000
+            for index in range(10):
+                await pipeline.push('camera', np.full((2, 2, 3), index, np.uint8), timestamp_ms=now + index * 17,
+                                    modality='video')
+            await asyncio.sleep(0)
+            module.release.set()
+            await pipeline.drain()
+            self.assertEqual(sum(module.calls, []), [now + index * 17 for index in range(10)])
+            self.assertEqual([len(call) for call in module.calls], [4, 4, 2])   # what waits, up to 4 a call
+            status = pipeline.status()['modules']['pose']
+            self.assertEqual((status['processed'], status['gaps']), (10, 0))
+            self.assertEqual(status['batch'], dict(most=4, calls=3, batched_frames=10, largest=4))
+            await pipeline.close()
+
+    async def test_a_recording_fills_its_batches(self):
+        async with Gamst(consent=True) as human:
+            pipeline, module = Pipeline(human, 'file'), Batching(.01)
+            module.release.set()
+            base = timestamp() - 60000
+
+            class Recording:
+                modality, live, missed = 'video', False, 0
+
+                async def frames(self):
+                    for index in range(9):
+                        yield InputFrame(np.full((2, 2, 3), index, np.uint8), 'video', base + index * 17)
+                        await asyncio.sleep(0)
+            pipeline.add_input('camera', Recording())
+            pipeline.add_module('pose', module, consumes='camera', batch=4)
+            await pipeline.run()
+            self.assertEqual(sum(module.calls, []), [base + index * 17 for index in range(9)])
+            self.assertGreater(max(len(call) for call in module.calls), 1)
+            await pipeline.close()
+
+    def test_batch_is_checked_and_ignored_without_process_batch(self):
+        pipeline = Pipeline(SimpleNamespace(register_capability=lambda spec: None, pipeline=None), 'x')
+        pipeline.add_input('camera')
+        with self.assertRaises(ValueError):
+            pipeline.add_module('a', Batching(), consumes='camera', batch=0)
+        pipeline.add_module('b', Slow(), consumes='camera', batch=4)
+        self.assertIsNone(pipeline.modules['b']['lane'])     # no process_batch: inline, one by one
 
 
-def matched(start, end, event_id=None):
-    item = dict(event='exemplar.matched', start_ms=start, end_ms=end, label='slam')
-    if event_id:
-        item.update(state='provisional', event_id=event_id)
-    return item
+HITS = CapabilitySpec('test.hits', 'test.hits', 'video', 'test', '1',
+                     (OutputField('count', 'integer'), OutputField('events', 'array')), 'native', stateful=True)
+FRAME = 17
 
 
-class CountVerificationTest(unittest.TestCase):
-    def test_final_revoked_uncertain_and_added(self):
-        from gamst.providers.count_verification import CountVerification
-        verify = CountVerification(SPEC, live='live', verifier='check', near_ms=100)
-        out = []
-        for result in (
-                verify.process(frame('live', 1000, [matched(800, 1000, 'a')], reference_id='r1')),
-                verify.process(frame('live', 2000, [matched(1800, 2000, 'b')])),
-                verify.process(frame('live', 4000, [matched(3800, 4000, 'c')])),
-                verify.process(frame('check', 1040, [matched(840, 1040)])),       # pairs with a
-                verify.process(frame('check', 1900)),                             # a pose there, no count: b revoked
-                verify.process(frame('check', 3000, [matched(2800, 3000)])),      # nobody live: added
-                verify.process(frame('check', 4500)),
-                verify.finish()):                                                 # no pose during c: uncertain
-            out += (result or {}).get('events', [])
-        decided = {item.get('revises') or item.get('event_id'): item['state'] for item in out}
-        self.assertEqual(decided['a'], 'final')
-        self.assertEqual(decided['b'], 'revoked')
-        self.assertEqual(decided['c'], 'uncertain')
-        added = [item for item in out if item.get('decided_by') == 'verification']
-        self.assertEqual([(item['end_ms'], item['state'], item['reference_id']) for item in added], [(3000, 'final', 'r1')])
-        self.assertEqual(verify.status()['decided'], dict(final=1, revoked=1, uncertain=1, added=1))
+class Camera:
+    """A live camera stand-in: frames every 17 ms, stamped when captured; the first pixel says which frame it is."""
+    modality, live, missed = 'video', True, 0
 
-    def test_nothing_is_decided_before_the_verifier_has_seen_past_it(self):
-        from gamst.providers.count_verification import CountVerification
-        verify = CountVerification(SPEC, live='live', verifier='check', near_ms=100)
-        verify.process(frame('live', 1000, [matched(800, 1000, 'a')]))
-        self.assertIsNone(verify.process(frame('check', 1050)))
-        self.assertEqual(verify.finish()['events'][0]['state'], 'revoked')   # the end decides what is left
+    def __init__(self, count):
+        self.count, self.base = count, None
+
+    async def frames(self):
+        self.base = time.time_ns() // 1_000_000
+        for index in range(self.count):
+            due = self.base + index * FRAME
+            wait = due / 1000 - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            yield InputFrame(np.full((2, 2, 3), index % 256, np.uint8), 'video', due)
+
+
+class Poser:
+    """A pose model stand-in: slow on ``slow`` frames (live only); its joints are the frame's number."""
+    owns_process, modalities = True, ('video',)
+
+    def __init__(self, slow=()):
+        self.slow, self.forks, self.seen = set(slow), [], []
+
+    async def process_batch(self, frames):
+        outputs = []
+        for frame in frames:
+            index = int(frame.data[0, 0, 0])
+            self.seen.append(index)
+            if index in self.slow:
+                await asyncio.sleep(.05)
+            outputs.append([Derived('joints', index, 'video')])
+        return outputs
+
+    async def process(self, frame):
+        return (await self.process_batch([frame]))[0]
+
+    async def fork(self):
+        self.forks.append(Poser())
+        return self.forks[-1]
+
+
+class Hits:
+    """A movement stand-in with state: a hit is frames 4, 5, 6 of every 12 up, then one down; it ends at the down."""
+
+    def __init__(self):
+        self.spec, self.run, self.start, self.count = HITS, 0, None, 0
+
+    def process(self, frame):
+        index = frame.data
+        if index % 12 in (4, 5, 6):
+            self.start = frame.timestamp_ms if self.run == 0 else self.start
+            self.run += 1
+            return None
+        found, self.run = self.run == 3, 0
+        if not found:
+            return None
+        self.count += 1
+        return dict(count=self.count, events=[dict(event='hit', start_ms=self.start, end_ms=frame.timestamp_ms)])
+
+    def fork(self):
+        return Hits()
+
+
+@unittest.skipIf(np is None, 'numpy')
+class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
+    async def run_cut(self, slow, tail_ms=150):
+        async with Gamst(consent=True) as human:
+            pipeline, camera = Pipeline(human, 'live'), Camera(150)
+            poser = Poser(slow=slow)                     # 50 ms of work per 17 ms frame there: it falls behind
+            pipeline.add_input('camera', camera)
+            pipeline.add_module('pose', poser, consumes='camera', emits=('joints',), backlog='spill', batch=4,
+                                catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=tail_ms, workers=1))
+            pipeline.add_module('hits', Hits(), consumes='joints', spec=HITS)
+            await pipeline.run()
+            status = pipeline.status()['modules']['pose']
+            rows = human.store.query('local-user', kind='observation.signal', limit=500, registered_only=True,
+                                     capability_id='test.hits')
+            events = [event for row in rows for event in row['observation']['value']['events']]
+            await pipeline.close()
+        frame = lambda ms: (ms - camera.base) / FRAME     # noqa: E731  (in frames; owned ends may fall between)
+        cuts = [(frame(cut['from_ms']), frame(cut['start_ms']), frame(cut['end_ms'])) for cut in status['catch_up']['todos']]
+        found = [(frame(event['start_ms']), frame(event['end_ms']), bool(event.get('correction'))) for event in events]
+        seen = set(poser.seen + sum((fork.seen for fork in poser.forks), []))
+        return status, cuts, found, seen
+
+    async def test_frames_the_live_lane_did_not_reach_are_counted_once_by_an_l2_chain(self):
+        straddled = []
+        for slow in (range(20, 45), range(22, 45), range(25, 49)):
+            status, cuts, found, seen = await self.run_cut(slow)
+            self.assertEqual(sorted(round(end) for _, end, _ in found), [i for i in range(150) if i % 12 == 7],
+                             (cuts, found))
+            self.assertEqual((status['catch_up']['done'], status['gaps']), (len(cuts), 0))
+            self.assertTrue(cuts and seen == set(range(150)))
+            for begin, end, late in found:     # an event is the lane's whose owned range holds its end
+                self.assertEqual(late, any(start <= end <= until for _, start, until in cuts), (cuts, found))
+                if any(begin < start <= end or begin <= until < end for _, start, until in cuts):
+                    straddled.append((begin, end, late))
+        self.assertTrue(straddled)     # some hits crossed a cut, and still counted once
+
+
+@unittest.skipIf(np is None, 'numpy')
+class RTMWBatch(unittest.TestCase):
+    def models(self, det_every_ms=500):
+        from gamst.providers.rtmw_pose import POINTS, RTMWModels
+        models = object.__new__(RTMWModels)
+        models.det_every_ms, models.max_poses, models.max_crops, models._fixed = det_every_ms, 4, 16, {}
+        models.detections = []
+
+        def detector(image):
+            models.detections.append(int(image[0, 0, 0]))
+            return np.array([[100., 50., 300., 400.]])
+
+        def postprocess(outputs, center, scale):
+            points = np.zeros((1, POINTS, 2), 'f4')
+            points[0, :17] = [[150. + 10 * k, 100. + 15 * k] for k in range(17)]
+            return points, np.ones((1, POINTS), 'f4')
+        models.detector = detector
+        models.calls = []
+        models.pose = SimpleNamespace(
+            session=SimpleNamespace(get_inputs=lambda: [SimpleNamespace(name='input')],
+                                    run=lambda _, feed: models.calls.append(len(feed['input'])) or
+                                    [np.zeros((len(feed['input']), POINTS, 576), 'f4'),
+                                     np.zeros((len(feed['input']), POINTS, 768), 'f4')]),
+            postprocess=postprocess)
+        models._fixed = {4: models.pose.session, 2: models.pose.session}
+        models._crop = lambda image, box: (np.zeros((4, 3, 3), np.uint8), (0, 0), (1, 1))
+        models._mean, models._std = np.zeros(3, 'f4'), np.ones(3, 'f4')
+        models.reset()
+        return models
+
+    def test_one_pose_call_for_a_batch_and_the_detector_only_when_due(self):
+        models = self.models()
+        images = [np.full((480, 640, 3), index, np.uint8) for index in range(6)]
+        found = models.infer_batch(images, [0, 17, 33, 50, 517, 534])
+        self.assertEqual(models.calls, [4, 2])              # the crops of the batch in fixed-size calls
+        self.assertEqual(models.detections, [0, 4])          # at the start and 500 ms later
+        self.assertEqual([len(boxes) for boxes, _, _ in found], [1] * 6)
+        self.assertEqual(found[1][0], [[100., 50., 300., 400.]])   # within the batch: the detection before it
+        after = models.infer_batch(images[:1], [551])
+        self.assertNotEqual(after[0][0], found[0][0])        # next batch: the box around the last keypoints
+        self.assertEqual(models.detections, [0, 4])
+
+    def test_the_worker_splits_stacked_frames_and_names_each_pose_s_frame(self):
+        from gamst.providers.model_workers import _RTMW
+        models = self.models()
+        models.version = 'rtmw:test'
+        stacked = np.concatenate([np.full((480, 640, 3), index, np.uint8) for index in range(3)])
+        public, joints = _RTMW(models).query(SimpleNamespace(data=stacked), dict(frames=3, timestamps_ms=[0, 17, 33]))
+        self.assertEqual([pose['in_batch'] for pose in public['poses']], [0, 1, 2])
+        self.assertEqual((public['image_height'], public['frames'], joints.shape), (480, 3, (3, 133, 3)))
+        from gamst.providers.model_workers import capability
+        spec = capability('rtmw.pose', dict(path='p', sha256='0' * 64, det_path='d', det_sha256='1' * 64))
+        self.assertEqual(spec.validate(public)['frames'], 3)     # what the worker answers passes its contract
+        with self.assertRaises(ValueError):
+            _RTMW(models).query(SimpleNamespace(data=stacked), dict(frames=7, timestamps_ms=[0] * 7))   # 1440 rows
+
+
+def rtmw_pose(points):
+    """An RTMW-shaped pose (coco_wholebody133) with ``points`` {index: (x, y)} visible, the rest invisible."""
+    landmarks = [dict(x=0., y=0., visibility=0., presence=1.) for _ in range(133)]
+    for index, (x, y) in points.items():
+        landmarks[index] = dict(x=x, y=y, visibility=.9, presence=1.)
+    return dict(keypoint_set='coco_wholebody133', landmarks=landmarks, image_width=1280, image_height=720)
+
+
+class KeypointSets(unittest.TestCase):
+    def test_face_points_of_an_rtmw_pose_are_its_own_indices(self):
+        from gamst.providers.person_match import face_points, face_reading
+        face = {2: (.40, .30), 1: (.46, .30), 0: (.43, .34), 71: (.41, .38), 77: (.45, .38)}
+        pose = rtmw_pose(face)
+        indices, visibility = face_reading(pose)
+        points = face_points(pose['landmarks'], 1000, 1000, indices, min_visibility=visibility)
+        self.assertEqual(points, [(face[index][0] * 1000, face[index][1] * 1000) for index in (2, 1, 0, 71, 77)])
+        # MediaPipe's indices on the same pose would read body and face points that are not the eyes and mouth
+        self.assertIsNone(face_points(pose['landmarks'], 1000, 1000, (5, 2, 0, 10, 9)))
+        self.assertEqual(face_reading(dict(keypoint_set='goliath308'))[0], None)    # unknown face points: no face
+        self.assertEqual(face_reading(dict(landmarks=[]))[0], (5, 2, 0, 10, 9))      # MediaPipe names no set
+
+    def test_pose_channels_read_an_rtmw_pose_by_its_keypoint_set(self):
+        from gamst.providers.pose_exemplar import MEDIAPIPE_BODY, largest_pose
+        from gamst.providers.rtmw_pose import COCO_WHOLEBODY_BODY
+        body = {index: (.3 + .01 * index, .2 + .02 * index) for index in COCO_WHOLEBODY_BODY.values()}
+        values, mask, _, _ = largest_pose([rtmw_pose(body)], MEDIAPIPE_BODY)     # the wrong mapping is not used
+        self.assertTrue(all(mask))
+        with self.assertRaises(ValueError):
+            largest_pose([dict(rtmw_pose(body), keypoint_set='unknown17')], MEDIAPIPE_BODY)
 
 
 @unittest.skipIf(np is None, 'numpy')
@@ -164,6 +380,9 @@ class FrameMemoryTest(unittest.TestCase):
         self.assertEqual((got.timestamp_ms, got.sensor.sequence), (5, 1))
         small = InputFrame(np.zeros((4, 4, 3), np.uint8), 'video', 6, 'local-user', None, sent.sensor)
         self.assertIsNone(memory.put(small))     # small frames keep the pipe
+        batch = np.concatenate([image] * 8)      # 22 MB: beyond the pipe's limit, within shared memory's
+        header, _ = memory.put(InputFrame(batch, 'video', 7, 'local-user', None, sent.sensor))
+        self.assertTrue(np.array_equal(decode_frame(header, b'').data, batch))
         memory.close()
 
 
@@ -182,15 +401,19 @@ class RecipeOptions(unittest.TestCase):
         with self.assertRaises(SystemExit):
             with_pose(recipe, 'no.such_model')
 
-    def test_verification_parts_settle_the_live_exemplar(self):
-        from gamst.recipes import load
-        recipe = load('person-action-count', include=['verification'], exclude=['target_person'])
+    def test_one_pose_model_counts_every_frame_by_default(self):
+        from gamst.recipes import load, with_pose
+        recipe = load('person-action-count', exclude=['target_person'])
         items = {item['name']: item for item in recipe['modules']}
-        self.assertEqual(items['verify_pose']['backlog'], 'spill')
-        self.assertEqual((items['verification']['verifies'], items['verification']['verifier']), ('exemplar', 'verify_exemplar'))
-        self.assertIn('verify_exemplar', [reference['name'] for reference in recipe['references']])
-        plain = load('person-action-count', exclude=['target_person'])
-        self.assertNotIn('verification', {item['name'] for item in plain['modules']})
+        pose = items['pose']
+        self.assertEqual((pose['use'], pose['candidate'], pose['backlog'], pose['batch']),
+                         ('rtmw-pose', 'rtmw.l_384x288', 'spill', 8))
+        self.assertNotIn('sample', pose)                                      # no frame is skipped
+        self.assertEqual([item for item in recipe['modules'] if item['use'] in ('rtmw-pose', 'mediapipe-pose')], [pose])
+        self.assertFalse({'verification', 'verify_pose', 'verify_exemplar'} & set(items))
+        mediapipe = {item['name']: item for item in with_pose(recipe, 'mediapipe.pose_full')['modules']}
+        self.assertEqual(mediapipe['pose']['use'], 'mediapipe-pose')
+        self.assertIsNone(mediapipe['exemplar'].get('source'))
 
 
 if __name__ == '__main__':

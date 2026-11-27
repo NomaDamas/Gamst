@@ -280,8 +280,10 @@ def main():
                     result = None
                 elif operation == 'close' and provider is not None and not payload:
                     provider.close()
-                    provider = None
                     output.write(envelope(dict(id=number, ok=True, result=None)))
+                    if callable(getattr(output, 'flush', None)):
+                        output.flush()
+                    provider = None    # answered first: freeing large models (several CoreML sessions) takes seconds
                     return
                 else:
                     raise ValueError('invalid provider operation/state')

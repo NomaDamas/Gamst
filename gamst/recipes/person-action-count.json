@@ -5,7 +5,7 @@
   "hardware": {
     "min_fps": null,
     "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
-    "compute": "CPU (MediaPipe Pose Landmarker in VIDEO mode and LVFace face matching, each in its own process and environment)"
+    "compute": "RTMW-l 384x288 whole-body pose + YOLOX-m detector (rtmlib ONNX; CoreML GPU on Apple silicon, ONNX Runtime CPU elsewhere) and LVFace face matching, each in its own process and environment; MediaPipe Pose stays selectable with --pose mediapipe.pose_full"
   },
   "inputs": [
     {
@@ -29,19 +29,13 @@
       "kind": "person",
       "label": "the enrolled person",
       "for": "target_person"
-    },
-    {
-      "name": "verify_exemplar",
-      "kind": "exemplar",
-      "label": "the movement as the verification lane's pose model sees it (default: the exemplar)",
-      "for": "verify_exemplar"
     }
   ],
   "modules": [
     {
       "name": "pose",
-      "use": "mediapipe-pose",
-      "candidate": "mediapipe.pose_full",
+      "use": "rtmw-pose",
+      "candidate": "rtmw.l_384x288",
       "max_poses": 4,
       "tracker": "ocsort",
       "consumes": [
@@ -51,7 +45,9 @@
       "emits": [
         "pose_joints"
       ],
-      "sample": "newest"
+      "det_every_ms": 500,
+      "backlog": "spill",
+      "batch": 8
     },
     {
       "name": "target_person",
@@ -77,7 +73,8 @@
         "target_person": [
           "pose_joints"
         ]
-      }
+      },
+      "source": "rtmw"
     },
     {
       "name": "exemplar",
@@ -94,7 +91,8 @@
           "pose_channels",
           "pose_joints"
         ]
-      }
+      },
+      "source": "rtmw"
     },
     {
       "name": "repetition",
@@ -102,76 +100,6 @@
       "max_reps_s": 2,
       "consumes": [
         "pose_channels"
-      ]
-    },
-    {
-      "name": "verify_pose",
-      "use": "rtmw-pose",
-      "candidate": "rtmw.l_384x288",
-      "optional": "off",
-      "pausable": false,
-      "parts": [
-        "verification"
-      ],
-      "verifies": "pose",
-      "backlog": "spill",
-      "max_poses": 4,
-      "tracker": "ocsort",
-      "consumes": [
-        "camera"
-      ],
-      "joints": "verify_joints",
-      "emits": [
-        "verify_joints"
-      ],
-      "det_every_ms": 500
-    },
-    {
-      "name": "verify_channels",
-      "use": "pose-channels",
-      "source": "rtmw",
-      "optional": "off",
-      "pausable": false,
-      "parts": [
-        "verification"
-      ],
-      "consumes": [
-        "verify_joints"
-      ],
-      "capability_id": "vision.pose_channels.verification"
-    },
-    {
-      "name": "verify_exemplar",
-      "use": "exemplar",
-      "source": "rtmw",
-      "reference": "verify_exemplar",
-      "capability_id": "temporal.exemplar_events.verification",
-      "mode": "hold",
-      "max_reps_s": 2,
-      "optional": "off",
-      "pausable": false,
-      "parts": [
-        "verification"
-      ],
-      "consumes": [
-        "verify_channels",
-        "verify_joints"
-      ]
-    },
-    {
-      "name": "verification",
-      "use": "count-verify",
-      "verifies": "exemplar",
-      "verifier": "verify_exemplar",
-      "near_ms": 150,
-      "optional": "off",
-      "pausable": false,
-      "parts": [
-        "verification"
-      ],
-      "consumes": [
-        "exemplar",
-        "verify_exemplar"
       ]
     },
     {

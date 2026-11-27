@@ -60,7 +60,8 @@ FIELDS = {
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
     'rtmw.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
-                            OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
+                            OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
+                            OutputField('frames', 'integer', required=False))),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
@@ -232,26 +233,38 @@ class _Pose(_Worker):
 
 
 class _RTMW(_Worker):
-    """One frame (``request["timestamp_ms"]``: its capture time, for the detection interval) -> boxes and joints."""
+    """Consecutive frames -> boxes and joints. ``frame.data`` is one image, or ``request["frames"]`` images of one size
+    stacked by rows; ``request["timestamps_ms"]``: their capture times (for the detection interval)."""
 
     def __init__(self, models):
         self.models = models
 
     def query(self, frame, request):
+        from .rtmw_pose import MAX_FRAMES, POINTS
         np = _numpy()
-        height, width = frame.data.shape[:2]
-        boxes, keypoints, scores = self.models.infer(frame.data, (request or {}).get('timestamp_ms'))
-        joints = np.zeros((len(boxes), keypoints.shape[1] if len(boxes) else 133, 3), dtype='<f4')
-        if len(boxes):
-            joints[..., 0], joints[..., 1] = keypoints[..., 0] / width, keypoints[..., 1] / height
-            joints[..., 2] = np.clip(scores, 0., 1.)
-        public = []
-        for box in boxes:
-            box = [float(value) for value in box]
-            x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
-            x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
-            public.append(dict(bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0) if x1 > x0 and y1 > y0 else None))
-        return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height)), joints
+        request = request or {}
+        count = request.get('frames', 1)
+        times = request.get('timestamps_ms') or [request.get('timestamp_ms')]
+        if type(count) is not int or not 1 <= count <= MAX_FRAMES or len(times) != count \
+                or frame.data.shape[0] % count:
+            raise ValueError(f'rtmw.pose takes 1..{MAX_FRAMES} stacked frames with one capture time each')
+        rows = frame.data.shape[0] // count
+        images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
+        height, width = rows, frame.data.shape[1]
+        public, joints = [], []
+        for index, (boxes, keypoints, scores) in enumerate(self.models.infer_batch(images, times)):
+            for box, points, values in zip(boxes, keypoints, scores):
+                rows_ = np.zeros((POINTS, 3), dtype='<f4')
+                rows_[:, 0], rows_[:, 1], rows_[:, 2] = points[:, 0] / width, points[:, 1] / height, np.clip(values, 0., 1.)
+                joints.append(rows_)
+                box = [float(value) for value in box]
+                x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
+                x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
+                public.append(dict(in_batch=index, bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
+                                   if x1 > x0 and y1 > y0 else None))
+        joints = np.stack(joints) if joints else np.zeros((0, POINTS, 3), dtype='<f4')
+        return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height),
+                    frames=count), joints
 
     def reset(self):
         self.models.reset()
@@ -507,16 +520,33 @@ class RemoteRTMW(_Client):
     """Async stand-in for :class:`gamst.providers.rtmw_pose.RTMWModels`; tracking stays in this process."""
 
     async def infer(self, image, timestamp_ms):
+        return (await self.infer_batch([image], [timestamp_ms]))[0]
+
+    async def infer_batch(self, images, timestamps_ms):
+        """Consecutive frames of one size -> one list of poses per frame (one worker call: the frames go stacked)."""
+        import numpy as np
         from ..crew.modules import bounded_image
         from ..private_payload import CONTRACTS, landmarks
-        result, private = await self.worker.query(self._frame(bounded_image(image), 'video', timestamp_ms=timestamp_ms),
-                                                  {'timestamp_ms': int(timestamp_ms)})
+        from dataclasses import replace
+        images = [np.ascontiguousarray(bounded_image(image)) for image in images]
+        if len(images) == 1:
+            frame = self._frame(images[0], 'video', timestamp_ms=timestamps_ms[0])
+        elif getattr(self.worker, '_frames', None) is not None:     # shared memory: written there without stacking
+            frame = replace(self._frame(images[0], 'video', timestamp_ms=timestamps_ms[0]), data=tuple(images))
+        else:
+            frame = self._frame(np.concatenate(images), 'video', timestamp_ms=timestamps_ms[0])
+        result, private = await self.worker.query(
+            frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
         columns = CONTRACTS['rtmw.pose'].columns
-        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='coco_wholebody133', track_id=None,
-                     association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
-                     image_width=result['image_width'], image_height=result['image_height'],
-                     landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
-                for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
+        found = [[] for _ in images]
+        for pose, rows in zip(result['poses'], private.take('joints')):
+            poses = found[pose.get('in_batch', 0)]
+            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set='coco_wholebody133',
+                              track_id=None, association_quality='unavailable', identity_verified=False,
+                              speaker_association='unavailable', image_width=result['image_width'],
+                              image_height=result['image_height'],
+                              landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)]))
+        return found
 
     async def reset(self):
         await self.worker.reset()

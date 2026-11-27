@@ -100,14 +100,16 @@ async def _mediapipe_pose(options, context):
     from ..crew.modules import open_private_worker
     from ..providers.pose import PoseWorkerPlugin
     entry = context['installed'](options)
-    worker = await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
-                                       entry['provider_profile'],
-                                       dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
-                                            allow_skips=True,
-                                            **({'delegate': options['delegate']} if options.get('delegate') else {})))
+
+    async def opener():
+        return await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
+                                         entry['provider_profile'],
+                                         dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
+                                              allow_skips=True,
+                                              **({'delegate': options['delegate']} if options.get('delegate') else {})))
     # allow_skips: a frame lost on a loaded machine must not rebuild the detector (docs/landmarker-video.md).
-    return dict(module=PoseWorkerPlugin(worker, joints=options.get('joints'),
-                                        tracker=options.get('tracker', 'iou')))
+    return dict(module=PoseWorkerPlugin(await opener(), joints=options.get('joints'),
+                                        tracker=options.get('tracker', 'iou'), opener=opener))
 
 
 async def _mediapipe_graph(options, context):
@@ -151,8 +153,14 @@ class _Channels:
     A sensor sample with a missing channel is not a sample of the movement; a pose's hidden joints are part of it.
     """
 
-    def __init__(self, counter):
-        self.counter, self.spec = counter, counter.spec
+    def __init__(self, counter, make=None):
+        self.counter, self.spec, self._make = counter, counter.spec, make
+
+    def fork(self):
+        """The same counter from a fresh state (an L2 chain)."""
+        if self._make is None:
+            raise ValueError('this counter cannot fork')
+        return _Channels(self._make(), self._make)
 
     def process(self, frame):
         from dataclasses import replace
@@ -175,10 +183,12 @@ async def _repetition(options, context):
     sensor = _sensor(options, context)
     if sensor is not None and sensor.modality != 'imu':
         raise SystemExit('the repetition counter reads imu samples')
-    counter = RepetitionCounter(channels=len(CHANNELS if sensor is None else sensor.columns),
-                                modality='video' if sensor is None else 'imu', min_period_s=max(.05, 1 / (2 * rate)),
-                                max_period_s=float(options.get('max_period_s', 6.7)))
-    return dict(module=_Channels(counter), spec=counter.spec)
+    def make():
+        return RepetitionCounter(channels=len(CHANNELS if sensor is None else sensor.columns),
+                                 modality='video' if sensor is None else 'imu', min_period_s=max(.05, 1 / (2 * rate)),
+                                 max_period_s=float(options.get('max_period_s', 6.7)))
+    counter = make()
+    return dict(module=_Channels(counter, make), spec=counter.spec)
 
 
 async def _exemplar(options, context):
@@ -196,27 +206,8 @@ async def _exemplar(options, context):
                             modality=modality, contract=None if sensor is None else sensor.contract,
                             speaker_bound=modality != 'audio' or speaker_bound(context['modules'], options['name']),
                             capability_id=options.get('capability_id', 'temporal.exemplar_events'),
-                            provisional=any(item.get('use') == 'count-verify' and item.get('verifies') == options['name']
-                                            for item in context.get('modules') or ()),
                             **_pose_source(options))
     return dict(module=module, spec=module.spec)
-
-
-async def _count_verify(options, context):
-    """Settles the counts of the module it ``verifies`` by a verification counter (``verifier``), see
-    :mod:`gamst.providers.count_verification`; commits under the verified module's capability."""
-    from ..providers.count_verification import CountVerification
-    from ..providers.pose_exemplar import ExemplarEvents
-    items = {item['name']: item for item in context.get('modules') or ()}
-    live, verifier = options.get('verifies'), options.get('verifier')
-    if live not in items or verifier not in items:
-        raise SystemExit(f"{options['name']}: \"verifies\" and \"verifier\" name two counters of the recipe")
-    counted = items[live]
-    spec = ExemplarEvents(capability_id=counted.get('capability_id', 'temporal.exemplar_events'),
-                          modality=counted.get('modality', 'video')).spec    # the same contract: its revisions
-    module = CountVerification(spec, live=live, verifier=verifier, event=options.get('event', 'exemplar.matched'),
-                               near_ms=int(options.get('near_ms', 150)))
-    return dict(module=module, spec=spec)
 
 
 async def _terms(options, context):
@@ -366,7 +357,6 @@ PARTS = {
     'pose-channels': Part('module', build=_pose_channels),
     'repetition': Part('module', build=_repetition, sampling=movement_sampling),
     'exemplar': Part('module', build=_exemplar, sampling=movement_sampling),
-    'count-verify': Part('module', build=_count_verify),
     'terms': Part('module', build=_terms),
     # views
     'count': Part('view'),

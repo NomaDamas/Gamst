@@ -48,6 +48,20 @@ ARCFACE_112 = ((38.2946, 51.6963), (73.5318, 51.5014), (56.0252, 71.7366), (41.5
 # MediaPipe Pose landmarks in that order for a frontal face: the subject's right eye and right mouth
 # corner appear on the image's left. 0 nose, 2 left_eye, 5 right_eye, 9 mouth_left, 10 mouth_right.
 MEDIAPIPE_FACE_POINTS = (5, 2, 0, 10, 9)
+# COCO-WholeBody (RTMW) in the same order: 2 right_eye, 1 left_eye, 0 nose, then the 68 face points from index 23
+# (iBUG 68: 48 is the mouth corner on the image's left of a frontal face, 54 the other): 23 + 48, 23 + 54.
+COCO_WHOLEBODY_FACE_POINTS = (2, 1, 0, 71, 77)
+FACE_POINTS = {'mediapipe33': (MEDIAPIPE_FACE_POINTS, .5), 'coco_wholebody133': (COCO_WHOLEBODY_FACE_POINTS, .3)}
+
+
+def face_reading(pose, indices=MEDIAPIPE_FACE_POINTS, min_visibility=.5):
+    """(indices, min_visibility) of the five face points of this pose: by its ``keypoint_set`` when it names one
+    (a set without known face points, e.g. Sapiens2 ``goliath308`` here, gives None: no face is aligned); a pose
+    without one (MediaPipe) uses ``indices``."""
+    kind = pose.get('keypoint_set') if isinstance(pose, dict) else None
+    if kind is None:
+        return indices, min_visibility
+    return FACE_POINTS.get(kind, (None, min_visibility))
 
 
 def _np():
@@ -82,6 +96,8 @@ def umeyama(source, target):
 def face_points(landmarks, width, height, indices=MEDIAPIPE_FACE_POINTS, *, min_visibility=.5):
     """Five face points in pixels from normalized keypoints, or None when any is not visible."""
     points = []
+    if indices is None:
+        return None
     for index in indices:
         if index >= len(landmarks):
             return None
@@ -280,7 +296,8 @@ async def enroll_person(face_embedder, body_embedder, images, poses, face_indice
         height, width = image.shape[:2]
         landmarks = pose.get('landmarks') or []
         if face_embedder is not None:
-            face = align_face(image, face_points(landmarks, width, height, face_indices))
+            indices, visibility = face_reading(pose, face_indices)
+            face = align_face(image, face_points(landmarks, width, height, indices, min_visibility=visibility))
             if face is not None:
                 faces.append(await embed(face_embedder, face))
         if body_embedder is not None and pose.get('bbox'):
@@ -361,7 +378,9 @@ class TargetPerson:
         state['seen_ms'] = ts
         if self.face is not None and self.gallery.face is not None and \
                 (state['face_ms'] is None or ts - state['face_ms'] >= self.face_every_ms):
-            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, self.face_indices))
+            indices, visibility = face_reading(pose, self.face_indices)
+            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
+                                                 min_visibility=visibility))
             if crop is not None:
                 state['face'], state['face_ms'] = self.gallery.face_score(await embed(self.face, crop)), ts
         if self.body is not None and pose.get('bbox') and \

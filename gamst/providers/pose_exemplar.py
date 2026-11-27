@@ -52,6 +52,22 @@ CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
 CHANNELS_VERSION = 2
 
 
+def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=.5):
+    """(mapping, min_visibility) to read this pose's joints with: its own ``keypoint_set`` decides when it names a
+    known one (RTMW ``coco_wholebody133``, Sapiens2 ``goliath308``), so joints are never read by another model's
+    indices; a pose without one (MediaPipe) is read with the given mapping."""
+    kind = pose.get('keypoint_set') if isinstance(pose, dict) else None
+    if kind == 'coco_wholebody133':
+        from .rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+    if kind == 'goliath308':
+        from .sapiens2_pose import GOLIATH_BODY
+        return GOLIATH_BODY, .3      # the official Sapiens2 demo's --kpt-thr (as recipes/parts.py)
+    if kind not in (None, 'mediapipe33'):
+        raise ValueError(f'poses of keypoint set {kind!r} have no joint mapping here')
+    return mapping, min_visibility
+
+
 def joint_angle(a, vertex, b):
     """Angle at ``vertex`` in units of pi radians, None for a zero-length side."""
     ax, ay, bx, by = a[0] - vertex[0], a[1] - vertex[1], b[0] - vertex[0], b[1] - vertex[1]
@@ -116,7 +132,8 @@ def largest_pose(poses, mapping=MEDIAPIPE_BODY, min_visibility=.5):
         if not landmarks:
             continue
         aspect = _aspect(pose)
-        values, mask = pose_channels(landmarks, mapping, min_visibility=min_visibility,
+        own, visibility = keypoint_reading(pose, mapping, min_visibility)
+        values, mask = pose_channels(landmarks, own, min_visibility=visibility,
                                      aspect=1. if aspect is None else aspect)
         if best is None or sum(mask) > sum(best[1]):
             best = (values, mask, index, aspect)
@@ -134,14 +151,18 @@ class PoseChannels:
 
     def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5,
                  capability_id='vision.pose_channels'):
-        """``capability_id``: another one for a second pose model's channels in the same run (a verification lane)."""
+        """``capability_id``: another one for a second pose model's channels in the same run."""
         self.mapping, self.min_visibility = mapping, min_visibility
+        self._args = dict(mapping=mapping, source=source, min_visibility=min_visibility, capability_id=capability_id)
         self.spec = CapabilitySpec(
             capability_id, 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
             (OutputField('channels', 'array'), OutputField('mask', 'array'), OutputField('visible', 'integer'),
              OutputField('pose_index', 'integer', required=False),
              OutputField('image_aspect', 'number', unit='width/height', required=False)),
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
+
+    def fork(self):
+        return type(self)(**self._args)
 
     def process(self, frame):
         poses = poses_of(frame.data)
@@ -197,12 +218,9 @@ class ExemplarEvents:
 
     def __init__(self, *, reference='exemplar', mode=None, enter=.12, exit=.18, min_hold_ms=200,
                  refractory_ms=None, max_gap_ms=1000, modality='video', capability_id='temporal.exemplar_events',
-                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5, contract=None, speaker_bound=True,
-                 provisional=False):
+                 fixed_thresholds=False, mapping=MEDIAPIPE_BODY, min_visibility=.5, contract=None, speaker_bound=True):
         """``contract``: what a sensor's channels are; a movement learned from others is refused.
-        ``speaker_bound=False``: the sound is not tied to an enrolled voice; every event says so.
-        ``provisional``: a later lane settles each count (:mod:`gamst.providers.count_verification`): every
-        ``exemplar.matched`` is committed as ``state: "provisional"`` with an ``event_id``."""
+        ``speaker_bound=False``: the sound is not tied to an enrolled voice; every event says so."""
         if mode not in (None, 'hold', 'sequence'):
             raise ValueError("mode must be 'hold' or 'sequence'")
         if not 0 < enter <= exit:
@@ -212,7 +230,7 @@ class ExemplarEvents:
         self.fixed_thresholds = fixed_thresholds     # the caller's enter / exit win over the reference's
         self.refractory_ms, self.max_gap_ms = refractory_ms, max_gap_ms
         self.contract, self.speaker_bound = contract, bool(speaker_bound)
-        self.mapping, self.min_visibility, self.provisional = mapping, min_visibility, bool(provisional)
+        self.mapping, self.min_visibility = mapping, min_visibility
         self.label, self.scorer, self.rule, self.info = reference, None, None, {}
         self.identity, self.from_ms, self._methods, self._next = {}, 0, [], []
         self._defaults = dict(enter=enter, exit=exit)
@@ -244,11 +262,19 @@ class ExemplarEvents:
                            refractory_ms=self.refractory_ms, max_gap_ms=self.max_gap_ms, modality=self.spec.modality,
                            capability_id=self.spec.id, fixed_thresholds=self.fixed_thresholds, mapping=self.mapping,
                            min_visibility=self.min_visibility, contract=self.contract, speaker_bound=self.speaker_bound,
-                           provisional=self.provisional, **self._defaults)
+                           **self._defaults)
         ready.set_exemplar(reference['value'])
+        ready._reference = reference
         ready.label = reference['label']
         ready.identity = {f'reference_{key}': reference[key] for key in ('id', 'revision') if reference.get(key) is not None}
         return ready
+
+    def fork(self):
+        """A counter of the same movement from a fresh state (an L2 chain of :class:`gamst.pipeline.Pipeline`)."""
+        reference = getattr(self, '_reference', None)
+        if reference is None:
+            raise ValueError('this counter has no movement to fork')
+        return self.prepare(reference)
 
     def offline(self, reference):
         """A separate counter for records that were kept (nothing of it is committed)."""
@@ -263,7 +289,7 @@ class ExemplarEvents:
             self._next = [item for item in self._next if item[0] < from_ms] + [(from_ms, ready)]
 
     def _adopt(self, ready, from_ms):
-        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity'):
+        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity', '_reference'):
             setattr(self, name, getattr(ready, name) if ready is not None else None if name in ('scorer', 'rule', 'mode') else
                     getattr(self, name))
         self.info, self.from_ms = dict(ready.info, removed=False) if ready is not None else dict(self.info, removed=True), from_ms
@@ -380,8 +406,8 @@ class ExemplarEvents:
             if best is None:
                 return None
             channels, mask, index, aspect = best
-            return channels, mask, body_points(poses[index]['landmarks'], self.mapping,
-                                               min_visibility=self.min_visibility,
+            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility)
+            return channels, mask, body_points(poses[index]['landmarks'], own, min_visibility=visibility,
                                                aspect=1. if aspect is None else aspect)
         value = frame.data if isinstance(frame.data, dict) else {}
         channels, mask = value.get('channels'), value.get('mask')
@@ -437,8 +463,6 @@ class ExemplarEvents:
         self._inside, self._started_ms, self._last_match_ms = True, start, ts
         self._best, self._end_ms, self._method = current, ts, self._methods[index or 0]
         extra = {} if index is None else dict(example=index)
-        if self.provisional:
-            extra.update(state='provisional', event_id=f'{self.spec.id}:{start}:{ts}:{self._count}')
         return self._event('exemplar.matched', start_ms=start, end_ms=ts, distance=round(current, 5), **extra)
 
     def _hold(self, ts, current, index, start, rival, events):

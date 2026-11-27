@@ -71,7 +71,7 @@ class Contract:
 CONTRACTS = {
     'mediapipe.body.video': Contract('joints', 33, ('x', 'y', 'visibility', 'presence'), 4, 100., private_only=False),
     'sapiens2.pose': Contract('joints', 308, ('x', 'y', 'visibility'), 8, 100.),
-    'rtmw.pose': Contract('joints', 133, ('x', 'y', 'visibility'), 8, 100.),
+    'rtmw.pose': Contract('joints', 133, ('x', 'y', 'visibility'), 64, 100.),   # up to 16 frames of 4 people
     'mediapipe.face.video': Contract('joints', 9, ('x', 'y'), 4, 100., private_only=False),
     'speaker.embedding': Contract('embedding', max_items=4096),
     'face.embedding': Contract('embedding', max_items=4096),
