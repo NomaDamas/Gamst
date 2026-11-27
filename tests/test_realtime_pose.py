@@ -211,8 +211,8 @@ class Poser:
     """A pose model stand-in: slow on ``slow`` frames (live only); its joints are the frame's number."""
     owns_process, modalities = True, ('video',)
 
-    def __init__(self, slow=()):
-        self.slow, self.forks, self.seen = set(slow), [], []
+    def __init__(self, slow=(), fork_delay=0.):
+        self.slow, self.forks, self.seen, self.delay, self.fork_delay = set(slow), [], [], 0., fork_delay
 
     async def process_batch(self, frames):
         outputs = []
@@ -221,6 +221,8 @@ class Poser:
             self.seen.append(index)
             if index in self.slow:
                 await asyncio.sleep(.05)
+            elif self.delay:
+                await asyncio.sleep(self.delay)
             outputs.append([Derived('joints', index, 'video')])
         return outputs
 
@@ -229,6 +231,7 @@ class Poser:
 
     async def fork(self):
         self.forks.append(Poser())
+        self.forks[-1].delay = self.fork_delay
         return self.forks[-1]
 
 
@@ -256,10 +259,10 @@ class Hits:
 
 @unittest.skipIf(np is None, 'numpy')
 class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
-    async def run_cut(self, slow, tail_ms=150):
+    async def run_cut(self, slow, tail_ms=150, fork_delay=0.):
         async with Gamst(consent=True) as human:
             pipeline, camera = Pipeline(human, 'live'), Camera(150)
-            poser = Poser(slow=slow)                     # 50 ms of work per 17 ms frame there: it falls behind
+            poser = Poser(slow=slow, fork_delay=fork_delay)                     # 50 ms of work per 17 ms frame there: it falls behind
             pipeline.add_input('camera', camera)
             pipeline.add_module('pose', poser, consumes='camera', emits=('joints',), backlog='spill', batch=4,
                                 catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=tail_ms, workers=1))
@@ -289,6 +292,14 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
                 if any(begin < start <= end or begin <= until < end for _, start, until in cuts):
                     straddled.append((begin, end, late))
         self.assertTrue(straddled)     # some hits crossed a cut, and still counted once
+
+    async def test_a_second_interval_waits_for_the_one_worker_and_is_processed(self):
+        # the one L2 worker is still busy with the first interval when the second is cut
+        status, cuts, found, seen = await self.run_cut(list(range(15, 35)) + list(range(70, 100)), fork_delay=.06)
+        self.assertGreaterEqual(len(cuts), 2)
+        self.assertEqual((status['catch_up']['done'], status['catch_up']['pending']), (len(cuts), 0))
+        self.assertEqual(seen, set(range(150)))
+        self.assertEqual(sorted(round(end) for _, end, _ in found), [i for i in range(150) if i % 12 == 7])
 
 
 class CoreMLTemp(unittest.TestCase):

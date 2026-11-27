@@ -617,7 +617,8 @@ class Pipeline:
 
     def _start_catch_up(self, name):
         entry = self.modules[name]
-        entry['workers'] = [task for task in entry['workers'] if not task.done()]
+        current = asyncio.current_task()     # a worker that asks from its own end is done already
+        entry['workers'] = [task for task in entry['workers'] if not task.done() and task is not current]
         width = min(int(entry['catch_up']['workers']), int(getattr(entry['module'], 'max_forks', 1) or 1))
         for todo in entry['todos']:
             if len(entry['workers']) >= width or self._closed:
