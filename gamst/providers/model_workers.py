@@ -12,7 +12,7 @@ profile                    worker (real model)                                  
 =========================  ==================================================  ====================
 ``speaker.embedding``      sherpa-onnx CAM++ / WeSpeaker w2v-BERT               ``RemoteEmbedder``
 ``face.embedding``         LVFace ONNX                                          ``RemoteEmbedder``
-``body.embedding``         SOLIDER-REID                                         ``RemoteEmbedder``
+``body.embedding``         person re-ID ONNX (OSNet-AIN)                        ``RemoteEmbedder``
 ``target_speech.local``    WeSep / USEF-TFGridNet / SAM-Audio spans             ``RemoteExtractor``
 ``pixit.sources``          pyannote PixIT (diarization + separation)            ``RemoteSeparator``
 ``sepformer.sources``      SpeechBrain SepFormer (two sources)                  ``RemoteSeparator``
@@ -73,7 +73,7 @@ def model_id(profile, config):
     digest = config.get('sha256')
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
-    name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
+    name = {'face.embedding': 'lvface', 'body.embedding': config.get('name', 'osnet-ain'), 'qwen3.forced_aligner': 'qwen3-forced-aligner',
             'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'rtmw.pose': 'rtmw', 'qwen3.asr.words': 'qwen3-asr',
             'hosted.asr.words': 'hosted-asr', 'active_speaker.lightasd': 'lightasd', 'pixit.sources': 'pyannote-pixit',
             'sepformer.sources': 'sepformer', 'faster_whisper.align': 'whisper-align',
@@ -307,8 +307,8 @@ def load(profile, config):
         embedder = LVFaceEmbedder.from_local(config.pop('path'), **config)
         return _Embedding(lambda frame: embedder.embed(frame.data))
     if profile == 'body.embedding':
-        from .person_match import SOLIDERBodyEmbedder
-        embedder = SOLIDERBodyEmbedder.from_local(config.pop('source'), config.pop('checkpoint'), **config)
+        from .person_match import ReIDEmbedder
+        embedder = ReIDEmbedder.from_local(config.pop('path'), **config)
         return _Embedding(lambda frame: embedder.embed(frame.data))
     if profile == 'target_speech.local':
         from .target_speech import EXTRACTORS, SAMSpanBackend

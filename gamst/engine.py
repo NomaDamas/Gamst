@@ -860,8 +860,33 @@ class Gamst:
         result['scope'] = 'retained_registered_observations'
         return result
 
+    def _who_intervals(self, subject_id, as_of_ms=None):
+        """``{track_id: [(from_ms, to_ms, who)]}`` of the retained ``vision.person_binding`` records (person_binding.py)."""
+        from .counting import MAX_SCAN
+        from .providers.person_binding import CAPABILITY, binding_events, intervals_of
+        rows = self.store.query(subject_id, None, None, 'observation.signal', limit=MAX_SCAN, registered_only=True,
+                                capability_id=CAPABILITY, known_until=as_of_ms)
+        return intervals_of(binding_events(rows))
+
+    @staticmethod
+    def _with_who(rows, intervals):
+        """Stored rows whose events that name a track carry the person bound to it (retroactive within the track)."""
+        from .providers.person_binding import resolve
+        shown = []
+        for record in rows:
+            value = (record.get('observation') or {}).get('value')
+            events = value.get('events') if isinstance(value, dict) else None
+            if isinstance(events, list) and any(isinstance(item, dict) and item.get('track_id') for item in events):
+                events = [dict(item, who=resolve(item, intervals), **({'who_when_counted': item['who']} if item.get('who')
+                               and item.get('who') != resolve(item, intervals) else {}))
+                          if isinstance(item, dict) and item.get('track_id') and str(item.get('event', '')).startswith('exemplar.')
+                          else item for item in events]
+                record = dict(record, observation=dict(record['observation'], value=dict(value, events=events)))
+            shown.append(record)
+        return shown
+
     async def count_events(self, capability_id, subject_id='local-user', window='1h', event=None,
-                           where=None, group_by=None, max_evidence=20, as_of_ms=None):
+                           where=None, group_by=None, max_evidence=20, as_of_ms=None, who=None):
         """Count events of retained records of one capability, with bounded evidence record IDs.
 
         ``complete`` is False when the Pipeline lost frames this capability depends on in the window (``lost``
@@ -892,10 +917,17 @@ class Gamst:
         replaced, scanned = self.store.superseded(subject_id, as_of_ms), len(rows)
         rows = [record for record in rows if record['id'] not in replaced]
         changes = [change for _, change in self.instruction_changes(as_of_ms) if capability_id in change.get('capabilities', ())]
+        if who is not None:     # a person's events: who is resolved from the bindings, also for events counted before
+            if not isinstance(who, str) or not 1 <= len(who) <= 128:
+                raise ValueError('who is the name of an enrolled person (1..128 characters)')
+            rows = self._with_who(rows, self._who_intervals(subject_id, as_of_ms))
+            where = dict(where or {}, who=who)
         result = count_events(rows, event=event, where=where, group_by=group_by, max_evidence=max_evidence,
                               current=current_instructions(changes))
         if changes:     # since when what is counted has been looked for
             result['counted_from_ms'] = {name: from_ms for name, (_, from_ms) in current_instructions(changes).items()}
+        if who is not None:
+            result['who'] = who
         return dict(result, capability_id=capability_id, window_start_ms=start, window_end_ms=now,
                     scanned_records=scanned, scan_truncated=truncated,
                     complete=not gaps and not truncated, lost=lost(gaps),
@@ -932,6 +964,10 @@ class Gamst:
         """Set or replace the words or the movement the running recipe looks for, without restarting it."""
         return await self._instructed().set(kind, **options)
 
+    async def enroll_person(self, **options):
+        """Enroll a person (few-shot, consent required) into the running recipe, so instructions can name them (``who``)."""
+        return await self._instructed().enroll_person(**options)
+
     async def remove_instruction(self, reference, actor='user'):
         return await self._instructed().remove(reference, actor=actor)
 
@@ -947,7 +983,7 @@ class Gamst:
         return as_of_ms
 
     async def get_timeline(self, subject_id='local-user', window=None, start_ms=None, end_ms=None, step_ms=200,
-                           capabilities=None, settled_only=False, as_of_ms=None, cursor=None, max_bytes=65536):
+                           capabilities=None, settled_only=False, as_of_ms=None, cursor=None, max_bytes=65536, who=None):
         """Retained records as rows of capture time, with an explicit status per capability (:mod:`gamst.timeline`).
 
         Give ``window`` (default 10 s, ending now) or ``start_ms`` and ``end_ms``. ``as_of_ms``: what was known at
@@ -995,11 +1031,45 @@ class Gamst:
                     raise
             if self.closed or self.store._cursor_key != key:
                 raise RuntimeError('timeline discarded after deletion or close')
+            if who is not None or any(isinstance(entry.get('value'), dict) and entry['value'].get('track_id')
+                                      for entry in answer.get('evidence', {}).values()):
+                answer = self._timeline_who(answer, self._who_intervals(subject_id, as_of_ms), who)
             if isinstance(answer, dict) and not answer.get('restart'):
                 starts = self.input_starts(subject_id, known_until=as_of_ms)
                 if starts:
                     answer['input_starts'] = starts
             return answer
+
+    @staticmethod
+    def _timeline_who(answer, intervals, who):
+        """Events of a track show the person bound to it (retroactive); with ``who``, only that person's events are
+        left and ``who`` says when the person was on screen. The cursor stays the unfiltered read's."""
+        from .providers.person_binding import resolve, seen_intervals
+        dropped = set()
+        for ref, entry in answer.get('evidence', {}).items():
+            value = entry.get('value')
+            if not isinstance(value, dict) or not value.get('track_id') or not str(value.get('event', '')).startswith('exemplar.'):
+                continue
+            found = resolve(value, intervals)
+            entry['value'] = dict(value, who=found)
+            if who is not None and found != who:
+                dropped.add(ref)
+        if who is None:
+            return answer
+        if not isinstance(who, str) or not 1 <= len(who) <= 128:
+            raise ValueError('who is the name of an enrolled person (1..128 characters)')
+        for ref in dropped:
+            del answer['evidence'][ref]
+        for row in answer.get('rows', ()):
+            for cell in row.get('cells', {}).values():
+                if cell.get('ref') in dropped:
+                    del cell['ref']
+                if 'intervals' in cell:
+                    cell['intervals'] = [ref for ref in cell['intervals'] if ref not in dropped]
+        answer['who'] = dict(name=who, filtered_events=len(dropped), seen=seen_intervals(
+            intervals, who, answer.get('start_ms'), answer.get('end_ms'))[:64],
+            note='events of other people and of unknown tracks are left out; next_cursor is of the unfiltered read')
+        return answer
 
     async def get_observation_page(self, subject_id='local-user', cursor=None, limit=20,
                                    max_bytes=65536, capability_id=None, source_id=None,

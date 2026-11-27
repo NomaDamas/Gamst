@@ -160,6 +160,9 @@ class CountView(_Window):
             lines.insert(1, (f"pose {choice['chosen']}: {choice['live_fps']:g}+{choice['l2_fps']:g} fps measured, "
                              f"input {choice['input_fps']:g}" + ('' if kept else f" ({choice['model']} too slow)"),
                              (150, 150, 150) if kept else STATE_COLOR['revoked']))
+        refused = (getattr(self.pipeline, 'notes', None) or {}).get('who_refused')
+        if refused:     # an instruction naming a person was refused (gamst/person_reference.py, same words as CLI and MCP)
+            lines += [(refused[:110], STATE_COLOR['revoked']), ('', None)]
         quality = getattr(self.pipeline, 'voice_quality', None)
         if isinstance(quality, dict) and quality.get('low'):      # gamst/voice_quality.py (ASCII: cv2 text)
             lines += [(f"VOICE REFERENCE QUALITY LOW {quality['quality']['mean']:.2f} -> {quality['used']}",

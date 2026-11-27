@@ -588,10 +588,38 @@ async def face_embedder(options, context):
 
 
 async def body_embedder(options, context):
-    """Optional: ``"body": {"python", "config"}`` of a SOLIDER-REID environment and checkpoint."""
+    """The whole-body appearance (person re-ID) model: the item's own ``"body": {"python", "config"}``, else the
+    ``vision.body_identity`` candidate setup installed; None (face only) with ``"body": "off"`` or when it is not set
+    up (the run says so: ``context["notes"]``)."""
     body = options.get('body')
-    return None if not body else await _open('RemoteEmbedder', (
-        dict(body['config']), body.get('python') or sys.executable, 'body.embedding'))
+    if body == 'off':
+        return None
+    if isinstance(body, dict):
+        return await _open('RemoteEmbedder', (dict(body['config']), body.get('python') or sys.executable, 'body.embedding'))
+    try:
+        entry = context['installed'](dict(use='role', role='vision.body_identity',
+                                          candidate=options.get('body_candidate', 'osnet.ain_x1_0_msmt17')))
+    except SystemExit as error:
+        context.setdefault('notes', {})['body_identity'] = f'whole-body appearance is off: {error}'
+        return None
+    return await _open('RemoteEmbedder', (dict(entry['config']), context.get('worker_python') or entry.get('python')
+                                          or sys.executable, 'body.embedding'))
+
+
+async def _person_binding(options, context):
+    """Who each track is (gamst/providers/person_binding.py): face + whole-body appearance against every enrolled person."""
+    from ..providers.person_binding import PersonBinding
+    arguments = {name: options[name] for name in ('face_threshold', 'face_reject', 'body_threshold', 'margin',
+                                                  'face_every_ms', 'body_every_ms', 'lost_ms') if name in options}
+    face = await face_embedder(options, context)
+    try:
+        body = await body_embedder(options, context)
+    except BaseException:
+        await face.close()
+        raise
+    references = options.get('references') or [options.get('reference', 'person')]
+    module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
+    return dict(module=module, spec=module.spec)
 
 
 async def _target_person(options, context):
@@ -882,6 +910,8 @@ def parts(Part):
         'coincidence': Part('module', build=_coincidence),
         'voice-channels': Part('module', build=_voice_channels),
         'target-person': Part('module', role='vision.face_identity', candidate='lvface.b', build=_target_person),
+        'person-binding': Part('module', role='vision.face_identity', candidate='lvface.b', build=_person_binding,
+                               extra_roles=(('body_candidate', 'vision.body_identity', 'osnet.ain_x1_0_msmt17'),)),
         'sapiens2-pose': Part('module', role='vision.pose', candidate='sapiens2.1b', build=_sapiens2_pose),
         'rtmw-pose': Part('module', role='vision.pose', candidate='rtmw.l_384x288', build=_rtmw_pose),
         'active-speaker': Part('module', role='vision.active_speaker', candidate='lightasd.ava', build=_active_speaker),

@@ -7,8 +7,8 @@ For every visible person it scores
 - the **face** (LVFace, MIT code and weights): a 112x112 crop aligned to the ArcFace 5-point template
   with the eye, nose and mouth-corner keypoints the pose model already gives, then cosine against the
   enrolled face centroid;
-- the **body** (SOLIDER Swin-B re-ID, Apache-2.0): a 384x128 crop of the pose box, cosine against the
-  enrolled body centroid and the body embeddings collected this session while the face confirmed the
+- the **body** (whole-body appearance, person re-ID: OSNet-AIN, MIT, :class:`ReIDEmbedder`): a crop of the pose box,
+  cosine against the enrolled body centroid and the body embeddings collected this session while the face confirmed the
   person (clothing changes between sessions, so body re-ID is short-horizon glue between face
   confirmations, never the primary identity).
 
@@ -143,7 +143,7 @@ def body_box(bbox, width, height, *, pad=.1):
     return (x0, y0, x1, y1) if x1 - x0 >= 8 and y1 - y0 >= 16 else None
 
 
-def body_crop(image, bbox, *, pad=.1, size=(128, 384)):
+def body_crop(image, bbox, *, pad=.1, size=(128, 256)):
     """BGR crop of the person resized to ``size`` (width, height), or None for a tiny box."""
     import cv2
     height, width = image.shape[:2]
@@ -224,83 +224,42 @@ class LVFaceEmbedder:
         return [float(v) for v in output.reshape(-1)]
 
 
-class SOLIDERBodyEmbedder:
-    """SOLIDER-REID Swin (tinyvision/SOLIDER-REID, MIT; SOLIDER backbone Apache-2.0): person crop -> 1024-d.
+class ReIDEmbedder:
+    """Whole-body appearance (person re-ID) ONNX: a person crop -> an embedding, compared by cosine.
 
-    Built with the official ``make_model`` from a pinned source checkout and a fine-tuned re-ID
-    checkpoint (``load_param``). Three shims keep the 2023 code importable on torch 2.x without editing
-    it: ``torch._six.container_abcs`` (removed in torch 2) is provided from ``collections.abc``;
-    ``mmcv.runner.load_checkpoint`` (used only to load ImageNet/SOLIDER *pretraining*, which inference
-    from a fine-tuned checkpoint skips via ``MODEL.PRETRAIN_PATH ''``) raises if called; and the backbone
-    is called with an explicit ``semantic_weight`` tensor on the model's device (its default path calls
-    ``.cuda()``). The feature is the backbone's ``global_feat`` (``TEST.NECK_FEAT 'before'``), as in
-    the official test; it is L2-normalised by :func:`cosine`.
+    Default (registry ``vision.body_identity``): OSNet-AIN x1.0 trained on MSMT17 (KaiyangZhou/deep-person-reid,
+    code and weights MIT; weights on the authors' Hugging Face repo with a published sha256), converted once by
+    :mod:`gamst.providers.osnet_export`. Preprocessing follows torchreid's ``FeatureExtractor``: BGR -> RGB, a plain
+    resize to ``height`` x ``width`` (256 x 128), ``/ 255``, ImageNet mean and std. The 512-d feature is not normalised
+    by the model; :func:`cosine` does. Appearance is evidence about one video only (clothes change): the person
+    binding never trusts it across sessions (:mod:`gamst.person_reference`).
     """
 
-    SOURCE_REVISION = '8c08e1c3255e8e1e51e006bf189e52cc57b009ed'
+    MEAN, STD = (.485, .456, .406), (.229, .224, .225)
 
-    def __init__(self, model, model_id, device, semantic_weight):
-        self.model, self.model_id, self.device, self.semantic_weight = model, model_id, device, semantic_weight
-
-    @staticmethod
-    def _shims():
-        import collections.abc
-        import sys
-        import types
-        import torch
-        if not hasattr(torch, '_six') and 'torch._six' not in sys.modules:
-            six = types.ModuleType('torch._six')
-            six.container_abcs = collections.abc
-            six.string_classes = (str,)
-            six.int_classes = (int,)
-            sys.modules['torch._six'] = six
-        try:
-            from mmcv.runner import load_checkpoint  # noqa: F401  (mmcv < 2 installed: use it)
-        except ImportError:
-            def load_checkpoint(*args, **kwargs):
-                raise RuntimeError('SOLIDER pretraining weights are not loaded for inference')
-            mmcv = sys.modules.setdefault('mmcv', types.ModuleType('mmcv'))
-            runner = types.ModuleType('mmcv.runner')
-            runner.load_checkpoint = load_checkpoint
-            mmcv.runner = runner
-            sys.modules['mmcv.runner'] = runner
+    def __init__(self, session, model_id, *, height=256, width=128):
+        self.session, self.model_id, self.height, self.width = session, model_id, int(height), int(width)
+        self.input_name = session.get_inputs()[0].name
+        self.output_name = session.get_outputs()[0].name
 
     @classmethod
-    def from_local(cls, source, checkpoint, *, sha256=None, config='configs/msmt17/swin_base.yml',
-                   semantic_weight=.2, device='cuda'):
-        import os
-        import subprocess
-        import sys
-        source = os.path.abspath(source)
-        head = subprocess.run(['git', '-C', source, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-        if head != cls.SOURCE_REVISION:
-            raise ValueError(f'{source} must be tinyvision/SOLIDER-REID at {cls.SOURCE_REVISION}, found {head or "no git"}')
-        digest = _verify(checkpoint, sha256)
-        cls._shims()
-        if source not in sys.path:
-            sys.path.insert(0, source)
-        from config import cfg as base_cfg
-        from model import make_model
-        cfg = base_cfg.clone()
-        cfg.merge_from_file(os.path.join(source, config))
-        cfg.merge_from_list(['MODEL.SEMANTIC_WEIGHT', float(semantic_weight), 'MODEL.PRETRAIN_PATH', '',
-                             'TEST.WEIGHT', str(checkpoint), 'TEST.NECK_FEAT', 'before'])
-        model = make_model(cfg, num_class=1, camera_num=1, view_num=1, semantic_weight=cfg.MODEL.SEMANTIC_WEIGHT)
-        model.load_param(str(checkpoint))
-        model.eval().to(device)
-        return cls(model, f'solider-reid:{digest[:16]}', device, float(semantic_weight))
+    def from_local(cls, path, *, sha256=None, providers=None, height=256, width=128, name='osnet-ain'):
+        import onnxruntime
+        digest = _verify(path, sha256)
+        session = onnxruntime.InferenceSession(str(path), providers=providers or ['CPUExecutionProvider'])
+        return cls(session, f'{name}:{digest[:16]}', height=height, width=width)
 
     def embed(self, crop):
-        import torch
         np = _np()
         if crop is None:
             return None
-        tensor = ((crop[:, :, ::-1].astype(np.float32) / 255. - .5) / .5).transpose(2, 0, 1)[None]
-        with torch.inference_mode():
-            x = torch.from_numpy(np.ascontiguousarray(tensor)).to(self.device)
-            weight = torch.full((1, 1), self.semantic_weight, device=self.device)
-            feature, _ = self.model.base(x, semantic_weight=weight)
-        return [float(v) for v in feature.detach().cpu().reshape(-1).tolist()]
+        if crop.shape[:2] != (self.height, self.width):
+            import cv2
+            crop = cv2.resize(crop, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+        rgb = crop[:, :, ::-1].astype(np.float32) / 255.
+        tensor = ((rgb - np.array(self.MEAN, np.float32)) / np.array(self.STD, np.float32)).transpose(2, 0, 1)[None]
+        output = self.session.run([self.output_name], {self.input_name: np.ascontiguousarray(tensor, np.float32)})[0]
+        return [float(v) for v in output.reshape(-1)]
 
 
 async def enroll_person(face_embedder, body_embedder, images, poses, face_indices=MEDIAPIPE_FACE_POINTS):

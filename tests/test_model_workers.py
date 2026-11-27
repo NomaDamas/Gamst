@@ -223,7 +223,7 @@ class RegistryPinTest(unittest.TestCase):
     def test_manual_and_licence_bound_candidates_are_never_applied(self):
         for role, name in (('audio.target_speech', 'usef.tfgridnet'), ('vision.pose', 'sapiens2.5b'),
                            ('audio.speaker_verify', 'wespeaker.w2vbert2_mfa_voxblink2'),
-                           ('vision.body_identity', 'solider.swin_b_msmt17'),
+                           ('vision.body_identity', 'osnet.ain_x1_0_msmt17'),
                            ('vision.semantic_scene', 'qwen3.8-flash.hosted')):
             self.assertFalse(ROLES[role].candidates[name].automatic)
         for role in ROLES.values():

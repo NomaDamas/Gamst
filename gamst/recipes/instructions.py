@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import threading
 
 from ..movement_finder import movement_text
@@ -32,6 +33,7 @@ PERSONAL = ('voice', 'person', 'face', 'body')
 COUNTERS = dict(terms='terms', exemplar='exemplar')     # part -> the kind of reference it reads
 VIDEO, SOUND, SAMPLES = ('.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'), ('.wav',), ('.csv', '.jsonl', '.ndjson')
 SOURCES = ('terms', 'file', 'proposals', 'rule', 'clips')
+PHOTOS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 
 def _media(head):
@@ -109,9 +111,24 @@ class Instructions:
             shown.append(entry)
         changes = [dict(change, known_ms=known) for known, change in pipeline.human.instruction_changes()][-32:]
         return dict(recipe=self.raw['name'], instructions=shown, changes=changes, preparing=self._busy is not None,
-                    owner_only=sorted({item['kind'] for item in self.raw.get('references', ()) if item['kind'] in PERSONAL}),
+                    owner_only=sorted({item['kind'] for item in self.raw.get('references', ()) if item['kind'] in PERSONAL} - {'person'}),
+                    persons=self._persons(),
                     clips=await asyncio.to_thread(self._files), proposals=self.proposals is not None,
                     actor='set_by is what each caller said of itself; GAMST does not verify it')
+
+    def _persons(self):
+        """The enrolled persons ``who`` may name: name, reference, what identifies them here (no embeddings)."""
+        from ..person_reference import check, name_of
+        binding = self._binding()
+        shown = []
+        for key, item in self.pipeline.references.items():
+            if item['kind'] != 'person':
+                continue
+            verdict = check(item['value'], session=getattr(binding, 'session', None))
+            shown.append(dict(name=name_of(item['value'], key), reference=key, usable=verdict['ok'], basis=verdict['basis'],
+                              bound=binding is not None and name_of(item['value'], key) in [p.name for p in binding.persons],
+                              **({'problems': verdict['problems']} if verdict['problems'] else {})))
+        return shown
 
     def _files(self):
         found, walked = [], 0
@@ -270,15 +287,27 @@ class Instructions:
     # ------------------------------------------------------------------ changes
 
     async def set(self, kind, *, reference=None, terms=None, file=None, proposals=None, rule=None, clips=None, negatives=None,
-                  mode=None, text=None, actor=OWNERS[0], patterns=False):
+                  mode=None, text=None, actor=OWNERS[0], patterns=False, who=None):
         """Set or replace the words or the movement of ``reference``: exactly one of ``terms``, ``file``, ``proposals``
-        (IDs the owner confirmed), ``rule`` (with ``text``) or ``clips`` (with ``negatives``, ``mode``, ``text``)."""
+        (IDs the owner confirmed), ``rule`` (with ``text``) or ``clips`` (with ``negatives``, ``mode``, ``text``).
+
+        ``who`` (a movement only): count it for that enrolled person (events whose ``who`` is the person). Refused before
+        anything changes, in the same words as the command line and the HUD, without a person reference that passes
+        :func:`gamst.person_reference.check`. With ``who`` and no source, the current movement is kept and only who
+        changes."""
         if actor not in OWNERS:
             raise ValueError(f'actor must be one of {OWNERS}')
         name = self._name(kind, reference)
         given = dict(terms=terms, file=file, proposals=proposals, rule=rule, clips=clips)
         source = [key for key in SOURCES if given[key] is not None]
         allowed = ('terms', 'file', 'proposals') if kind == 'terms' else SOURCES[1:]
+        if who is not None:
+            self._who(who, kind, name)
+            current = self.pipeline.references.get(name)
+            if not source and not negatives and current is not None and isinstance(current.get('value'), dict):
+                value = dict(current['value'], who=who)
+                result = await self._apply(name, kind, value, label=current.get('label') or name, set_by=actor, source='who')
+                return dict(result, who=who, confirmed=value.get('confirmed', True))
         if len(source) != 1 or source[0] not in allowed or negatives and source != ['clips']:
             raise ValueError(f"{kind}: give exactly one of {', '.join(allowed)}" + (' (negatives go with clips)' if negatives else ''))
         if proposals is not None and (type(proposals) is not list or not 1 <= len(proposals) <= MAX_IDS):
@@ -296,12 +325,114 @@ class Instructions:
             else:
                 value = await self._movement(file=file, proposals=proposals, rule=rule, clips=clips, negatives=negatives,
                                              mode=mode, text=text, actor=actor)
+            if kind == 'exemplar' and isinstance(value, dict):
+                value = dict(value, who=who) if who is not None else {key: item for key, item in value.items() if key != 'who'}
             label = value.get('label') if isinstance(value, dict) else None
             label = label or text or (', '.join(value['terms'])[:100] if kind == 'terms' and isinstance(value, dict) else None)
             result = await self._apply(name, kind, value, label=label or name, set_by=actor, source=source[0])
         except SystemExit as error:
             raise ValueError(str(error)) from None
-        return dict(result, confirmed=value.get('confirmed', True) if isinstance(value, dict) else True)
+        return dict(result, confirmed=value.get('confirmed', True) if isinstance(value, dict) else True,
+                    **({'who': who} if who is not None else {}))
+
+    # ------------------------------------------------------------------ who (a person, few-shot only)
+
+    def _binding(self):
+        from ..providers.person_binding import PersonBinding
+        return next((entry['module'] for entry in self.pipeline.modules.values()
+                     if isinstance(entry['module'], PersonBinding)), None)
+
+    def _who(self, who, kind, name=None):
+        """Refuse ``who`` (ValueError with :func:`gamst.person_reference.refusal`) unless a checked person reference of
+        that name is in this run and a person binding and a per-track counter use it."""
+        from ..person_reference import hud_line, refusal, require
+        if not isinstance(who, str) or not 1 <= len(who) <= 128:
+            raise ValueError('who is the name of an enrolled person (1..128 characters)')
+        binding = self._binding()
+        problems = []
+        if kind != 'exemplar':
+            problems.append('who is given for a movement; words are tied to a person by the enrolled voice '
+                            '(person-term-count with --voice)')
+        elif binding is None:
+            problems.append('this run has no person_binding module: the owner starts it with --person P.json')
+        elif name is not None and not all(hasattr(entry['module'], 'wanted') for entry in self.pipeline._reading(name).values()):
+            problems.append('this run counts one target person (--with target_person); who needs the per-track counter')
+        try:
+            if not problems:
+                require(who, self.pipeline.references, session=binding.session)
+                if who not in [person.name for person in binding.persons]:
+                    problems.append('the person reference is not bound in this run')
+        except ValueError as error:
+            self.pipeline.notes = dict(getattr(self.pipeline, 'notes', None) or {}, who_refused=hud_line(who))
+            raise
+        if problems:
+            self.pipeline.notes = dict(getattr(self.pipeline, 'notes', None) or {}, who_refused=hud_line(who, problems))
+            raise ValueError(refusal(who, problems))
+        (getattr(self.pipeline, 'notes', None) or {}).pop('who_refused', None)
+
+    async def enroll_person(self, *, name, consent, images=None, video=None, camera_seconds=None, actor=OWNERS[0]):
+        """A person reference from photos or a video range in the owner's folders, or from the next seconds of this run's
+        camera (one person in view); checked like ``gamst recipe enroll --kind person``, saved (embeddings only, mode 600)
+        in the first ``--clips`` folder and added to this run's person binding, so ``who`` can name the person."""
+        from . import enrollment
+        from ..person_reference import refusal
+        if actor not in OWNERS:
+            raise ValueError(f'actor must be one of {OWNERS}')
+        if not isinstance(name, str) or not re.fullmatch(r'[^\x00-\x1f/\\]{1,64}', name) or name.startswith('.'):
+            raise ValueError('name: 1..64 characters, no slash or control characters')
+        if not isinstance(consent, str) or not consent.strip():
+            raise ValueError(refusal(name, ['no consent record (who consented, to what, when)']))
+        if sum(item is not None for item in (images, video, camera_seconds)) != 1:
+            raise ValueError('give exactly one of images, video ({file, start_s, end_s}) or camera_seconds')
+        if self._busy is not None:
+            raise ValueError('another instruction is being prepared; try again when list_instructions says it is not')
+        binding = self._binding()
+        if binding is None:
+            raise ValueError(refusal(name, ['this run has no person_binding module: the owner starts it with --person P.json']))
+        if not self.folders:
+            raise ValueError('no folder to save the person reference in: the owner starts the run with --clips DIR')
+        record = enrollment.consent_record(consent)
+        out = self.folders[0] / (re.sub(r'[^\w.-]', '_', name) + '.person.json')
+        if camera_seconds is not None:
+            if type(camera_seconds) not in (int, float) or not 1 <= camera_seconds <= 10:
+                raise ValueError('camera_seconds: 1..10')
+            found = await binding.collect(float(camera_seconds))
+            value = enrollment.person_value(name, self.recipe, binding.face, binding.body, found, record,
+                                            session=binding.session, origin=dict(kind='camera', seconds=float(camera_seconds),
+                                                                                 skipped_crowded=found['skipped']))
+            if not value['quality']['ok']:
+                raise ValueError(refusal(name, value['quality']['problems']))
+            await asyncio.to_thread(enrollment._save, out, value)
+        else:
+            options = dict(name=name, consent=consent, out=str(out), voice_file=None, camera=None, iphone=None, take=None,
+                           microphone=False, input=None, sensor=None, audio=None, image=[], video=None, start=0., seconds=None)
+            if images is not None:
+                if type(images) is not list or not 1 <= len(images) <= 16:
+                    raise ValueError('images: 1..16 files')
+                options['image'] = [str(self._inside(item, PHOTOS, MAX_FILE * 8)) for item in images]
+            else:
+                if type(video) is not dict or set(video) - {'file', 'start_s', 'end_s'}:
+                    raise ValueError('video is {file, start_s, end_s}')
+                clip = self._clip(dict(video, file=video.get('file')), dict(use='camera'))
+                start = clip.start_s or 0.
+                end = clip.end_s if clip.end_s is not None else start + 10.
+                options.update(video=clip.path, start=start, seconds=end - start)
+            value = await self._enrolled(lambda: self._enroll_person(**options))
+        reference = f'person_{len([1 for item in self.pipeline.references.values() if item["kind"] == "person"]) + 1}'
+        self.pipeline.add_reference(reference, 'person', value, label=name, consent=record)
+        binding.set_references({**binding._values, reference: value})
+        quality = value['quality']
+        return dict(name=name, reference=reference, file=str(out.relative_to(self.folders[0])), basis=quality['basis'],
+                    faces=quality['face']['n'], bodies=quality['body']['n'], face_agreement=quality['face']['mean'],
+                    body_agreement=quality['body']['mean'], session_only=quality['session_only'], set_by=actor,
+                    note='embeddings only; images and frames are not kept')
+
+    def _enroll_person(self, **options):
+        from . import build_pipeline, installed
+        from .enrollment import enroll_person
+        args = argparse.Namespace(**{**vars(self.args), **options})
+        context = dict(installed=lambda item: installed(self.recipe, item, getattr(args, 'profile', None)))
+        return asyncio.run(enroll_person(self.recipe, args, build_pipeline=build_pipeline, context=context))
 
     async def remove(self, reference, *, actor=OWNERS[0]):
         if actor not in OWNERS:

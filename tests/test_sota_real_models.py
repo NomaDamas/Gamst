@@ -3,7 +3,7 @@
 GAMST_TEST_WESPEAKER=<model dir>            GAMST_TEST_WESEP=<model dir>
 GAMST_TEST_USEF=<source>:<checkpoint>       GAMST_TEST_QWEN_ALIGNER=<snapshot dir>
 GAMST_TEST_WHISPER=<faster-whisper dir>     GAMST_TEST_LVFACE=<onnx>
-GAMST_TEST_SOLIDER=<source>:<checkpoint>    GAMST_TEST_SAPIENS2=<pose dir>:<detr dir>
+GAMST_TEST_REID=<onnx>                      GAMST_TEST_SAPIENS2=<pose dir>:<detr dir>
 GAMST_TEST_PERSON_IMAGE=<image of a person> GAMST_TEST_DEVICE=cpu|mps|cuda (default cpu)
 GAMST_TEST_RTMW=<rtmw onnx>:<yolox onnx>    GAMST_TEST_RTMW_DEVICE=cpu|coreml (default cpu)
 
@@ -32,7 +32,7 @@ USEF, usef = given('USEF')
 ALIGNER, aligner = given('QWEN_ALIGNER')
 WHISPER, whisper = given('WHISPER')
 LVFACE, lvface = given('LVFACE')
-SOLIDER, solider = given('SOLIDER')
+REID, reid = given('REID')
 SAPIENS2, sapiens2 = given('SAPIENS2')
 RTMW, rtmw = given('RTMW')
 IMAGE = os.environ.get('GAMST_TEST_PERSON_IMAGE')
@@ -91,11 +91,13 @@ class RealModelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model.embed(face)), 512)
         np.testing.assert_allclose(model.embed(face), model.embed(face), rtol=1e-4)
 
-    @SOLIDER
-    def test_solider(self):
-        from gamst.providers.person_match import SOLIDERBodyEmbedder
-        model = SOLIDERBodyEmbedder.from_local(solider[0], solider[1], device=DEVICE)
-        self.assertEqual(len(model.embed(np.zeros((384, 128, 3), np.uint8))), 1024)
+    @REID
+    def test_reid(self):
+        from gamst.providers.person_match import ReIDEmbedder
+        model = ReIDEmbedder.from_local(reid[0])
+        crop = np.random.default_rng(0).integers(0, 255, (256, 128, 3), np.uint8)
+        self.assertEqual(len(model.embed(crop)), 512)
+        np.testing.assert_allclose(model.embed(crop), model.embed(crop), rtol=1e-4)
 
     @SAPIENS2
     @unittest.skipUnless(IMAGE, 'set GAMST_TEST_PERSON_IMAGE')
