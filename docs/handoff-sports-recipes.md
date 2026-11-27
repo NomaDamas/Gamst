@@ -45,6 +45,33 @@ Not usable as shipped: roboflow/sports YOLOv8 weights (AGPL), sn-gamestate (GPL-
 TTNet and most tennis repos (no licence), GolfDB (CC BY-NC). PnLCalib weights are CC BY 4.0 but the code is GPL-2+.
 No maintained, benchmarked pose-vs-reference OSS was found; GAMST's `exemplar` DTW covers it.
 
-## 4. Proposal sent to the owner (not yet approved)
+## 4. Owner direction (2026-11-27)
 
-See the session briefing; recorded here once the owner decides.
+- Accepted: a sports category of generic parts; per sport, an agent composes the parts or a recipe pipeline is shipped.
+  All sports proposed, framed as "what 1 fps misses" and efficiency.
+- Use parts of existing datasets (no own filming for now). Local disk is short: free space or use GCP (not decided).
+- Licence is not a selection criterion (general open source, not commercial): choose by measured accuracy.
+
+## 5. Detector facts (authors' numbers, T4 TensorRT; not measured on this Mac)
+
+| Model | COCO AP | T4 latency | Licence |
+|---|---|---|---|
+| YOLO26 n / s / m | 40.9 / 48.6 / 53.1 | 1.7 / 2.5 / 4.7 ms (CPU ONNX n 39 ms) | AGPL-3.0 |
+| RF-DETR N / S / M / L | 48.4 / 53.0 / 54.7 / 56.5 | 2.3 / 3.5 / 4.4 / 6.8 ms | Apache-2.0 |
+| D-FINE X (Obj365) | 59.3 | 12.9 ms | Apache-2.0 |
+| SAM 3 | concept segmentation, not a COCO detector | ~30 ms per image on H200, 848M params | SAM License |
+
+RF-DETR's README re-benchmarks YOLO with its own protocol (YOLO26-N 40.3); cross-README numbers are not equal footing.
+
+## 6. Datasets with event labels (local evaluation only, never redistributed)
+
+| Sport | Dataset | Licence | Events |
+|---|---|---|---|
+| Table tennis | OpenTTGames | CC BY-NC-SA 4.0, per-video download (~35 GB total) | bounce / net per frame |
+| Tennis | TrackNet V1 | none stated | hit / bounce per frame |
+| Badminton | ShuttleSet (+ TrackNetV2 videos) | nv | stroke times |
+| Fitness | RepCount-A | none stated | rep start/end |
+| Gymnastics | FineGym | annotations CC BY-NC 4.0, videos YouTube | element start/end |
+| Diving | FineDiving | signed release agreement | step transitions |
+| Soccer | SoccerNet | NDA | ball actions, tracking |
+| Team MOT | SportsMOT | CC BY-NC 4.0 | player boxes + IDs |
