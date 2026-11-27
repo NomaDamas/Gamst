@@ -257,7 +257,7 @@ The owner's request: build the sports analysis Ultralytics claims as a recipe ca
 | CI on PR #373 | fixed: shared frame memory imported numpy for every frame; the core CI job has no numpy. After the fix the failures equal Main's (32), plus motion-provider, which also fails on Main (no tests ran) |
 | one-model movement counting, no skips, L2 correction, realtime / post, memory budget | in progress, PR #373 |
 | Sapiens2 1B opt-in | downloaded (5.7 GB); measured runs in progress (an fp32 profile took free memory to 1-6% and the guard stopped it) |
-| person few-shot enforcement, face + appearance, photo enrollment, LVFace-B (455 MB), `person_binding`, `enroll_person` | built (Draft PR on `feat/person-identity`, against PR #373); consistency and timing measured on two testbed clips; accuracy waits for the owner's labelled multi-person clips |
+| person few-shot enforcement, face + appearance, photo enrollment, LVFace-B (455 MB), `person_binding`, `enroll_person` | built (Draft PR #374 on `feat/person-identity`, against PR #373). The binding runs with nobody enrolled, so MCP can enroll mid-run. Faces are scored beside the pose lane, never in it. Tracker swaps are continued by box overlap. Realtime keeps up with 0 pose frames lost. Accuracy waits for the owner's labelled multi-person clips; the appearance threshold 0.8 is provisional. |
 | `compose_recipe`, semantic causal state chain | next |
 | conversational demo (LLM answers only through GAMST MCP) | after the above |
 | sports recipes | separate PR (`feat/sports-recipes`) |
