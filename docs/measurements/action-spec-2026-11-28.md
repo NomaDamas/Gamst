@@ -314,5 +314,5 @@ models and person file), recorded again, and scored the same way. `try-it/testbe
 | 관제탑 (rule + 7 examples, count = both) | 58 / 58 | 58 | 29 / 31 / 39 (P 93.5 %, R 74.4 %), as the replay | 46 / 51 / 61, as the replay |
 | 맨까송 (punch rule) | 52 / 54 | 52 | 6 / 10 / 16 (P 60 %, R 37.5 %), as the replay | 12 / 26 / 16 (replay 12 / 27) |
 
-On 맨까송 the replay has 2 events more than the run (one punch-length event pair at a rate threshold, the dump's
-rounding, as in the first check). The person binding of the second run gave the same 감스트 numbers.
+On 맨까송 the replay has 2 events more than the run (one matched + ended pair; not traced one by one; the first check
+found differences of this size from the dump's 4-decimal rounding at a rate threshold). The person binding of the second run gave the same 감스트 numbers.
