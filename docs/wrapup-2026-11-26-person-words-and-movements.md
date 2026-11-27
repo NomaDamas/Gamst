@@ -8,10 +8,11 @@
   ③ 규칙 파일.
   결과는 횟수와 **행동마다 시작·끝 시각**, 근거다. 감스트 샷건(①, 글 묘사 → 규칙): 16/16, 시각 오차 평균 9 ms.
   **실시간(PR #373, 사장님 결정 37~42):** 가장 정확한 모델 하나(RTMW-l)가 모든 프레임을 직접 센다. 검증 레인·애매함·건너뛰기는 없앴다.
-  배치(최대 8프레임)·고정 크기 CoreML 세션·예열로 60 fps 720p에서 프레임당 14 ms(실시간 계수 0.93): `--as-live` 3회와 첫 실행 모두
-  16/16, 건너뛴 프레임 0, 잃은 프레임 0, 지연 p50 0.19~0.24초(최대 0.30초). 후처리(`--timing post`) 60 fps·30 fps 16/16.
-  못 따라가면 밀린 구간을 같은 모델의 L2가 보정(늦게 센 것은 correction 표시)한다. 시작할 때 속도를 재서 못 따라가면 MediaPipe full로
-  바꾸고 그 사실을 알린다. 측정: `measurements/testbed-2026-11-26.md` "One model, every frame".
+  배치(최대 8프레임)·고정 크기 CoreML 세션·예열로 60 fps 720p에서 프레임당 14 ms(실시간 계수 0.93). `--as-live`/`--realtime`
+  60 fps 7회·30 fps 6회 모두 16/16, 건너뛴 프레임 0, 잃은 프레임 0, 지연 p50 60 fps 0.19~0.24초 / 30 fps 0.02~0.03초.
+  후처리(`--timing post`) 60·30 fps 16/16. 일부러 느리게 만들면(밀림) 같은 모델의 L2가 밀린 구간을 보정한다(늦게 센 것은
+  correction 표시): 고친 뒤 5회 모두 16/16, 중복 0, 보정 지연 p50 1.6~4.7초. 시작할 때 속도를 재서 못 따라가면 MediaPipe full로
+  바꾸고 알린다. few-shot(RTMW로 등록) 14/16(2.05, 2.47 놓침). 측정: `measurements/testbed-2026-11-26.md` "One model, every frame".
 - **단어:** 지정한 단어를 **몇 번 말했는지와 각 단어의 구간**을 실시간으로 찾는다(말한 뒤 약 0.7초에 카운트). 철자 변형·낱말 단위·반복 수(달달달 = 3)를 지원한다.
 - **누가 말했나:** 지정한 사람의 목소리 샘플(few-shot: 같은 마이크로 미리 녹음 / 파일 / 같은 녹음의 구간 / 자동 주인공)로 그 사람이 말한 것만 센다. 기준 품질을 검사한다. 사장님 라벨 4개 영상: 33개 중 30개 맞음, 틀림 3개.
 - **모드:** 세기(count, 기본) / 찾기(search, 놓치지 않게 넉넉히 세고 후보와 이유를 함께 줌).
@@ -26,7 +27,7 @@
 
 | capability | how it is specified | what comes back | measured |
 |---|---|---|---|
-| Count a movement and find each occurrence | text (zero-shot: an LLM writes a rule over pose joints), example clips (few-shot), or a rule file | count, each occurrence's start/end capture time, its evidence | shotgun clip (text → rule): 16/16, mean time error 9 ms. One model (RTMW-l) over every frame (PR #373): post 16/16 at 60 and 30 fps; live (`--as-live`, 60 fps) 16/16 in 4 of 4 runs, 0 skipped, 0 lost, latency p50 0.19-0.24 s, 14 ms per frame (real-time factor 0.93); frames the live lane cannot reach are counted late by L2 with the same model (`testbed-2026-11-26.md`) |
+| Count a movement and find each occurrence | text (zero-shot: an LLM writes a rule over pose joints), example clips (few-shot), or a rule file | count, each occurrence's start/end capture time, its evidence | shotgun clip (text → rule): 16/16, mean time error 9 ms. One model (RTMW-l) over every frame (PR #373): post 16/16 at 60 and 30 fps; live and realtime 16/16 in 13 of 13 runs (60 and 30 fps), 0 skipped, 0 lost, latency p50 0.19-0.24 s (60 fps) / 24-26 ms (30 fps), 14 ms per frame at 60 fps (real-time factor 0.93); forced backlog: L2 corrections, 16/16 in 5 of 5 after a fix; few-shot 14/16 (`testbed-2026-11-26.md`) |
 | Count a word and find each occurrence | words, spellings, `re:` patterns, whole-word `word:W` / repetitions `word:W*`, flags (`#may_be_number`) | count, each word's capture time, which recognisers heard it, state | words heard 45/46 on four clips; word → HUD ~0.7 s p50 (partials) |
 | Only one person's words | voice few-shot: `--record-voice-first N` (same microphone, live), `--voice-wav`, `--voice-range`, automatic main speaker; quality check with fallback | each word's speaker decision and reason | four owner-labelled clips: 30/33 right, 3 wrong (v8) |
 | Search instead of count | `--mode search`: recall first, candidates with reasons | candidates incl. uncertain ones, each with its reason | 뽀또: recall 78 % → 89 %, precision 78 % → 53 %; four clips 31 right (count mode 30) |
