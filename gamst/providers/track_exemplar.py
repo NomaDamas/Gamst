@@ -40,7 +40,7 @@ class TrackExemplar(ExemplarEvents):
             self.spec.id, 'temporal.exemplar_events', self.spec.modality, 'gamst.exemplar_events', '3.tracks',
             (*self.spec.fields, OutputField('count_all', 'integer', required=False),
              OutputField('who', 'string', required=False), OutputField('by_who', 'object', required=False),
-             OutputField('tracks', 'integer', required=False)),
+             OutputField('tracks', 'integer', required=False), OutputField('by_person', 'object', required=False)),
             'native', stateful=True, reset_on_gap=True, freshness_ms=self.max_gap_ms, interpretation='estimate',
             devices=('cpu',), license='Apache-2.0')
         self._options = dict(options)
@@ -92,18 +92,20 @@ class TrackExemplar(ExemplarEvents):
             if item.get('event') == 'person.bound':
                 self.bindings.tracks.setdefault(item['track_id'], dict(first_ms=item['start_ms'], last_ms=item['end_ms'],
                                                                        who=None, from_ms=None, by=None, bound_before=True))
-                self.bindings.tracks[item['track_id']].update(who=item['who'], from_ms=item['start_ms'], by=item.get('by'))
+                self.bindings.tracks[item['track_id']].update(who=item['who'], from_ms=item['start_ms'], by=item.get('by'),
+                                                              person_id=item.get('person_id'))
             elif item.get('event') == 'person.unbound' and item.get('track_id') in self.bindings.tracks:
-                self.bindings.tracks[item['track_id']].update(who=None, from_ms=None, by=None)
+                self.bindings.tracks[item['track_id']].update(who=None, from_ms=None, by=None, person_id=None)
         del self._binding_events[:-MAX_EVENTS_KEPT]
 
-    def by_who(self):
+    def by_who(self, key='who'):
         """Counts per person, resolved from the bindings (retroactive); one action of a person counted on two tracks
-        within ``SAME_EVENT_MS`` counts once (:class:`PersonOnce`)."""
-        intervals = intervals_of(self._binding_events)
+        within ``SAME_EVENT_MS`` counts once (:class:`PersonOnce`). ``key='person_id'``: per person id (named or
+        not; ``unknown`` for tracks nobody was bound to)."""
+        intervals = intervals_of(self._binding_events, key=key)
         counts, once = {}, PersonOnce()
         for track, end_ms in sorted(self._counted, key=lambda item: item[1]):
-            who = resolve(dict(track_id=track, end_ms=end_ms), intervals)
+            who = resolve(dict(track_id=track, end_ms=end_ms), intervals, key) or UNKNOWN
             if once.fresh(who, track, end_ms):
                 counts[who] = counts.get(who, 0) + 1
         return counts
@@ -156,7 +158,9 @@ class TrackExemplar(ExemplarEvents):
         tagged = []
         for item in events:
             who = self.bindings.who(track) or UNKNOWN
-            item = dict(item, track_id=track, who=who, track_index=item.get('index'))
+            person = (self.bindings.tracks.get(track) or {}).get('person_id')
+            item = dict(item, track_id=track, who=who, track_index=item.get('index'), **({'person_id': person}
+                                                                                          if person else {}))
             if item['event'] == 'exemplar.matched':
                 self._count += 1
                 self._counted.append((track, item['end_ms']))
@@ -171,7 +175,8 @@ class TrackExemplar(ExemplarEvents):
         everyone = sum(counts.values())
         wanted = self.wanted
         value = dict(status='matching' if any(counter._inside for counter in self._tracks.values()) else 'watching',
-                     events=events, tracks=len(self._tracks), by_who=dict(list(counts.items())[:16]), **self.identity)
+                     events=events, tracks=len(self._tracks), by_who=dict(list(counts.items())[:16]),
+                     by_person=dict(list(self.by_who('person_id').items())[:32]), **self.identity)
         if distance is not None:
             value['distance'] = round(distance, 5)
         if wanted is not None:

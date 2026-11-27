@@ -93,10 +93,19 @@ class TrackBindings:
     ``start_ms`` of the same person), a retroactive start never reaches back to or before the end of any earlier
     binding of the person, and binding a person moves them off the track that holds them."""
 
-    def __init__(self):
-        self.tracks = {}       # track -> {first_ms, last_ms, prev_ms, who, from_ms, by, bound_before}
+    def __init__(self, names=None):
+        self.tracks = {}       # track -> {first_ms, last_ms, prev_ms, who, from_ms, by, bound_before}; who: a person id
         self.closed = []       # finished intervals {track_id, who, from_ms, to_ms, by}
-        self.released = {}     # who -> when their latest binding ended (the end of every earlier one, at the latest)
+        self.released = {}     # person -> when their latest binding ended (the end of every earlier one, at the latest)
+        self.names = {} if names is None else names     # person id -> name (None: not named); not listed: the id is the name
+
+    def name(self, person):
+        """The ``who`` of a person id: its name, :data:`UNKNOWN` for a person not named yet."""
+        return (self.names[person] or UNKNOWN) if person in self.names else person
+
+    def _event(self, kind, track, person, **fields):
+        return dict(event=kind, track_id=track, who=self.name(person), **({'person_id': person} if person in self.names
+                                                                         else {}), **fields)
 
     def seen(self, track, ts):
         state = self.tracks.setdefault(track, dict(first_ms=ts, last_ms=ts, prev_ms=None, who=None, from_ms=None,
@@ -133,8 +142,8 @@ class TrackBindings:
         start = min(start, ts)
         retroactive = start < ts
         state.update(who=who, from_ms=start, by=by, bound_before=True)
-        event = dict(event='person.bound', track_id=track, who=who, start_ms=start, end_ms=ts, by=by,
-                     retroactive=retroactive, **{key: round(value, 5) for key, value in scores.items() if value is not None})
+        event = self._event('person.bound', track, who, start_ms=start, end_ms=ts, by=by, retroactive=retroactive,
+                            **{key: round(value, 5) for key, value in scores.items() if value is not None})
         return [*events, event] if events else event
 
     def unbind(self, track, ts, reason, *, before=False):
@@ -151,46 +160,60 @@ class TrackBindings:
         end = max(state['from_ms'] - 1, end)
         self.released[state['who']] = max(end, self.released.get(state['who'], end))
         self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=end, by=state['by']))
-        event = dict(event='person.unbound', track_id=track, who=state['who'], start_ms=state['from_ms'], end_ms=end,
-                     reason=reason)
+        event = self._event('person.unbound', track, state['who'], start_ms=state['from_ms'], end_ms=end, reason=reason)
         state.update(who=None, from_ms=None, by=None)
         return event
 
-    def forget(self, track):
+    def forget(self, track, reason='track_lost'):
         """The track is lost: its binding ends at its last frame."""
         state = self.tracks.get(track)
-        event = self.unbind(track, state['last_ms'], 'track_lost') if state else None
+        event = self.unbind(track, state['last_ms'], reason) if state else None
         self.tracks.pop(track, None)
         return event
 
 
-def intervals_of(events):
-    """``{track_id: [(from_ms, to_ms or None, who)]}`` from ``person.bound`` / ``person.unbound`` events (in order)."""
-    found = {}
+def intervals_of(events, key='who', names=None):
+    """``{track_id: [(from_ms, to_ms or None, who)]}`` from ``person.bound`` / ``person.unbound`` events (in order).
+
+    ``key='person_id'``: the person ids instead (None for a binding without one). A ``person.named`` event names a
+    person id from then on *and before* (retroactive), and so does ``names`` ({person_id: name}, e.g. the owner's
+    naming in the label tool): ``who`` of every binding of that person is the name."""
+    found, named = {}, {}
     for item in events:
-        if not isinstance(item, dict) or not item.get('track_id'):
+        if not isinstance(item, dict):
+            continue
+        if item.get('event') == 'person.named' and item.get('person_id') and isinstance(item.get('who'), str):
+            named[item['person_id']] = item['who']
+            continue
+        if not item.get('track_id'):
             continue
         spans = found.setdefault(item['track_id'], [])
+        person = item.get('person_id') or item.get('who')
         if item.get('event') == 'person.bound':
             if spans and spans[-1][1] is None:
-                spans[-1] = (spans[-1][0], item['end_ms'], spans[-1][2])
-            spans.append((item['start_ms'], None, item['who']))
-        elif item.get('event') == 'person.unbound' and spans and spans[-1][1] is None and spans[-1][2] == item.get('who'):
-            spans[-1] = (spans[-1][0], item['end_ms'], spans[-1][2])
-    return found
+                spans[-1] = (spans[-1][0], item['end_ms'], *spans[-1][2:])
+            spans.append((item['start_ms'], None, item.get('who'), item.get('person_id'), person))
+        elif item.get('event') == 'person.unbound' and spans and spans[-1][1] is None and spans[-1][4] == person:
+            spans[-1] = (spans[-1][0], item['end_ms'], *spans[-1][2:])
+    named.update(names or {})
+    if key == 'person_id':
+        return {track: [(low, high, person) for low, high, _, person, _ in spans] for track, spans in found.items()}
+    return {track: [(low, high, named.get(person, who) if person else who) for low, high, who, person, _ in spans]
+            for track, spans in found.items()}
 
 
-def resolve(event, intervals):
+def resolve(event, intervals, key='who'):
     """Who did ``event`` (it carries ``track_id`` and a time): the binding of its track that covers its end (or
-    start) time, else what it said itself, else :data:`UNKNOWN`. A binding decided later reaches back (retroactive)."""
+    start) time, else what it said itself, else :data:`UNKNOWN` (``key='person_id'`` with person-id intervals: the
+    person id, else None). A binding decided later reaches back (retroactive)."""
     track = event.get('track_id') if isinstance(event, dict) else None
     at = event.get('end_ms', event.get('start_ms')) if isinstance(event, dict) else None
     if track is not None and type(at) in (int, float):
         for low, high, who in reversed(intervals.get(track, ())):
             if low <= at and (high is None or at <= high):
                 return who
-    own = event.get('who') if isinstance(event, dict) else None
-    return own if isinstance(own, str) and own else UNKNOWN
+    own = event.get(key) if isinstance(event, dict) else None
+    return own if isinstance(own, str) and own else (UNKNOWN if key == 'who' else None)
 
 
 SAME_EVENT_MS = 100     # as gamst.pipeline.SAME_EVENT_MS (the L2 safety net), keyed by person here
@@ -221,7 +244,7 @@ def binding_events(rows):
     for record in rows:
         value = (record.get('observation') or {}).get('value')
         for item in (value.get('events') if isinstance(value, dict) else None) or ():
-            if isinstance(item, dict) and item.get('event') in ('person.bound', 'person.unbound'):
+            if isinstance(item, dict) and item.get('event') in ('person.bound', 'person.unbound', 'person.named'):
                 found.append(item)
     return found
 
@@ -240,18 +263,58 @@ def seen_intervals(intervals, who, start_ms=None, end_ms=None):
     return sorted(shown, key=lambda item: item['start_ms'])
 
 
+def persons_of(events, *, start_ms=0, names=None):
+    """The persons of a run, for a reader that shows one row per person (e.g. the owner's label tool):
+    ``[{person_id, name, segments: [{track_id, start, end, start_ms, end_ms}]}]`` from its binding events (seconds
+    from ``start_ms``). A segment is one binding: a track while it was that person (a track is split where it changed
+    person and at scene cuts). ``names`` ({person_id: name}) names persons, also before (retroactive)."""
+    ids = intervals_of(events, key='person_id')
+    who = intervals_of(events, names=names)
+    found = {}
+    for track, spans in ids.items():
+        for (low, high, person), (_, _, name) in zip(spans, who[track]):
+            if person is None or high is not None and high < low:
+                continue
+            entry = found.setdefault(person, dict(person_id=person, name=None, segments=[]))
+            entry['name'] = name if name != UNKNOWN else entry['name']
+            entry['segments'].append(dict(track_id=track, start=round((low - start_ms) / 1000, 3),
+                                          end=None if high is None else round((high - start_ms) / 1000, 3),
+                                          start_ms=low, end_ms=high))
+    for entry in found.values():
+        entry['segments'].sort(key=lambda item: item['start_ms'])
+    order = lambda entry: (int(entry['person_id'][1:]) if entry['person_id'][1:].isdigit() else 10 ** 9, entry['person_id'])
+    return sorted(found.values(), key=order)
+
+
 # ---------------------------------------------------------------- the module
 
 class _Person:
-    def __init__(self, name, face, body, session_size):
+    """A person of the run: ``key`` is its person id (P1, P2, ...), ``name`` the enrolled or given name (None: not named).
+    An enrolled person has the reference's face (any video); every person has the faces this run bound to it."""
+
+    def __init__(self, key, name, face, body, session_size):
         from collections import deque
-        self.name = name
+        self.key, self.name = key, name
         self.face = centroid(face) if face else None
+        self.faces = deque(maxlen=session_size)            # faces of this run that bound the person
+        self._run_face = None
         self.body = centroid(body) if body else None       # this session's enrolled appearance only
         self.session = deque(maxlen=session_size)          # bodies seen while the face confirmed the person
 
+    def add_face(self, embedding):
+        self.faces.append(l2_normalize(embedding))
+        self._run_face = None
+
     def face_score(self, embedding):
-        return None if self.face is None or embedding is None else cosine(embedding, self.face)
+        """Against the enrolled face and against this run's faces of the person (the higher)."""
+        if embedding is None:
+            return None
+        scores = [cosine(embedding, self.face)] if self.face is not None else []
+        if self.faces:
+            if self._run_face is None:
+                self._run_face = centroid(list(self.faces))
+            scores.append(cosine(embedding, self._run_face))
+        return max(scores) if scores else None
 
     def body_score(self, embedding):
         if embedding is None:
@@ -345,8 +408,14 @@ class PersonBinding:
     def __init__(self, face=None, body=None, *, references=('person',), session=None, face_threshold=.35,
                  face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, confirm_every_ms=1000,
                  body_every_ms=500, lost_ms=5000, continue_ms=1000, continue_iou=.3, body_reject=.6, session_size=32,
-                 max_images=32, face_indices=MEDIAPIPE_FACE_POINTS):
-        """Without a face and a body model it binds nobody (no person can be enrolled into it either)."""
+                 max_images=32, face_indices=MEDIAPIPE_FACE_POINTS, anonymous=True, scene_cuts=True,
+                 appearance_across_cuts=False):
+        """Without a face and a body model it binds nobody (no person can be enrolled into it either).
+
+        ``anonymous``: every face that is nobody known yet starts a person of its own (P1, P2, ...), so everyone is
+        followed and can be named later. ``scene_cuts``: tracks are split at scene cuts (:mod:`.scene_cut`);
+        ``appearance_across_cuts``: whether appearance seen before a cut still binds after it (off: a cut may be
+        another recording, and appearance is trusted within one recording only)."""
         if not face_reject <= face_threshold:
             raise ValueError('require face_reject <= face_threshold')
         import secrets
@@ -362,13 +431,17 @@ class PersonBinding:
                           face_reject=face_reject, body_threshold=body_threshold, margin=margin,
                           face_every_ms=face_every_ms, confirm_every_ms=confirm_every_ms, body_every_ms=body_every_ms,
                           lost_ms=lost_ms, continue_ms=continue_ms, continue_iou=continue_iou, body_reject=body_reject,
-                          session_size=session_size, max_images=max_images, face_indices=self.face_indices)
+                          session_size=session_size, max_images=max_images, face_indices=self.face_indices,
+                          anonymous=anonymous, scene_cuts=scene_cuts, appearance_across_cuts=appearance_across_cuts)
+        self.anonymous, self.scene_cuts, self.appearance_across_cuts = bool(anonymous), bool(scene_cuts), \
+            bool(appearance_across_cuts)
         self.version = f"2.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
         self.spec = CapabilitySpec(
             CAPABILITY, CAPABILITY, 'video', 'gamst.person_binding', self.version,
-            (OutputField('tracks', 'array'), OutputField('bound', 'object'), OutputField('events', 'array')),
+            (OutputField('tracks', 'array'), OutputField('bound', 'object'), OutputField('events', 'array'),
+             OutputField('persons', 'object', required=False)),
             'frame', stateful=True, freshness_ms=1000, interpretation='estimate', devices=('cpu',), license='Apache-2.0')
-        self.persons, self._values = [], {}
+        self.persons, self._values, self._ids, self.names = [], {}, {}, {}     # names: person id -> name or None
         self.counts = dict(face_embeddings=0, body_embeddings=0, unpaired_images=0, frames=0, scored_frames=0)
         self.scorer = _Scorer(face, body)
         self.reset()
@@ -394,7 +467,7 @@ class PersonBinding:
     def set_references(self, values):
         """``{reference name: person reference value}``; embeddings of another face model are refused."""
         from ..person_reference import name_of
-        persons = []
+        persons, before = [], dict(self.names)
         for key, value in values.items():
             face, body = value.get('face') or [], value.get('body') or []
             if face and (self.face is None or value.get('face_model') != self.face.model_id):
@@ -403,36 +476,82 @@ class PersonBinding:
             if body and (self.body is None or value.get('body_model') != self.body.model_id
                          or value.get('session') is None or value.get('session') != self.session):
                 body = []      # another model, or clothes seen in another video: not trusted here
-            persons.append(_Person(name_of(value, key), face, body, self.session_size))
+            name = name_of(value, key)
+            given = (value.get('enrolled_from') or {}).get('person_id')     # enrolled from a person of this run
+            if given in self.names and self.names[given] in (None, name):
+                self._ids[name] = given
+            person_id = self._ids.setdefault(name, given if given in self.names else self._new_id())
+            persons.append(_Person(person_id, name, face, body, self.session_size))
         if persons and self.face is None and self.body is None:
             raise ValueError('person_binding has no face or body model set up: run gamst recipe setup')
         names = [person.name for person in persons]
         if len(set(names)) != len(names):
             raise ValueError(f"two person references have the same name: {', '.join(names)}")
-        kept = {person.name: person.session for person in self.persons}
-        for person in persons:          # a person added while the run goes on keeps the others' appearance glue
-            person.session.extend(kept.get(person.name, ()))
-        self.persons, self._values = persons, dict(values)
+        old = {person.key: person for person in self.persons}
+        for person in persons:          # a person added while the run goes on keeps the others' faces and glue
+            if person.key in old:
+                person.session.extend(old[person.key].session)
+                person.faces.extend(old[person.key].faces)
+            if person.key in before and before[person.key] != person.name:
+                self._named.append(person.key)      # a person of this run got their name (retroactive)
+            self.names[person.key] = person.name
+        keys = {person.key for person in persons}
+        anonymous = [person for person in self.persons if person.key not in keys and person.name is None]
+        self.persons[:], self._values = persons + anonymous, dict(values)     # in place: L2 forks share the persons
+        self.bindings.names = self.names
+
+    def _new_id(self):
+        number = 1 + max((int(key[1:]) for key in self.names if key[1:].isdigit()), default=0)
+        key = f'P{number}'
+        self.names[key] = None
+        return key
+
+    def _person(self, key):
+        return next((person for person in self.persons if person.key == key), None)
+
+    def name_person(self, person_id, name):
+        """Name a person of this run (from then on and before: readers resolve ``who`` through ``person.named``)."""
+        if person_id not in self.names:
+            raise ValueError(f'no person {person_id!r} in this run')
+        if not isinstance(name, str) or not 1 <= len(name) <= 128:
+            raise ValueError('name: 1..128 characters')
+        if any(other == name and key != person_id for key, other in self.names.items()):
+            raise ValueError(f'{name!r} is the name of another person of this run')
+        self.names[person_id] = name
+        self._person(person_id).name = name
+        self._ids[name] = person_id
+        self._named.append(person_id)
+
+    def collected_of(self, person_id):
+        """The faces and bodies this run bound to a person (for ``enroll_person`` from that person):
+        ``{face, body, samples, skipped}`` like :meth:`collect`."""
+        person = self._person(person_id)
+        if person is None:
+            raise ValueError(f'no person {person_id!r} in this run')
+        faces, bodies = [list(item) for item in person.faces], [list(item) for item in person.session]
+        return dict(face=faces, body=bodies, skipped=0, samples=[dict(source='person', person_id=person_id, persons=1,
+                                                                        face=True, body=False) for _ in faces])
 
     # ------------------------------------------------------------------ L2 (gamst.pipeline)
 
     def fork(self):
         twin = type(self)(self.face, self.body, **self._args)
         twin._shares_models, twin._forked, twin.scorer = True, True, self.scorer
-        if self._values:
-            twin.set_references(self._values)
+        # one registry of persons for the run: a fork's new person gets the next id of the run, not its own P1
+        twin.persons, twin.names, twin._ids, twin._values = self.persons, self.names, self._ids, self._values
+        twin.bindings.names = self.names
         return twin
 
     def snapshot(self):
         """At a cut: the bound tracks' last boxes and who they are, and this session's appearance glue."""
         return dict(bound=[dict(bbox=self._boxes.get(track), who=state['who']) for track, state in self.bindings.tracks.items()
                            if state['who'] is not None and self._boxes.get(track)],
-                    session={person.name: list(person.session) for person in self.persons})
+                    session={person.key: list(person.session) for person in self.persons})
 
     def restore(self, state):
         self._handover = [item for item in (state or {}).get('bound') or () if item.get('bbox')]
         for person in self.persons:
-            for embedding in ((state or {}).get('session') or {}).get(person.name) or ():
+            for embedding in ((state or {}).get('session') or {}).get(person.key) or ():
                 person.session.append(embedding)
 
     async def collect(self, seconds, *, every_ms=200):
@@ -479,7 +598,10 @@ class PersonBinding:
 
     def reset(self):
         self._collect = getattr(self, '_collect', None)
-        self.bindings, self._scores, self._poses, self._boxes = TrackBindings(), {}, {}, {}
+        self.bindings, self._scores, self._poses, self._boxes = TrackBindings(self.names), {}, {}, {}
+        self._named, self._cut_ms, self._pending_cuts = [], None, []
+        from .scene_cut import SceneCuts
+        self._cuts = SceneCuts() if self.scene_cuts else None
         self._images, self._camera_ms, self._kept_ms = {}, None, None
         self._results = []      # what the scorer (beside the lane) gave back
         self.delays = []      # ms from a frame to the frame where its face result is decided on
@@ -542,9 +664,9 @@ class PersonBinding:
         """After this frame's decisions: crops of a track whose face (or body) is due go to the scorer; nothing waits
         for a model here."""
         state = self._scores[track]
-        if image is None or not self.persons or track.startswith('frame:'):
+        if image is None or not (self.persons or self.anonymous) or track.startswith('frame:'):
             return
-        face = any(person.face is not None for person in self.persons) and self._due(track, ts, 'face')
+        face = (self.anonymous or any(person.face is not None for person in self.persons)) and self._due(track, ts, 'face')
         body = self._due(track, ts, 'body')
         if face:
             state['face_ms'] = ts      # tried: a turned head is tried again at the same pace, not on the next frame
@@ -589,17 +711,18 @@ class PersonBinding:
         results, self._results = self._results, []
         for track, ts, face, body in results:
             state = self._scores.get(track)
-            if state is None or now - ts > 1000:
+            if state is None or now - ts > 1000 or self._cut_ms is not None and ts < self._cut_ms:
                 self.counts['stale_results'] = self.counts.get('stale_results', 0) + 1
                 continue
             self.delays.append(now - ts)
             del self.delays[:-4096]
             if face is not None:
-                state['face'] = state['new_face'] = {person.name: person.face_score(face) for person in self.persons}
+                state['face'] = state['new_face'] = {person.key: person.face_score(face) for person in self.persons}
+                state['face_embedding'] = face
                 state['face_seen_ms'] = ts
             if body is not None:
                 state['body_embedding'] = body
-                state['body'] = state['new_body'] = {person.name: person.body_score(body) for person in self.persons}
+                state['body'] = state['new_body'] = {person.key: person.body_score(body) for person in self.persons}
                 state['body_seen_ms'] = ts
 
     def _best(self, scores, threshold):
@@ -628,7 +751,7 @@ class PersonBinding:
             if current is not None and face.get(current) is not None and face[current] < self.face_reject:
                 events.append(bindings.unbind(track, ts, 'face_contradicts', before=True))
         # faces: rounds of claims; a track that loses a person may claim its next best person in the next round
-        open_tracks = {track for track, scores in tracks.items() if self._fresh(scores, 'face')}
+        open_tracks = {track for track, scores in tracks.items() if scores.get('new_face') is not None}
         decided = set()
         for _ in range(len(self.persons)):
             claims = {}
@@ -657,9 +780,14 @@ class PersonBinding:
                     events.append(bindings.bind(winner, name, ts, 'face', face_score=face.get(name),
                                                 body_score=body.get(name)))
                 bindings.tracks[winner]['confirmed_ms'] = ts
-                person = next(item for item in self.persons if item.name == name)
+                person = self._person(name)
+                if scores.get('face_embedding') is not None:
+                    person.add_face(scores['face_embedding'])
                 if body and scores.get('body_embedding') is not None:
                     person.session.append(l2_normalize(scores['body_embedding']))
+        if self.anonymous and self.face is not None:
+            for track in sorted(open_tracks):
+                self._newcomer(track, tracks[track], ts, events)
         # appearance (this session only): an unbound track, a person nobody holds, no face that contradicts
         claims = {}
         for track, scores in tracks.items():
@@ -678,6 +806,34 @@ class PersonBinding:
                 scores = tracks[winner]
                 events.append(bindings.bind(winner, name, ts, 'body', body_score=self._fresh(scores, 'body').get(name),
                                             face_score=self._fresh(scores, 'face').get(name)))
+
+    def _newcomer(self, track, scores, ts, events):
+        """A face that is nobody known: clearly not any person of the run (below ``face_reject`` for all) on a track
+        that holds nobody. Two such faces of the track that agree (at least ``face_threshold``) start a new person,
+        bound to the track (retroactive like any first binding)."""
+        bindings, face = self.bindings, scores.get('face_embedding')
+        if bindings.who(track) is not None or face is None:
+            return
+        known = [value for value in self._fresh(scores, 'face').values() if value is not None]
+        pending = scores.setdefault('pending_faces', [])
+        if known and max(known) >= self.face_reject:
+            pending.clear()        # maybe someone known: the face decides later, not a new person
+            return
+        pending.append(face)
+        del pending[:-3]
+        agree = [cosine(pending[-1], other) for other in pending[:-1]]
+        if not agree or max(agree) < self.face_threshold:
+            return
+        person = _Person(self._new_id(), None, [], [], self.session_size)
+        for item in pending:
+            person.add_face(item)
+        pending.clear()
+        self.persons.append(person)
+        self.counts['new_persons'] = self.counts.get('new_persons', 0) + 1
+        events.append(bindings.bind(track, person.key, ts, 'face', face_score=round(max(agree), 5)))
+        bindings.tracks[track]['confirmed_ms'] = ts
+        if scores.get('body_embedding') is not None:
+            person.session.append(l2_normalize(scores['body_embedding']))
 
     def _evidence(self, track, name, candidates):
         """(face, appearance) of a track for a person: this frame's or the last second's (``_state`` forgets older)."""
@@ -718,7 +874,7 @@ class PersonBinding:
         frame says otherwise (below ``face_reject`` or ``body_reject``). The face confirms it later as for any track."""
         bindings = self.bindings
         for person in self.persons:
-            holder = bindings.holder(person.name)
+            holder = bindings.holder(person.key)
             if holder is None or holder in candidates:
                 continue
             last = bindings.tracks[holder]
@@ -732,14 +888,14 @@ class PersonBinding:
                 if state.get('first_ms', ts) < last['last_ms'] - self.continue_ms:
                     continue        # a track that was there all along is someone else
                 face, body = self._fresh(scores, 'face', ts), self._fresh(scores, 'body', ts)
-                if face.get(person.name) is not None and face[person.name] < self.face_reject or \
-                        body.get(person.name) is not None and body[person.name] < self.body_reject:
+                if face.get(person.key) is not None and face[person.key] < self.face_reject or \
+                        body.get(person.key) is not None and body[person.key] < self.body_reject:
                     continue
                 options.append((box_iou(pose.get('bbox'), self._boxes[holder]), track))
             iou, track = max(options, default=(0., None))
             if track is not None and iou >= self.continue_iou:
                 events.append(bindings.unbind(holder, ts, 'track_replaced'))
-                events.append(bindings.bind(track, person.name, ts, 'continuation', iou=iou))
+                events.append(bindings.bind(track, person.key, ts, 'continuation', iou=iou))
 
     def _hand_over(self, candidates, ts, events):
         """An L2 fork's first frame: each bound person of the cut goes to the track whose box overlaps theirs most."""
@@ -777,7 +933,7 @@ class PersonBinding:
     def _wants_image(self, ts):
         """Keep this camera frame until its joints come (this module in a lane of its own sees the frame first)? Only
         at the pace faces are looked at, and only while someone is enrolled or being enrolled."""
-        if not (self.persons or self._collect is not None) or (self.face is None and self.body is None):
+        if not (self.persons or self.anonymous or self._collect is not None) or (self.face is None and self.body is None):
             return False
         every = min(self.face_every_ms, self.body_every_ms, (self._collect or {}).get('every', 10 ** 9))
         return self._kept_ms is None or ts - self._kept_ms >= every
@@ -801,6 +957,10 @@ class PersonBinding:
         if frame.modality != 'video' or not hasattr(frame.data, 'shape'):
             return None
         self._camera_ms = ts if self._camera_ms is None else max(self._camera_ms, ts)
+        if self._cuts is not None:      # every camera frame: a 32 x 18 thumbnail (scene_cut.py)
+            cut = self._cuts.feed(ts, frame.data)
+            if cut is not None:
+                self._pending_cuts.append(cut)
         poses = self._poses.pop(ts, None)
         if poses is not None:
             return await self._frame(ts, poses, frame.data if self._wants_image(ts) or self._kept_ms is None else None,
@@ -821,8 +981,11 @@ class PersonBinding:
                 self.counts['unpaired_images'] += 1
         self.counts['frames'] += 1
         self.counts['scored_frames'] += image is not None
-        self._take_results(ts)
         candidates, events = {}, []
+        for cut in self._pending_cuts:
+            self._split(cut, ts, events)
+        self._pending_cuts = []
+        self._take_results(ts)
         for index, pose in enumerate(poses):
             if not isinstance(pose, dict) or not pose.get('bbox'):
                 continue
@@ -847,32 +1010,109 @@ class PersonBinding:
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
-        tracks = [dict(track_id=track, who=UNKNOWN, duplicate_of=kept) for track, kept in doubles.items()]
+        for key in self._named:
+            flat.append(dict(event='person.named', person_id=key, who=self.names[key], end_ms=ts))
+        self._named = []
+        tracks = [dict(track_id=track, who=UNKNOWN, person_id=None, duplicate_of=kept) for track, kept in doubles.items()]
         for track, (_, scores) in candidates.items():
-            who = self.bindings.who(track)
-            entry = dict(track_id=track, who=who or UNKNOWN)
+            person = self.bindings.who(track)
+            entry = dict(track_id=track, who=self.bindings.name(person) if person else UNKNOWN, person_id=person)
             for key in ('face', 'body'):
                 values = self._fresh(scores, key, ts)
-                value = values.get(who) if who else max((v for v in values.values() if v is not None), default=None)
+                value = values.get(person) if person else max((v for v in values.values() if v is not None), default=None)
                 if value is not None:
                     entry[key + '_score'] = round(value, 5)
             tracks.append(entry)
         for state in self._scores.values():
             state.pop('new_face', None)
             state.pop('new_body', None)
-        bound = {person.name: self.bindings.holder(person.name) for person in self.persons}
-        return self.spec.validate(dict(tracks=tracks[:16], bound=bound, events=flat))
+        return self.spec.validate(dict(tracks=tracks[:16], events=flat, **self._held()))
+
+    def _held(self):
+        """``bound``: {name: track} of the named persons; ``persons``: {person id: track} of everyone."""
+        persons = {person.key: self.bindings.holder(person.key) for person in self.persons}
+        return dict(bound={person.name: persons[person.key] for person in self.persons if person.name},
+                    persons=dict(list(persons.items())[-64:]))
+
+    def _split(self, cut_ms, ts, events):
+        """A scene cut at ``cut_ms`` (decided at ``ts``): every binding ends before it and every track starts a new
+        segment there, so a track the tracker carried over the cut onto someone else is two segments. A binding the
+        face confirmed after the cut continues on the new segment (``by: scene_cut``). Tracks not seen since the cut
+        are finished (no continuation over a cut); appearance seen before it binds nobody after it (unless
+        ``appearance_across_cuts``)."""
+        bindings = self.bindings
+        self.counts['scene_cuts'] = self.counts.get('scene_cuts', 0) + 1
+        events.append(dict(event='scene.cut', start_ms=cut_ms, end_ms=ts))
+        self._cut_ms = cut_ms if self._cut_ms is None else max(self._cut_ms, cut_ms)
+        for track, state in list(bindings.tracks.items()):
+            if state['last_ms'] < cut_ms:
+                events.append(bindings.forget(track, 'scene_cut'))
+                self._scores.pop(track, None)
+                self._boxes.pop(track, None)
+                continue
+            if state['first_ms'] >= cut_ms:
+                continue
+            person = state['who']
+            scores = self._scores.get(track) or {}
+            after = person is not None and (scores.get('face_seen_ms') or -1) >= cut_ms and \
+                ((scores.get('face') or {}).get(person) or -1) >= self.face_threshold
+            if person is not None:
+                events.append(bindings.unbind(track, cut_ms - 1, 'scene_cut'))
+            state.update(first_ms=cut_ms, bound_before=False)
+            if not after:
+                for key in ('face', 'body', 'body_embedding', 'face_embedding'):
+                    scores.pop(key, None)
+                scores.pop('pending_faces', None)
+            elif person is not None:
+                events.append(bindings.bind(track, person, ts, 'scene_cut'))
+        if not self.appearance_across_cuts:
+            for person in self.persons:
+                person.session.clear()
 
     def finish(self):
         """End of input: every open binding ends at its track's last frame (so "when was P on screen" has an end)."""
         events = [self.bindings.unbind(track, state['last_ms'], 'end_of_input')
                   for track, state in list(self.bindings.tracks.items()) if state['who'] is not None]
         events = [item for item in events if item]
-        return self.spec.validate(dict(tracks=[], bound={person.name: None for person in self.persons}, events=events)) \
-            if events else None
+        return self.spec.validate(dict(tracks=[], events=events, **self._held())) if events else None
 
     def status(self):
         delays = sorted(self.delays)
-        return dict(self.counts, persons=[person.name for person in self.persons], waiting_images=len(self._images),
+        return dict(self.counts, persons=[person.name or person.key for person in self.persons], waiting_images=len(self._images),
                     tracks=len(self.bindings.tracks), waiting_jobs=self.scorer.waiting(self), scored_jobs=self.scorer.done,
                     decision_delay_ms=dict(p50=delays[len(delays) // 2], max=delays[-1], n=len(delays)) if delays else None)
+
+
+def persons_file(run, *, names=None):
+    """The persons file of a run: ``{start_ms, cuts, persons}`` with :func:`persons_of` and the scene cuts (seconds from
+    the first frame). ``run``: a JSON with ``binding_events`` and ``start_ms`` (every ``vision.person_binding`` event of
+    the run, e.g. what a view collected), or a ``--report`` (its events are at most the first 100 per capability)."""
+    events = run.get('binding_events')
+    if events is None:
+        events = (run.get('events') or {}).get(CAPABILITY, ())
+    events = [item for item in events if isinstance(item, dict)]
+    start = run.get('start_ms') or 0
+    cuts = sorted({item['start_ms'] for item in events if item.get('event') == 'scene.cut'})
+    return dict(start_ms=start, cuts=[round((cut - start) / 1000, 3) for cut in cuts],
+                persons=persons_of(events, start_ms=start, names=names))
+
+
+def main(argv=None):
+    """``python -m gamst.providers.person_binding RUN.json OUT.json [--names NAMES.json]``: write the persons file."""
+    import argparse
+    import json
+    from pathlib import Path
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument('run', help='a run with binding_events and start_ms, or a --report')
+    parser.add_argument('out')
+    parser.add_argument('--names', help='JSON {person_id: name}: names given later (e.g. in the label tool)')
+    args = parser.parse_args(argv)
+    names = json.loads(Path(args.names).read_text()) if args.names else None
+    found = persons_file(json.loads(Path(args.run).read_text()), names=names)
+    Path(args.out).write_text(json.dumps(found, ensure_ascii=False, indent=1))
+    print(json.dumps(dict(out=args.out, persons=len(found['persons']), cuts=len(found['cuts']),
+                          named=sorted({item['name'] for item in found['persons'] if item['name']})), ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    main()

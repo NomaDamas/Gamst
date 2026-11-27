@@ -370,7 +370,8 @@ class Instructions:
             raise ValueError(refusal(who, problems))
         (getattr(self.pipeline, 'notes', None) or {}).pop('who_refused', None)
 
-    async def enroll_person(self, *, name, consent, images=None, video=None, camera_seconds=None, actor=OWNERS[0]):
+    async def enroll_person(self, *, name, consent, images=None, video=None, camera_seconds=None, person_id=None,
+                            actor=OWNERS[0]):
         """A person reference from photos or a video range in the owner's folders, or from the next seconds of this run's
         camera (one person in view); checked like ``gamst recipe enroll --kind person``, saved (embeddings only, mode 600)
         in the first ``--clips`` folder and added to this run's person binding, so ``who`` can name the person."""
@@ -382,8 +383,8 @@ class Instructions:
             raise ValueError('name: 1..64 characters, no slash or control characters')
         if not isinstance(consent, str) or not consent.strip():
             raise ValueError(refusal(name, ['no consent record (who consented, to what, when)']))
-        if sum(item is not None for item in (images, video, camera_seconds)) != 1:
-            raise ValueError('give exactly one of images, video ({file, start_s, end_s}) or camera_seconds')
+        if sum(item is not None for item in (images, video, camera_seconds, person_id)) != 1:
+            raise ValueError('give exactly one of images, video ({file, start_s, end_s}), camera_seconds or person_id')
         if self._busy is not None:
             raise ValueError('another instruction is being prepared; try again when list_instructions says it is not')
         binding = self._binding()
@@ -395,7 +396,14 @@ class Instructions:
             raise ValueError('no folder to save the person reference in: the owner starts the run with --clips DIR')
         record = enrollment.consent_record(consent)
         out = self.folders[0] / (re.sub(r'[^\w.-]', '_', name) + '.person.json')
-        if camera_seconds is not None:
+        if person_id is not None:     # a person this run follows already: its faces and appearance of this run
+            found = binding.collected_of(person_id)
+            value = enrollment.person_value(name, self.recipe, binding.face, binding.body, found, record,
+                                            session=binding.session, origin=dict(kind='person', person_id=person_id))
+            if not value['quality']['ok']:
+                raise ValueError(refusal(name, value['quality']['problems']))
+            await asyncio.to_thread(enrollment._save, out, value)
+        elif camera_seconds is not None:
             if type(camera_seconds) not in (int, float) or not 1 <= camera_seconds <= 10:
                 raise ValueError('camera_seconds: 1..10')
             found = await binding.collect(float(camera_seconds))

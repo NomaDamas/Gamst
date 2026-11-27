@@ -180,6 +180,7 @@ RAISE = {'rule': {'steps': [{'when': {'measure': {'height': ['left_wrist', 'left
 class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
     def module(self, **options):
         from gamst.providers.person_binding import PersonBinding
+        options = dict(dict(anonymous=False, scene_cuts=False), **options)
         module = PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, body_threshold=.95,
                                face_every_ms=0, body_every_ms=0, session='file:s', **options)
         module.set_references(dict(person=reference(face=3, name='P') | dict(face=[[0., 0., 1.]] * 3)))
@@ -282,7 +283,8 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_nobody_enrolled_binds_nobody_and_a_person_enrolled_later_reaches_back_over_live_tracks(self):
         from gamst.providers.person_binding import PersonBinding
-        module = PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, session='file:s')
+        module = PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, session='file:s',
+                               anonymous=False, scene_cuts=False)        # nobody: no persons of its own either
         module.bind(argparse.Namespace(references={}))
         first = await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
         self.assertEqual((first['tracks'][0]['who'], first['bound'], module.counts['face_embeddings']), ('unknown', {}, 0))
@@ -759,8 +761,8 @@ class OneTrackModuleTest(PersonBindingTest):
     def binding(self, **options):
         from gamst.providers.person_binding import PersonBinding
         module = PersonBinding(Color('face'), Color('body'), face_every_ms=0, body_every_ms=0, confirm_every_ms=0,
-                               session='file:s', **dict(dict(face_threshold=.9, face_reject=.5, body_threshold=.95),
-                                                        **options))
+                               session='file:s', **dict(dict(face_threshold=.9, face_reject=.5, body_threshold=.95,
+                                                             anonymous=False, scene_cuts=False), **options))
         module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
         return module
 
@@ -802,7 +804,7 @@ class OneTrackModuleTest(PersonBindingTest):
         moved = [(item['event'], item['track_id'], item.get('reason') or item.get('by')) for item in same['events']]
         self.assertEqual(moved, [('person.unbound', 'b', 'duplicate'), ('person.bound', 'a', 'duplicate')])
         self.assertEqual(same['bound'], {'P': 'a'})
-        self.assertIn(dict(track_id='b', who='unknown', duplicate_of='a'), same['tracks'])
+        self.assertIn(dict(track_id='b', who='unknown', person_id=None, duplicate_of='a'), same['tracks'])
         self.assertGreaterEqual(module.counts['duplicates'], 2)
         events = bound['events'] + same['events']
         self.assertEqual(at_once(events, 'P', range(1000, 1202)), [])
@@ -843,6 +845,164 @@ class OneCountTest(TrackExemplarTest):
                                 dict(event='person.unbound', track_id='a', who='P', start_ms=0, end_ms=120, reason='x'),
                                 dict(event='person.bound', track_id='b', who='P', start_ms=121, end_ms=300, by='face')])
         self.assertEqual(module.by_who(), {'P': 1})         # matched at 100 on a and at 150 on b: one action of P
+
+
+# ---------------------------------------------------------------- everyone, named or not; scene cuts
+
+GREEN = (0, 255, 0)
+
+
+class SceneCutTest(unittest.TestCase):
+    @unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+    def test_a_hard_cut_and_a_dissolve_are_found_and_motion_is_not(self):
+        from gamst.providers.scene_cut import SceneCuts
+        cuts, found = SceneCuts(), []
+        room = np.full((180, 320, 3), 40, np.uint8)
+        other = np.full((180, 320, 3), 200, np.uint8)
+        for index in range(90):          # 3 s at 30 fps: a person (a block) moving in one room, then a cut
+            ts = index * 33
+            image = (room if index < 45 else other).copy()
+            image[60:120, (index * 3) % 260:(index * 3) % 260 + 60] = 255 if index < 45 else 0
+            found.append(cuts.feed(ts, image))
+        self.assertEqual([item for item in found if item is not None], [45 * 33])
+        fade, found = SceneCuts(), []
+        for index in range(120):         # a one-second cross-fade from one room to another
+            ts = index * 33
+            weight = min(1., max(0., (index - 45) / 30))
+            image = (room * (1 - weight) + other * weight).astype(np.uint8)
+            found.append(fade.feed(ts, image))
+        cut = [item for item in found if item is not None]
+        self.assertEqual(len(cut), 1)
+        self.assertLess(abs(cut[0] - 60 * 33), 400)      # the middle of the fade
+
+
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class EveryoneTest(PersonBindingTest):
+    def everyone(self, **options):
+        from gamst.providers.person_binding import PersonBinding
+        return PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, body_threshold=.95,
+                             face_every_ms=0, body_every_ms=0, confirm_every_ms=0, session='file:s',
+                             **dict(dict(scene_cuts=False), **options))
+
+    async def test_everyone_gets_a_person_id_and_keeps_it_when_they_come_back(self):
+        module, events = self.everyone(), []
+        for ts in (1000, 1100):          # nobody enrolled: two faces, two people
+            events += (await self.step(module, ts, [person(.25, 'a'), person(.75, 'b')], frame_of(RED, GREEN)))['events']
+        value = await self.step(module, 1200, [person(.25, 'a'), person(.75, 'b')], frame_of(RED, GREEN))
+        self.assertEqual(sorted((item['track_id'], item['person_id']) for item in value['tracks']),
+                         [('a', 'P1'), ('b', 'P2')])
+        self.assertEqual({item['who'] for item in value['tracks']}, {'unknown'})        # not named
+        self.assertEqual(value['persons'], {'P1': 'a', 'P2': 'b'})
+        first = next(item for item in events if item['event'] == 'person.bound' and item['track_id'] == 'a')
+        self.assertEqual((first['person_id'], first['start_ms'], first['retroactive']), ('P1', 1000, True))
+        back = await self.step(module, 9000, [person(.75, 'c')], frame_of(BLUE, RED))    # P1 returns on a new track
+        self.assertEqual(back['persons']['P1'], 'c')
+        self.assertEqual(module.counts['new_persons'], 2)
+
+    async def test_a_person_can_be_named_later_and_the_name_reaches_back(self):
+        from gamst.providers.person_binding import persons_of
+        module, events = self.everyone(), []
+        for ts in (1000, 1100, 1200):
+            events += (await self.step(module, ts, [person(.25, 'a')], frame_of(RED, BLUE)))['events']
+        module.name_person('P1', 'P')
+        named = await self.step(module, 1300, [person(.25, 'a')], frame_of(RED, BLUE))
+        events += named['events']
+        self.assertIn(dict(event='person.named', person_id='P1', who='P', end_ms=1300), events)
+        self.assertEqual(resolve(dict(track_id='a', end_ms=1050), intervals_of(events)), 'P')    # before the naming
+        self.assertEqual(resolve(dict(track_id='a', end_ms=1050), intervals_of(events, key='person_id'), 'person_id'),
+                         'P1')
+        persons = persons_of(events, start_ms=1000)
+        self.assertEqual([(item['person_id'], item['name'], item['segments'][0]['start']) for item in persons],
+                         [('P1', 'P', 0.)])
+        later = persons_of(events, start_ms=1000, names={'P1': 'Q'})     # the owner's name in the label tool
+        self.assertEqual(later[0]['name'], 'Q')
+        collected = module.collected_of('P1')
+        self.assertGreaterEqual(len(collected['face']), 2)
+
+    async def test_a_person_enrolled_from_their_person_id_keeps_it(self):
+        module = self.everyone()
+        for ts in (1000, 1100):
+            await self.step(module, ts, [person(.25, 'a')], frame_of(RED, BLUE))
+        value = reference(name='P') | dict(face=[[0., 0., 1.]] * 3, enrolled_from=dict(kind='person', person_id='P1'))
+        module.set_references(dict(person_1=value))
+        later = await self.step(module, 1200, [person(.25, 'a')], frame_of(RED, BLUE))
+        self.assertEqual(later['bound'], {'P': 'a'})
+        self.assertEqual(later['persons'], {'P1': 'a'})
+        self.assertIn(dict(event='person.named', person_id='P1', who='P', end_ms=1200), later['events'])
+
+    async def test_a_track_carried_over_a_scene_cut_onto_someone_else_is_split_there(self):
+        module, events = self.everyone(scene_cuts=True), []
+        for ts in (1000, 1100, 1200):    # scene 1: red face on track a
+            events += (await self.step(module, ts, [person(.25, 'a')], frame_of(RED, BLUE)))['events']
+        for ts in (1300, 1400, 1500, 1600):      # the cut: the tracker keeps a, now on a green face, colours swapped
+            events += (await self.step(module, ts, [person(.25, 'a')], frame_of(GREEN, RED)))['events']
+        cut = [item for item in events if item['event'] == 'scene.cut']
+        self.assertEqual([item['start_ms'] for item in cut], [1300])
+        persons = intervals_of(events, key='person_id')['a']
+        self.assertEqual([(low < 1300, high is not None and high < 1300, person) for low, high, person in persons],
+                         [(True, True, 'P1'), (False, False, 'P2')])
+        self.assertEqual(at_once(events, 'P1', range(1000, 1700, 10)), [])
+
+    async def test_two_tracks_never_hold_one_person_at_once(self):
+        module, events, times = self.everyone(), [], []
+        for ts in range(1000, 3000, 100):        # two tracks with the same face all along
+            events += (await self.step(module, ts, [person(.3, 'a'), person(.7, 'b')],
+                                       stripes((80, 160, RED), (240, 320, RED))))['events']
+            times += [ts, ts + 1]
+        spans = intervals_of(events, key='person_id')
+        self.assertEqual([at for at in times
+                          if len({person for track in spans for low, high, person in spans[track]
+                                  if person and low <= at and (high is None or at <= high)} ) <
+                          sum(1 for track in spans for low, high, person in spans[track]
+                              if person and low <= at and (high is None or at <= high))], [])
+
+
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class PersonCountTest(TrackExemplarTest):
+    def test_events_carry_the_person_id_and_by_person_counts_unnamed_people(self):
+        module = self.counter()
+        self.bind(module, 0, [dict(event='person.bound', track_id='a', who='unknown', person_id='P3', start_ms=0,
+                                   end_ms=0, by='face')])
+        value = None
+        for ts, up in ((10, False), (100, True), (200, False), (300, True)):
+            value = self.push(module, ts, [person(.25, 'a', wrist_up=up)])
+        matched = [item for item in value['events'] if item['event'] == 'exemplar.matched']
+        self.assertEqual([(item['person_id'], item['who']) for item in matched], [('P3', 'unknown')])
+        self.assertEqual(value['by_person'], {'P3': 2})
+
+
+class StorePersonTest(unittest.IsolatedAsyncioTestCase):
+    async def test_count_events_and_get_timeline_take_a_person_id(self):
+        from gamst import Gamst
+        from gamst.capabilities import CapabilitySpec, OutputField, SensorMetadata
+        from gamst.providers.person_binding import CAPABILITY
+        from tests.test_speaker_verify import now
+        async with Gamst(consent=True) as human:
+            start = now() - 5000
+            human.register_capability(CapabilitySpec('temporal.exemplar_events', 'temporal.exemplar_events', 'video',
+                                                     'test', '1', (OutputField('count', 'integer'),
+                                                                   OutputField('events', 'array')), 'native'))
+            human.register_capability(CapabilitySpec(CAPABILITY, CAPABILITY, 'video', 'test', '1',
+                                                     (OutputField('events', 'array'),), 'frame'))
+            matched = lambda track, ts: dict(event='exemplar.matched', track_id=track, who='unknown', start_ms=ts - 50,
+                                             end_ms=ts, label='raise')
+            await human.push_observation('temporal.exemplar_events', dict(count=3, events=[
+                matched('a', start + 100), matched('b', start + 300), matched('a', start + 600)]),
+                sensor=SensorMetadata('t', 'camera', 1), timestamp_ms=start + 600)
+            await human.push_observation(CAPABILITY, dict(events=[
+                dict(event='person.bound', track_id='a', who='unknown', person_id='P3', start_ms=start, end_ms=start + 50,
+                     by='face'),
+                dict(event='person.bound', track_id='b', who='unknown', person_id='P4', start_ms=start, end_ms=start + 50,
+                     by='face')]), sensor=SensorMetadata('t', 'camera', 2), timestamp_ms=start + 700)
+            self.assertEqual((await human.count_events('temporal.exemplar_events', person_id='P3'))['count'], 2)
+            timeline = await human.get_timeline(start_ms=start, end_ms=start + 2000, step_ms=500,
+                                                capabilities=['temporal.exemplar_events'], person_id='P4')
+            shown = [entry['value'] for entry in timeline['evidence'].values() if entry['kind'] == 'events']
+            self.assertEqual([(item['track_id'], item['person_id']) for item in shown], [('b', 'P4')])
+            await human.push_observation(CAPABILITY, dict(events=[dict(event='person.named', person_id='P3', who='Q',
+                                                                       end_ms=start + 800)]),
+                                         sensor=SensorMetadata('t', 'camera', 2), timestamp_ms=start + 800)
+            self.assertEqual((await human.count_events('temporal.exemplar_events', who='Q'))['count'], 2)   # retroactive
 
 
 if __name__ == '__main__':
