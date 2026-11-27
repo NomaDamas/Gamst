@@ -226,6 +226,28 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         bound = [item for item in handed['events'] if item['event'] == 'person.bound']
         self.assertEqual((bound[0]['by'], bound[0]['track_id']), ('handover', 'person-1@9100'))
 
+    async def test_frames_without_a_person_are_empty_answers_and_keep_the_bindings(self):
+        from gamst.plugins import InputFrame
+        from gamst.private_payload import PrivatePoses
+        module = self.module()
+        bound = await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        self.assertEqual(bound['bound'], {'P': 'b'})
+        black = np.zeros((400, 400, 3), np.uint8)
+        zero_box = dict(person(.5, 'z'), bbox=dict(x=.5, y=.5, width=0., height=0.))
+        for ts, poses in ((1100, []), (1133, [dict(person(.5, None), bbox=None)]), (1166, [zero_box]), (1200, [])):
+            for first, second in ((PrivatePoses(poses), black), (black, PrivatePoses(poses))):     # either order
+                outputs = [await module.process(InputFrame(item, 'video', ts)) for item in (first, second)]
+                await module.settled()
+                answer = next(item for item in outputs if item is not None)
+                self.assertEqual(answer['bound'], {'P': 'b'})       # nobody in view: the binding stands
+                self.assertEqual(answer['events'], [])
+                ts += 1
+        later = await self.step(module, 1500, [person(.75, 'b')], frame_of(BLUE, RED))
+        self.assertEqual(later['bound'], {'P': 'b'})
+        await module.process(InputFrame(PrivatePoses([]), 'video', 9000))   # nobody for longer than lost_ms
+        gone = await module.process(InputFrame(black, 'video', 9000))
+        self.assertEqual([(item['event'], item['reason']) for item in gone['events']], [('person.unbound', 'track_lost')])
+
     async def test_camera_seconds_collect_the_one_person_in_view(self):
         module = self.module()
 
@@ -365,6 +387,13 @@ class TrackExemplarTest(unittest.TestCase):
         for ts, up in ((10, False), (100, True), (200, False), (300, True)):
             value = self.push(module, ts, [person(.25, 'a', wrist_up=up), person(.75, 'b', wrist_up=up and ts == 300)])
         self.assertEqual((value['who'], value['count'], value['count_all']), ('P', 1, 3))
+
+    def test_frames_without_a_person_count_nothing_and_break_nothing(self):
+        module, events = self.counter(), []
+        frames = [[]] * 9 + [[person(.5, 'a', wrist_up=True)]] * 2 + [[]] * 4      # nobody, a raise, nobody again
+        for index, poses in enumerate(frames):
+            events += (self.push(module, 1000 + 33 * index, poses) or {}).get('events', [])
+        self.assertEqual([event['track_id'] for event in events if event['event'] == 'exemplar.matched'], ['a'])
 
     def test_a_pose_without_a_track_continues_the_track_it_overlaps(self):
         module = self.counter()
