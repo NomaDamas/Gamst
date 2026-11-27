@@ -72,6 +72,7 @@ class TrackBindings:
     def __init__(self):
         self.tracks = {}       # track -> {first_ms, last_ms, who, from_ms, by, bound_before}
         self.closed = []       # finished intervals {track_id, who, from_ms, to_ms, by}
+        self.released = {}     # who -> when their last binding ended
 
     def seen(self, track, ts):
         state = self.tracks.setdefault(track, dict(first_ms=ts, last_ms=ts, who=None, from_ms=None, by=None,
@@ -94,17 +95,23 @@ class TrackBindings:
         events = []
         if state['who'] is not None:
             events.append(self.unbind(track, ts, 'another_person'))
-        retroactive = not state['bound_before']
-        start = state['first_ms'] if retroactive else ts
+        # The first binding of a track reaches back to its first frame, but never before the person was released from
+        # another track: one person is on one track at a time, also in the past.
+        start = max(state['first_ms'], self.released.get(who, state['first_ms'])) if not state['bound_before'] else ts
+        start = min(start, ts)
+        retroactive = start < ts
         state.update(who=who, from_ms=start, by=by, bound_before=True)
         event = dict(event='person.bound', track_id=track, who=who, start_ms=start, end_ms=ts, by=by,
                      retroactive=retroactive, **{key: round(value, 5) for key, value in scores.items() if value is not None})
         return [*events, event] if events else event
 
     def unbind(self, track, ts, reason):
+        """A ``person.unbound`` event: the binding ends when the track was last seen (``ts`` at the latest)."""
         state = self.tracks.get(track)
         if state is None or state['who'] is None:
             return None
+        ts = max(state['from_ms'], min(ts, state['last_ms']))
+        self.released[state['who']] = ts
         self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=ts, by=state['by']))
         event = dict(event='person.unbound', track_id=track, who=state['who'], start_ms=state['from_ms'], end_ms=ts,
                      reason=reason)
@@ -663,6 +670,14 @@ class PersonBinding:
             state.pop('new_body', None)
         bound = {person.name: self.bindings.holder(person.name) for person in self.persons}
         return self.spec.validate(dict(tracks=tracks[:16], bound=bound, events=flat))
+
+    def finish(self):
+        """End of input: every open binding ends at its track's last frame (so "when was P on screen" has an end)."""
+        events = [self.bindings.unbind(track, state['last_ms'], 'end_of_input')
+                  for track, state in list(self.bindings.tracks.items()) if state['who'] is not None]
+        events = [item for item in events if item]
+        return self.spec.validate(dict(tracks=[], bound={person.name: None for person in self.persons}, events=events)) \
+            if events else None
 
     def status(self):
         delays = sorted(self.delays)

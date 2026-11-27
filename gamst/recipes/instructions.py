@@ -354,7 +354,7 @@ class Instructions:
             problems.append('who is given for a movement; words are tied to a person by the enrolled voice '
                             '(person-term-count with --voice)')
         elif binding is None:
-            problems.append('this run has no person_binding module: the owner starts it with --person P.json')
+            problems.append('this run has no person_binding module (it was left out with --without)')
         elif name is not None and not all(hasattr(entry['module'], 'wanted') for entry in self.pipeline._reading(name).values()):
             problems.append('this run counts one target person (--with target_person); who needs the per-track counter')
         try:
@@ -388,7 +388,9 @@ class Instructions:
             raise ValueError('another instruction is being prepared; try again when list_instructions says it is not')
         binding = self._binding()
         if binding is None:
-            raise ValueError(refusal(name, ['this run has no person_binding module: the owner starts it with --person P.json']))
+            raise ValueError(refusal(name, ['this run has no person_binding module (it was left out with --without)']))
+        if binding.face is None and binding.body is None:
+            raise ValueError(refusal(name, ['no face model is set up for this run: gamst recipe setup ' + self.raw['name']]))
         if not self.folders:
             raise ValueError('no folder to save the person reference in: the owner starts the run with --clips DIR')
         record = enrollment.consent_record(consent)

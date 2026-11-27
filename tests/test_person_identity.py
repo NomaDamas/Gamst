@@ -103,6 +103,7 @@ class BindingDataTest(unittest.TestCase):
         bindings.seen('t1', 4000)
         first = bindings.bind('t1', 'P', 5000, 'face', face_score=.8)
         self.assertEqual((first['start_ms'], first['end_ms'], first['retroactive']), (1000, 5000, True))
+        bindings.seen('t1', 8000)
         released = bindings.unbind('t1', 8000, 'face_contradicts')
         again = bindings.bind('t1', 'Q', 9000, 'face')
         self.assertEqual((again['start_ms'], again['retroactive']), (9000, False))
@@ -113,6 +114,16 @@ class BindingDataTest(unittest.TestCase):
         self.assertEqual(resolve(dict(track_id='t1', end_ms=9500), intervals), 'Q')
         self.assertEqual(resolve(dict(track_id='t2', end_ms=2000, who='R'), intervals), 'R')
         self.assertEqual(seen_intervals(intervals, 'P', 2000, 10000), [dict(track_id='t1', start_ms=2000, end_ms=8000)])
+
+    def test_a_person_is_on_one_track_at_a_time_also_in_the_past(self):
+        bindings = TrackBindings()
+        bindings.seen('t1', 0)
+        bindings.bind('t1', 'P', 500, 'face')
+        bindings.seen('t2', 1000)                     # a second track of the same person starts while t1 still holds
+        bindings.seen('t1', 3000)
+        released = bindings.unbind('t1', 4000, 'seen_on_another_track')    # t1 was last seen at 3000
+        moved = bindings.bind('t2', 'P', 4000, 'face')
+        self.assertEqual((released['end_ms'], moved['start_ms'], moved['retroactive']), (3000, 3000, True))
 
     def test_a_lost_track_ends_its_binding_at_its_last_frame(self):
         bindings = TrackBindings()
@@ -266,6 +277,15 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         await self.step(late, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
         gone = await self.step(late, 3000, [person(.75, 'c', face=False)], frame_of(RED, RED))
         self.assertNotIn('continuation', [item.get('by') for item in gone['events']])   # too long after
+
+    async def test_at_the_end_of_input_every_open_binding_ends_at_its_last_frame(self):
+        module = self.module()
+        await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        await self.step(module, 2000, [person(.75, 'b')], frame_of(BLUE, RED))
+        ended = module.finish()['events']
+        self.assertEqual([(item['event'], item['reason'], item['end_ms']) for item in ended],
+                         [('person.unbound', 'end_of_input', 2001)])
+        self.assertIsNone(module.finish())
 
     async def test_a_reference_below_the_check_is_refused_at_bind(self):
         from gamst.providers.person_binding import PersonBinding
