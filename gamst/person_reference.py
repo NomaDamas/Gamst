@@ -53,6 +53,22 @@ def agreement(embeddings):
     return dict(n=found['pieces'], mean=found['mean'], min=found['min'])
 
 
+def cleaned(embeddings, min_agreement):
+    """``(kept, dropped)``: the embeddings without the few that disagree with the rest, when more than half of them agree
+    (mean pairwise >= ``min_agreement``) once those are left out (:func:`gamst.voice_quality.consistent_majority`, the
+    voice reference's rule). A crop the pose model aligned badly (a turned head) is one of those; two people never are a
+    majority of one. Otherwise everything is kept and the check says the samples disagree."""
+    from .voice_quality import consistent_majority
+    embeddings = list(embeddings or ())
+    found = agreement(embeddings)
+    if found['mean'] is None or found['mean'] >= min_agreement:
+        return embeddings, 0
+    keep = consistent_majority(embeddings, min_agreement)
+    if keep is None:
+        return embeddings, 0
+    return [embeddings[index] for index in keep], len(embeddings) - len(keep)
+
+
 def session_of(path, *, block=1 << 22):
     """A short identity of one recording (its size, first and last 4 MB): body samples from it are trusted in it only."""
     file = Path(path)

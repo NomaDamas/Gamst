@@ -38,6 +38,7 @@ from __future__ import annotations
 from collections import deque
 import hashlib
 import math
+from pathlib import Path
 
 from .speaker_verify import centroid, cosine, embed, l2_normalize
 
@@ -165,6 +166,29 @@ def _verify(path, expected):
     return value
 
 
+def onnx_session(path, *, device='cpu', compute_units='ALL', cache_dir=None, providers=None):
+    """ONNX Runtime session on the CPU, or on Apple's CoreML execution provider (``device='coreml'``: ML Program format,
+    ``compute_units`` ALL / CPUAndGPU / CPUAndNeuralEngine). ``cache_dir`` keeps CoreML's compiled model there
+    (``ModelCacheDirectory``) instead of a new temporary folder per session."""
+    import onnxruntime
+    if providers is None and device == 'coreml':
+        options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units}
+        if cache_dir:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            options['ModelCacheDirectory'] = str(cache_dir)
+        providers = [('CoreMLExecutionProvider', options), 'CPUExecutionProvider']
+    elif device not in ('cpu', 'coreml'):
+        raise ValueError("device is 'cpu' or 'coreml'")
+    options = onnxruntime.SessionOptions()
+    probe = onnxruntime.InferenceSession(str(path), providers=['CPUExecutionProvider'])
+    for item in probe.get_inputs():     # one crop per call: a fixed batch, which CoreML compiles whole
+        for dimension in item.shape:
+            if isinstance(dimension, str):
+                options.add_free_dimension_override_by_name(dimension, 1)
+    del probe
+    return onnxruntime.InferenceSession(str(path), options, providers=providers or ['CPUExecutionProvider'])
+
+
 # ---------------------------------------------------------------- identity gallery and embedding backends
 
 class PersonGallery:
@@ -206,11 +230,12 @@ class LVFaceEmbedder:
         self.output_name = session.get_outputs()[0].name
 
     @classmethod
-    def from_local(cls, path, *, sha256=None, providers=None):
-        import onnxruntime
+    def from_local(cls, path, *, sha256=None, providers=None, device='cpu', compute_units='ALL', cache_dir=None):
         digest = _verify(path, sha256)
-        session = onnxruntime.InferenceSession(str(path), providers=providers or ['CPUExecutionProvider'])
-        return cls(session, f'lvface:{digest[:16]}')
+        model = cls(onnx_session(path, device=device, compute_units=compute_units, cache_dir=cache_dir, providers=providers),
+                    f'lvface:{digest[:16]}')
+        model.embed(_np().zeros((112, 112, 3), 'uint8'))     # CoreML specializes on the first call: here, not on a frame
+        return model
 
     def embed(self, face):
         np = _np()
@@ -243,11 +268,13 @@ class ReIDEmbedder:
         self.output_name = session.get_outputs()[0].name
 
     @classmethod
-    def from_local(cls, path, *, sha256=None, providers=None, height=256, width=128, name='osnet-ain'):
-        import onnxruntime
+    def from_local(cls, path, *, sha256=None, providers=None, height=256, width=128, name='osnet-ain', device='cpu',
+                   compute_units='ALL', cache_dir=None):
         digest = _verify(path, sha256)
-        session = onnxruntime.InferenceSession(str(path), providers=providers or ['CPUExecutionProvider'])
-        return cls(session, f'{name}:{digest[:16]}', height=height, width=width)
+        model = cls(onnx_session(path, device=device, compute_units=compute_units, cache_dir=cache_dir, providers=providers),
+                    f'{name}:{digest[:16]}', height=height, width=width)
+        model.embed(_np().zeros((height, width, 3), 'uint8'))
+        return model
 
     def embed(self, crop):
         np = _np()

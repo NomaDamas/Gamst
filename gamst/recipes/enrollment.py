@@ -179,11 +179,13 @@ async def sample(face, body, image, pose, face_indices=None):
 
 def person_value(name, recipe, face, body, found, consent, *, session=None, origin=None, voice=None):
     """The saved person reference (embeddings only) with its check (:func:`gamst.person_reference.check`)."""
-    from ..person_reference import check, with_voice
+    from ..person_reference import MIN_BODY_AGREEMENT, MIN_FACE_AGREEMENT, check, cleaned, with_voice
+    faces, dropped_faces = cleaned(found['face'], MIN_FACE_AGREEMENT)       # badly aligned crops (a turned head)
+    bodies, dropped_bodies = cleaned(found['body'], MIN_BODY_AGREEMENT)
     value = dict(kind='person', name=name, recipe=recipe['name'] if recipe else None,
                  face_model=getattr(face, 'model_id', None), body_model=getattr(body, 'model_id', None), consent=consent,
-                 face=found['face'], body=found['body'], samples=found['samples'], session=session,
-                 enrolled_from=origin or {})
+                 face=faces, body=bodies, samples=found['samples'], session=session, enrolled_from=origin or {},
+                 dropped=dict(face=dropped_faces, body=dropped_bodies))
     if voice is not None:
         value = with_voice(value, voice)
     value['quality'] = check(value, session=session)
@@ -274,8 +276,9 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     if not saved['quality']['ok']:
         raise SystemExit(refusal(name, saved['quality']['problems']))
     _save(args.out, saved)
-    print(json.dumps(dict(out=args.out, kind='person', name=name, faces=len(found['face']), bodies=len(found['body']),
-                          samples=len(found['samples']), skipped_frames=len(crowded), basis=saved['quality']['basis'],
+    print(json.dumps(dict(out=args.out, kind='person', name=name, faces=len(saved['face']), bodies=len(saved['body']),
+                          samples=len(found['samples']), skipped_frames=len(crowded), dropped=saved['dropped'],
+                          basis=saved['quality']['basis'],
                           face_agreement=saved['quality']['face']['mean'], body_agreement=saved['quality']['body']['mean'],
                           model=face.model_id), ensure_ascii=False), flush=True)
     return saved

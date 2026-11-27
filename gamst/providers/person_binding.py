@@ -18,10 +18,13 @@ visible person, with the tracker's ``track_id``). For each track it scores, agai
 
 Decisions (math only): a track is bound to P when its face scores at least ``face_threshold`` and beats every other
 person by ``margin``; an unbound track is bound by body when its appearance scores at least ``body_threshold`` against
-P's appearance of this session and no face contradicts it. A bound track is released when its face contradicts P (score
+P's appearance of this session and no face contradicts it (default 0.8: on the shop clip, OSNet-AIN, the person's
+face-confirmed tracks scored median 0.87, the best other track median 0.64 and 90th percentile 0.79; one clip, not
+labelled, docs/measurements/person-identity-2026-11-27.md). A pose the tracker gave no track is never bound. A bound track is released when its face contradicts P (score
 below ``face_reject``: the tracker may have switched people) or when it is lost (not seen for ``lost_ms``). One person is
-on one track at a time: a face binding moves P off any other track. Scores are uncalibrated cosines; the thresholds are
-the same defaults as ``target_person`` and are not measured on labelled people yet.
+on one track at a time: a face binding moves P off any other track. A person moves to another track only when that track's face
+beats the holding track's face of the same frame by ``margin``. Scores are uncalibrated cosines; the face thresholds are
+the same defaults as ``target_person``; none is measured on labelled people yet.
 
 Retroactive: the first binding of a track starts at the track's first frame (``retroactive: true``): what that track did
 before its face was seen was the same person. After a release, a new binding starts when it is decided.
@@ -183,7 +186,7 @@ class PersonBinding:
     name = 'person_binding'
 
     def __init__(self, face=None, body=None, *, references=('person',), session=None, face_threshold=.35,
-                 face_reject=.15, body_threshold=.6, margin=.05, face_every_ms=200, body_every_ms=500, lost_ms=5000,
+                 face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, body_every_ms=500, lost_ms=5000,
                  session_size=32, face_indices=MEDIAPIPE_FACE_POINTS):
         if face is None and body is None:
             raise ValueError('person_binding needs a face or a body embedder')
@@ -371,8 +374,10 @@ class PersonBinding:
             return None
         return ranked[0][1], ranked[0][0]
 
-    def _decide(self, track, scores, ts, events):
+    def _decide(self, track, scores, ts, events, candidates):
         bindings = self.bindings
+        if track.startswith('frame:'):      # the tracker gave this pose no track: nothing to bind it over time
+            return
         current = bindings.who(track)
         face, body = scores.get('face') or {}, scores.get('body') or {}
         if current is not None and face.get(current) is not None and face[current] < self.face_reject:
@@ -383,6 +388,9 @@ class PersonBinding:
             name, score = chosen
             other = bindings.holder(name)
             if other is not None and other != track:
+                held = ((candidates.get(other) or (None, {}))[1].get('face') or {}).get(name)
+                if held is not None and held >= score - self.margin:
+                    return      # the track that holds the person still shows their face as well: no flip
                 events.append(bindings.unbind(other, ts, 'seen_on_another_track'))
             events.append(bindings.bind(track, name, ts, 'face', face_score=score, body_score=body.get(name)))
             person = next(item for item in self.persons if item.name == name)
@@ -438,7 +446,7 @@ class PersonBinding:
         if self._handover:
             self._hand_over(candidates, ts, events)
         for track, (_, scores) in candidates.items():
-            self._decide(track, scores, ts, events)
+            self._decide(track, scores, ts, events, candidates)
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
