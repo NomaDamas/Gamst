@@ -293,6 +293,15 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
                     straddled.append((begin, end, late))
         self.assertTrue(straddled)     # some hits crossed a cut, and still counted once
 
+    async def test_intervals_cut_one_after_another_own_disjoint_ranges(self):
+        # slow for long: the live lane falls behind again while it warms up after a jump (as with --debug-slowdown)
+        status, cuts, found, seen = await self.run_cut(range(15, 110), tail_ms=400)
+        self.assertGreaterEqual(len(cuts), 2)
+        for (_, _, until), (_, start, _) in zip(cuts, cuts[1:]):
+            self.assertLess(until, start)                            # disjoint, in order
+        self.assertEqual(sorted(round(end) for _, end, _ in found), [i for i in range(150) if i % 12 == 7], (cuts, found))
+        self.assertEqual(seen, set(range(150)))
+
     async def test_a_second_interval_waits_for_the_one_worker_and_is_processed(self):
         # the one L2 worker is still busy with the first interval when the second is cut
         status, cuts, found, seen = await self.run_cut(list(range(15, 35)) + list(range(70, 100)), fork_delay=.06)
@@ -325,10 +334,11 @@ class SafetyNet(unittest.TestCase):
         pipeline = Pipeline(SimpleNamespace(register_capability=lambda spec: None, pipeline=None), 'x')
         entry = {}
         hit = lambda end: dict(count=1, events=[dict(event='hit', label='slam', start_ms=end - 200, end_ms=end)])  # noqa
-        self.assertEqual(pipeline._once(entry, hit(1000), False)['events'][0]['end_ms'], 1000)
-        self.assertIsNone(pipeline._once(entry, hit(1060), True))                 # L2 found the live one again
-        self.assertIsNotNone(pipeline._once(entry, hit(1060), False))             # the same lane twice: two hits
-        self.assertIsNotNone(pipeline._once(entry, hit(1300), True))              # another hit
+        self.assertEqual(pipeline._once(entry, hit(1000), None)['events'][0]['end_ms'], 1000)
+        self.assertIsNone(pipeline._once(entry, hit(1060), 1))                    # L2 found the live one again
+        self.assertIsNotNone(pipeline._once(entry, hit(1060), None))              # the same lane twice: two hits
+        self.assertIsNotNone(pipeline._once(entry, hit(1300), 1))                 # another hit
+        self.assertIsNone(pipeline._once(entry, hit(1350), 2))                    # a second L2 interval: still once
 
 
 @unittest.skipIf(np is None, 'numpy')

@@ -151,6 +151,7 @@ class _Context:
     lane: dict | None = None
     failures: list = field(default_factory=list)
     forks: dict | None = None     # an L2 chain: its modules (forks) by name; frames go only to them
+    owner: Any = None             # ... which lane's results these are (an L2 interval's id; None: the live lane)
     keep: Any = None              # ... and what of their results is theirs: keep(start_ms, end_ms)
     correction: bool = False      # ... whose events are corrections (counted late)
 
@@ -631,7 +632,8 @@ class Pipeline:
     # ------------------------------------------------------------------ L2 for video
 
     def _once(self, entry, output, late):
-        """Drop an event the other lane (live or L2) already committed with the same label and person and an end within
+        """``late``: which lane commits (an L2 interval's id, None for the live lane). Drop an event another lane already
+        committed with the same label and person and an end within
         ``SAME_EVENT_MS``: ownership by end time makes this rare; it is the stored record's safety net."""
         seen = entry.setdefault('ends', deque(maxlen=256))
 
@@ -710,8 +712,12 @@ class Pipeline:
         items = [item for item in lane['frames'] if name in item.names and item.media and item.frame.modality == 'video']
         if chain is None or not items:
             return
-        start, newest = items[0].frame.timestamp_ms, items[-1].frame.timestamp_ms
-        until = newest + int(config['tail_ms'])
+        first, newest = items[0].frame.timestamp_ms, items[-1].frame.timestamp_ms
+        # owned ranges never overlap: what an earlier interval owns (its tail) stays its own; those frames are this
+        # one's pre-roll
+        owned = max((high for low, high in entry['claims']), default=first - 1)
+        start = max(first, owned + 1)
+        until = max(newest + int(config['tail_ms']), start)
         recent = lane.get('recent') or deque()
         pre = [item for item in recent if item.frame.timestamp_ms >= start - config['max_lookback_ms']]
         for item in list(recent):
@@ -783,7 +789,8 @@ class Pipeline:
                 forks[member] = await _call(self.modules[member]['module'].fork)
                 if member in todo['snapshots'] and callable(getattr(forks[member], 'restore', None)):
                     await _call(forks[member].restore, todo['snapshots'][member])
-            context = _Context(lane, forks=forks, keep=keep, correction=not (self._paced and not self._keeping_up))
+            context = _Context(lane, forks=forks, keep=keep, correction=not (self._paced and not self._keeping_up),
+                               owner=todo['id'])
             leader, width = forks[name], int(lane.get('batch') or 1)
             source = self.inputs.get(todo['source'], {})
             while not self._closed:
@@ -1819,7 +1826,7 @@ class Pipeline:
                 return not any(low <= at <= high for low, high in claims)
         output = self._trim(entry, output, keep)
         if entry.get('claim_by') == 'end' and output:     # the safety net of L2 ownership: no event twice
-            output = self._once(entry, output, bool(context.forks))
+            output = self._once(entry, output, context.owner)
         if context.correction and output:
             output = [_corrected(item) for item in output] if isinstance(output, list) else _corrected(output)
         if output is None or output == []:
