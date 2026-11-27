@@ -24,6 +24,8 @@ profile                    worker (real model)                                  
 ``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
 ``rtmw.pose``              RTMW whole-body + YOLOX (rtmlib ONNX)                ``RemoteRTMW``
+``ultralytics.pose``       YOLO26-pose, 17 COCO keypoints (ultralytics)         ``RemoteRTMW``
+``image.embedding``        SigLIP image embedding (player crops, team split)    ``RemoteEmbedder``
 =========================  ==================================================  ====================
 
 ``active_speaker.lightasd`` (Light-ASD: face crops and sound -> speaking logits) answers ``RemoteActiveSpeaker``.
@@ -63,6 +65,11 @@ FIELDS = {
                             OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
                             OutputField('frames', 'integer', required=False),
                             OutputField('benchmark', 'object', required=False))),
+    'ultralytics.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
+                                   OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
+                                   OutputField('frames', 'integer', required=False),
+                                   OutputField('benchmark', 'object', required=False))),
+    'image.embedding': ('video', EMBEDDING),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
@@ -74,7 +81,7 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'rtmw.pose': 'rtmw', 'qwen3.asr.words': 'qwen3-asr',
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'rtmw.pose': 'rtmw', 'ultralytics.pose': 'yolo26-pose', 'image.embedding': 'siglip', 'qwen3.asr.words': 'qwen3-asr',
             'hosted.asr.words': 'hosted-asr', 'active_speaker.lightasd': 'lightasd', 'pixit.sources': 'pyannote-pixit',
             'sepformer.sources': 'sepformer', 'faster_whisper.align': 'whisper-align',
             'streaming.asr.words': config.get('backend')}.get(profile) or {
@@ -92,6 +99,9 @@ def capability(profile, config):
     if profile == 'rtmw.pose':
         from .rtmw_pose import check_config as check_rtmw
         check_rtmw(config)
+    if profile == 'ultralytics.pose':
+        from .ultralytics_sports import check_config as check_ultralytics
+        check_ultralytics(config, pose=True)
     if profile == 'active_speaker.lightasd':
         from .active_speaker import check_weights
         check_weights(config.get('sha256'), config.get('allow_noncommercial', False))
@@ -235,13 +245,15 @@ class _Pose(_Worker):
 
 class _RTMW(_Worker):
     """Consecutive frames -> boxes and joints. ``frame.data`` is one image, or ``request["frames"]`` images of one size
-    stacked by rows; ``request["timestamps_ms"]``: their capture times (for the detection interval)."""
+    stacked by rows; ``request["timestamps_ms"]``: their capture times (for the detection interval). ``points``: the
+    keypoints per person (RTMW 133; YOLO26-pose 17 with the same calls)."""
 
-    def __init__(self, models):
-        self.models = models
+    def __init__(self, models, points=None):
+        self.models, self.points = models, points
 
     def query(self, frame, request):
-        from .rtmw_pose import MAX_FRAMES, POINTS
+        from .rtmw_pose import MAX_FRAMES, POINTS as RTMW_POINTS
+        POINTS = self.points or RTMW_POINTS
         np = _numpy()
         request = request or {}
         if request.get('benchmark'):
@@ -362,6 +374,13 @@ def load(profile, config):
     if profile == 'rtmw.pose':
         from .rtmw_pose import RTMWModels
         return _RTMW(RTMWModels(**config))
+    if profile == 'ultralytics.pose':
+        from .ultralytics_sports import POINTS, UltralyticsPoseModels
+        return _RTMW(UltralyticsPoseModels(config.pop('path'), config.pop('sha256'), **config), POINTS)
+    if profile == 'image.embedding':
+        from .siglip_embedding import SigLIPEmbedder
+        embedder = SigLIPEmbedder.from_local(config.pop('path'), config.pop('sha256'), **config)
+        return _Embedding(lambda frame: embedder.embed(frame.data))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))
@@ -372,6 +391,7 @@ def load(profile, config):
 class _Client:
     def __init__(self, worker, profile, config):
         self.worker, self.model_id = worker, model_id(profile, config) if 'sha256' in config else profile
+        self.profile = profile
         self._sequence = 0
 
     @classmethod
@@ -551,11 +571,12 @@ class RemoteRTMW(_Client):
         frame = self._stacked(images, timestamps_ms[0])
         result, private = await self.worker.query(
             frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
-        columns = CONTRACTS['rtmw.pose'].columns
+        columns = CONTRACTS[getattr(self, 'profile', 'rtmw.pose')].columns
+        keypoint_set = 'coco17' if getattr(self, 'profile', None) == 'ultralytics.pose' else 'coco_wholebody133'
         found = [[] for _ in images]
         for pose, rows in zip(result['poses'], private.take('joints')):
             poses = found[pose.get('in_batch', 0)]
-            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set='coco_wholebody133',
+            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set=keypoint_set,
                               track_id=None, association_quality='unavailable', identity_verified=False,
                               speaker_association='unavailable', image_width=result['image_width'],
                               image_height=result['image_height'],

@@ -142,6 +142,12 @@ def _construct(profile, config):
     elif profile == 'rfdetr.trajectories':
         from .providers.detection_trajectories import RFDETRTrajectories
         provider = RFDETRTrajectories.from_local(**config)
+    elif profile == 'ultralytics.objects':
+        from .providers.ultralytics_sports import UltralyticsObjects
+        provider = UltralyticsObjects.from_local(**config)
+    elif profile == 'tracknet.ball':
+        from .providers.tracknet_ball import TrackNetBall
+        provider = TrackNetBall.from_local(**config)
     elif profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         provider = RFDETRObjects.from_local(**config, variant=profile.split('.')[1])

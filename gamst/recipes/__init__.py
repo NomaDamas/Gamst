@@ -151,8 +151,9 @@ def choose(recipe, include=(), exclude=()):
                 records=[item['id'] if isinstance(item, dict) else item for item in recipe.get('records', ()) if kept(item)])
 
 
-POSE_PARTS = {'mediapipe': 'mediapipe-pose', 'rtmw': 'rtmw-pose', 'sapiens2': 'sapiens2-pose'}
-POSE_SOURCES = {'mediapipe-pose': None, 'rtmw-pose': 'rtmw', 'sapiens2-pose': 'sapiens2'}
+POSE_PARTS = {'mediapipe': 'mediapipe-pose', 'rtmw': 'rtmw-pose', 'sapiens2': 'sapiens2-pose', 'yolo26': 'yolo26-pose'}
+# yolo26-pose reads like RTMW: its 17 COCO points are the first 17 of COCO-WholeBody (the same indices)
+POSE_SOURCES = {'mediapipe-pose': None, 'rtmw-pose': 'rtmw', 'sapiens2-pose': 'sapiens2', 'yolo26-pose': 'rtmw'}
 
 
 def with_pose(recipe, candidate, *, module=None):
@@ -346,12 +347,78 @@ def with_asr(recipe, candidate):
     return dict(recipe, modules=modules)
 
 
-def load(name, include=(), exclude=(), with_roles=(), keep=None):
+def _override(modules, changes, where):
+    """Module items with ``changes`` ({module: {key: value | null}}) merged in; ``{"remove": true}`` drops one."""
+    names = {item['name'] for item in modules}
+    unknown = set(changes) - names
+    if unknown:
+        raise ValueError(f"{where}: no module {', '.join(sorted(unknown))} to change")
+    result = []
+    for item in modules:
+        change = changes.get(item['name'])
+        if change is None:
+            result.append(item)
+            continue
+        if change.get('remove'):
+            continue
+        merged = dict(item)
+        for key, value in change.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+        result.append(merged)
+    return result
+
+
+def stack_names(raw):
+    return [name for name in (raw.get('stacks') or {}) if name != 'default']
+
+
+def variant(raw, *, stack=None, sport=None, timing=None):
+    """The recipe with its sport preset, then its stack, then the stack's timing variant applied (docs/sports.md).
+
+    ``"sports"``: {sport: {"modules": {...}}} plus ``"default"``; the sport's physics preset
+    (:mod:`gamst.sports.presets`) also goes to every ``ball-track`` item as ``sport``. ``"stacks"``: {stack:
+    {"summary", "modules", "realtime": {"modules"}, "post": {"modules"}}} plus ``"default"``. A recipe without them is
+    returned unchanged (asking for a stack or sport it does not have is an error)."""
+    sports, stacks = raw.get('sports') or {}, raw.get('stacks') or {}
+    if sport is not None and sport not in sports:
+        raise SystemExit(f"{raw['name']} has no sport {sport!r}; sports: {', '.join(k for k in sports if k != 'default') or 'none'}")
+    if stack is not None and stack not in stacks:
+        raise SystemExit(f"{raw['name']} has no stack {stack!r}; stacks: {', '.join(stack_names(raw)) or 'none'}")
+    sport = sport or sports.get('default')
+    stack = stack or stacks.get('default')
+    if not sport and not stack:
+        return raw
+    modules = [dict(item) for item in raw['modules']]
+    chosen = {}
+    if sport:
+        from ..sports.presets import SPORTS
+        for item in modules:
+            if item['use'] == 'ball-track' and sport in SPORTS:
+                item.setdefault('sport', sport)
+        modules = _override(modules, (sports[sport] or {}).get('modules') or {}, f"{raw['name']} sport {sport}")
+        chosen['sport'] = sport
+    if stack:
+        entry = stacks[stack]
+        modules = _override(modules, entry.get('modules') or {}, f"{raw['name']} stack {stack}")
+        if timing in TIMINGS and entry.get(timing):
+            modules = _override(modules, entry[timing].get('modules') or {}, f"{raw['name']} stack {stack} {timing}")
+        chosen.update(stack=stack, stack_summary=entry.get('summary'))
+    if timing:
+        chosen['timing'] = timing
+    return dict(raw, modules=modules, chosen=chosen)
+
+
+def load(name, include=(), exclude=(), with_roles=(), keep=None, *, stack=None, sport=None, timing=None):
     """A built-in recipe by name, or a recipe file path; validated, optional modules resolved.
 
-    ``keep(input item)``: an input that stays although nothing reads it (a camera that is only shown).
+    ``keep(input item)``: an input that stays although nothing reads it (a camera that is only shown). ``stack``,
+    ``sport``, ``timing``: the recipe's variant (:func:`variant`).
     """
     path, raw = read_recipe(name)
+    raw = variant(raw, stack=stack, sport=sport, timing=timing)
     recipe = choose(raw, include, exclude)
     for wanted in with_roles:
         recipe = add_role(recipe, wanted)
@@ -651,6 +718,62 @@ async def choose_pose(recipe, args, pipeline):
     return dict(model=item['candidate'], chosen=chosen, input_fps=fps, live_fps=round(live, 1), l2_fps=round(late, 1),
                 l2_workers=len(measured) - 1, persons=persons, free_memory_pct=free_pct(), measured=list(measured),
                 reason=reason)
+
+
+MEASURED_PARTS = ('detect', 'ball-model')     # model parts whose realtime candidate is chosen by a start benchmark
+
+
+async def choose_models(recipe, args, pipeline):
+    """Realtime: measure each ``detect`` / ``ball-model`` item that has ``"choose"`` on synthetic frames now (``size``,
+    ``seconds``), keep its candidate if it gives at least the input's frame rate, else its ``choose.fallback``; the
+    same rule as :func:`choose_pose` (one model per part in a run, the reason said). Post: nothing is chosen, the
+    item's candidate counts every frame."""
+    import time
+    import numpy as np
+    from ..capabilities import SensorMetadata
+    from ..plugins import InputFrame
+    if timing(args) != 'realtime':
+        return []
+    choices = []
+    for item in recipe['modules']:
+        if item['use'] not in MEASURED_PARTS or not item.get('choose') or item['name'] not in pipeline.modules:
+            continue
+        module, choose = pipeline.modules[item['name']]['module'], item['choose']
+        fps = _source_fps(args) or float(choose.get('camera_fps', 30))
+        height, width = choose.get('size', [720, 1280])
+        image = np.full((int(height), int(width), 3), 127, np.uint8)
+        seconds, calls, started = float(choose.get('seconds', 2)), 0, None
+        for index in range(10_000):
+            frame = InputFrame(image, 'video', index + 1, 'local-user', None, SensorMetadata(
+                source_id='gamst.choose', sensor_id='benchmark', sequence=index, coordinate_frame='camera.normalized'))
+            await module.process(frame)
+            if index == 0:
+                started = time.perf_counter()        # the first call also warms the model up
+                continue
+            calls += 1
+            if time.perf_counter() - started >= seconds and calls >= 3:
+                break
+        ms = (time.perf_counter() - started) * 1000 / max(1, calls)
+        reset = getattr(module, 'reset', None)
+        if callable(reset):
+            value = reset()
+            if hasattr(value, '__await__'):
+                await value
+        keeps = 1000 / ms >= fps
+        chosen = item['candidate'] if keeps or not choose.get('fallback') else choose['fallback']
+        choices.append(dict(module=item['name'], model=item['candidate'], chosen=chosen, ms_per_frame=round(ms, 1),
+                            fps_possible=round(1000 / ms, 1), input_fps=fps, size=[int(height), int(width)],
+                            reason=f"{item['candidate']} takes {ms:.1f} ms per {width}x{height} frame now "
+                                   f"({1000 / ms:.1f} fps); the input is {fps:g} fps: " +
+                                   ('it keeps up' if keeps else f"too slow for this machine, {chosen} counts instead"
+                                    if chosen != item['candidate'] else 'too slow, and no fallback: frames will wait')))
+    return choices
+
+
+def with_candidates(recipe, chosen):
+    """The recipe with ``chosen`` ({module: candidate}) as those modules' candidates."""
+    return dict(recipe, modules=[dict(item, candidate=chosen[item['name']]) if item['name'] in chosen else item
+                                 for item in recipe['modules']])
 
 
 def _pairs(values, option):
@@ -989,6 +1112,12 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
                    show=getattr(args, 'refine_show', False), cached=getattr(args, 'refine_cached', None))
+    context['timing'] = timing(args)
+    if getattr(args, 'court', None):     # the sports court reference: four marked corners (gamst/sports/court.py)
+        from ..sports.court import court_map
+        court = json.loads(Path(args.court).read_text())
+        court_map(court)        # refused here, before any model starts, when the points do not fix a plane
+        context['court'] = court
     context['stages'] = {item['name']: item for item in modules if item.get('in')}
     slow = slowdowns(getattr(args, 'debug_slowdown', None))
     unknown = set(slow) - {item['name'] for item in modules}
@@ -1049,6 +1178,25 @@ def slowdowns(values):
         except ValueError:
             raise SystemExit(f'--debug-slowdown {value!r}: write MODULE=MS@FROM-TO[,FROM-TO] (seconds)') from None
     return found
+
+
+def stacks_table(name):
+    """Per stack and timing: which part and candidate each changed module uses, and the stack's summary."""
+    _, raw = read_recipe(name)
+    table = dict(recipe=raw['name'], default=(raw.get('stacks') or {}).get('default'), stacks={})
+    for stack in stack_names(raw):
+        rows = {}
+        for each in TIMINGS:
+            recipe = variant(raw, stack=stack, timing=each)
+            rows[each] = {item['name']: {key: item[key] for key in ('use', 'candidate', 'tracker', 'settings', 'embed')
+                                         if key in item}
+                          for item in recipe['modules'] if item['use'] in MODEL_PARTS or 'tracker' in item}
+        table['stacks'][stack] = dict(summary=raw['stacks'][stack].get('summary'), **rows)
+    return table
+
+
+MODEL_PARTS = ('detect', 'ball-model', 'yolo26-pose', 'rtmw-pose', 'mediapipe-pose', 'sapiens2-pose', 'object-track',
+               'team-split', 'team-split-siglip')
 
 
 def _view_class(name):
@@ -1146,6 +1294,19 @@ async def run_pipeline(recipe, args):
                 pipeline = await build_pipeline(recipe, args, human)
             report['pose_choice'] = choice
             pipeline.notes['pose_choice'] = choice
+        models = await choose_models(recipe, args, pipeline)
+        if models:
+            print(json.dumps(dict(model_choice=models)), file=sys.stderr, flush=True)
+            changed = {entry['module']: entry['chosen'] for entry in models if entry['chosen'] != entry['model']}
+            if changed:
+                await pipeline.close()
+                recipe = with_candidates(recipe, changed)
+                pipeline = await build_pipeline(recipe, args, human)
+            report['model_choice'] = models
+            pipeline.notes['model_choice'] = models
+        if recipe.get('chosen'):
+            report['variant'] = recipe['chosen']
+            pipeline.notes['variant'] = recipe['chosen']
         pipeline.notes['timing'] = report['timing']
         view, idle, live, warned = None, None, None, dict(at=0., seen=set())
         pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
@@ -1387,6 +1548,14 @@ def _optional_options(parser):
                         help='add a registry role as a module (gamst recipe roles); @MS: look at one frame per MS')
 
 
+def _variant_options(parser):
+    parser.add_argument('--stack', metavar='NAME',
+                        help="which models fill the recipe's parts (sports recipes: ultralytics, roboflow, sota; "
+                             "gamst recipe stacks RECIPE lists them)")
+    parser.add_argument('--sport', metavar='NAME',
+                        help="the sport preset of a sports recipe (court, ball, fastest speed, detector labels)")
+
+
 def _module_options(parser):
     parser.add_argument('--pose', metavar='CANDIDATE',
                         help='the vision.pose candidate that counts (person-action-count: rtmw.l_384x288 by default; '
@@ -1590,8 +1759,13 @@ def main(argv=None):
                          help='venv: one environment per model (default); current: everything into this python')
     install.add_argument('--profile', help='profile to write (default ~/.config/gamst/profile.json)')
     _asr_options(install, consent=False)
+    install.add_argument('--timing', choices=TIMINGS,
+                         help="set up the stack's models for this timing only (default: both realtime and post)")
+    listing = actions.add_parser('stacks', help="a recipe's stacks: which candidate fills each part, realtime and post")
+    listing.add_argument('recipe')
     verify = actions.add_parser('check', help='can this camera run the recipe without aliasing?')
     verify.add_argument('recipe')
+    _variant_options(verify)
     verify.add_argument('--fps', type=float, help='camera frames per second (omit to get the required rate)')
     _speed_options(verify)
     learn = actions.add_parser('enroll', help='save a user-defined movement (example clips, a text or a rule), voice or person')
@@ -1645,6 +1819,10 @@ def main(argv=None):
     start.add_argument('--realtime', nargs='?', type=float, const=1., metavar='SPEED',
                        help='replay a recording at its own speed (or SPEED times it), as a live capture arrives')
     start.add_argument('--truth', help='ground-truth JSON to score the run against (gamst/scoring.py)')
+    start.add_argument('--court', metavar='FILE',
+                       help='sports recipes: the court reference, JSON {"court": "tennis.singles", "points": [[x, y] x 4]} '
+                            '(the four corners the camera sees, far left, far right, near right, near left; normalised '
+                            'image coordinates, or pixels with "image_size")')
     _store_options(start)
     start.add_argument('--headless', action='store_true', help='no window; events as JSON lines')
     start.add_argument('--serve', nargs='?', type=int, const=8765, metavar='PORT',
@@ -1692,6 +1870,7 @@ def main(argv=None):
     for command in (show, install, learn, start, search, seek):
         _optional_options(command)
         _module_options(command)
+        _variant_options(command)
     takes = start.add_argument_group('GAMST 240 takes (coin-flip)')
     takes.add_argument('--record-dir', help='one folder per take: raw.gmst, hud.mp4, refined.json/mp4 '
                                             '(default gamst-takes)')
@@ -1723,8 +1902,28 @@ def main(argv=None):
     if args.action in ('proposals', 'export'):
         from . import movement
         return getattr(movement, args.action)(args)
+    if args.action == 'stacks':
+        return print(json.dumps(stacks_table(args.recipe), indent=2, ensure_ascii=False))
+    variants = dict(stack=getattr(args, 'stack', None), sport=getattr(args, 'sport', None))
+    if args.action in ('run', 'enroll', 'find'):
+        variants['timing'] = timing(args)
+    elif args.action == 'setup' and stack_names(read_recipe(args.recipe)[1]):
+        # Both timing variants of the stack (or the one named), and the realtime fallbacks a start benchmark may pick;
+        # setup skips what an earlier pass installed.
+        for each in [args.timing] if getattr(args, 'timing', None) else TIMINGS:
+            each_recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()),
+                               getattr(args, 'with_roles', ()), None, **variants, timing=each)
+            fallbacks = {item['name']: item['choose']['fallback'] for item in each_recipe['modules']
+                         if each == 'realtime' and item['use'] in MEASURED_PARTS
+                         and (item.get('choose') or {}).get('fallback')}
+            for one in [each_recipe] + ([with_candidates(each_recipe, fallbacks)] if fallbacks else []):
+                setup(one, models=args.models, dry_run=args.dry_run, prefix=args.prefix, profile=args.profile,
+                      isolation=args.isolation)
+        return
+    else:
+        variants['timing'] = getattr(args, 'timing', None)
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
-                  _kept(args) if args.action == 'run' else None)
+                  _kept(args) if args.action == 'run' else None, **variants)
     if getattr(args, 'asr', None):
         recipe = with_asr(recipe, args.asr)
     if getattr(args, 'pose', None):

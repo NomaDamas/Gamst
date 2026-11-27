@@ -322,6 +322,48 @@ def _mediapipe(kind, filename, url, sha, size, verification, ram=768, size_sourc
     )
 
 
+# YOLO26 COCO weights of the ultralytics v8.4.0 release: size and SHA256 from the GitHub release asset digests
+# (read 2026-11-28 with gh api; not downloaded). The Ultralytics stack of the sports recipes (docs/sports.md).
+YOLO26_RELEASE = "https://github.com/ultralytics/assets/releases/download/v8.4.0/"
+YOLO26_WEIGHTS = {
+    "n": (5544453, "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef"),
+    "s": (20422725, "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b"),
+    "m": (44255705, "401cea9ab23ad19246ff7744859816bc599f350e93c9dd30367b6f0a0745d0b7"),
+    "l": (53211173, "9fe3c544f2b19bebad7ea41e76d7ad3d88b7c2f10d11d24430c5311f6b32db26"),
+    "x": (118667365, "9fdd44a31c504547ffb81d2c6d9e6dac3493c8eaa8b0398d3f43bae6c7003e92"),
+}
+YOLO26_POSE_WEIGHTS = {
+    "n": (7878574, "eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9"),
+    "s": (24151790, "a083adb42303728ae14c4bd6bd56d80da46f82fb2564dbd6f31dcc92ea321646"),
+    "m": (49036866, "2fbf16367022256a226035695c5c389384c6706e8bb8ab8fcd0e7976f05443c4"),
+    "l": (57995961, "ad33da8a29ea5772318c4c980844e47b56792d2b63815ad4e8e09c078c7d1abf"),
+    "x": (126242553, "08ed9e01d22a6f248b04f2f9992016aca9a32250b9ab57057d886a09d026700d"),
+}
+# COCO val mAP50-95 / T4 TensorRT10 ms the Ultralytics docs state (docs.ultralytics.com/models/yolo26, read
+# 2026-11-27; not measured by GAMST).
+YOLO26_STATED = {"n": "40.9 mAP, 1.7 ms", "s": "48.6 mAP, 2.5 ms", "m": "53.1 mAP, 4.7 ms", "l": "not recorded", "x": "not recorded"}
+ULTRALYTICS = ("ultralytics==8.4.212", "torch==2.8.0", "torchvision==0.23.0", "numpy>=1.24", "Pillow>=10",
+               "opencv-python>=4.8,<5", "lap>=0.5.12")
+ULTRALYTICS_LICENSE = "Ultralytics AGPL-3.0 (or Ultralytics Enterprise); weights the same"
+
+
+def _yolo26(size, pose=False):
+    name = f"yolo26{size}-pose.pt" if pose else f"yolo26{size}.pt"
+    bytes_, sha = (YOLO26_POSE_WEIGHTS if pose else YOLO26_WEIGHTS)[size]
+    return _candidate(
+        f"yolo26.pose_{size}" if pose else f"yolo26.{size}", "ultralytics.pose" if pose else "ultralytics.objects",
+        ULTRALYTICS, ("cpu", "mps", "cuda"), 2048, 1024, 600, ESTIMATED, ULTRALYTICS_LICENSE,
+        ("COCO-pose 17 keypoints; " if pose else f"COCO {YOLO26_STATED[size]} (Ultralytics docs, T4 TensorRT); ") +
+        "not measured by GAMST (docs/sports.md)",
+        (_weight(name, YOLO26_RELEASE + name, sha, bytes_, "GitHub release asset digest"),),
+        environment="ultralytics", python="3.11", automatic=False,
+        config={"device": "cpu"} if pose else {"device": "cpu", "tracker": "botsort"})
+
+
+TRACKNET_SOURCE = {"url": "https://github.com/qaz812345/TrackNetV3", "revision": "master"}
+SIGLIP_REV = "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed"
+SPORTS_ROLES_NOTE = "docs/sports.md"
+
 DETECTION = {
     "rfdetr.nano": _rfdetr(
         "nano", RF_NANO_SHA,
@@ -358,6 +400,7 @@ DETECTION = {
          _weight("mobileclip2_b.ts", "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts", MOBILECLIP_SHA, 253794476, "pinned source bytes")),
         environment="yoloe", config={"mode": "text", "labels": ["object"], "encoder_family": "mobileclip2:b", "device": "cpu"},
     ),
+    **{f"yolo26.{size}": _yolo26(size) for size in "nsmlx"},
     "custom": _candidate(
         "custom", "rfdetr.nano", ("rfdetr==1.12.1",), ("cpu", "mps", "cuda"),
         2048, 0, 3000, ESTIMATED, "user checkpoint license",
@@ -570,7 +613,41 @@ ROLES = {
         "rtmw.l_384x288": _rtmw(),
         "sapiens2.1b": _sapiens2("1b", "f5fed8b97b99698d5eea1d14ff0855d0b4c3f000", "2dab7014a17e99e460c18817325a71dd7a81ce48d87027f01c2ee7d7b3af969f", 6079194752),
         "sapiens2.5b": _sapiens2("5b", "ada1f29aa1fd454ca28665c700923a0101b6b24f", "b4848da8691c72e14d3ff71319f077363107129bf4128019eb39d072129b2a52", 20480899148),
+        **{f"yolo26.pose_{size}": _yolo26(size, pose=True) for size in "nsmlx"},
     }, _defaults("mediapipe.pose_lite")),
+    "vision.ball": Role("vision.ball", "A small fast ball or shuttlecock, one heatmap per frame (sports recipes)", {
+        "tracknetv3.shuttlecock": _candidate(
+            "tracknetv3.shuttlecock", "tracknet.ball", ("torch==2.8.0", "numpy>=1.24", "Pillow>=10", "opencv-python>=4.8,<5"),
+            ("cpu", "mps", "cuda"), 2048, 1024, 200, ESTIMATED,
+            "TrackNetV3 code and checkpoints MIT (README: 'including both the codebase and the pretrained model checkpoints')",
+            "authors: Shuttlecock Trajectory test F1 98.56 (TrackNetV3 README); not measured by GAMST. The checkpoint is on "
+            "Google Drive without a published digest: download TrackNetV3_ckpts.zip (README link) by hand, give the path "
+            "and sha256 of ckpts/TrackNet_best.pt in the module's config (docs/sports.md)",
+            (_weight("TrackNet_best.pt", "https://drive.google.com/file/d/1CfzE87a0f6LhBp0kniSl1-89zaLCZ8cA/view?usp=sharing",
+                     None, 0, "unpinned: inside TrackNetV3_ckpts.zip (TrackNetV3 README)"),),
+            environment="tracknet", python="3.11", automatic=False, source=TRACKNET_SOURCE,
+            config={"device": "cpu", "ensemble": "causal"}),
+    }, _defaults("tracknetv3.shuttlecock")),
+    "vision.image_embedding": Role("vision.image_embedding", "An embedding of an image crop (team split of players)", {
+        "siglip.base_patch16_224": _candidate(
+            "siglip.base_patch16_224", "image.embedding",
+            ("transformers==4.57.6", "torch==2.8.0", "safetensors==0.7.0", "numpy>=1.24", "Pillow>=10"),
+            ("cpu", "mps", "cuda"), 2048, 1024, 900, ESTIMATED, "Apache-2.0 (google/siglip-base-patch16-224 model card)",
+            "Roboflow Sports' team-split embedder; the vision tower of model.safetensors only; not measured by GAMST",
+            (_weight("model.safetensors", f"https://huggingface.co/google/siglip-base-patch16-224/resolve/{SIGLIP_REV}/model.safetensors",
+                     "2c63cb7d1f2e95ba501893cbb8faeb4ea9a3af295498d35097126228659c2af8", 812672320, "Hugging Face LFS digest"),),
+            environment="siglip", python="3.11", automatic=False, config={"device": "cpu"}),
+    }, _defaults("siglip.base_patch16_224")),
+    "vision.object_track": Role("vision.object_track", "Track IDs for a detector's objects (players), in the Pipeline process", {
+        "gamst.ocsort": _candidate(
+            "gamst.ocsort", None, ("numpy>=1.24",), ("cpu",), 128, 0, 1, ESTIMATED, "Apache-2.0 (GAMST NumPy OC-SORT)",
+            "docs/ocsort.md: detector-in-the-loop quality not accepted", in_process="gamst.providers.sports_track:ObjectTracker"),
+        "trackers.2_7_1": _candidate(
+            "trackers.2_7_1", None, ("trackers==2.7.1", "supervision>=0.31.0"), ("cpu",), 256, 0, 50, ESTIMATED,
+            "Apache-2.0 (roboflow/trackers); supervision MIT",
+            "SportsMOT HOTA in its README (YOLOX detections): ByteTrack 73.0, BoT-SORT 73.8, BoT-SORT+ReID 75.5; "
+            "not measured by GAMST", in_process="gamst.providers.sports_track:ObjectTracker"),
+    }, _defaults("gamst.ocsort")),
     "vision.mediapipe_graph": Role("vision.mediapipe_graph", "MediaPipe Framework C++ graph (pose, hands, face) in its own process", {
         "graph.holistic_cpu": _candidate(
             "graph.holistic_cpu", None, ("numpy>=1.24",), ("cpu",), 1024, 0, 10000, ESTIMATED,

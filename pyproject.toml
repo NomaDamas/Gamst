@@ -27,6 +27,14 @@ talknet = ["torch==2.8.0", "numpy>=1.24", "scipy>=1.10"]
 vision = ["opencv-python>=4.8,<5", "numpy>=1.24"]
 # Generic vision.rotation provider and `gamst demo rotation`; detection models stay optional.
 rotation = ["opencv-python>=4.8,<5", "numpy>=1.24", "Pillow>=10"]
+# Sports recipes (docs/sports.md): the computation parts need NumPy only; each stack's models are separate extras
+# that `gamst recipe setup RECIPE --stack NAME` installs, each in its own environment.
+sports = ["numpy>=1.24", "opencv-python>=4.8,<5", "Pillow>=10"]
+sports-trackers = ["trackers==2.7.1", "supervision>=0.31.0"]
+# Ultralytics YOLO26 (the Ultralytics stack) is AGPL-3.0 or Ultralytics Enterprise; GAMST stays Apache-2.0.
+sports-ultralytics = ["ultralytics==8.4.212", "torch==2.8.0", "torchvision==0.23.0", "lap>=0.5.12", "numpy>=1.24", "Pillow>=10", "opencv-python>=4.8,<5"]
+sports-tracknet = ["torch==2.8.0", "numpy>=1.24", "Pillow>=10", "opencv-python>=4.8,<5"]
+sports-siglip = ["transformers==4.57.6", "torch==2.8.0", "safetensors==0.7.0", "numpy>=1.24", "Pillow>=10"]
 audio = ["sounddevice>=0.4,<1", "numpy>=1.24"]
 vad = ["torch>=2.2,<3"]
 # TEN-VAD uses an explicitly hashed local native library and NumPy from `audio`;

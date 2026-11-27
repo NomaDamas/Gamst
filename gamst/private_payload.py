@@ -72,10 +72,12 @@ CONTRACTS = {
     'mediapipe.body.video': Contract('joints', 33, ('x', 'y', 'visibility', 'presence'), 4, 100., private_only=False),
     'sapiens2.pose': Contract('joints', 308, ('x', 'y', 'visibility'), 8, 100.),
     'rtmw.pose': Contract('joints', 133, ('x', 'y', 'visibility'), 64, 100.),   # up to 16 frames of 4 people
+    'ultralytics.pose': Contract('joints', 17, ('x', 'y', 'visibility'), 64, 100.),   # YOLO26-pose, COCO-17
     'mediapipe.face.video': Contract('joints', 9, ('x', 'y'), 4, 100., private_only=False),
     'speaker.embedding': Contract('embedding', max_items=4096),
     'face.embedding': Contract('embedding', max_items=4096),
     'body.embedding': Contract('embedding', max_items=4096),
+    'image.embedding': Contract('embedding', max_items=4096),
     'target_speech.local': Contract('waveform', limit=1e3),
     'pixit.sources': Contract('sources', max_items=8, limit=1e3),
     'sepformer.sources': Contract('sources', max_items=8, limit=1e3),
