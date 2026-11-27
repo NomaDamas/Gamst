@@ -81,7 +81,12 @@ Each capability takes the lane of the built-in recipe it was measured in, so a c
   first (`gamst recipe enroll person-action-count --kind person --image ...`, embeddings only, beside the recipe as
   `NAME.person.json`, the description kept as `description`); the person file must pass the check (consent, one person
   per sample, agreeing face crops or a voice); a name given must be the enrolled one. The description is kept with the
-  reference and shown back; it does not identify anyone (no model reads it). The refusal is `refusal()`'s sentence, the same as on the CLI, HUD and in MCP.
+  reference and shown back, as a description for people and the LLM; it does not identify anyone (no model reads it).
+- **Whom the examples are learnt from**: by default the largest visible person of each clip. With several people in
+  a clip, name the person: a point per clip (`{"file", "start_s", "end_s", "at": [x, y]}` or `"FILE@A-B@X,Y"`, x and y
+  in 0..1 of the frame; the track nearest the click is followed), or `what.movement.examples_from: "who"` (each clip
+  is learnt from the track the person binding names `who`; CLI `gamst recipe enroll ... --from-who NAME --person
+  P.json`, MCP `set_instruction` `clips_from: "who"`). The refusal is `refusal()`'s sentence, the same as on the CLI, HUD and in MCP.
 - **Validation**: `gamst.recipes.validate` (what `load` does for a file): every input is read from a source it supports,
   every `consumes` names an input or an earlier module, every part is in `PARTS`, the view exists; every reference the
   chosen recipe needs is given.

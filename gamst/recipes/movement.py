@@ -39,25 +39,36 @@ class Clip:
     method: str = 'examples'
     confirmed: bool = True
     proposal: str | None = None
+    at: tuple | None = None         # the person to learn from: the one at this point (x, y in 0..1 of the frame)
 
     def name(self):
         place = Path(self.path).name if isinstance(self.path, str) else self.kind
-        return place if self.start is None else f'{place}@{self.start:g}-{self.end:g}'
+        place = place if self.start is None else f'{place}@{self.start:g}-{self.end:g}'
+        return place if self.at is None else f'{place}@{self.at[0]:g},{self.at[1]:g}'
 
     def footage(self):
         path = str(Path(self.path).expanduser().resolve()) if isinstance(self.path, str) else self.path
         return (self.kind, path), self.start or 0., float('inf') if self.end is None else self.end
 
 
+def parse_at(text):
+    """``X,Y`` in 0..1 of the frame -> (x, y)."""
+    found = re.fullmatch(r'(\d*\.?\d+),(\d*\.?\d+)', str(text).strip())
+    if found is None or not all(0 <= float(value) <= 1 for value in found.groups()):
+        raise SystemExit(f'{text}: a point is X,Y in 0..1 of the frame (the person to learn from)')
+    return float(found[1]), float(found[2])
+
+
 def parse_clip(kind, text):
-    """``FILE`` or ``FILE@start-end`` in seconds (a file whose name looks like that wins)."""
-    found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)', text)
+    """``FILE``, ``FILE@start-end`` in seconds, or ``FILE@start-end@x,y`` (learn from the person at that point, x and y
+    in 0..1 of the frame; the track nearest the click is followed). A file whose name looks like that wins."""
+    found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?:@(\d*\.?\d+,\d*\.?\d+))?', text)
     if found is None or Path(text).is_file():
         return Clip(kind, text)
     start, end = float(found[2]), float(found[3])
     if not 0 < end - start <= MAX_CLIP_S:
         raise SystemExit(f'{text}: an interval is start < end, at most {MAX_CLIP_S:g} s')
-    return Clip(kind, found[1], start, end)
+    return Clip(kind, found[1], start, end, at=parse_at(found[4]) if found[4] else None)
 
 
 def _exemplar_item(recipe):
@@ -97,24 +108,83 @@ def exemplar_input(recipe):
 
 
 class _JointsTap:
-    """A module of a demonstration only: the joints of the largest person per frame, as a rule reads them, in memory
-    (for :func:`gamst.providers.movement_rule.calibrate`); it commits nothing and nothing of it is saved."""
+    """A module of a demonstration only: per frame, the joints of the largest person as a rule reads them (for
+    :func:`gamst.providers.movement_rule.calibrate`) and, with ``everyone``, every tracked person's channels, joints and
+    box (to learn from a chosen person, :func:`chosen_person`). In memory only; it commits nothing and nothing of it is
+    saved."""
 
-    def __init__(self, mapping, min_visibility):
-        self.mapping, self.min_visibility, self.points = mapping, min_visibility, {}
+    def __init__(self, mapping, min_visibility, everyone=False):
+        self.mapping, self.min_visibility, self.everyone = mapping, min_visibility, everyone
+        self.points, self.people = {}, {}
+
+    def _read(self, pose):
+        from ..providers.pose_exemplar import body_points, keypoint_reading, largest_pose, raw_score_gates
+        best = largest_pose([pose], self.mapping, self.min_visibility)
+        if best is None:
+            return None
+        channels, mask, _, aspect = best
+        own, visibility = keypoint_reading(pose, self.mapping, self.min_visibility, hands=True)
+        return [round(value, 5) for value in channels], mask, body_points(
+            pose['landmarks'], own, min_visibility=visibility, aspect=1. if aspect is None else aspect,
+            raw_gates=raw_score_gates(pose, own))
 
     def process(self, frame):
         from ..private_payload import poses_of
-        from ..providers.pose_exemplar import body_points, keypoint_reading, largest_pose, raw_score_gates
-        poses = poses_of(frame.data)
-        best = largest_pose(poses or [], self.mapping, self.min_visibility) if poses else None
+        from ..providers.pose_exemplar import largest_pose
+        poses = [pose for pose in poses_of(frame.data) or () if isinstance(pose, dict) and pose.get('landmarks')]
+        best = largest_pose(poses, self.mapping, self.min_visibility) if poses else None
         if best is not None:
-            _, _, index, aspect = best
-            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility, hands=True)
-            self.points[frame.timestamp_ms] = body_points(poses[index]['landmarks'], own, min_visibility=visibility,
-                                                          aspect=1. if aspect is None else aspect,
-                                                          raw_gates=raw_score_gates(poses[index], own))
+            read = self._read(poses[best[2]])
+            if read is not None:
+                self.points[frame.timestamp_ms] = read[2]
+        if self.everyone:
+            row = []
+            for pose in poses:
+                read = self._read(pose)
+                if read is not None:
+                    row.append((pose.get('track_id'), pose.get('bbox'), *read))
+            self.people[frame.timestamp_ms] = row
         return None
+
+
+def chosen_person(people, *, at=None, who=None, bindings=()):
+    """{timestamp_ms: (channels, mask, points)} of one person in a demonstration's frames (``people``: what
+    :class:`_JointsTap` kept with ``everyone``).
+
+    ``at`` (x, y): the person whose box holds the point (else the nearest box centre) in the first frame with anyone,
+    then that track (the label tool's ``enroll_clicked.py``). ``who``: in each frame, the track the person binding bound
+    to that name (bindings resolved retroactively over the clip)."""
+    from ..providers.person_binding import intervals_of, resolve
+    chosen, track = {}, None
+    intervals = intervals_of(list(bindings)) if who else None
+    for ts in sorted(people):
+        row = people[ts]
+        if who:
+            for item in row:
+                if item[0] and resolve(dict(track_id=item[0], end_ms=ts), intervals) == who:
+                    chosen[ts] = item[2:]
+                    break
+            continue
+        if track is None:
+            x, y = at
+            best = None
+            for item in row:
+                box = item[1]
+                if not box:
+                    continue
+                inside = box['x'] <= x <= box['x'] + box['width'] and box['y'] <= y <= box['y'] + box['height']
+                gap = ((box['x'] + box['width'] / 2 - x) ** 2 + (box['y'] + box['height'] / 2 - y) ** 2) ** .5 - inside
+                if best is None or gap < best[0]:
+                    best = (gap, item)
+            if best is None:
+                continue
+            track = best[1][0] or ''
+            chosen[ts] = best[1][2:]
+            continue
+        found = next((item for item in row if item[0] == track), None) if track else None
+        if found is not None:
+            chosen[ts] = found[2:]
+    return chosen
 
 
 def _joints_input(modules):
@@ -130,8 +200,12 @@ def _joints_input(modules):
 async def demonstration(recipe, args, clip, *, joints=False):
     """([(timestamp_ms, channels, mask), ...], channel contract) of one clip; frames and joints are not kept.
 
-    ``joints``: each sample also carries the largest person's joints of that frame (a fourth item, ``{joint: (x, y)}``
-    or None), held in memory for calibrating a rule and then dropped."""
+    ``joints``: each sample also carries the person's joints of that frame (a fourth item, ``{joint: (x, y)}`` or
+    None), held in memory for calibrating a rule and then dropped.
+
+    The person learnt from is the largest visible one, unless the clip names a point (``clip.at``, ``FILE@a-b@x,y``):
+    then the one there; or ``--from-who NAME`` (with ``--person``): then the track the person binding names so
+    (:func:`chosen_person`)."""
     from .. import Gamst
     from ..inputs import open_source
     from . import build_pipeline
@@ -146,22 +220,38 @@ async def demonstration(recipe, args, clip, *, joints=False):
         options = {key: place[key] for key in ('columns', 'time', 'modality') if key in place}
     sound = clip.kind == 'video' and place['use'] == 'microphone'
     source = open_source('sound' if sound else clip.kind, clip.path if clip.path is not True else None, **options)
-    run = argparse.Namespace(**dict(vars(args), offset_ms=None, input=None, **{name: None for name in SOURCES}))
+    run = argparse.Namespace(**dict(vars(args), offset_ms=None, input=None, who=None,
+                                    **{name: None for name in SOURCES}))
     setattr(run, clip.kind, clip.path)
     start, end = clip.start or 0., clip.end
+    from_who = getattr(args, 'from_who', None)
+    choose = clip.at is not None or bool(from_who)
+    references = []
+    if from_who:
+        if not getattr(args, 'person', None):
+            raise SystemExit(f'--from-who {from_who} learns from the person the binding names so: give --person P.json '
+                             '(an enrolled person, photos)')
+        binding = next((item for item in recipe['modules'] if item['use'] == 'person-binding'), None)
+        if binding is None:
+            raise SystemExit(f"--from-who: {recipe['name']} has no person-binding module")
+        modules = [*modules, dict(binding, optional=False)]
+        references = [item for item in recipe.get('references', ()) if item['kind'] == 'person']
+    bindings = []
     async with Gamst(consent=True) as human:
         if place['use'] == 'sensor':    # its samples are the channels: no module between
             from ..pipeline import Pipeline
             pipeline = Pipeline(human, 'demonstration').add_input(place['id'], source)
         else:
-            pipeline = await build_pipeline(dict(recipe, references=[]), run, human, sources={place['id']: source},
-                                            modules=modules, lanes=False)
+            pipeline = await build_pipeline(dict(recipe, references=references), run, human,
+                                            sources={place['id']: source}, modules=modules, lanes=False)
         tap = None
-        if joints and place['use'] != 'sensor' and _joints_input(modules):
+        if (joints or choose) and place['use'] != 'sensor' and _joints_input(modules):
             name, options = _joints_input(modules)
             from ..providers.pose_exemplar import MEDIAPIPE_BODY
-            tap = _JointsTap(options.get('mapping') or MEDIAPIPE_BODY, options.get('min_visibility', .5))
+            tap = _JointsTap(options.get('mapping') or MEDIAPIPE_BODY, options.get('min_visibility', .5), everyone=choose)
             pipeline.add_module('demonstration_joints', tap, consumes=[name])
+        elif choose:
+            raise SystemExit(f'{clip.name()}: choosing a person needs a pose model with tracks')
 
         async def on_frame(input_id, frame, records):
             origin = getattr(source, 'origin_ms', None)
@@ -177,9 +267,14 @@ async def demonstration(recipe, args, clip, *, joints=False):
             if seconds >= start and place['use'] == 'sensor':
                 samples.append((frame.timestamp_ms, frame.data['channels'], frame.data['mask']))
                 seen['channels'] = source.contract
-            elif seconds >= start:
+            elif seconds >= start or from_who:
                 for record in records:
                     capability = (record['observation'].get('capability') or {}).get('id')
+                    value = record['observation'].get('value')
+                    if capability == 'vision.person_binding' and isinstance(value, dict):
+                        bindings.extend(item for item in value.get('events') or () if isinstance(item, dict))
+                    if seconds < start:
+                        continue
                     if capability in FEATURES:
                         value = record['observation']['value']
                         samples.append((record['timestamp_ms'], value['channels'], value['mask']))
@@ -195,6 +290,14 @@ async def demonstration(recipe, args, clip, *, joints=False):
                          'part, FILE@start-end')
     if not samples:
         raise SystemExit(f'nothing to learn in {clip.name()} (no visible person, no audio, or no samples)')
+    if choose:
+        people = chosen_person({ts: row for ts, row in tap.people.items() if ts >= samples[0][0]}, at=clip.at,
+                               who=from_who, bindings=bindings)
+        if len(people) < 2:
+            missing = 'nobody at that point' if clip.at else f'{from_who!r} is not bound to anyone'
+            raise SystemExit(f'{clip.name()}: {missing} in this clip; give another point or clip')
+        samples = [(ts, channels, mask, points) for ts, (channels, mask, points) in sorted(people.items())]
+        return (samples if joints else [item[:3] for item in samples]), seen['channels']
     if joints:
         found = tap.points if tap is not None else {}
         samples = [(*item, found.get(item[0])) for item in samples]
@@ -416,6 +519,8 @@ async def enroll(recipe, args):
                 saved = template(mode, samples)
                 entries[key].append(dict(saved=dict(
                     saved, frames=len(samples), source=clip.name(), method=clip.method, confirmed=clip.confirmed,
+                    **({'person': dict(at=list(clip.at))} if clip.at else {'person': dict(who=args.from_who)}
+                       if getattr(args, 'from_who', None) else {}),
                     **({'proposal': clip.proposal} if clip.proposal else {})),
                     template=example(saved['value'], span_ms=saved.get('span_ms')), clip=samples))
             except ValueError as error:

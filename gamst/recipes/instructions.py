@@ -175,8 +175,13 @@ class Instructions:
 
     def _clip(self, item, place):
         from .movement import MAX_CLIP_S, Clip
-        if type(item) is not dict or set(item) - {'file', 'start_s', 'end_s'} or ('start_s' in item) != ('end_s' in item):
-            raise ValueError('a clip is {"file", and start_s with end_s if only a part of it is the movement}')
+        if type(item) is not dict or set(item) - {'file', 'start_s', 'end_s', 'at'} or ('start_s' in item) != ('end_s' in item):
+            raise ValueError('a clip is {"file", and start_s with end_s if only a part of it is the movement, and at: '
+                             '[x, y] (0..1 of the frame) for the person to learn it from}')
+        at = item.get('at')
+        if at is not None and not (type(at) is list and len(at) == 2 and all(
+                type(value) in (int, float) and 0 <= value <= 1 for value in at)):
+            raise ValueError('at is [x, y] in 0..1 of the frame: the person to learn the clip from')
         suffixes = SAMPLES if place['use'] == 'sensor' else (*SOUND, *VIDEO) if place['use'] == 'microphone' else VIDEO
         path = self._inside(item.get('file'), suffixes, MAX_CLIP_FILE)
         if path.suffix.lower() not in SAMPLES:
@@ -188,7 +193,8 @@ class Instructions:
         if start is not None and not (type(start) in (int, float) and type(end) in (int, float) and 0 <= start < end
                                       and end - start <= MAX_CLIP_S):
             raise ValueError(f'{item["file"]}: 0 <= start_s < end_s, at most {MAX_CLIP_S:g} s')
-        return Clip(kind, str(path), None if start is None else float(start), None if end is None else float(end))
+        return Clip(kind, str(path), None if start is None else float(start), None if end is None else float(end),
+                    at=None if at is None else (float(at[0]), float(at[1])))
 
     # ------------------------------------------------------------------ enrollment
 
@@ -229,7 +235,7 @@ class Instructions:
             mode=None, start=None, seconds=None, capture_fps=None, out=None, clips=None), **options}
         return asyncio.run(enroll(self.raw, argparse.Namespace(**given)))
 
-    async def _movement(self, *, file, proposals, rule, clips, negatives, mode, text, actor, combine=None):
+    async def _movement(self, *, file, proposals, rule, clips, negatives, mode, text, actor, combine=None, from_who=None):
         from .movement import _rule, exemplar_input
         from ..providers.movement_match import MAX_EXAMPLES
         text = None if text is None else movement_text(text)
@@ -252,6 +258,8 @@ class Instructions:
         if len(kinds) > 1:
             raise ValueError('clips of one movement are all video files or all sound files')
         extra = {} if rule is None else dict(rule='instruction', rule_value=rule, combine=combine)
+        if from_who:
+            extra.update(from_who=from_who, person=str(self._person_file(from_who)))
         saved = await self._enrolled(lambda: self._enroll(clips=found, text=text, name=text, mode=mode, **extra))
         return dict(saved, confirmed=saved['confirmed'] and actor == OWNERS[0])
 
@@ -292,7 +300,7 @@ class Instructions:
     # ------------------------------------------------------------------ changes
 
     async def set(self, kind, *, reference=None, terms=None, file=None, proposals=None, rule=None, clips=None, negatives=None,
-                  mode=None, text=None, actor=OWNERS[0], patterns=False, who=None, combine=None):
+                  mode=None, text=None, actor=OWNERS[0], patterns=False, who=None, combine=None, clips_from=None):
         """Set or replace the words or the movement of ``reference``: exactly one of ``terms``, ``file``, ``proposals``
         (IDs the owner confirmed), ``rule`` (with ``text``) or ``clips`` (with ``negatives``, ``mode``, ``text``); or a
         ``rule`` with ``clips`` (owner decision 58: the rule is the skeleton, the clips set its numbers and are compared
@@ -317,6 +325,8 @@ class Instructions:
             allowed = (*allowed, 'rule+clips')
         if combine not in (None, 'all', 'any') or combine and source != ['rule+clips']:
             raise ValueError("combine ('all' or 'any') is for a rule given with clips")
+        if clips_from not in (None, 'who') or clips_from and (who is None or clips is None):
+            raise ValueError("clips_from 'who' learns each clip from the person of who: give who and clips")
         if isinstance(who, dict):
             who = await self._who_object(who, kind, actor)
         if who is not None:
@@ -343,7 +353,8 @@ class Instructions:
                 value = await self._words(terms=terms, proposals=proposals, actor=actor, patterns=patterns)
             else:
                 value = await self._movement(file=file, proposals=proposals, rule=rule, clips=clips, negatives=negatives,
-                                             mode=mode, text=text, actor=actor, combine=combine)
+                                             mode=mode, text=text, actor=actor, combine=combine,
+                                             from_who=who if clips_from == 'who' else None)
             if kind == 'exemplar' and isinstance(value, dict):
                 value = dict(value, who=who) if who is not None else {key: item for key, item in value.items() if key != 'who'}
             label = value.get('label') if isinstance(value, dict) else None
@@ -355,6 +366,16 @@ class Instructions:
                     **({'who': who} if who is not None else {}))
 
     # ------------------------------------------------------------------ who (a person, few-shot only)
+
+    def _person_file(self, name):
+        """The enrolled person file of ``name``: enroll_person's in the first --clips folder, else the run's --person."""
+        if self.folders:
+            path = self.folders[0] / (re.sub(r'[^\w.-]', '_', name) + '.person.json')
+            if path.is_file():
+                return path
+        if getattr(self.args, 'person', None):
+            return Path(self.args.person)
+        raise ValueError(f'no person file of {name!r} to learn the clips from: enroll_person first')
 
     async def _who_object(self, who, kind, actor):
         """The name ``who`` = ``{name, text, photos, consent}`` stands for; photos are enrolled first. Refused unless it

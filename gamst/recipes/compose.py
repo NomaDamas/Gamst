@@ -266,25 +266,37 @@ def _clip_text(item, files, where):
     """``FILE@START-END`` (the enroll form) of one clip given as that string or as {file, start_s, end_s}; None if bad."""
     from .instructions import VIDEO
     if isinstance(item, str):
-        found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)', item)
-        item = dict(file=found[1], start_s=float(found[2]), end_s=float(found[3])) if found else dict(file=item)
-    if not isinstance(item, dict) or set(item) - {'file', 'start_s', 'end_s'}:
-        files.missing.append(f'{where}: a clip is {{"file", "start_s", "end_s"}} or "FILE@START-END".')
+        found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?:@(\d*\.?\d+),(\d*\.?\d+))?', item)
+        item = dict(file=found[1], start_s=float(found[2]), end_s=float(found[3]), **(
+            dict(at=[float(found[4]), float(found[5])]) if found[4] else {})) if found else dict(file=item)
+    if not isinstance(item, dict) or set(item) - {'file', 'start_s', 'end_s', 'at'}:
+        files.missing.append(f'{where}: a clip is {{"file", "start_s", "end_s", "at": [x, y] (the person to learn from, '
+                             '0..1 of the frame)}} or "FILE@START-END[@X,Y]".')
         return None
+    at = item.get('at')
+    if at is not None and not (type(at) is list and len(at) == 2 and all(type(v) in (int, float) and 0 <= v <= 1
+                                                                          for v in at)):
+        files.missing.append(f'{where}.at: [x, y] in 0..1 of the frame (the person to learn this clip from).')
+        return None
+    suffix = '' if at is None else f'@{at[0]:g},{at[1]:g}'
     path = files.get(item.get('file'), VIDEO, where, MAX_MEDIA)
     if path is None:
         return None
     start, end = item.get('start_s'), item.get('end_s')
     if start is None and end is None:
+        if at is not None:
+            files.missing.append(f'{where}.at: a point goes with start_s and end_s.')
+            return None
         return str(path)
     from .movement import MAX_CLIP_S
     if type(start) not in (int, float) or type(end) not in (int, float) or not 0 < end - start <= MAX_CLIP_S or start < 0:
         files.missing.append(f'{where}: start_s < end_s, at most {MAX_CLIP_S:g} s apart (one movement per clip).')
         return None
-    return f'{path}@{start:g}-{end:g}'
+    return f'{path}@{start:g}-{end:g}{suffix}'
 
 
-MOVEMENT_KEYS = ('text', 'rule', 'examples', 'negatives', 'combine', 'exemplar', 'label', 'clips')   # clips: examples
+MOVEMENT_KEYS = ('text', 'rule', 'examples', 'negatives', 'combine', 'exemplar', 'label', 'clips',   # clips: examples
+                 'examples_from')
 
 
 def _movement(what, files, missing):
@@ -310,6 +322,10 @@ def _movement(what, files, missing):
         return None
     if negatives and not examples:
         missing.append('what.movement.negatives: look-alikes go with examples of the movement (what.movement.examples).')
+        return None
+    if movement.get('examples_from') not in (None, 'who', 'largest', 'at'):
+        missing.append("what.movement.examples_from: 'who' (learn each clip from the person of who, by the person "
+                       "binding), 'at' (each clip's own point) or 'largest' (the largest visible person, the default).")
         return None
     if movement.get('combine') not in (None, 'all', 'any'):
         missing.append("what.movement.combine: 'all' (the rule and an example: count mode's default) or 'any' (either: "
@@ -346,7 +362,7 @@ def _movement(what, files, missing):
     text = movement.get('text')
     if rule is None:
         return dict(exemplar=None, rule=None, text=text, label=movement.get('label') or text or 'movement',
-                    examples=clips, negatives=looks, combine=None)
+                    examples=clips, negatives=looks, combine=None, examples_from=movement.get('examples_from'))
     if isinstance(rule, str):
         path = files.get(rule, ('.json',), 'what.movement.rule')
         if path is None:
@@ -368,7 +384,7 @@ def _movement(what, files, missing):
         missing.append(f'what.movement.rule: {error}.')
         return None
     return dict(exemplar=None, rule=rule, text=text, label=movement.get('label') or text, examples=clips,
-                negatives=looks, combine=movement.get('combine'))
+                negatives=looks, combine=movement.get('combine'), examples_from=movement.get('examples_from'))
 
 
 def _words(what, files, missing):
@@ -548,9 +564,12 @@ def _enroll(argv):
     return None
 
 
-def enroll_examples(movement, path, *, profile=None, actor='user'):
-    """Enroll the request's example clips (and its rule, when given) into ``path``; an error sentence or None."""
+def enroll_examples(movement, path, *, profile=None, actor='user', who=None):
+    """Enroll the request's example clips (and its rule, when given) into ``path``; an error sentence or None.
+    ``who`` ({name, person}): learn each clip from the track the person binding names so (``--from-who``)."""
     argv = ['--mode', 'sequence', '--name', movement['label'], '--out', str(path)]
+    if who:
+        argv += ['--from-who', who['name'], '--person', str(who['person'])]
     for clip in movement['examples']:
         argv += ['--video', clip]
     for clip in movement['negatives']:
@@ -737,7 +756,11 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
     if movement and movement['examples']:
         movement_path = recipe_path.with_suffix('.movement.json')
         movement_path.parent.mkdir(parents=True, exist_ok=True)
-        problem = enroll_examples(movement, movement_path, profile=profile, actor=actor)
+        if movement.get('examples_from') == 'who' and not who:
+            return dict(ok=False, missing=["what.movement.examples_from 'who': name the person (who) to learn the clips "
+                                           'from.'])
+        problem = enroll_examples(movement, movement_path, profile=profile, actor=actor,
+                                  who=who if movement.get('examples_from') == 'who' else None)
         if problem:
             return dict(ok=False, missing=[f'what.movement.examples: {problem}'])
         enrolled = json.loads(movement_path.read_text())

@@ -289,19 +289,21 @@ class Combinations(unittest.TestCase):
                 Path(path).write_text(json.dumps(dict(kind='person', name=who['name'], consent=dict(statement='ok'),
                                                       samples=[dict(persons=1)] * 3, face=[[1., 0.], [1., 0.1], [1., .05]])))
 
-            def examples(movement, path, profile=None, actor='user'):
-                seen['examples'] = movement
+            def examples(movement, path, profile=None, actor='user', who=None):
+                seen['examples'], seen['from'] = movement, who
                 Path(path).write_text(json.dumps(dict(kind='exemplar', mode='rule+sequence', id='x', rule_source='text+clips',
                                                       threshold_source='leave_one_out', enter=.2, exit=.3)))
             request = dict(name='gwan', inputs=dict(video=str(folder / 'b.mp4')),
                            who=dict(name='감스트', text='회색 맨투맨, 검은 뿔테', photos=[str(folder / 'a.jpg')], consent='owner, 2026-11-28'),
                            what=dict(movement=dict(text='관제탑', rule=RULE | dict(channels='vision.pose_channels', steps=[
                                dict(when=dict(measure=dict(distance=['left_wrist', 'right_wrist']), op='lt', value=1.2))]),
-                               examples=[dict(file=str(folder / 'b.mp4'), start_s=1, end_s=2), str(folder / 'b.mp4') + '@3-4'])))
+                               examples=[dict(file=str(folder / 'b.mp4'), start_s=1, end_s=2), str(folder / 'b.mp4') + '@3-4@0.5,0.4'],
+                               examples_from='who')))
             with mock.patch.object(C, 'enroll_photos', photos), mock.patch.object(C, 'enroll_examples', examples):
                 result = C.compose(request, out=str(folder / 'gwan.json'))
             self.assertTrue(result['ok'], result.get('missing'))
-            self.assertEqual(seen['examples']['examples'], [f'{folder / "b.mp4"}@1-2', f'{folder / "b.mp4"}@3-4'])
+            self.assertEqual(seen['examples']['examples'], [f'{folder / "b.mp4"}@1-2', f'{folder / "b.mp4"}@3-4@0.5,0.4'])
+            self.assertEqual(seen['from']['name'], '감스트')
             self.assertIn('--exemplar', result['run'])
             self.assertEqual(result['run'][result['run'].index('--person') + 1], str(folder / 'gwan.person.json'))
             self.assertEqual(json.loads((folder / 'gwan.person.json').read_text())['description'], '회색 맨투맨, 검은 뿔테')
@@ -354,6 +356,75 @@ class Instructions(unittest.TestCase):
             asyncio.run(found.set('exemplar', rule=RULE, text='t', who=dict(name='감스트')))
         asyncio.run(found.set('exemplar', rule=RULE, text='t', who=dict(name='감스트', photos=['a.jpg'], consent='owner')))
         self.assertEqual(found.enroll_person.call_args.kwargs['images'], ['a.jpg'])
+
+
+
+
+class ChosenPerson(unittest.TestCase):
+    """Example clips learn from the clicked person or the person of who, not whoever is largest."""
+
+    def people(self):
+        box = lambda x: dict(x=x, y=.1, width=.3, height=.8)
+        return {ts: [('a', box(.05), [1.] * 13, [True] * 13, {'a': (0., 0.)}),
+                     ('b', box(.6), [2.] * 13, [True] * 13, {'b': (0., 0.)})] for ts in (100, 133, 166)}
+
+    def test_a_point_picks_the_box_there_and_follows_its_track(self):
+        from gamst.recipes.movement import chosen_person, parse_clip
+        chosen = chosen_person(self.people(), at=(.7, .5))
+        self.assertEqual([channels[0] for channels, _, _ in chosen.values()], [2.] * 3)
+        clip = parse_clip('video', 'a.mp4@62.051-63.951@0.7,0.5')
+        self.assertEqual((clip.start, clip.end, clip.at), (62.051, 63.951, (.7, .5)))
+        self.assertEqual(clip.name(), 'a.mp4@62.051-63.951@0.7,0.5')
+        with self.assertRaises(SystemExit):
+            parse_clip('video', 'a.mp4@1-2@1.5,0.2')
+
+    def test_who_picks_the_track_the_binding_names(self):
+        from gamst.recipes.movement import chosen_person
+        bindings = [dict(event='person.bound', track_id='a', who='감스트', start_ms=0, end_ms=500, by='face',
+                         retroactive=True)]
+        chosen = chosen_person(self.people(), who='감스트', bindings=bindings)
+        self.assertEqual([channels[0] for channels, _, _ in chosen.values()], [1.] * 3)
+        self.assertEqual(chosen_person(self.people(), who='Q', bindings=bindings), {})
+
+
+HAS_CV = all(__import__('importlib.util').util.find_spec(name) for name in ('cv2', 'numpy'))
+
+
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class Readers(unittest.IsolatedAsyncioTestCase):
+    """count_events and get_timeline give each occurrence its own span and its evidence."""
+
+    async def test_each_occurrence_with_its_span_and_evidence(self):
+        from gamst import Gamst
+        from gamst.capabilities import CapabilitySpec, OutputField, SensorMetadata
+        from gamst.providers.person_binding import CAPABILITY
+        from tests.test_speaker_verify import now
+        async with Gamst(consent=True) as human:
+            start = now() - 5000
+            human.register_capability(CapabilitySpec('temporal.exemplar_events', 'temporal.exemplar_events', 'video', 'test',
+                                                     '1', (OutputField('count', 'integer'), OutputField('events', 'array')),
+                                                     'native'))
+            human.register_capability(CapabilitySpec(CAPABILITY, CAPABILITY, 'video', 'test', '1',
+                                                     (OutputField('events', 'array'),), 'frame'))
+            evidence = lambda ts: dict(combine='all', rule=dict(satisfied=True, steps_ms=[ts - 600, ts - 300, ts]),
+                                       example=dict(index=2, distance=.2, enter=.26, close=True))
+            matched = [dict(event='exemplar.matched', track_id='a', who='unknown', start_ms=ts - 600, end_ms=ts,
+                            label='관제탑', method='rule+examples', evidence=evidence(ts)) for ts in (start + 700, start + 1400)]
+            await human.push_observation('temporal.exemplar_events', dict(count=2, events=matched),
+                                         sensor=SensorMetadata('t', 'camera', 1), timestamp_ms=start + 1400)
+            await human.push_observation(CAPABILITY, dict(events=[dict(event='person.bound', track_id='a', who='감스트',
+                                                                       start_ms=start, end_ms=start + 2000, by='face')]),
+                                         sensor=SensorMetadata('t', 'camera', 2), timestamp_ms=start + 2000)
+            found = await human.count_events('temporal.exemplar_events', event='exemplar.matched', who='감스트')
+            self.assertEqual(found['count'], 2)
+            spans = [(item['event']['start_ms'], item['event']['end_ms']) for item in found['evidence']]
+            self.assertEqual(spans, [(start + 100, start + 700), (start + 800, start + 1400)])     # two, never merged
+            self.assertEqual(found['evidence'][0]['event']['evidence']['example']['index'], 2)
+            timeline = await human.get_timeline(start_ms=start, end_ms=start + 2000, step_ms=500,
+                                                capabilities=['temporal.exemplar_events'], who='감스트')
+            shown = [entry['value'] for entry in timeline['evidence'].values() if entry['kind'] == 'events']
+            self.assertEqual([(item['start_ms'], item['end_ms']) for item in shown], spans)
+            self.assertTrue(all(item['evidence']['rule']['satisfied'] for item in shown))
 
 
 if __name__ == '__main__':

@@ -246,7 +246,9 @@ def movement_value(positives, negatives=(), *, rule=None, mode='sequence', calib
                                      template=example(saved['value'], span_ms=saved.get('span_ms')), clip=plain))
     thresholds = derive(mode, entries['positives'], entries['negatives'], enter0=enter0, exit0=exit0,
                         min_hold_ms=min_hold_ms)
-    value = dict(kind='exemplar', format=2, label=label, mode=mode, method='examples', confirmed=True, **thresholds,
+    from ..providers.pose_exemplar import CHANNELS_VERSION
+    value = dict(kind='exemplar', format=2, label=label, mode=mode, channels=f'vision.pose_channels@{CHANNELS_VERSION}.rtmw',
+                 method='examples', confirmed=True, **thresholds,
                  positives=[entry['saved'] for entry in entries['positives']],
                  negatives=[entry['saved'] for entry in entries['negatives']])
     if rule is None:
