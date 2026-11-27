@@ -5,8 +5,12 @@ Worktree `.local-run/wt-sports`. Branched from Main at `e137433`, then rebased o
 
 ## 0. Current state (2026-11-28) — read first
 
+- PR #377 (draft, base `feat/realtime-pose`): not to be merged without the owner's OK; retarget to Main after #373.
 - Owner decisions: build per the final plan; GCP for measurement; everything before GCP is done in this branch.
-- Done: the parts, stacks, six recipes, adapters and docs below; `tests/test_sports.py` (39 tests, synthetic data,
+- Tests: `tests/test_sports.py` 41 pass. Full suite (unittest discover, Mac): the same 15 errors as base `278b8d4`; the
+  2 failures it showed were fixed in `646babe` (run alone, pass); the full suite was not rerun after that fix.
+- An independent review found 13 defects; all fixed (lessons 9-10).
+- Done: the parts, stacks, six recipes, adapters and docs below; `tests/test_sports.py` (41 tests, synthetic data,
   one real Pipeline + Store test). See `docs/sports.md`.
 - Not done (needs downloads or GCP): any run with real weights or footage; M1-M3 measurements; pinning the TrackNetV3
   checkpoint digest (Google Drive zip, no published digest).
