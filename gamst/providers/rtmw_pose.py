@@ -10,6 +10,9 @@ in each box. ``det_every_ms`` 0 (default) detects on every frame, as rtmlib's ``
 detects at most that often and in between uses the box around the previous frame's body keypoints (rtmlib
 ``PoseTracker``), which is cheaper but follows a cut or a new person only at the next detection.
 
+A frame without a person (a fade to black, an empty room) gives no pose: an empty list, also inside a batch, never
+an error.
+
 Frames may come in a batch of consecutive ones (:meth:`RTMWModels.infer_batch`, ``PerceptionPlugin.process_batch``):
 the pose model then runs once on all their crops. Measured on an M2 Pro (CoreML, GPU): 23 ms for one crop, 14-15 ms
 per crop for 4-8 (docs/measurements/testbed-2026-11-26.md). In a batch, a frame without a detection uses the box of
@@ -41,6 +44,12 @@ COMPUTE_UNITS = ('ALL', 'CPUAndGPU', 'CPUOnly', 'CPUAndNeuralEngine')
 # carries their joints together); the pose model runs on at most MAX_CROPS crops per session call.
 MAX_FRAMES, MAX_POSES, MAX_CROPS = 16, 4, 16
 FIXED_BATCHES = (8, 4, 2)   # CoreML: a session of each fixed batch size (about 300 MB each); 1 crop uses the plain one
+# YOLOX's NMS tail has shapes that depend on how many boxes it finds. On CoreML a frame without a person gives a
+# zero-sized one, which the CoreML execution provider refuses ("has zero elements. This is not supported by the CoreML
+# EP"): the session failed and the worker with it. With static input shapes only, CoreML takes the backbone and the CPU
+# the NMS tail: the same boxes, 27.1 against 27.5 ms per detection, and an empty list for an empty frame
+# (docs/measurements/testbed-2026-11-26.md "No person in the frame").
+DETECTOR_COREML = {'RequireStaticInputShapes': '1'}
 
 
 def _sha256(path):
@@ -149,16 +158,17 @@ class RTMWModels:
             cache = coreml_cache(path, cache_dir)
             clear_dead_coreml_temp()
 
-            def providers(sha, name):
+            def providers(sha, name, **extra):
                 # one compiled copy per model, unit and batch size, reused by every run (without it CoreML writes a
                 # 200-400 MB copy per session into $TMPDIR, left behind whenever a worker is killed)
-                options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units}
+                options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units, **extra}
                 if cache is not None:
                     folder = cache / f'{sha[:16]}-{compute_units}-{name}'
                     folder.mkdir(parents=True, exist_ok=True)
                     options['ModelCacheDirectory'] = str(folder)
                 return [('CoreMLExecutionProvider', options), 'CPUExecutionProvider']
-            self.detector.session = ort.InferenceSession(str(det_path), providers=providers(det_sha256, 'det'))
+            self.detector.session = ort.InferenceSession(str(det_path), providers=providers(
+                det_sha256, 'det-static', **DETECTOR_COREML))
             self.pose.session = ort.InferenceSession(str(path), providers=providers(sha256, 'dynamic'))
             # A session whose batch size changes from call to call specializes again for every new size (about
             # 300 ms on CoreML); one session per fixed size never does. The session above takes what is left.
