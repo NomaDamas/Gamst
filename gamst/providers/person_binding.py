@@ -186,10 +186,10 @@ class PersonBinding:
     name = 'person_binding'
 
     def __init__(self, face=None, body=None, *, references=('person',), session=None, face_threshold=.35,
-                 face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, body_every_ms=500, lost_ms=5000,
-                 session_size=32, face_indices=MEDIAPIPE_FACE_POINTS):
-        if face is None and body is None:
-            raise ValueError('person_binding needs a face or a body embedder')
+                 face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, confirm_every_ms=1000,
+                 body_every_ms=500, lost_ms=5000, continue_ms=1000, continue_iou=.3, body_reject=.6, session_size=32,
+                 max_images=32, face_indices=MEDIAPIPE_FACE_POINTS):
+        """Without a face and a body model it binds nobody (no person can be enrolled into it either)."""
         if not face_reject <= face_threshold:
             raise ValueError('require face_reject <= face_threshold')
         import secrets
@@ -197,32 +197,38 @@ class PersonBinding:
         session = session or f'live:{secrets.token_hex(6)}'
         self.face, self.body, self.reference_names, self.session = face, body, tuple(references), session
         self.face_threshold, self.face_reject, self.body_threshold, self.margin = face_threshold, face_reject, body_threshold, margin
-        self.face_every_ms, self.body_every_ms, self.lost_ms = int(face_every_ms), int(body_every_ms), int(lost_ms)
-        self.session_size, self.face_indices = session_size, tuple(face_indices)
+        self.face_every_ms, self.confirm_every_ms = int(face_every_ms), int(confirm_every_ms)
+        self.body_every_ms, self.lost_ms = int(body_every_ms), int(lost_ms)
+        self.continue_ms, self.continue_iou, self.body_reject = int(continue_ms), float(continue_iou), float(body_reject)
+        self.session_size, self.max_images, self.face_indices = session_size, int(max_images), tuple(face_indices)
         self._args = dict(references=self.reference_names, session=self.session, face_threshold=face_threshold,
                           face_reject=face_reject, body_threshold=body_threshold, margin=margin,
-                          face_every_ms=face_every_ms, body_every_ms=body_every_ms, lost_ms=lost_ms,
-                          session_size=session_size, face_indices=self.face_indices)
-        self.version = f"1.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
+                          face_every_ms=face_every_ms, confirm_every_ms=confirm_every_ms, body_every_ms=body_every_ms,
+                          lost_ms=lost_ms, continue_ms=continue_ms, continue_iou=continue_iou, body_reject=body_reject,
+                          session_size=session_size, max_images=max_images, face_indices=self.face_indices)
+        self.version = f"2.{getattr(face, 'model_id', 'noface')}.{getattr(body, 'model_id', 'nobody')}"
         self.spec = CapabilitySpec(
             CAPABILITY, CAPABILITY, 'video', 'gamst.person_binding', self.version,
             (OutputField('tracks', 'array'), OutputField('bound', 'object'), OutputField('events', 'array')),
             'frame', stateful=True, freshness_ms=1000, interpretation='estimate', devices=('cpu',), license='Apache-2.0')
         self.persons, self._values = [], {}
+        self.counts = dict(face_embeddings=0, body_embeddings=0, unpaired_images=0, frames=0, scored_frames=0)
         self.reset()
 
     # ------------------------------------------------------------------ references
 
     def bind(self, pipeline):
-        from ..person_reference import check, name_of
+        """The run's person references that are given (none is allowed: a person can be enrolled while it runs)."""
+        from ..person_reference import check, name_of, refusal
         found = {}
         for key in self.reference_names:
             reference = pipeline.references.get(key)
-            if reference is None or reference['kind'] != 'person':
-                raise ValueError(f'person_binding needs a person reference named {key!r}')
+            if reference is None:
+                continue
+            if reference['kind'] != 'person':
+                raise ValueError(f'person_binding reads person references; {key!r} is a {reference["kind"]} reference')
             verdict = check(reference['value'], session=self.session)
             if not verdict['ok']:
-                from ..person_reference import refusal
                 raise ValueError(refusal(name_of(reference['value'], key), verdict['problems']))
             found[key] = reference['value']
         self.set_references(found)
@@ -240,11 +246,14 @@ class PersonBinding:
                          or value.get('session') is None or value.get('session') != self.session):
                 body = []      # another model, or clothes seen in another video: not trusted here
             persons.append(_Person(name_of(value, key), face, body, self.session_size))
-        if not persons:
-            raise ValueError('person_binding has no person reference')
+        if persons and self.face is None and self.body is None:
+            raise ValueError('person_binding has no face or body model set up: run gamst recipe setup')
         names = [person.name for person in persons]
         if len(set(names)) != len(names):
             raise ValueError(f"two person references have the same name: {', '.join(names)}")
+        kept = {person.name: person.session for person in self.persons}
+        for person in persons:          # a person added while the run goes on keeps the others' appearance glue
+            person.session.extend(kept.get(person.name, ()))
         self.persons, self._values = persons, dict(values)
 
     # ------------------------------------------------------------------ L2 (gamst.pipeline)
@@ -312,6 +321,7 @@ class PersonBinding:
     def reset(self):
         self._collect = getattr(self, '_collect', None)
         self.bindings, self._scores, self._poses, self._boxes = TrackBindings(), {}, {}, {}
+        self._images, self._camera_ms, self._kept_ms = {}, None, None
         self._handover, self._namespace = [], None
         for person in self.persons:
             person.session.clear()
@@ -342,27 +352,42 @@ class PersonBinding:
         except ValueError:      # too small or unclear for the model
             return None
 
+    def _due(self, track, ts, kind):
+        """Whether a track's face (or body) is looked at in this frame: often while it is unconfirmed, again only after
+        ``confirm_every_ms`` once it is bound. Every track is looked at; nothing is looked at on every frame."""
+        state = self._scores.get(track) or {}
+        last = state.get(kind + '_ms')
+        every = self.confirm_every_ms if self.bindings.who(track) is not None else \
+            self.face_every_ms if kind == 'face' else self.body_every_ms
+        return last is None or ts - last >= every
+
     async def _score(self, track, pose, image, ts):
-        height, width = image.shape[:2]
         state = self._scores.setdefault(track, dict(face=None, face_ms=None, body=None, body_ms=None, body_embedding=None))
-        if self.face is not None and any(person.face is not None for person in self.persons) and \
-                (state['face_ms'] is None or ts - state['face_ms'] >= self.face_every_ms):
-            indices, visibility = face_reading(pose, self.face_indices)
-            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
-                                                 min_visibility=visibility))
-            embedding = await self._embed(self.face, crop)
-            if embedding is not None:
-                state['face'] = {person.name: person.face_score(embedding) for person in self.persons}
-                state['face_ms'] = ts
-        if self.body is not None and pose.get('bbox') and (state['body_ms'] is None or ts - state['body_ms'] >= self.body_every_ms):
-            embedding = await self._embed(self.body, body_crop(image, pose['bbox']))
-            if embedding is not None:
-                state['body_embedding'] = embedding
-                state['body'] = {person.name: person.body_score(embedding) for person in self.persons}
+        if image is not None and self.persons:
+            height, width = image.shape[:2]
+            if self.face is not None and any(person.face is not None for person in self.persons) and self._due(track, ts, 'face'):
+                indices, visibility = face_reading(pose, self.face_indices)
+                crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
+                                                     min_visibility=visibility))
+                state['face_ms'] = ts      # tried: a turned head is tried again at the same pace, not on the next frame
+                embedding = await self._embed(self.face, crop)
+                if embedding is not None:
+                    self.counts['face_embeddings'] += 1
+                    state['face'] = {person.name: person.face_score(embedding) for person in self.persons}
+                    state['face_seen_ms'] = ts
+            if self.body is not None and pose.get('bbox') and self._due(track, ts, 'body'):
                 state['body_ms'] = ts
+                embedding = await self._embed(self.body, body_crop(image, pose['bbox']))
+                if embedding is not None:
+                    self.counts['body_embeddings'] += 1
+                    state['body_embedding'] = embedding
+                    state['body'] = {person.name: person.body_score(embedding) for person in self.persons}
+                    state['body_seen_ms'] = ts
         for key in ('face', 'body'):     # a score is evidence about now, not about a minute ago
-            if state[key + '_ms'] is not None and ts - state[key + '_ms'] > 1000:
+            if state.get(key + '_seen_ms') is not None and ts - state[key + '_seen_ms'] > 1000:
                 state[key] = None
+                if key == 'body':
+                    state['body_embedding'] = None
         return state
 
     def _best(self, scores, threshold):
@@ -374,12 +399,16 @@ class PersonBinding:
             return None
         return ranked[0][1], ranked[0][0]
 
+    def _fresh(self, scores, kind, ts):
+        """The scores of this frame only (a decision is made on what was just seen)."""
+        return (scores.get(kind) or {}) if scores.get(kind + '_seen_ms') == ts else {}
+
     def _decide(self, track, scores, ts, events, candidates):
         bindings = self.bindings
         if track.startswith('frame:'):      # the tracker gave this pose no track: nothing to bind it over time
             return
         current = bindings.who(track)
-        face, body = scores.get('face') or {}, scores.get('body') or {}
+        face, body = self._fresh(scores, 'face', ts), self._fresh(scores, 'body', ts)
         if current is not None and face.get(current) is not None and face[current] < self.face_reject:
             events.append(bindings.unbind(track, ts, 'face_contradicts'))
             current = None
@@ -389,15 +418,18 @@ class PersonBinding:
             other = bindings.holder(name)
             if other is not None and other != track:
                 held = ((candidates.get(other) or (None, {}))[1].get('face') or {}).get(name)
-                if held is not None and held >= score - self.margin:
+                if other in candidates and held is not None and held >= score - self.margin:
                     return      # the track that holds the person still shows their face as well: no flip
                 events.append(bindings.unbind(other, ts, 'seen_on_another_track'))
             events.append(bindings.bind(track, name, ts, 'face', face_score=score, body_score=body.get(name)))
+            self.bindings.tracks[track]['confirmed_ms'] = ts
             person = next(item for item in self.persons if item.name == name)
-            if scores.get('body_embedding') is not None:
+            if body and scores.get('body_embedding') is not None:
                 person.session.append(l2_normalize(scores['body_embedding']))
             return
         if current is not None:
+            if face.get(current) is not None and face[current] >= self.face_threshold:
+                self.bindings.tracks[track]['confirmed_ms'] = ts
             return
         chosen = self._best(body, self.body_threshold)
         if chosen is not None:
@@ -405,6 +437,36 @@ class PersonBinding:
             contradicted = face.get(name) is not None and face[name] < self.face_reject
             if not contradicted and bindings.holder(name) is None:
                 events.append(bindings.bind(track, name, ts, 'body', body_score=score, face_score=face.get(name)))
+
+    def _continue(self, candidates, ts, events):
+        """A tracker that starts a new track for the same person (a swap): when the track that holds a person has just
+        left the frame (within ``continue_ms``) and a track that was never bound appears where it was (box overlap
+        ``continue_iou``), the person goes over to it (``by: continuation``), unless its face or appearance of this
+        frame says otherwise (below ``face_reject`` or ``body_reject``). The face confirms it later as for any track."""
+        bindings = self.bindings
+        for person in self.persons:
+            holder = bindings.holder(person.name)
+            if holder is None or holder in candidates:
+                continue
+            last = bindings.tracks[holder]
+            if ts - last['last_ms'] > self.continue_ms or not self._boxes.get(holder):
+                continue
+            options = []
+            for track, (pose, scores) in candidates.items():
+                state = bindings.tracks.get(track) or {}
+                if track.startswith('frame:') or state.get('who') is not None or state.get('bound_before'):
+                    continue
+                if state.get('first_ms', ts) < last['last_ms'] - self.continue_ms:
+                    continue        # a track that was there all along is someone else
+                face, body = self._fresh(scores, 'face', ts), self._fresh(scores, 'body', ts)
+                if face.get(person.name) is not None and face[person.name] < self.face_reject or \
+                        body.get(person.name) is not None and body[person.name] < self.body_reject:
+                    continue
+                options.append((box_iou(pose.get('bbox'), self._boxes[holder]), track))
+            iou, track = max(options, default=(0., None))
+            if track is not None and iou >= self.continue_iou:
+                events.append(bindings.unbind(holder, ts, 'track_replaced'))
+                events.append(bindings.bind(track, person.name, ts, 'continuation', iou=iou))
 
     def _hand_over(self, candidates, ts, events):
         """An L2 fork's first frame: each bound person of the cut goes to the track whose box overlaps theirs most."""
@@ -415,38 +477,73 @@ class PersonBinding:
                 events.append(self.bindings.bind(best[1], item['who'], ts, 'handover', iou=best[0]))
         self._handover = []
 
+    def _wants_image(self, ts):
+        """Keep this camera frame until its joints come (this module in a lane of its own sees the frame first)? Only
+        at the pace faces are looked at, and only while someone is enrolled or being enrolled."""
+        if not (self.persons or self._collect is not None) or (self.face is None and self.body is None):
+            return False
+        every = min(self.face_every_ms, self.body_every_ms, (self._collect or {}).get('every', 10 ** 9))
+        return self._kept_ms is None or ts - self._kept_ms >= every
+
     async def process(self, frame):
+        """Joints and the camera frame of one capture, in either order (in the pose module's lane the joints come
+        first; in a lane of its own the camera frame does): a frame is decided when both, or the joints of a camera
+        frame that was not kept, have arrived."""
         from ..private_payload import poses_of
         found = poses_of(frame.data)
-        if found is not None:                      # the joints arrive before their camera frame
-            self._poses[frame.timestamp_ms] = found
+        ts = frame.timestamp_ms
+        if found is not None:
+            if ts in self._images:
+                return await self._frame(ts, found, self._images.pop(ts))
+            if self._camera_ms is not None and ts <= self._camera_ms:
+                return await self._frame(ts, found, None)       # its camera frame went by unkept: decide on joints
+            self._poses[ts] = found
             while len(self._poses) > 8:
                 self._poses.pop(next(iter(self._poses)))
             return None
         if frame.modality != 'video' or not hasattr(frame.data, 'shape'):
             return None
-        ts = frame.timestamp_ms
+        self._camera_ms = ts if self._camera_ms is None else max(self._camera_ms, ts)
         poses = self._poses.pop(ts, None)
-        if poses is None:
-            return None
+        if poses is not None:
+            return await self._frame(ts, poses, frame.data if self._wants_image(ts) or self._kept_ms is None else None,
+                                     kept=True)
+        if self._wants_image(ts):
+            import numpy as np
+            self._images[ts], self._kept_ms = np.array(frame.data, copy=True), ts   # the lane may reuse its buffer
+            while len(self._images) > self.max_images:
+                self._images.pop(next(iter(self._images)))
+                self.counts['unpaired_images'] += 1
+        return None
+
+    async def _frame(self, ts, poses, image, kept=False):
+        if image is not None:
+            self._kept_ms = ts if kept else self._kept_ms
+            for old in [key for key in self._images if key < ts]:       # their joints never came
+                del self._images[old]
+                self.counts['unpaired_images'] += 1
+        self.counts['frames'] += 1
+        self.counts['scored_frames'] += image is not None
         candidates, events = {}, []
         for index, pose in enumerate(poses):
             if not isinstance(pose, dict) or not pose.get('bbox'):
                 continue
             track = self._track(pose, ts, index)
             self.bindings.seen(track, ts)
-            self._boxes[track] = pose['bbox']
-            candidates[track] = (pose, await self._score(track, pose, frame.data, ts))
+            candidates[track] = (pose, await self._score(track, pose, image, ts))
         for track in [key for key, state in self.bindings.tracks.items() if ts - state['last_ms'] > self.lost_ms]:
             events.append(self.bindings.forget(track))
             self._scores.pop(track, None)
             self._boxes.pop(track, None)
-        if self._collect is not None:
-            await self._collected(candidates, frame.data, ts)
+        if self._collect is not None and image is not None:
+            await self._collected(candidates, image, ts)
         if self._handover:
             self._hand_over(candidates, ts, events)
         for track, (_, scores) in candidates.items():
             self._decide(track, scores, ts, events, candidates)
+        self._continue(candidates, ts, events)
+        for track, (pose, _) in candidates.items():
+            self._boxes[track] = pose['bbox']
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
@@ -455,10 +552,14 @@ class PersonBinding:
             who = self.bindings.who(track)
             entry = dict(track_id=track, who=who or UNKNOWN)
             for key in ('face', 'body'):
-                value = (scores.get(key) or {}).get(who) if who else max(
-                    (v for v in (scores.get(key) or {}).values() if v is not None), default=None)
+                values = self._fresh(scores, key, ts)
+                value = values.get(who) if who else max((v for v in values.values() if v is not None), default=None)
                 if value is not None:
                     entry[key + '_score'] = round(value, 5)
             tracks.append(entry)
         bound = {person.name: self.bindings.holder(person.name) for person in self.persons}
         return self.spec.validate(dict(tracks=tracks[:16], bound=bound, events=flat))
+
+    def status(self):
+        return dict(self.counts, persons=[person.name for person in self.persons], waiting_images=len(self._images),
+                    tracks=len(self.bindings.tracks))

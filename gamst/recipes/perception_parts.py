@@ -611,13 +611,22 @@ async def _person_binding(options, context):
     from ..providers.person_binding import PersonBinding
     arguments = {name: options[name] for name in ('face_threshold', 'face_reject', 'body_threshold', 'margin',
                                                   'face_every_ms', 'body_every_ms', 'lost_ms') if name in options}
-    face = await face_embedder(options, context)
+    references = options.get('references') or [options.get('reference', 'person')]
+    given = any(name in (context.get('references') or {}) for name in references)
+    try:
+        face = await face_embedder(options, context)
+    except SystemExit as error:
+        if given:
+            raise
+        # nobody enrolled and no face model set up: it runs, binds nobody, and enroll_person says what to set up
+        context.setdefault('notes', {})['face_identity'] = f'no face model: {error}'
+        face = None
     try:
         body = await body_embedder(options, context)
     except BaseException:
-        await face.close()
+        if face is not None:
+            await face.close()
         raise
-    references = options.get('references') or [options.get('reference', 'person')]
     module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
     return dict(module=module, spec=module.spec)
 

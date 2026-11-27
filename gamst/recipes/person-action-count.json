@@ -74,7 +74,9 @@
       "consumes": [
         "camera",
         "pose_joints"
-      ]
+      ],
+      "runs_without_reference": true,
+      "backlog": "spill"
     },
     {
       "name": "target_person",
@@ -158,6 +160,6 @@
       "for": "person_binding"
     }
   ],
-  "limits": "every track is counted; who is the enrolled person bound to the track by face (or by whole-body appearance within the same video), else unknown, also retroactively within a track; a track switch by the tracker can move an identity; --without person_binding counts every track as unknown; --with target_person counts one enrolled person only (the earlier behaviour); identity thresholds are not measured on labelled people",
+  "limits": "every track is counted; who is the enrolled person bound to the track by face (or by whole-body appearance within the same video), else unknown, also retroactively within a track; a track switch by the tracker can move an identity; without --person nobody is bound until a person is enrolled (MCP enroll_person); --without person_binding leaves identity out; --with target_person counts one enrolled person only (the earlier behaviour); identity thresholds are not measured on labelled people",
   "measured": "not yet"
 }

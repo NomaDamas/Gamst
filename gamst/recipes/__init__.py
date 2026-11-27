@@ -875,15 +875,16 @@ def _without(recipe, reference):
 
 
 def not_given(recipe, args, include=()):
-    """Optional modules that read a reference marked ``"optional": true`` that the command line did not give (e.g.
-    ``person_binding`` without ``--person``: every track is counted, who is unknown). Asked for by name, they stay and
-    the missing reference is refused as usual."""
+    """Optional modules that read a reference marked ``"optional": true`` that the command line did not give; a module
+    marked ``"runs_without_reference": true`` stays (``person_binding``: it runs with nobody enrolled, so a person can
+    be enrolled over MCP while the run goes on). Asked for by name, they stay."""
     left = []
     for reference in recipe.get('references', ()):
         if not reference.get('optional') or getattr(args, reference['kind'], None):
             continue
         for item in recipe.get('modules', ()):
             if item['name'] in _listed(reference.get('for')) and item.get('optional') == 'on' and \
+                    not item.get('runs_without_reference') and \
                     item['name'] not in include and not set(_listed(item.get('parts'))) & set(include):
                 left.append(item['name'])
     return left
@@ -937,6 +938,8 @@ def reference_values(recipe, args):
         except SystemExit as error:
             if reference['kind'] not in ('voice', 'person', 'exemplar', 'terms') or getattr(args, reference['kind'], None):
                 raise       # given, but unusable
+            if reference.get('optional'):
+                continue    # not given: what reads it runs without it, or was left out (not_given)
             missing.append(f'{error}{_without(recipe, reference)}')
     if missing:
         raise SystemExit('\n'.join(missing))

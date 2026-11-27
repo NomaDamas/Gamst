@@ -215,6 +215,48 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(collected['face']), 5)
         self.assertTrue(all(sample['persons'] == 1 for sample in collected['samples']))
 
+    async def test_in_a_lane_of_its_own_the_camera_frame_comes_first_and_is_kept_only_when_faces_are_due(self):
+        from gamst.plugins import InputFrame
+        from gamst.private_payload import PrivatePoses
+        module = self.module(confirm_every_ms=1000)
+        image = frame_of(BLUE, RED)
+        found = []
+        for ts in range(0, 1400, 100):
+            await module.process(InputFrame(image, 'video', ts))                       # camera first
+            found.append(await module.process(InputFrame(PrivatePoses([person(.75, 'b')]), 'video', ts)))
+        self.assertTrue(all(value is not None for value in found))                    # every frame decided
+        self.assertEqual(found[0]['events'][0]['who'], 'P')
+        self.assertEqual(module.counts['face_embeddings'], 2)        # bound at 0, confirmed again at 1000, not in between
+        self.assertEqual(module.counts['unpaired_images'], 0)
+        self.assertLessEqual(len(module._images), 1)
+
+    async def test_nobody_enrolled_binds_nobody_and_a_person_enrolled_later_reaches_back_over_live_tracks(self):
+        from gamst.providers.person_binding import PersonBinding
+        module = PersonBinding(Color('face'), Color('body'), face_threshold=.9, face_reject=.5, session='file:s')
+        module.bind(argparse.Namespace(references={}))
+        first = await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        self.assertEqual((first['tracks'][0]['who'], first['bound'], module.counts['face_embeddings']), ('unknown', {}, 0))
+        await self.step(module, 2000, [person(.75, 'b')], frame_of(BLUE, RED))
+        module.set_references(dict(person_1=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))     # enroll_person
+        later = await self.step(module, 3000, [person(.75, 'b')], frame_of(BLUE, RED))
+        event = later['events'][0]
+        self.assertEqual((event['who'], event['start_ms'], event['retroactive']), ('P', 1000, True))
+
+    async def test_a_new_track_where_the_person_just_was_continues_the_person(self):
+        module = self.module()
+        await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        swapped = await self.step(module, 1033, [person(.74, 'c', face=False)], frame_of(BLUE, RED))
+        moved = [(item['event'], item['track_id'], item.get('by') or item.get('reason')) for item in swapped['events']]
+        self.assertEqual(moved, [('person.unbound', 'b', 'track_replaced'), ('person.bound', 'c', 'continuation')])
+        other = self.module()
+        await self.step(other, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        elsewhere = await self.step(other, 1033, [person(.25, 'c', face=False)], frame_of(BLUE, RED))
+        self.assertEqual(elsewhere['events'], [])           # no overlap: the face (or appearance) has to say it
+        late = self.module()
+        await self.step(late, 1000, [person(.75, 'b')], frame_of(BLUE, RED))
+        gone = await self.step(late, 3000, [person(.75, 'c', face=False)], frame_of(RED, RED))
+        self.assertNotIn('continuation', [item.get('by') for item in gone['events']])   # too long after
+
     async def test_a_reference_below_the_check_is_refused_at_bind(self):
         from gamst.providers.person_binding import PersonBinding
         module = PersonBinding(Color('face'), Color('body'))
@@ -307,12 +349,15 @@ class CommandLineTest(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'no person-binding module'):
             with_who(without, argparse.Namespace(who='P', video=None), given, without['modules'])
 
-    def test_without_a_person_the_binding_stays_out_unless_asked_for(self):
-        from gamst.recipes import not_given, read_recipe
+    def test_without_a_person_the_binding_still_runs_so_a_person_can_be_enrolled_later(self):
+        from gamst.recipes import not_given, read_recipe, reference_values, load
         raw = read_recipe('person-action-count')[1]
-        self.assertEqual(not_given(raw, argparse.Namespace(person=None)), ['person_binding'])
-        self.assertEqual(not_given(raw, argparse.Namespace(person='p.json')), [])
-        self.assertEqual(not_given(raw, argparse.Namespace(person=None), ['person_binding']), [])
+        self.assertEqual(not_given(raw, argparse.Namespace(person=None)), [])
+        recipe = load('person-action-count')
+        args = argparse.Namespace(person=None, exemplar=None, terms=None, voice=None)
+        with self.assertRaisesRegex(SystemExit, 'exemplar') as error:     # the movement is still needed; the person is not
+            reference_values(recipe, args)
+        self.assertNotIn('person', str(error.exception).split('exemplar')[0])
 
     def test_the_recipe_counts_every_track_and_keeps_the_single_target_choice(self):
         from gamst.recipes import load
