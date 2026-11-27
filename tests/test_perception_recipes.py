@@ -155,8 +155,10 @@ class SpeechRecipeTest(unittest.TestCase):
                           '2', '--consent', 'owner, pose counting', '--out', str(self.tmp / 'me.json'),
                           '--profile', str(self.profile), '--pose', 'mediapipe.pose_full'])
         saved = json.loads((self.tmp / 'me.json').read_text())
-        self.assertEqual(set(saved), {'kind', 'recipe', 'face_model', 'body_model', 'face', 'body', 'consent'})
+        self.assertEqual(set(saved), {'kind', 'name', 'recipe', 'face_model', 'body_model', 'face', 'body', 'consent', 'samples',
+                                      'session', 'enrolled_from', 'dropped', 'quality'})      # embeddings, never images
         self.assertEqual((len(saved['face']), saved['body']), (10, []))   # every second frame had one person
+        self.assertEqual((saved['name'], saved['quality']['basis']), ('me', ['face']))
 
     def test_optional_modules_choose_their_links_and_references(self):
         recipe = recipes.load('person-voice-style-count')
@@ -165,7 +167,7 @@ class SpeechRecipeTest(unittest.TestCase):
         self.assertEqual([item['name'] for item in more['references']], ['voice', 'style', 'terms'])
         with self.assertRaisesRegex(SystemExit, 'no optional module'):
             recipes.load('person-term-count', ['semantic'])
-        action = recipes.load('person-action-count', exclude=['target_person'])
+        action = recipes.load('person-action-count', exclude=['person_binding'])    # every track, who unknown
         channels = next(item for item in action['modules'] if item['name'] == 'pose_channels')
         self.assertEqual(channels['consumes'], ['pose_joints'])
         self.assertEqual([item['name'] for item in action['references']], ['exemplar'])
