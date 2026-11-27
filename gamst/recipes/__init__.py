@@ -874,6 +874,21 @@ def _without(recipe, reference):
     return f"; or leave that part out: --without {(_listed(readers[0].get('parts')) or [readers[0]['name']])[-1]}"
 
 
+def not_given(recipe, args, include=()):
+    """Optional modules that read a reference marked ``"optional": true`` that the command line did not give (e.g.
+    ``person_binding`` without ``--person``: every track is counted, who is unknown). Asked for by name, they stay and
+    the missing reference is refused as usual."""
+    left = []
+    for reference in recipe.get('references', ()):
+        if not reference.get('optional') or getattr(args, reference['kind'], None):
+            continue
+        for item in recipe.get('modules', ()):
+            if item['name'] in _listed(reference.get('for')) and item.get('optional') == 'on' and \
+                    item['name'] not in include and not set(_listed(item.get('parts'))) & set(include):
+                left.append(item['name'])
+    return left
+
+
 def with_who(recipe, args, references, modules):
     """``--who NAME``: the movement is counted for that enrolled person (events whose ``who`` is NAME). Refused before
     the run, in the same words as MCP and the HUD, when no checked person reference of that name is given or nothing
@@ -1776,6 +1791,9 @@ def main(argv=None):
     if args.action in ('proposals', 'export'):
         from . import movement
         return getattr(movement, args.action)(args)
+    if args.action in ('run', 'find'):     # an optional person or voice not given: the parts that need it stay out
+        args.exclude = [*getattr(args, 'exclude', ()), *not_given(read_recipe(args.recipe)[1], args,
+                                                                  getattr(args, 'include', ()))]
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
                   _kept(args) if args.action == 'run' else None)
     if getattr(args, 'asr', None):

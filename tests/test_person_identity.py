@@ -78,6 +78,15 @@ class ReferenceCheckTest(unittest.TestCase):
         self.assertTrue(hud_line('P', ['x']).startswith('WHO P REFUSED: x'))
         self.assertTrue(hud_line('감스트').isascii())
 
+    def test_a_few_badly_aligned_crops_are_dropped_by_the_majority_and_two_people_are_not(self):
+        from gamst.person_reference import cleaned
+        same = [[1., .1 * i, 0.] for i in range(4)]
+        kept, dropped = cleaned(same + [[0., 0., 1.], [0., 0., -1.]], .5)
+        self.assertEqual((kept[:4], len(kept), dropped), (same, 5, 1))     # stops once the rest agree (voice rule)
+        two = [[1., 0., 0.]] * 2 + [[0., 1., 0.]] * 2
+        self.assertEqual(cleaned(two, .5), (two, 0))      # no majority of one person: kept, and the check refuses it
+        self.assertFalse(check(reference(face=0) | dict(face=two))['ok'])
+
     def test_session_of_names_one_recording(self):
         with tempfile.TemporaryDirectory() as folder:
             a, b = Path(folder, 'a.mp4'), Path(folder, 'b.mp4')
@@ -257,6 +266,14 @@ class TrackExemplarTest(unittest.TestCase):
             value = self.push(module, ts, [person(.25, 'a', wrist_up=up), person(.75, 'b', wrist_up=up and ts == 300)])
         self.assertEqual((value['who'], value['count'], value['count_all']), ('P', 1, 3))
 
+    def test_a_pose_without_a_track_continues_the_track_it_overlaps(self):
+        module = self.counter()
+        untracked = lambda x, up=False: dict(person(x, None, wrist_up=up), track_id=None)
+        self.push(module, 0, [person(.25, 'a'), untracked(.75)])
+        self.push(module, 100, [untracked(.25, True), untracked(.75)])
+        self.assertEqual(sorted(module._tracks), ['a', 'untracked'])
+        self.assertEqual(module.by_who(), {'unknown': 1})
+
     def test_a_fork_names_its_tracks_by_its_first_frame(self):
         module = self.counter()
         twin = module.fork()
@@ -289,6 +306,13 @@ class CommandLineTest(unittest.TestCase):
         without = load('person-action-count', (), ('person_binding',))
         with self.assertRaisesRegex(SystemExit, 'no person-binding module'):
             with_who(without, argparse.Namespace(who='P', video=None), given, without['modules'])
+
+    def test_without_a_person_the_binding_stays_out_unless_asked_for(self):
+        from gamst.recipes import not_given, read_recipe
+        raw = read_recipe('person-action-count')[1]
+        self.assertEqual(not_given(raw, argparse.Namespace(person=None)), ['person_binding'])
+        self.assertEqual(not_given(raw, argparse.Namespace(person='p.json')), [])
+        self.assertEqual(not_given(raw, argparse.Namespace(person=None), ['person_binding']), [])
 
     def test_the_recipe_counts_every_track_and_keeps_the_single_target_choice(self):
         from gamst.recipes import load

@@ -31,7 +31,8 @@
       "for": [
         "person_binding",
         "target_person"
-      ]
+      ],
+      "optional": true
     }
   ],
   "modules": [

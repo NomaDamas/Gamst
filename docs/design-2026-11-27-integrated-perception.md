@@ -38,7 +38,7 @@ How the current state measures up against this philosophy:
 | LLM changes *what* is counted in words | yes: `set_instruction`, `propose_movement`, `set_count_mode` |
 | "when did it happen" is indexed | yes: `count_events`, `get_timeline` (start/end), `search_retained` (past records, no model run) |
 | realtime answers through GAMST | yes: MCP queries; `create_watch` pushes alarms |
-| LLM sets *who* | **not yet**: person enrollment is CLI only (`recipe enroll --person`). Planned: MCP `enroll_person` and `who` in `set_instruction` |
+| LLM sets *who* | yes (PR `feat/person-identity`): MCP `enroll_person` (photos, a video range or camera seconds, consent, the same check) and `who` in `set_instruction`, `count_events`, `get_timeline`; refused without a checked few-shot reference ([person-identity.md](person-identity.md)) |
 | conversational UX | **not yet**: demos so far are CLI and HUD. Planned: a demo where the LLM answers "how many shotguns, when?" only through GAMST MCP |
 
 ## 2. Integrated structure (owner-approved)
@@ -102,12 +102,12 @@ The structure answers these questions:
 
 | what | zero-shot (text) | few-shot (examples) | state |
 |---|---|---|---|
-| **who** (person) | no: a name or description does not identify a person | **required**: photo, video range ("this person at 0:12"), camera seconds | video range / camera enrollment exists; **photo enrollment to add**; not measured on real people; LVFace and the appearance model are not on this Mac yet |
+| **who** (person) | no: a name or description does not identify a person | **required**: photo, video range ("this person at 0:12"), camera seconds | photo, video range and camera enrollment exist and are checked (refused with guidance); LVFace-B and OSNet-AIN (appearance) are on this Mac; identity consistency measured on two testbed clips, accuracy unmeasured (no owner labels yet) |
 | **voice** | no | same-microphone recording, file, range of the same recording, automatic main speaker | exists; four owner clips 30/33 right (v8) |
 | **action** | yes: text → rule written by the LLM over MCP (`propose_movement`), or VLM proposals confirmed by the owner. GAMST has no hidden LLM | yes: 3+ example clips (+ negatives) | shotgun text → rule 16/16; example clips 15/16 offline (MediaPipe) |
 | **words** | yes: terms, spellings, `word:W`, `word:W*` | – | exists (kept) |
 
-Enforcement (to build): an instruction with `who` and no person reference, or with a reference that fails the quality check, is refused. The refusal says which few-shot is missing and how to provide it, in the same words on the CLI, in MCP and on the HUD. A person reference needs a consent record.
+Enforcement (built, `gamst/person_reference.py`): an instruction with `who` and no person reference, or with a reference that fails the quality check, is refused. The refusal says which few-shot is missing and how to provide it, in the same words on the CLI, in MCP and on the HUD. A person reference needs a consent record.
 
 Identity looks at the whole person, not the face only. The score combines:
 
@@ -118,6 +118,12 @@ Identity looks at the whole person, not the face only. The score combines:
 Clothes change between broadcasts, so appearance is trusted within one video only. In a new video the person is confirmed again by face or voice.
 
 The appearance model registered today, SOLIDER, is a problem. It is on Google Drive only, has no digest, has a CUDA-only adapter, and its training-data terms need review. It will be replaced by a model chosen by these criteria: official release, permissive licence, published digest, 500 MB or less (decision 44).
+Chosen (2026-11-27): OSNet-AIN x1.0 trained on MSMT17, from the authors' own Hugging Face repository (`kaiyangzhou/osnet`,
+MIT model card, sha256 published, 17.3 MB), converted once to ONNX. It is the only candidate that met every criterion; the
+more accurate ones (SOLIDER, CLIP-ReID, TransReID, PASS: Google Drive only, no digest; PersonViT: weights "cc" without a
+variant and LUPerson non-commercial pretraining; fast-reid: no published digest) did not. Its published number is
+cross-domain only (MSMT17 -> Market-1501 R1 70.1 / mAP 43.3), well below SOLIDER's same-domain figures. Details:
+[measurements/person-identity-2026-11-27.md](measurements/person-identity-2026-11-27.md).
 
 ## 4. Movement counting: one model, realtime and post modes
 
@@ -251,7 +257,7 @@ The owner's request: build the sports analysis Ultralytics claims as a recipe ca
 | CI on PR #373 | fixed: shared frame memory imported numpy for every frame; the core CI job has no numpy. After the fix the failures equal Main's (32), plus motion-provider, which also fails on Main (no tests ran) |
 | one-model movement counting, no skips, L2 correction, realtime / post, memory budget | in progress, PR #373 |
 | Sapiens2 1B opt-in | downloaded (5.7 GB); measured runs in progress (an fp32 profile took free memory to 1-6% and the guard stopped it) |
-| person few-shot enforcement, face + appearance, photo enrollment, LVFace-B (455 MB), `person_binding`, `enroll_person` | next |
+| person few-shot enforcement, face + appearance, photo enrollment, LVFace-B (455 MB), `person_binding`, `enroll_person` | built (Draft PR on `feat/person-identity`, against PR #373); consistency and timing measured on two testbed clips; accuracy waits for the owner's labelled multi-person clips |
 | `compose_recipe`, semantic causal state chain | next |
 | conversational demo (LLM answers only through GAMST MCP) | after the above |
 | sports recipes | separate PR (`feat/sports-recipes`) |

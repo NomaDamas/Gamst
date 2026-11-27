@@ -25,6 +25,8 @@ from .pose_exemplar import ExemplarEvents, largest_pose
 MAX_TRACKS = 32          # counters kept at once (a crowd beyond it: the longest unseen ones go first)
 TRACK_LOST_MS = 10000    # a track not seen this long is finished
 MAX_EVENTS_KEPT = 4096   # event times kept for the retroactive by_who
+CONTINUE_IOU = .5        # an untracked pose continues the track it overlaps this much in the frame before
+UNTRACKED = 'untracked'
 
 
 class TrackExemplar(ExemplarEvents):
@@ -103,10 +105,26 @@ class TrackExemplar(ExemplarEvents):
     # ------------------------------------------------------------------ frames
 
     def _tracked(self, poses):
-        found = {}
+        """``{track: pose}``. A pose the tracker gave no track continues the track whose box it overlaps most in the
+        frame before (IoU >= :data:`CONTINUE_IOU`), else the one ``untracked`` stream (a pose model without a tracker:
+        one person); further untracked poses of that frame are not counted."""
+        from .person_match import box_iou
+        found, loose = {}, []
         for index, pose in enumerate(poses):
-            if isinstance(pose, dict) and pose.get('landmarks'):
+            if not isinstance(pose, dict) or not pose.get('landmarks'):
+                continue
+            if pose.get('track_id'):
                 found[self._track_name(pose, self._frame_ms, index)] = pose
+            else:
+                loose.append(pose)
+        boxes = getattr(self, '_boxes', {})
+        for pose in loose:
+            best = max(((box_iou(pose.get('bbox'), box), track) for track, box in boxes.items() if track not in found),
+                       default=(0., None))
+            track = best[1] if best[0] >= CONTINUE_IOU else UNTRACKED
+            if track not in found:
+                found[track] = pose
+        self._boxes = {track: pose.get('bbox') for track, pose in found.items() if pose.get('bbox')}
         return found
 
     def _feed(self, counter, pose, ts):
