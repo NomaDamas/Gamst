@@ -28,7 +28,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .rtmw_pose import RTMWPosePlugin, _sha256, clear_dead_coreml_temp, coreml_cache, coreml_providers, track_box
+from .rtmw_pose import (DETECTOR_COREML, RTMWPosePlugin, _sha256, clear_dead_coreml_temp, coreml_cache, coreml_providers,
+                        track_box)
 
 POINTS = 308
 # Goliath-308 indices (sapiens2 ``sapiens/pose/configs/_base_/keypoints308.py`` at 7e5bae8, 36 teeth points removed).
@@ -115,7 +116,9 @@ class Sapiens2Models:
             self.detector.score_thr = float(det_score)
         if det_device == 'coreml':     # compiled once into the CoreML cache, as RTMW's (no $TMPDIR copy per session)
             clear_dead_coreml_temp()
-            providers = coreml_providers(compute_units, coreml_cache(det_path, cache_dir), det_sha256, 'det')
+            # static shapes, as RTMW's: a frame without a person is an empty answer, not a CoreML error
+            providers = coreml_providers(compute_units, coreml_cache(det_path, cache_dir), det_sha256, 'det-static',
+                                         **DETECTOR_COREML)
             self.detector.session = ort.InferenceSession(str(det_path), providers=providers)
         self.torch, self.device = torch, torch.device(device)
         self.processor = Sapiens2ImageProcessor.from_pretrained(str(path), local_files_only=True)

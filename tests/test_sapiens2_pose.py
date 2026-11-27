@@ -137,6 +137,27 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual((public['poses'], joints.shape), ([], (0, POINTS, 3)))
         CONTRACTS['sapiens2.pose'].check_shape(list(joints.shape), None)
 
+    def test_black_frames_and_a_mixed_batch_give_empty_answers_in_place(self):
+        from gamst.providers.model_workers import _RTMW
+        from gamst.private_payload import pack, unpack
+        for every in (0, 500):
+            for nobody in (np.zeros((0, 4), 'f4'), np.array([]), []):    # what YOLOX answers for no person
+                models = self.models(every)
+                person = models.detector
+                models.detector = lambda image, person=person, nobody=nobody: person(image) if image.any() else nobody
+                black, seen = np.zeros((120, 160, 3), np.uint8), np.full((120, 160, 3), 9, np.uint8)
+                found = models.infer_batch([black, black], [0, 17])
+                self.assertEqual([(len(boxes), points.shape) for boxes, points, _ in found], [(0, (0, POINTS, 2))] * 2)
+                found = models.infer_batch([seen, black, seen], [600, 1200, 1800])
+                self.assertEqual([len(boxes) for boxes, _, _ in found], [2, 0, 2], (every, nobody))
+                stacked = np.concatenate([black, seen, black])
+                public, joints = _RTMW(models).query(type('F', (), dict(data=stacked))(),
+                                                     dict(frames=3, timestamps_ms=[2400, 3000, 3600]))
+                self.assertEqual(([pose['in_batch'] for pose in public['poses']], joints.shape), ([1, 1], (2, POINTS, 3)))
+                descriptor, payload = pack('sapiens2.pose', public, joints, None)
+                self.assertEqual(unpack('sapiens2.pose', public, descriptor, payload, None).take('joints').shape,
+                                 (2, POINTS, 3))
+
     def test_the_worker_answers_stacked_frames_with_308_points_each(self):
         from gamst.providers.model_workers import _RTMW
         models = self.models(0)
@@ -168,17 +189,19 @@ class OptInTest(unittest.TestCase):
     def test_the_yolox_coreml_session_compiles_into_the_cache_not_tmpdir(self):
         import tempfile
         from pathlib import Path
-        from gamst.providers.rtmw_pose import coreml_providers
+        from gamst.providers.rtmw_pose import DETECTOR_COREML, coreml_providers
         with tempfile.TemporaryDirectory() as cache:
-            (name, options), cpu = coreml_providers('CPUAndGPU', Path(cache), 'b' * 64, 'det')
+            (name, options), cpu = coreml_providers('CPUAndGPU', Path(cache), 'b' * 64, 'det-static', **DETECTOR_COREML)
             self.assertEqual((name, cpu), ('CoreMLExecutionProvider', 'CPUExecutionProvider'))
-            self.assertEqual(options['ModelCacheDirectory'], str(Path(cache) / f"{'b' * 16}-CPUAndGPU-det"))
+            self.assertEqual(options['ModelCacheDirectory'], str(Path(cache) / f"{'b' * 16}-CPUAndGPU-det-static"))
+            self.assertEqual(options['RequireStaticInputShapes'], '1')     # a frame without a person: no CoreML error
             self.assertTrue(Path(options['ModelCacheDirectory']).is_dir())
         (_, options), _ = coreml_providers('CPUAndGPU', None, 'b' * 64, 'det')
         self.assertNotIn('ModelCacheDirectory', options)
         import inspect
         source = inspect.getsource(Sapiens2Models.__init__)
         self.assertIn('coreml_providers(compute_units, coreml_cache(det_path, cache_dir)', source)
+        self.assertIn('**DETECTOR_COREML', source)
         self.assertIn('clear_dead_coreml_temp()', source)
 
 
