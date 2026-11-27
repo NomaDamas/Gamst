@@ -2055,6 +2055,10 @@ class Pipeline:
                 task.cancel()
             await asyncio.gather(*tasks, stopping, return_exceptions=True)
             self._running = self._paced = self._keeping_up = False
+        for name, entry in self.modules.items():     # an L2 interval that never ran is declared, never counted complete
+            for todo in list(entry['todos']):
+                if todo.get('video') and todo['state'] in ('waiting', 'cancelled'):
+                    self._gap(name, [name], todo['start_ms'], todo['until_ms'], todo['frames'], 'backlog')
         try:
             records = await self.finish()
         finally:
