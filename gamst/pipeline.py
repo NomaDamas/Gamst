@@ -504,8 +504,8 @@ class Pipeline:
         forks = callable(getattr(module, 'fork', None)) and getattr(module, 'can_fork', True)
         if catch_up is None and (not forks or tuple(getattr(module, 'modalities', ())) == ('video',)):
             return None     # video: only where a recipe asks for it (it keeps frames for its pre-roll)
-        if not forks:
-            raise ValueError(f'{name!r} cannot catch up: its module has no fork()')
+        if not forks:     # a module that cannot fork does not catch up: its lane keeps (or gives up) frames as before
+            return None
         if lane is None or lane['name'] != name or width != 1 or every_ms:
             if catch_up is None:
                 return None

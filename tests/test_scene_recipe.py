@@ -424,6 +424,7 @@ class Scene(FakeSpeech):
         used = {item['use'] for item in recipes.load('scene', ['semantic', 'repetition'])['modules']}
         others = {item['use'] for name in ('person-action-count', 'person-term-count')
                   for item in json.loads((recipes.RECIPES / f'{name}.json').read_text())['modules']}
+        others |= set(recipes.POSE_PARTS.values())     # person-action-count selects its pose part with --pose
         self.assertLessEqual(used, others)
 
     def test_what_is_not_enrolled_is_named_with_how_to_leave_it_out(self):

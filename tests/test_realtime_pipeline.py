@@ -594,7 +594,7 @@ class RecipeLanes(unittest.IsolatedAsyncioTestCase):
             pipeline = Pipeline(human, 'recipe')
             pipeline.add_input('camera')
             for item in recipe['modules']:
-                worker = item['use'] in ('mediapipe-pose', 'semantic-scene')
+                worker = item['use'] in ('mediapipe-pose', 'rtmw-pose', 'semantic-scene')
                 pipeline.add_module(item['name'], Worker() if worker else Slow(), consumes=item['consumes'],
                                     emits=tuple(item.get('emits', ())), every_ms=item.get('every_ms'), queue='auto',
                                     optional=bool(item.get('optional')))
