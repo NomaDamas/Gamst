@@ -147,11 +147,14 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(recipes.check(recipe, fps=30)['ok'], True)
         self.assertFalse(recipes.check(recipe, fps=3)['ok'])
         steps = recipes.plan(recipe, hardware=HOST)
-        self.assertEqual(steps['roles']['vision.pose']['model'], 'mediapipe.pose_full')
-        self.assertTrue(any(line.startswith('mediapipe==') for entry in steps['install'] for line in entry['packages']))
-        self.assertEqual(set(recipes.weight_files(steps)), {'pose_landmarker_full.task', 'LVFace-B_Glint360K.onnx'})
+        self.assertEqual(steps['roles']['vision.pose']['model'], 'rtmw.l_384x288')    # one pose model (decision 37-38)
+        self.assertTrue(any(line.startswith('rtmlib==') for entry in steps['install'] for line in entry['packages']))
+        self.assertEqual(set(recipes.weight_files(steps)), {'end2end.onnx', 'yolox_m_humanart.onnx', 'LVFace-B_Glint360K.onnx'})
         anyone = recipes.load('person-action-count', exclude=['target_person'])   # the most visible person
-        self.assertEqual(recipes.weight_files(recipes.plan(anyone, hardware=HOST)), ['pose_landmarker_full.task'])
+        self.assertEqual(sorted(recipes.weight_files(recipes.plan(anyone, hardware=HOST))),
+                         ['end2end.onnx', 'yolox_m_humanart.onnx'])
+        mediapipe = recipes.with_pose(anyone, 'mediapipe.pose_full')                  # selectable with --pose
+        self.assertEqual(recipes.weight_files(recipes.plan(mediapipe, hardware=HOST)), ['pose_landmarker_full.task'])
         self.assertEqual(recipes.roles(recipe).get('vision.semantic_scene'), None)   # off unless --with semantic
         with self.assertRaisesRegex(SystemExit, 'gamst recipe enroll'):
             recipes.main(['run', 'person-action-count', '--video', str(self.tmp / 'x.mp4'), '--headless'])
