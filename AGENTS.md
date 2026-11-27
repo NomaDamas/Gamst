@@ -25,3 +25,5 @@ matches the task before setting anything up:
 - `skills/gamst-person-terms/` counts words, text patterns or a tone of voice, of one enrolled person or of anyone.
 - `skills/gamst-scene/` runs several of these together (camera and microphone, or a video and its sound), with any registry role.
 - `skills/gamst-person-action/` counts a pose or movement a person demonstrated once (no training).
+- `skills/gamst-sports/` analyses a sport (racket rallies, team possession and passes, reps and form, swings, turns,
+  billiards) with a recipe per sport and a model stack (ultralytics, roboflow, sota); see docs/sports.md.

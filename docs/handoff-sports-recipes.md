@@ -1,6 +1,33 @@
 # HANDOFF feat/sports-recipes
 
-Worktree `.local-run/wt-sports`, branched from Main `feat/humansense-20261112-154922` at `e137433`. No PR yet.
+Worktree `.local-run/wt-sports`. Branched from Main at `e137433`, then rebased onto PR #373 (`feat/realtime-pose`,
+`278b8d4`) on the owner's OK (2026-11-28): the PR is stacked on #373 and is retargeted to Main when #373 merges.
+
+## 0. Current state (2026-11-28) — read first
+
+- Owner decisions: build per the final plan; GCP for measurement; everything before GCP is done in this branch.
+- Done: the parts, stacks, six recipes, adapters and docs below; `tests/test_sports.py` (39 tests, synthetic data,
+  one real Pipeline + Store test). See `docs/sports.md`.
+- Not done (needs downloads or GCP): any run with real weights or footage; M1-M3 measurements; pinning the TrackNetV3
+  checkpoint digest (Google Drive zip, no published digest).
+- Not built: WASB, InpaintNet, CAMELTrack, ReID for BoT-SORT, MCP `compose_recipe`, basketball shot zones, swing tempo.
+
+| file | what |
+|---|---|
+| `gamst/sports/{court,presets,objects}.py` | homography from four marked corners, sport presets + `ball_sampling`, object contracts |
+| `gamst/providers/sports_*.py` | ball, contacts, rally, possession, occupancy, team, form, spin, motion, track |
+| `gamst/providers/ultralytics_sports.py` | YOLO26 detect + Ultralytics tracker (`ultralytics.objects`), YOLO26-pose (`ultralytics.pose`) |
+| `gamst/providers/tracknet_ball.py` | TrackNetV3 network (from its MIT model.py), causal / weighted ensemble streaming |
+| `gamst/providers/siglip_embedding.py` | SigLIP vision embedding of crops (`image.embedding`) |
+| `gamst/crew/registry.py` | YOLO26 n..x and pose n..x (pinned from release digests), roles `vision.ball`, `vision.image_embedding`, `vision.object_track` |
+| `gamst/recipes/perception_parts.py` | sports parts (`detect`, `ball-model`, `yolo26-pose`, ... `object-motion`) |
+| `gamst/recipes/__init__.py` | `variant` (sport → stack → timing), `--stack`, `--sport`, `--court`, `stacks` action, `choose_models`, setup of both timings + fallbacks |
+| `gamst/recipes/{racket-rally,team-field,body-reps,swing,body-rotation,billiards}.json` | the recipes |
+| `skills/gamst-sports/SKILL.md`, `docs/sports.md` | agent recipe, the map |
+
+Next step (GCP): owner installs `gcloud` and logs in; VM price stated first; list downloads (file, source, size) for the
+owner's OK; run M1 (docs/sports.md section 9) per stack and timing; record numbers in
+`docs/measurements/sports-*.md` and the recipes' `measured`.
 
 ## 1. State (2026-11-27)
 

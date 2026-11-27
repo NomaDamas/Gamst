@@ -89,8 +89,13 @@ class ObjectTracker:
         for row, track_id in zip(range(len(tracked)), tracked.tracker_id if tracked.tracker_id is not None else []):
             if track_id is None or int(track_id) < 0:
                 continue
-            source = items[int(tracked.data['index'][row])]
             x0, y0, x1, y1 = (float(v) for v in tracked.xyxy[row])
+            if 'index' in (tracked.data or {}):
+                source = items[int(tracked.data['index'][row])]
+            else:       # a tracker that rebuilt the detections: the detection its box overlaps most
+                area = dict(x=x0 / width, y=y0 / height, width=(x1 - x0) / width, height=(y1 - y0) / height)
+                source = max(items, key=lambda b: intersection_over_union(
+                    area, dict(x=b.x, y=b.y, width=b.width, height=b.height)))
             found.append(Box(f'track-{int(track_id)}', source.label, source.score, x0 / width, y0 / height,
                              (x1 - x0) / width, (y1 - y0) / height, source.team))
         return found

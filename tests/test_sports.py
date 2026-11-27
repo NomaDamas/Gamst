@@ -389,6 +389,39 @@ class TrackerTest(unittest.TestCase):
             self.assertIn('ball', [item['track_id'] for item in value['objects']])
         self.assertEqual(len(ids), 1)
 
+    def test_roboflow_trackers_path_with_stand_ins(self):
+        """The trackers/supervision calls as their docs show them (stand-ins: the packages are not installed here)."""
+        import sys
+        from unittest import mock
+
+        class Detections:
+            def __init__(self, xyxy, confidence=None, class_id=None, data=None):
+                self.xyxy, self.confidence, self.class_id, self.data = xyxy, confidence, class_id, data or {}
+                self.tracker_id = None
+
+            def __len__(self):
+                return len(self.xyxy)
+
+        class ByteTrackTracker:
+            def __init__(self, frame_rate=30.):
+                self.frame_rate = frame_rate
+
+            def update(self, detections):
+                detections.tracker_id = np.arange(len(detections)) + 41
+                return detections
+        modules = {'supervision': SimpleNamespace(Detections=Detections),
+                   'trackers': SimpleNamespace(ByteTrackTracker=ByteTrackTracker)}
+        with mock.patch.dict(sys.modules, modules):
+            from gamst.providers.sports_track import ObjectTracker
+            tracker = ObjectTracker(objects='detect', tracker='bytetrack', labels=('person',), frame_rate=60.)
+            self.assertEqual(tracker._tracker.frame_rate, 60.)
+            value = tracker.process(record('detect', dict(objects(('d', 'person', .1, .2, .1, .3), ball_box(.5, .5)),
+                                                          summary=dict(width=1280, height=720)), 0))
+        person = next(item for item in value['objects'] if item['label'] == 'person')
+        self.assertEqual(person['track_id'], 'track-41')
+        self.assertAlmostEqual(person['location']['bbox']['x'], .1, places=5)
+        self.assertEqual(value['summary']['width'], 1280)
+
     def test_none_passes_a_tracking_detector_through(self):
         from gamst.providers.sports_track import ObjectTracker
         tracker = ObjectTracker(objects='detect', tracker='none')
@@ -592,3 +625,61 @@ class ChooseModelsTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FakeDetector:
+    """A detector module: the n-th frame shows the ball at the n-th point and two players."""
+
+    def __init__(self, points, players):
+        from gamst.capabilities import CapabilitySpec, OutputField
+        self.points, self.players = points, players
+        self.spec = CapabilitySpec('vision.test.objects', 'vision.objects', 'video', 'test.detector', '1',
+                                   (OutputField('objects', 'array'), OutputField('summary', 'object')), 'frame')
+
+    def process(self, frame):
+        x, y = self.points[frame.data]
+        value = objects(*self.players, ball_box(x, y))
+        return self.spec.validate(value)
+
+
+class FrameSource:
+    modality = 'video'
+
+    def __init__(self, count, start, step_ms=10):
+        self.count, self.start, self.step = count, start, step_ms
+
+    async def frames(self):
+        for index in range(self.count):
+            yield InputFrame(index, 'video', self.start + self.step * index)
+
+
+class SportsPipelineTest(unittest.IsolatedAsyncioTestCase):
+    async def test_records_flow_from_detector_to_rally_and_are_counted(self):
+        """The record links of racket-rally (detect -> ball -> contacts -> rally) in a real Pipeline and Store."""
+        import time
+        from gamst import Gamst
+        from gamst.pipeline import Pipeline
+        from gamst.providers.sports_ball import BallTrack
+        from gamst.providers.sports_contacts import BallContacts
+        from gamst.providers.sports_rally import Rally
+        points = rally_points()
+        players = (('far', 'person', points[19][0] - .03, points[19][1] - .05, .06, .1), ('near', 'person', .4, .85, .1, .12))
+        start = time.time_ns() // 1_000_000 - 5000
+        async with Gamst(consent=True) as human:
+            pipeline = Pipeline(human, 'sports-test')
+            pipeline.add_input('camera', FrameSource(len(points), start))
+            detector = FakeDetector(points, players)
+            pipeline.add_module('detect', detector, consumes='camera', spec=detector.spec)
+            ball = BallTrack(ball='detect', max_speed=10.)
+            pipeline.add_module('ball', ball, consumes='detect', spec=ball.spec)
+            contacts = BallContacts(ball='ball', players='detect', span=2, min_turn_deg=60)
+            pipeline.add_module('contacts', contacts, consumes=['ball', 'detect'], spec=contacts.spec)
+            rally = Rally(contacts='contacts', ball='ball')
+            pipeline.add_module('rally', rally, consumes=['contacts', 'ball'], spec=rally.spec)
+            await pipeline.run()
+            hits = await human.count_events('sports.contacts', event='contact.hit')
+            bounces = await human.count_events('sports.contacts', event='contact.bounce')
+            rallies = await human.count_events('sports.rally', event='rally.ended')
+        self.assertEqual(hits['count'], 1)
+        self.assertEqual(bounces['count'], 1)
+        self.assertEqual(rallies['count'], 1)

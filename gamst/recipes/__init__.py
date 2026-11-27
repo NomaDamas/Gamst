@@ -1188,7 +1188,7 @@ def stacks_table(name):
         rows = {}
         for each in TIMINGS:
             recipe = variant(raw, stack=stack, timing=each)
-            rows[each] = {item['name']: {key: item[key] for key in ('use', 'candidate', 'tracker', 'settings', 'embed')
+            rows[each] = {item['name']: {key: item[key] for key in ('use', 'candidate', 'choose', 'tracker', 'settings', 'embed')
                                          if key in item}
                           for item in recipe['modules'] if item['use'] in MODEL_PARTS or 'tracker' in item}
         table['stacks'][stack] = dict(summary=raw['stacks'][stack].get('summary'), **rows)
