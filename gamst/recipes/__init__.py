@@ -1696,7 +1696,13 @@ def _parser():
     learn.add_argument('--name', help="label of the movement in its records (default: the text); --kind person: the "
                        "person's name in who (default: the file name)")
     learn.add_argument('--text', help='the movement in words: with --proposals or --rule')
-    learn.add_argument('--rule', metavar='FILE', help='a rule as JSON (gamst/providers/movement_rule.py)')
+    learn.add_argument('--rule', metavar='FILE', help='a rule as JSON (gamst/providers/movement_rule.py); with --video clips '
+                       'the rule is the skeleton, the clips set its numbers and are compared as well')
+    learn.add_argument('--combine', choices=['all', 'any'],
+                       help="a rule with clips: 'all' counts what both the rule and an example say, 'any' what either says "
+                            '(default: by the run\'s mode, count = all, search = any)')
+    learn.add_argument('--keep-rule-numbers', action='store_true',
+                       help='a rule with clips: keep the numbers of the rule as written (the clips are compared only)')
     learn.add_argument('--proposals', metavar='FILE', help='use the confirmed (and rejected) proposals of --text')
     learn.add_argument('--proposal', action='append', default=[], metavar='ID', help='only this proposal; repeat it')
     learn.add_argument('--no-confirm', action='store_true',

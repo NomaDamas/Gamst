@@ -17,6 +17,16 @@ specified (a user-defined ``exemplar`` reference input), by examples or by a rul
   finds where the recent motion ends a close copy of an example; matches closer together than half the
   example's length are one event.
 - ``rule``: a declarative rule over channels and joint relations (:mod:`gamst.providers.movement_rule`).
+- ``rule+sequence`` / ``rule+hold``: a rule and examples together (owner decision 58): the text's rule is the skeleton,
+  the examples are compared as well. In count mode an occurrence needs both (the rule completes and an example copy
+  ends inside its span within ``enter``, closer than every negative); in search mode either one counts, and an
+  occurrence found by both is counted once. ``combine`` in the movement value (``all`` / ``any``) fixes it; else the
+  Pipeline's mode decides (``count``: all, ``search``: any). In count mode the copy may end up to
+  :data:`COMBINE_WAIT_MS` after the rule's last step (the event is then said that much later; its times stay the rule's).
+
+Every ``exemplar.matched`` event carries ``evidence``: ``rule`` (``satisfied``, ``steps_ms``: when each step was reached)
+and/or ``example`` (``index`` of the nearest positive, its ``distance`` with the ``enter`` it was held against, the
+closest negative's ``negative_distance``), and ``combine`` for both.
 
 A reference holds several positive and optional negative examples; the matching and the derivation of
 thresholds from them are in :mod:`gamst.providers.movement_match`.
@@ -51,6 +61,7 @@ CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
     'left_wrist_dx', 'left_wrist_dy', 'right_wrist_dx', 'right_wrist_dy', 'wrist_gap')
 CHANNELS_VERSION = 2
 RELEASE_MS = 100     # an ordered rule's first step let go this long, then held again, is a new repetition
+COMBINE_WAIT_MS = 300    # count mode with a rule and examples: how long after the rule's end an example copy may still end
 MEDIAPIPE_MIN_VISIBILITY = .5    # MediaPipe's own landmark gate (``mediapipe.tasks.python.vision.drawing_utils``)
 
 # The 21 points of one hand, in the order of COCO-WholeBody, MediaPipe Hands and OpenPose: the wrist, then each finger
@@ -285,6 +296,7 @@ class ExemplarEvents:
         self.mapping, self.min_visibility = mapping, min_visibility
         self.label, self.scorer, self.rule, self.info = reference, None, None, {}
         self.identity, self.from_ms, self._methods, self._next = {}, 0, [], []
+        self._parts, self.combine, self._host, self.rejected = None, None, None, 0
         self._defaults = dict(enter=enter, exit=exit)
         self.spec = CapabilitySpec(
             capability_id, 'temporal.exemplar_events', modality, 'gamst.exemplar_events',
@@ -304,6 +316,7 @@ class ExemplarEvents:
         reference = pipeline.references.get(self.reference_name)
         if reference is None or reference['kind'] != 'exemplar':
             raise ValueError(f'exemplar_events needs an exemplar reference named {self.reference_name!r}')
+        self._host = pipeline      # its counting mode decides how a rule and examples combine (unless the value says)
         self._adopt(self.prepare(reference), reference.get('from_ms', 0))
 
     # ------------------------------------------------------------------ another movement while a run goes on
@@ -315,6 +328,7 @@ class ExemplarEvents:
                            capability_id=self.spec.id, fixed_thresholds=self.fixed_thresholds, mapping=self.mapping,
                            min_visibility=self.min_visibility, contract=self.contract, speaker_bound=self.speaker_bound,
                            **self._defaults)
+        ready._host = self._host
         ready.set_exemplar(reference['value'])
         ready._reference = reference
         ready.label = reference['label']
@@ -341,9 +355,10 @@ class ExemplarEvents:
             self._next = [item for item in self._next if item[0] < from_ms] + [(from_ms, ready)]
 
     def _adopt(self, ready, from_ms):
-        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity', '_reference'):
-            setattr(self, name, getattr(ready, name) if ready is not None else None if name in ('scorer', 'rule', 'mode') else
-                    getattr(self, name))
+        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity', '_reference', '_parts',
+                     'combine'):
+            setattr(self, name, getattr(ready, name) if ready is not None else None if name in (
+                'scorer', 'rule', 'mode', '_parts', 'combine') else getattr(self, name))
         self.info, self.from_ms = dict(ready.info, removed=False) if ready is not None else dict(self.info, removed=True), from_ms
         person, joints = self._person, self._saw_joints
         self._clear()
@@ -367,11 +382,13 @@ class ExemplarEvents:
         """``{"positives": [...], ...}`` or ``{"rule": {...}}`` as saved by ``gamst recipe enroll``; or one bare
         example, ``{"channels", "mask"}`` (hold) or a list of them (sequence), as files before format 2 hold."""
         with self._lock:
-            self.scorer = self.rule = None
+            self.scorer = self.rule = self._parts = self.combine = None
             learned = value.get('channels') if isinstance(value, dict) and 'mask' not in value else None
             if isinstance(learned, str) and learned != self.contract and (self.contract or learned.startswith('sensor.')):
                 raise ValueError(f'the movement was specified on {learned}; this module reads {self.contract or "other channels"}')
-            if isinstance(value, dict) and 'rule' in value:
+            if isinstance(value, dict) and 'rule' in value and value.get('positives'):
+                self._combined_parts(value)
+            elif isinstance(value, dict) and 'rule' in value:
                 self.mode, self.rule = 'rule', RuleScorer(value['rule'])
                 self.enter, self.exit = 0., self.rule.margin
                 self._methods = ['rule']
@@ -396,12 +413,41 @@ class ExemplarEvents:
                 self._methods = [item.get('method', 'examples') for item in entries['positives']]
             saved = value if isinstance(value, dict) else {}
             self.identity = {'reference_id': saved['id']} if saved.get('id') else {}
+            examples = self._parts[1] if self._parts else self if self.rule is None else None
             self.info = dict(confirmed=bool(saved.get('confirmed', True)),
                              threshold_source='caller' if self.fixed_thresholds and self.rule is None else
                              saved.get('threshold_source', 'rule' if self.rule is not None else 'default'),
-                             positives=len(self._methods) if self.rule is None else 0,
-                             negatives=len(self.scorer.negatives) if self.rule is None else 0)
+                             positives=len(examples.scorer.positives) if examples else 0,
+                             negatives=len(examples.scorer.negatives) if examples else 0)
+            if self._parts:
+                self.info.update(combine=self.combine or 'by_mode', rule_source=saved.get('rule_source', 'text'))
             self._clear()
+
+    def _part(self):
+        return ExemplarEvents(reference=self.reference_name, min_hold_ms=self.min_hold_ms, refractory_ms=self.refractory_ms,
+                              max_gap_ms=self.max_gap_ms, modality=self.spec.modality, capability_id=self.spec.id,
+                              fixed_thresholds=self.fixed_thresholds, mapping=self.mapping,
+                              min_visibility=self.min_visibility, contract=self.contract,
+                              speaker_bound=self.speaker_bound, **self._defaults)
+
+    def _combined_parts(self, value):
+        """A rule and examples together: two counters of their own state, fed the same frames (:meth:`_combined`)."""
+        combine = value.get('combine')
+        if combine not in (None, 'all', 'any'):
+            raise ValueError("combine is 'all' (count: the rule and an example) or 'any' (search: either)")
+        rule, examples = self._part(), self._part()
+        ExemplarEvents.set_exemplar(rule, dict(rule=value['rule']))
+        mode = value.get('examples_mode') or str(value.get('mode', '')).split('+')[-1]
+        ExemplarEvents.set_exemplar(examples, dict({key: item for key, item in value.items() if key not in (
+            'rule', 'combine', 'id', 'who', 'rule_text', 'calibration')}, mode=mode))
+        if examples.mode != 'sequence' and examples.mode != 'hold':
+            raise ValueError('the examples of a rule are a hold or a sequence')
+        self._parts, self.combine, self.rule = (rule, examples), combine, rule.rule
+        self.mode = f'rule+{examples.mode}'
+        self.enter, self.exit = examples.enter, examples.exit
+        self._methods = ['rule+examples']
+        spans = [getattr(track, 'span_ms', None) or 0 for track in examples.scorer.positives]
+        self._keep_ms = 2 * max(spans, default=0) + 2000
 
     def status(self):
         return dict(self.info, **self.identity, from_ms=self.from_ms, scheduled=[item[0] for item in self._next],
@@ -416,10 +462,14 @@ class ExemplarEvents:
         self._best = self._method = None
         self._step, self._released, self._again_ms, self._off_ms = 0, False, None, None
         self._person, self._saw_joints, self._channel_frames = None, False, 0
+        self._steps_ms, self._last_update, self._history, self._emitted, self._own = [], None, [], [], {}
+        self._pending = []
         if self.scorer is not None:
             self.scorer.reset()
         if getattr(self, 'rule', None) is not None:
             self.rule.reset()
+        for part in getattr(self, '_parts', None) or ():
+            part._clear()
 
     def reset(self):
         with self._lock:
@@ -487,36 +537,135 @@ class ExemplarEvents:
             if found is None:
                 return said or None
             channels, mask, points = found
-            ts, events = frame.timestamp_ms, []
-            if self._last_ms is not None and ts - self._last_ms > self.max_gap_ms:
-                if self._inside:   # a gap ends a match; it does not undo counted ones
-                    events.append(self._ended(self._last_ms, cut='gap'))
-                count, person, joints = self._count, self._person, self._saw_joints
-                self._clear()
-                self._count, self._person, self._saw_joints = count, person, joints
-            self._last_ms = ts
-            if self.rule is not None:
-                current = self._rule(ts, channels, mask, points, events)
-            else:
-                current, index, start, rival = self.scorer.update(ts, (channels, mask), limit=self.exit)
-                (self._hold if self.mode == 'hold' else self._sequence)(ts, current, index, start, rival, events)
+            events, current = (self._combined if self._parts else self._advance)(frame.timestamp_ms, channels, mask, points)
             result = self._value(status='matching' if self._inside else 'watching', events=events,
                                  **({} if current is None else {'distance': round(current, 5)}))
             return [*said, result] if said else result
 
-    def finish(self):
-        """End of input: the match in progress ends at the last frame."""
-        with self._lock:
-            if not self._inside:
-                return None
-            events = [self._ended(self._last_ms, cut='end_of_input')]
-            return self._value(status='watching', events=events)
+    def _advance(self, ts, channels, mask, points):
+        """(events, distance or violation) of one frame's channels (and joints)."""
+        events = []
+        if self._last_ms is not None and ts - self._last_ms > self.max_gap_ms:
+            if self._inside:   # a gap ends a match; it does not undo counted ones
+                events.append(self._ended(self._last_ms, cut='gap'))
+            count, person, joints, rejected = self._count, self._person, self._saw_joints, self.rejected
+            self._clear()
+            self._count, self._person, self._saw_joints, self.rejected = count, person, joints, rejected
+        self._last_ms = ts
+        if self.rule is not None:
+            current = self._rule(ts, channels, mask, points, events)
+        else:
+            current, index, start, rival = self.scorer.update(ts, (channels, mask), limit=self.exit)
+            self._last_update = (ts, current, index, start, rival)
+            (self._hold if self.mode == 'hold' else self._sequence)(ts, current, index, start, rival, events)
+        return events, current
 
-    def _match(self, ts, start, current, index=None):
+    # ------------------------------------------------------------------ a rule and examples together
+
+    def combining(self):
+        """'all' (count mode: the rule and an example) or 'any' (search mode: either)."""
+        if self.combine:
+            return self.combine
+        return 'any' if getattr(self._host, 'mode', 'count') == 'search' else 'all'
+
+    def _nearest(self, start_ms, end_ms, until_ms=None):
+        """The closest example copy that ends inside [start_ms, until_ms or end_ms] and begins at most half the span before
+        ``start_ms``."""
+        earliest = start_ms - max(200, (end_ms - start_ms) // 2)
+        end_ms = end_ms if until_ms is None else until_ms
+        best = None
+        for ts, current, index, start, rival in self._history:
+            if start_ms <= ts <= end_ms and start is not None and start >= earliest and (best is None or current < best[1]):
+                best = (ts, current, index, start, rival)
+        if best is None:
+            return None
+        ts, current, index, start, rival = best
+        examples = self._parts[1]
+        return dict(index=index, distance=round(current, 5), enter=examples.enter, start_ms=start, end_ms=ts,
+                    negative_distance=None if rival is None else round(rival, 5),
+                    close=current <= examples.enter and (rival is None or current < rival))
+
+    def _covered(self, start_ms, end_ms):
+        """Whether an event counted here already covers at least half of this span (or of itself)."""
+        for start, end in self._emitted:
+            shared = min(end, end_ms) - max(start, start_ms)
+            if shared > 0 and 2 * shared >= min(end - start, end_ms - start_ms):
+                return True
+        return False
+
+    def _counted(self, start_ms, end_ms, distance, evidence):
+        self._count += 1
+        self._method = 'rule+examples'
+        self._emitted = [*self._emitted[-15:], (start_ms, end_ms)]
+        return self._event('exemplar.matched', start_ms=start_ms, end_ms=end_ms,
+                           **({} if distance is None else {'distance': distance}), evidence=evidence)
+
+    def _decide(self, ts, combine, final=False):
+        """The rule's matches that can be decided at ``ts``: in count mode once an example copy is close, or rejected
+        :data:`COMBINE_WAIT_MS` after the rule's end; in search mode at once."""
+        events, waiting = [], []
+        for item in self._pending:
+            until = item['end_ms'] + (COMBINE_WAIT_MS if combine == 'all' else 0)
+            nearest = self._nearest(item['start_ms'], item['end_ms'], min(ts, until))
+            close = bool(nearest and nearest['close'])
+            if combine == 'all' and not close and ts < until and not final:
+                waiting.append(item)
+                continue
+            evidence = dict(combine=combine, rule=dict(satisfied=True, steps_ms=item.get('steps_ms')), example=nearest)
+            if combine == 'all' and not close:
+                self.rejected += 1          # the rule alone: not a copy of any example
+            elif combine == 'all' or not self._covered(item['start_ms'], item['end_ms']):
+                events.append(self._counted(item['start_ms'], item['end_ms'],
+                                            None if nearest is None else nearest['distance'], evidence))
+        self._pending = waiting
+        return events
+
+    def _combined(self, ts, channels, mask, points):
+        rule, examples = self._parts
+        self._last_ms = ts
+        rule_events, violation = rule._advance(ts, channels, mask, points)
+        example_events, distance = examples._advance(ts, channels, mask, points)
+        update = examples._last_update
+        if update is not None and update[1] is not None:
+            self._history.append(update)
+        while self._history and ts - self._history[0][0] > self._keep_ms:
+            self._history.pop(0)
+        combine, events = self.combining(), []
+        self._pending += [item for item in rule_events if item['event'] == 'exemplar.matched']
+        events += self._decide(ts, combine)
+        if combine == 'any':
+            for item in example_events:
+                key = item.get('index')
+                if item['event'] == 'exemplar.matched' and not self._covered(item['start_ms'], item['end_ms']):
+                    evidence = dict(combine=combine, rule=dict(satisfied=False, step=rule._step),
+                                    example=dict(index=item.get('example'), distance=item['distance'],
+                                                 enter=examples.enter, start_ms=item['start_ms'], end_ms=item['end_ms']))
+                    events.append(self._counted(item['start_ms'], item['end_ms'], item['distance'], evidence))
+                    self._own[key] = self._count
+                elif item['event'] == 'exemplar.ended' and key in self._own:
+                    events.append(dict(item, index=self._own.pop(key), method='rule+examples'))
+        return events, distance if distance is not None else violation
+
+    def finish(self):
+        """End of input: the match in progress ends at the last frame (a rule's match waiting for its example is
+        decided with what was seen)."""
+        with self._lock:
+            events = self._decide(self._last_ms, self.combining(), final=True) if self._parts and self._pending else []
+            if self._inside:
+                events.append(self._ended(self._last_ms, cut='end_of_input'))
+            return self._value(status='watching', events=events) if events else None
+
+    def _match(self, ts, start, current, index=None, rival=None):
         self._count += 1
         self._inside, self._started_ms, self._last_match_ms = True, start, ts
         self._best, self._end_ms, self._method = current, ts, self._methods[index or 0]
-        extra = {} if index is None else dict(example=index)
+        if self.rule is not None:
+            steps = [*self._steps_ms, ts][-len(self.rule.steps):] if len(self.rule.steps) > 1 else [start, ts]
+            extra = dict(steps_ms=steps, evidence=dict(rule=dict(satisfied=True, steps_ms=steps)))
+        else:
+            extra = dict(example=index, evidence=dict(example=dict(
+                index=index, distance=round(current, 5), enter=self.enter,
+                negative_distance=None if rival is None else round(rival, 5))))
         return self._event('exemplar.matched', start_ms=start, end_ms=ts, distance=round(current, 5), **extra)
 
     def _hold(self, ts, current, index, start, rival, events):
@@ -526,7 +675,7 @@ class ExemplarEvents:
             if current <= self.enter and (rival is None or current < rival):
                 self._candidate_ms = ts if self._candidate_ms is None else self._candidate_ms
                 if ts - self._candidate_ms >= self.min_hold_ms:
-                    events.append(self._match(ts, self._candidate_ms, current, index))
+                    events.append(self._match(ts, self._candidate_ms, current, index, rival))
             else:
                 self._candidate_ms = None
             return
@@ -543,7 +692,7 @@ class ExemplarEvents:
             if self._last_match_ms is None or ts - self._last_match_ms >= refractory:
                 if self._inside:
                     events.append(self._ended(self._end_ms))
-                events.append(self._match(ts, start, current, index))
+                events.append(self._match(ts, start, current, index, rival))
                 return
         if self._inside:
             if value < self._best:
@@ -569,6 +718,7 @@ class ExemplarEvents:
         self._again_ms = ts if self._again_ms is None else self._again_ms
         if ts - self._again_ms >= steps[0].get('hold_ms', 0):
             self._started_ms, self._end_ms, self._step = self._again_ms, ts, 1
+            self._steps_ms = [self._again_ms]
             self._released, self._again_ms, self._candidate_ms = False, None, None
 
     def _rule(self, ts, channels, mask, points, events):
@@ -605,6 +755,9 @@ class ExemplarEvents:
             return current
         if self._step == 0:
             self._started_ms, self._released, self._again_ms, self._off_ms = self._candidate_ms, False, None, None
+            self._steps_ms = [self._candidate_ms]
+        elif self._step < len(steps) - 1:
+            self._steps_ms.append(self._candidate_ms)
         self._step, self._end_ms, self._candidate_ms = self._step + 1, ts, None
         if self._step == len(steps):
             events.append(self._match(ts, self._started_ms, current))

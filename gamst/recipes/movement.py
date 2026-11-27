@@ -1,8 +1,9 @@
 """Specify a movement, find it in recordings, and turn its events into data (``gamst recipe`` actions).
 
 - ``enroll``: example clips (``--video FILE[@start-end]``, ``--negative ...``), confirmed proposals of a text,
-  or a declarative rule become one movement file. It holds channel vectors (or the rule), thresholds and where
-  they come from; never frames, joints or audio.
+  a declarative rule, or a rule with example clips (owner decision 58: the text's rule is the skeleton, the clips set
+  its numbers and are compared too) become one movement file. It holds channel vectors (and/or the rule), thresholds
+  and where they come from; never frames, joints or audio.
 - ``propose`` / ``proposals``: a VLM looks for a text in a recording; the owner confirms or rejects each candidate.
 - ``find``: the recipe's own modules over recordings; matched intervals as rows.
 - ``export``: the events of a store as JSONL or CSV.
@@ -95,8 +96,42 @@ def exemplar_input(recipe):
     return (direct or inputs_of(recipe, feature_modules(recipe)) or inputs_of(recipe, upstream(recipe['modules'], item['name'])))[0]
 
 
-async def demonstration(recipe, args, clip):
-    """([(timestamp_ms, channels, mask), ...], channel contract) of one clip; frames and joints are not kept."""
+class _JointsTap:
+    """A module of a demonstration only: the joints of the largest person per frame, as a rule reads them, in memory
+    (for :func:`gamst.providers.movement_rule.calibrate`); it commits nothing and nothing of it is saved."""
+
+    def __init__(self, mapping, min_visibility):
+        self.mapping, self.min_visibility, self.points = mapping, min_visibility, {}
+
+    def process(self, frame):
+        from ..private_payload import poses_of
+        from ..providers.pose_exemplar import body_points, keypoint_reading, largest_pose, raw_score_gates
+        poses = poses_of(frame.data)
+        best = largest_pose(poses or [], self.mapping, self.min_visibility) if poses else None
+        if best is not None:
+            _, _, index, aspect = best
+            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility, hands=True)
+            self.points[frame.timestamp_ms] = body_points(poses[index]['landmarks'], own, min_visibility=visibility,
+                                                          aspect=1. if aspect is None else aspect,
+                                                          raw_gates=raw_score_gates(poses[index], own))
+        return None
+
+
+def _joints_input(modules):
+    """(name of the pose module's joints input, its mapping options) among the demonstration's modules, or None."""
+    from .parts import _pose_source
+    for item in modules:
+        if item['use'] in ('mediapipe-pose', 'mediapipe-graph', 'sapiens2-pose', 'rtmw-pose') and item.get('joints'):
+            source = {'rtmw-pose': 'rtmw', 'sapiens2-pose': 'sapiens2'}.get(item['use'])
+            return item['joints'], _pose_source(dict(source=source))
+    return None
+
+
+async def demonstration(recipe, args, clip, *, joints=False):
+    """([(timestamp_ms, channels, mask), ...], channel contract) of one clip; frames and joints are not kept.
+
+    ``joints``: each sample also carries the largest person's joints of that frame (a fourth item, ``{joint: (x, y)}``
+    or None), held in memory for calibrating a rule and then dropped."""
     from .. import Gamst
     from ..inputs import open_source
     from . import build_pipeline
@@ -121,6 +156,12 @@ async def demonstration(recipe, args, clip):
         else:
             pipeline = await build_pipeline(dict(recipe, references=[]), run, human, sources={place['id']: source},
                                             modules=modules, lanes=False)
+        tap = None
+        if joints and place['use'] != 'sensor' and _joints_input(modules):
+            name, options = _joints_input(modules)
+            from ..providers.pose_exemplar import MEDIAPIPE_BODY
+            tap = _JointsTap(options.get('mapping') or MEDIAPIPE_BODY, options.get('min_visibility', .5))
+            pipeline.add_module('demonstration_joints', tap, consumes=[name])
 
         async def on_frame(input_id, frame, records):
             origin = getattr(source, 'origin_ms', None)
@@ -154,6 +195,9 @@ async def demonstration(recipe, args, clip):
                          'part, FILE@start-end')
     if not samples:
         raise SystemExit(f'nothing to learn in {clip.name()} (no visible person, no audio, or no samples)')
+    if joints:
+        found = tap.points if tap is not None else {}
+        samples = [(*item, found.get(item[0])) for item in samples]
     return samples, seen['channels']
 
 
@@ -164,14 +208,14 @@ def template(mode, samples):
         mask = [sum(item[2][i] for item in samples) * 2 > len(samples) for i in range(size)]
         channels = []
         for i in range(size):
-            values = sorted(item[1][i] for item in samples if item[2][i])
+            values = sorted(item[1][i] for item in samples if item[2][i])  # item: (ts, channels, mask[, joints])
             channels.append(values[len(values) // 2] if values and mask[i] else 0.)
         return dict(value=dict(channels=channels, mask=mask))
     span = samples[-1][0] - samples[0][0]
     if len(samples) < 2 or span <= 0:
         raise ValueError('a movement needs at least two samples; use --mode hold for a pose')
     step = -(-len(samples) // MAX_SEQUENCE_ITEMS)
-    return dict(value=[dict(channels=channels, mask=mask) for _, channels, mask in samples[::step]], span_ms=span)
+    return dict(value=[dict(channels=item[1], mask=item[2]) for item in samples[::step]], span_ms=span)
 
 
 def _refuse_repeats(positives, negatives):
@@ -247,14 +291,14 @@ def _proposed(recipe, args):
 
 def _write(args, saved):
     from .enrollment import _save
-    content = {key: saved[key] for key in ('mode', 'channels', 'rule', 'positives', 'negatives', 'enter', 'exit')
+    content = {key: saved[key] for key in ('mode', 'channels', 'rule', 'positives', 'negatives', 'enter', 'exit', 'combine')
                if key in saved}
     saved['id'] = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
     if args.out is None:        # an instruction of a running recipe: kept by the run, not in a file
         return saved
     _save(args.out, saved)      # readable by the owner only
     summary = {key: saved[key] for key in ('id', 'label', 'mode', 'method', 'confirmed', 'enter', 'exit',
-                                           'threshold_source') if key in saved}
+                                           'threshold_source', 'rule_source', 'combine') if key in saved}
     evidence = saved.get('threshold_evidence') or {}
     print(json.dumps(dict(out=args.out, **summary, positives=len(saved.get('positives', ())),
                           negatives=len(saved.get('negatives', ())), **({'evidence': evidence} if evidence else {})),
@@ -262,6 +306,37 @@ def _write(args, saved):
     for note in evidence.get('notes', ()):
         print(f'note: {note}', file=sys.stderr)
     return saved
+
+
+def combined(recipe, args, rule, mode, channels, thresholds, entries, joints, *, confirmed):
+    """The movement file of a rule with example clips (owner decision 58).
+
+    The text's rule is the skeleton (joints, comparisons, order); unless ``--keep-rule-numbers``, its numbers are
+    calibrated from the clips' joints (:func:`gamst.providers.movement_rule.calibrate`; a clip whose joints were not
+    seen keeps the text's numbers). The clips are also kept as examples, with thresholds from
+    :func:`gamst.providers.movement_match.derive`. Counting uses both (``combine``: ``all`` in count mode, ``any`` in search
+    mode, unless ``--combine`` fixes it)."""
+    from ..providers.movement_rule import calibrate, validate_rule
+    try:
+        written = validate_rule(rule)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    used, evidence = written, None
+    if not getattr(args, 'keep_rule_numbers', False):
+        clips = {key: [[item for item in samples if item[3]] for samples in joints[key]] for key in joints}
+        if any(clips['positives']):
+            try:
+                used, evidence = calibrate(written, [clip for clip in clips['positives'] if clip],
+                                           [clip for clip in clips['negatives'] if clip])
+            except ValueError as error:
+                raise SystemExit(f'the clips do not calibrate the rule: {error}') from error
+    combine = getattr(args, 'combine', None)
+    return dict(kind='exemplar', format=2, recipe=recipe['name'], label=args.name or args.text, text=args.text,
+                mode=f'rule+{mode}', examples_mode=mode, channels=channels, method='rule+examples', confirmed=confirmed,
+                rule=used, rule_text=written, rule_source='text+clips' if evidence else 'text',
+                **({'calibration': evidence} if evidence else {}), **({'combine': combine} if combine else {}),
+                **thresholds, positives=[entry['saved'] for entry in entries['positives']],
+                negatives=[entry['saved'] for entry in entries['negatives']])
 
 
 def _rule(recipe, args, rule, *, confirmed, proposal=None):
@@ -290,15 +365,20 @@ async def enroll(recipe, args):
     given, negatives = getattr(args, 'clips', None) or (_positives(recipe, args), [])
     rule = None
     if args.rule:
-        if given or args.negative or args.proposals:
-            raise SystemExit('--rule specifies the movement alone; it takes no clips or proposals')
+        if args.proposals:
+            raise SystemExit('--rule takes example clips (--video, --negative), not proposals')
         if not args.text:
             raise SystemExit('--rule needs the --text it stands for')
-        try:
-            written = json.loads(Path(args.rule).read_text())
-        except (OSError, ValueError) as error:
-            raise SystemExit(f'{args.rule}: {error}') from error
-        return _rule(recipe, args, written, confirmed=not args.no_confirm)
+        rule = getattr(args, 'rule_value', None)
+        if rule is None:
+            try:
+                rule = json.loads(Path(args.rule).read_text())
+            except (OSError, ValueError) as error:
+                raise SystemExit(f'{args.rule}: {error}') from error
+        if not given and not args.negative:
+            return _rule(recipe, args, rule, confirmed=not args.no_confirm)
+        if not given:
+            raise SystemExit('--negative needs example clips of the movement as well (--video FILE@START-END)')
     positives = list(given)
     if args.proposals:
         if not args.text and not args.proposal:
@@ -321,11 +401,14 @@ async def enroll(recipe, args):
     if len(positives) > MAX_EXAMPLES or len(negatives) > MAX_EXAMPLES:
         raise SystemExit(f'at most {MAX_EXAMPLES} positive and {MAX_EXAMPLES} negative examples')
     _refuse_repeats(positives, negatives)
-    mode = args.mode or item.get('mode', 'hold')
-    entries, channels = dict(positives=[], negatives=[]), None
+    mode = args.mode or ('sequence' if rule is not None else item.get('mode', 'hold'))
+    entries, channels, joints = dict(positives=[], negatives=[]), None, dict(positives=[], negatives=[])
     for key, clips in (('positives', positives), ('negatives', negatives)):
         for clip in clips:
-            samples, contract = await demonstration(recipe, args, clip)
+            samples, contract = await demonstration(recipe, args, clip, joints=rule is not None)
+            if rule is not None:
+                joints[key].append(samples)
+                samples = [item[:3] for item in samples]
             if channels not in (None, contract):
                 raise SystemExit(f'{clip.name()} gives {contract}, the other clips {channels}')
             channels = contract
@@ -344,6 +427,9 @@ async def enroll(recipe, args):
         raise SystemExit(f'{error}; the examples do not say which is the movement') from error
     used = [entry['saved'] for entry in (*entries['positives'], *entries['negatives'])]
     methods = sorted({entry['method'] for entry in used[:len(positives)]})
+    if rule is not None:
+        return _write(args, combined(recipe, args, rule, mode, channels, thresholds, entries, joints,
+                                     confirmed=not args.no_confirm and all(entry['confirmed'] for entry in used)))
     return _write(args, dict(
         kind='exemplar', format=2, recipe=recipe['name'],
         label=args.name or args.text or next((reference.get('label') for reference in recipe['references']

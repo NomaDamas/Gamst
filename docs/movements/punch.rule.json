@@ -1,0 +1,8 @@
+{"steps": [
+  {"when": {"any": [
+     {"all": [{"measure": {"hand_open": "left"}, "op": "lt", "value": 1.1},
+              {"measure": {"rate": {"distance": ["left_wrist", "left_shoulder"]}}, "op": "gt", "value": 3.0}]},
+     {"all": [{"measure": {"hand_open": "right"}, "op": "lt", "value": 1.1},
+              {"measure": {"rate": {"distance": ["right_wrist", "right_shoulder"]}}, "op": "gt", "value": 3.0}]}]},
+   "hold_ms": 0}],
+ "margin": 0}

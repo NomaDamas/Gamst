@@ -107,7 +107,9 @@ class Compose(Files, unittest.TestCase):
     def test_every_missing_piece_is_one_sentence(self):
         cases = [
             (dict(inputs=dict(video=self.path('b.mp4')), what=dict(movement=dict(text='shotgun'))), 'no hidden LLM'),
-            (self.shotgun(who=dict(name='감스트')), "who='감스트' refused before start: no person reference"),
+            (self.shotgun(who=dict(name='감스트')), "who='감스트' refused before start: a text ('감스트') alone never identifies a person"),
+            (self.shotgun(who=dict(person=self.path('gamst.json'))), 'say who it is in words as well'),
+            (self.shotgun(who=dict(name='감스트', photos=['a.jpg'])), 'no consent record'),
             (self.shotgun(who=dict(name='감스트', person=self.path('one-face.json'))), 'only 1 usable face crop'),
             (self.shotgun(who=dict(name='Q', person=self.path('gamst.json'))), "enrolls '감스트', not 'Q'"),
             (dict(what=dict(words=['뽀또'])), 'at least one input'),
@@ -116,7 +118,9 @@ class Compose(Files, unittest.TestCase):
             (dict(inputs=dict(audio=self.path('a.wav')), what=dict(words=['뽀또']), who=dict(name='감스트', person=self.path('gamst.json'))),
              'who.voice'),
             (dict(inputs=dict(video=self.path('b.mp4'))), 'say what to look for'),
-            (self.shotgun(what=dict(movement=dict(clips=[dict(file='x.mp4')]))), 'enrolled first'),
+            (self.shotgun(what=dict(movement=dict(examples=[dict(file='x.mp4')]))), 'there is no file x.mp4'),
+            (self.shotgun(what=dict(movement=dict(negatives=[dict(file='x.mp4')]))), 'look-alikes go with examples'),
+            (self.shotgun(what=dict(movement=dict(text='관제탑'))), 'no hidden LLM'),
             (self.shotgun(what=dict(movement=dict(rule=SHOTGUN))), 'needs the text'),
             (self.shotgun(inputs=dict(video=self.path('none.mp4'))), 'no file'),
             (self.shotgun(when='now'), 'unknown when'),

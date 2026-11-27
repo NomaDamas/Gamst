@@ -1,0 +1,20 @@
+{"steps": [
+  {"when": {"all": [
+     {"measure": {"distance": ["left_wrist", "right_wrist"]}, "op": "lt", "value": 1.2},
+     {"measure": {"angle": ["left_shoulder", "left_elbow", "left_wrist"]}, "op": "lt", "value": 120},
+     {"measure": {"angle": ["right_shoulder", "right_elbow", "right_wrist"]}, "op": "lt", "value": 120}]}},
+  {"when": {"all": [
+     {"measure": {"distance": ["left_wrist", "right_wrist"]}, "op": "gt", "value": 2.4},
+     {"measure": {"height": ["left_wrist", "left_shoulder"]}, "op": "gt", "value": -0.8},
+     {"measure": {"height": ["right_wrist", "right_shoulder"]}, "op": "gt", "value": -0.8},
+     {"measure": {"height": ["left_wrist", "left_shoulder"]}, "op": "lt", "value": 0.8},
+     {"measure": {"height": ["right_wrist", "right_shoulder"]}, "op": "lt", "value": 0.8},
+     {"measure": {"angle": ["left_shoulder", "left_elbow", "left_wrist"]}, "op": "gt", "value": 130},
+     {"measure": {"angle": ["right_shoulder", "right_elbow", "right_wrist"]}, "op": "gt", "value": 130}]},
+   "within_ms": 1500},
+  {"when": {"all": [
+     {"measure": {"distance": ["left_wrist", "right_wrist"]}, "op": "lt", "value": 1.2},
+     {"measure": {"angle": ["left_shoulder", "left_elbow", "left_wrist"]}, "op": "lt", "value": 120},
+     {"measure": {"angle": ["right_shoulder", "right_elbow", "right_wrist"]}, "op": "lt", "value": 120}]},
+   "within_ms": 1500}],
+ "margin": 0}

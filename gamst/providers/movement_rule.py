@@ -308,3 +308,178 @@ class RuleScorer:
         if kind == 'offset':
             return (a[0] - b[0]) / width
         return math.dist(a, b) / width
+
+
+# ---------------------------------------------------------------- calibration from example clips
+
+# How far beyond the examples' least satisfying value a calibrated number is placed, per measure, in its own unit.
+SLACK = dict(angle=10., height=.15, offset=.15, distance=.15, hand_open=.1, channel=.05)
+RATE_SLACK = .2        # a rate: this fraction of the examples' least value
+MIN_WITHIN_MS, WITHIN_FACTOR = 300, 2.
+CONTAINS = .5          # a clip shows a step when, as written, the step is violated by at most this much at its place
+
+
+def _leaves(condition, path=()):
+    """[(path, leaf, any-group paths above it)] of a checked condition."""
+    for group in ('all', 'any'):
+        if group in condition:
+            return [(found, leaf, ([path] if group == 'any' else []) + above)
+                    for i, item in enumerate(condition[group])
+                    for found, leaf, above in _leaves(item, (*path, group, i))]
+    return [(path, condition, [])]
+
+
+def _at(condition, path):
+    for key in path:
+        condition = condition[key]
+    return condition
+
+
+def _rate_kind(measure):
+    [(kind, argument)] = measure.items()
+    return (True, next(iter(argument))) if kind == 'rate' else (False, kind)
+
+
+def _walk(scorer, condition, path, channels, mask, points, out):
+    """Violation of ``condition`` (None: unknown); every node's (violation, observed) into ``out[path]``."""
+    for group, pick in (('all', max), ('any', min)):
+        if group in condition:
+            values = [_walk(scorer, item, (*path, group, i), channels, mask, points, out)
+                      for i, item in enumerate(condition[group])]
+            value = None if group == 'all' and None in values else pick(
+                (v for v in values if v is not None), default=None)
+            out[path] = (value, None)
+            return value
+    value = scorer._violation(condition, channels, mask, points)
+    out[path] = (value, scorer._observe(condition['measure'], channels, mask, points))
+    return value
+
+
+def _series(scorer, clip):
+    """Per frame: (ts, [violation of each step], [{path: (violation, observed)} of each step]) of one clip."""
+    scorer.reset()
+    rows = []
+    for ts, channels, mask, points in clip:
+        points = points or {}
+        scorer.observe(ts, channels, mask, points)
+        violations, nodes = [], []
+        for step in scorer.steps:
+            out = {}
+            violations.append(_walk(scorer, step['when'], (), channels, mask, points, out))
+            nodes.append(out)
+        rows.append((ts, violations, nodes))
+    return rows
+
+
+def _aligned(rows, steps):
+    """(frame index of each step, in order, with the least summed violation (unknown: 1), that sum); None if empty."""
+    if not rows:
+        return None
+    cost = [[1. if v is None else min(1., v) for v in violations] for _, violations, _ in rows]
+    best, choice = [cost[f][0] for f in range(len(rows))], [[f] for f in range(len(rows))]
+    for k in range(1, steps):
+        run, at, total, picks = float('inf'), None, [], []
+        for f in range(len(rows)):
+            if best[f] < run:
+                run, at = best[f], f
+            total.append(run + cost[f][k])
+            picks.append(choice[at] + [f])
+        best, choice = total, picks
+    end = min(range(len(rows)), key=lambda f: best[f])
+    return choice[end], best[end]
+
+
+def _held(nodes, path, above):
+    """Whether the comparison at ``path`` is the one that holds in each ``any`` group above it (or as close as any)."""
+    for group in above:
+        mine = nodes.get(path[:len(group) + 2], (None, None))[0]
+        siblings = [value for key, (value, _) in nodes.items() if len(key) == len(group) + 2 and key[:len(group)] == group
+                    and key[len(group)] == 'any' and value is not None]
+        if mine is None or mine > min(siblings, default=float('inf')):
+            return False
+    return True
+
+
+def _placed(scorer, clips, steps):
+    placed = []
+    for clip in clips:
+        rows = _series(scorer, clip)
+        found = _aligned(rows, steps)
+        if found is not None:
+            placed.append(dict(rows=rows, frames=found[0], cost=round(found[1], 4)))
+    return placed
+
+
+def calibrate(rule, positives, negatives=()):
+    """The rule with its numbers set from example clips: ``(rule, evidence)``.
+
+    ``positives`` / ``negatives``: clips as ``[(timestamp_ms, channels, mask, points), ...]`` (points: {joint: (x, y)} as
+    the counter reads them). The rule's skeleton (the text's: which joints, which comparisons, in which order) is kept.
+    In each clip every step is placed on one frame, in order, where it is closest to satisfied; a clip shows a step when
+    the written step is violated there by at most :data:`CONTAINS` (a clip trimmed to start at the second step does not
+    show the first), and only such clips teach that step. As with example thresholds
+    (:func:`gamst.providers.movement_match.derive`), positives only widen: a comparison a positive does not pass moves to
+    the least satisfying value the positives show, plus :data:`SLACK` (a rate: :data:`RATE_SLACK` of it); one they all
+    pass keeps the text's number. A comparison inside ``any`` learns only from the clips where it was the one that held.
+    A step's ``within_ms`` grows to twice the longest gap the positives show between it and the step before (at least
+    :data:`MIN_WITHIN_MS`). Only a negative narrows: a negative whose placed values would satisfy every step moves the
+    comparison that separates it most from the positives to halfway between. The evidence lists, per comparison, the
+    text's number, the positives' values and the number chosen.
+    """
+    checked = validate_rule(rule)
+    scorer = RuleScorer(checked)
+    steps = len(checked['steps'])
+    placed = _placed(scorer, positives, steps)
+    calibrated = json.loads(json.dumps(checked))
+    evidence = dict(rule='gamst.providers.movement_rule.calibrate', positives=len(positives), negatives=len(negatives),
+                    placed_cost=[item['cost'] for item in placed], leaves=[], within_ms=[], negatives_moved=[])
+    learned = {}
+    shows = [[(item['rows'][item['frames'][k]][1][k] or 0) <= CONTAINS and item['rows'][item['frames'][k]][1][k] is not None
+              for k in range(steps)] for item in placed]
+    evidence['shows_step'] = shows
+    for k, step in enumerate(checked['steps']):
+        for path, leaf, above in _leaves(step['when']):
+            values = [item['rows'][item['frames'][k]][2][k][path][1] for item, seen in zip(placed, shows)
+                      if seen[k] and _held(item['rows'][item['frames'][k]][2][k], path, above)]
+            values = [value for value in values if value is not None]
+            target = _at(calibrated['steps'][k]['when'], path)
+            if values:
+                rate, kind = _rate_kind(leaf['measure'])
+                worst = min(values) if leaf['op'] in ('gt', 'gte') else max(values)
+                slack = abs(worst) * RATE_SLACK if rate else SLACK.get(kind, .1)
+                value = min(leaf['value'], worst - slack) if leaf['op'] in ('gt', 'gte') else \
+                    max(leaf['value'], worst + slack)
+                low, high = (-10000, 10000) if rate else (0, 180) if kind == 'angle' else (-100, 100)
+                target['value'] = round(min(high, max(low, value)), 4)
+                learned[k, path] = worst
+            evidence['leaves'].append(dict(step=k, path='.'.join(map(str, path)) or 'when', measure=leaf['measure'],
+                                           op=leaf['op'], text=leaf['value'], value=target['value'],
+                                           positives=[round(value, 4) for value in values]))
+        both = [item for item, seen in zip(placed, shows) if seen[k] and seen[k - 1]]
+        if k and both:
+            gaps = [item['rows'][item['frames'][k]][0] - item['rows'][item['frames'][k - 1]][0] for item in both]
+            within = int(min(60_000, max(step['within_ms'], MIN_WITHIN_MS, WITHIN_FACTOR * max(gaps))))
+            evidence['within_ms'].append(dict(step=k, text=step.get('within_ms'), gaps_ms=gaps, value=within))
+            calibrated['steps'][k]['within_ms'] = within
+    calibrated = validate_rule(calibrated)
+    for index, item in enumerate(_placed(RuleScorer(calibrated), negatives, steps)):
+        frames, rows = item['frames'], item['rows']
+        if any(rows[frames[k]][1][k] is None or rows[frames[k]][1][k] > 0 for k in range(steps)):
+            continue        # this negative is not counted by the calibrated rule as placed
+        best = None         # the comparison with the widest gap between the negative and the positives' worst
+        for (k, path), worst in learned.items():
+            value = rows[frames[k]][2][k].get(path, (None, None))[1]
+            if value is None:
+                continue
+            leaf = _at(calibrated['steps'][k]['when'], path)
+            gap = (worst - value) if leaf['op'] in ('gt', 'gte') else (value - worst)
+            if gap > 0 and (best is None or gap > best[0]):
+                best = (gap, k, path, value, worst)
+        if best is None:
+            evidence['negatives_moved'].append(dict(negative=index, moved=None, note='not separable by one comparison'))
+            continue
+        _, k, path, value, worst = best
+        leaf = _at(calibrated['steps'][k]['when'], path)
+        leaf['value'] = round((value + worst) / 2, 4)
+        evidence['negatives_moved'].append(dict(negative=index, step=k, path='.'.join(map(str, path)), value=leaf['value']))
+    return validate_rule(calibrated), evidence

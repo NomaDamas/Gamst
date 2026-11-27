@@ -13,8 +13,12 @@ Request::
    "inputs": {"camera": 0 | "video": FILE,            pictures: a camera index or a video file (its sound too)
               "microphone": true | "audio": FILE,     sound
               "sensors": [{"id", "file", "modality", "columns", "time"}]},
-   "who": {"name": "P", "person": P.json, "voice": V.json} | null,     few-shot person reference (required for who)
-   "what": {"movement": {"text", "rule": {...} | FILE} | {"exemplar": FILE},
+   "who": {"name": "P", "text": "a description", "photos": [JPG, ...] | "person": P.json, "consent": "...",
+           "voice": V.json} | null,    a text (name or description) AND a photo few-shot are required (decision 59)
+   "what": {"movement": {"text", "rule": {...} | FILE, "examples": [CLIP, ...], "negatives": [CLIP, ...],
+                         "combine": "all" | "any"} | {"exemplar": FILE},
+            (text + rule: zero-shot; examples: few-shot; text + rule + examples: the rule is the skeleton, the clips set
+             its numbers and are compared too, decision 58; CLIP = {"file", "start_s", "end_s"} or "FILE@START-END")
             "words": ["W", ...] | FILE,
             "rhythm": {"input", "channel", "band"}},
    "mode": "count" | "search", "timing": "realtime" | "post",
@@ -193,20 +197,48 @@ def _who(request, inputs, files, missing, *, words):
     from ..person_reference import check, name_of, refusal, session_of
     if isinstance(who, str):
         who = dict(name=who)
-    if not isinstance(who, dict) or set(who) - {'name', 'person', 'voice'} or not isinstance(who.get('name'), str) \
-            or not who['name']:
-        missing.append('who: {"name": the person\'s name, "person": an enrolled person file, "voice": an enrolled '
-                       'voice file (for words)}.')
+    if not isinstance(who, dict) or set(who) - {'name', 'text', 'photos', 'person', 'consent', 'voice'}:
+        missing.append('who: {"name" or "text": who it is (a name or a description), "photos": photos of that person '
+                       '(few-shot, with "consent") or "person": an enrolled person file, "voice": an enrolled voice file '
+                       '(for words)}.')
         return None
-    name = who['name']
+    texts = [who.get(key) for key in ('name', 'text') if isinstance(who.get(key), str) and who[key].strip()]
+    if not texts:
+        missing.append('who: say who it is in words as well ("name" or "text": a name or a description); photos alone '
+                       'do not say whom the count is for (decision 59).')
+        return None
+    name = (who.get('name') or who['text']).strip()[:64]
+    description = who.get('text') if isinstance(who.get('text'), str) else None
+    if who.get('photos') and who.get('person'):
+        missing.append('who: give photos (enrolled now) or an enrolled person file, not both.')
+        return None
+    if who.get('photos'):
+        photos = who['photos']
+        if type(photos) is not list or not 1 <= len(photos) <= 16:
+            missing.append('who.photos: 1..16 photos of the person, exactly one person in each.')
+            return None
+        if not isinstance(who.get('consent'), str) or not who['consent'].strip():
+            missing.append(refusal(name, ['no consent record (who consented, to what, when): add who.consent']))
+            return None
+        from .instructions import PHOTOS
+        paths = [files.get(item, PHOTOS, f'who.photos[{index}]', MAX_FILE * 8) for index, item in enumerate(photos)]
+        if None in paths:
+            return None
+        if words:
+            missing.append('who.voice: words said by a person are told apart by the voice: enroll the person with a voice '
+                           'first (gamst recipe enroll --kind person ... --voice-file V.json) and give who.person.')
+            return None
+        return dict(name=name, text=description, person=None, photos=paths, consent=who['consent'], voice=None,
+                    check=None)
     if not who.get('person'):
-        missing.append(refusal(name))
+        missing.append(refusal(name, [f'a text ({name!r}) alone never identifies a person: add who.photos (with '
+                                      'who.consent) or who.person (an enrolled person file)']))
         return None
     path = files.get(who['person'], ('.json',), 'who.person')
     value = _json_file(path, 'person', 'who.person', missing) if path else None
     if value is None:
         return None
-    if name_of(value, name) != name:
+    if who.get('name') and name_of(value, name) != name:
         missing.append(f'who.person: {who["person"]} enrolls {name_of(value)!r}, not {name!r}: give that person\'s file '
                        f'or ask for who {name_of(value)!r}.')
         return None
@@ -226,25 +258,65 @@ def _who(request, inputs, files, missing, *, words):
             voice = files.get(who['voice'], ('.json',), 'who.voice')
             if voice and _json_file(voice, 'voice', 'who.voice', missing) is None:
                 voice = None
-    return dict(name=name, person=path, voice=voice, check=verdict)
+    return dict(name=name_of(value, name) if not who.get('name') else name, text=description, person=path, photos=None,
+                voice=voice, check=verdict)
+
+
+def _clip_text(item, files, where):
+    """``FILE@START-END`` (the enroll form) of one clip given as that string or as {file, start_s, end_s}; None if bad."""
+    from .instructions import VIDEO
+    if isinstance(item, str):
+        found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)', item)
+        item = dict(file=found[1], start_s=float(found[2]), end_s=float(found[3])) if found else dict(file=item)
+    if not isinstance(item, dict) or set(item) - {'file', 'start_s', 'end_s'}:
+        files.missing.append(f'{where}: a clip is {{"file", "start_s", "end_s"}} or "FILE@START-END".')
+        return None
+    path = files.get(item.get('file'), VIDEO, where, MAX_MEDIA)
+    if path is None:
+        return None
+    start, end = item.get('start_s'), item.get('end_s')
+    if start is None and end is None:
+        return str(path)
+    from .movement import MAX_CLIP_S
+    if type(start) not in (int, float) or type(end) not in (int, float) or not 0 < end - start <= MAX_CLIP_S or start < 0:
+        files.missing.append(f'{where}: start_s < end_s, at most {MAX_CLIP_S:g} s apart (one movement per clip).')
+        return None
+    return f'{path}@{start:g}-{end:g}'
+
+
+MOVEMENT_KEYS = ('text', 'rule', 'examples', 'negatives', 'combine', 'exemplar', 'label', 'clips')   # clips: examples
 
 
 def _movement(what, files, missing):
-    """{exemplar path | None, rule, text, label} of what.movement, or None."""
+    """{exemplar path | None, rule, text, label, examples, negatives, combine} of what.movement, or None.
+
+    Text only is refused (GAMST has no hidden LLM to read it): text + rule (zero-shot), examples (few-shot) or text +
+    rule + examples (decision 58), or an enrolled movement file."""
     movement = what.get('movement')
     if movement is None:
         return None
-    if not isinstance(movement, dict) or set(movement) - {'text', 'rule', 'exemplar', 'clips', 'label'}:
+    if not isinstance(movement, dict) or set(movement) - set(MOVEMENT_KEYS):
         missing.append('what.movement: {"text" with "rule" (JSON of gamst/providers/movement_rule.py, written by the '
-                       'caller), or "exemplar" (an enrolled movement file)}.')
+                       'caller), and/or "examples" (clips of the movement, with optional "negatives"), or "exemplar" (an '
+                       'enrolled movement file)}.')
         return None
     if movement.get('clips'):
-        missing.append('what.movement.clips: example clips are enrolled first (gamst recipe enroll person-action-count '
-                       '--video FILE@START-END ... --out move.json, then what.movement.exemplar), or start with a rule '
-                       'and send the clips with set_instruction while the run goes on.')
+        movement = dict(movement, examples=movement['clips'])
+    examples, negatives = movement.get('examples') or [], movement.get('negatives') or []
+    from ..providers.movement_match import MAX_EXAMPLES
+    if type(examples) is not list or type(negatives) is not list or len(examples) > MAX_EXAMPLES or \
+            len(negatives) > MAX_EXAMPLES:
+        missing.append(f'what.movement.examples / negatives: lists of at most {MAX_EXAMPLES} clips.')
         return None
-    if movement.get('exemplar') and movement.get('rule'):
-        missing.append('what.movement: give a rule or an exemplar, not both.')
+    if negatives and not examples:
+        missing.append('what.movement.negatives: look-alikes go with examples of the movement (what.movement.examples).')
+        return None
+    if movement.get('combine') not in (None, 'all', 'any'):
+        missing.append("what.movement.combine: 'all' (the rule and an example: count mode's default) or 'any' (either: "
+                       "search mode's default).")
+        return None
+    if movement.get('exemplar') and (movement.get('rule') or examples):
+        missing.append('what.movement: an enrolled movement file stands alone; give it, or a rule and/or examples.')
         return None
     if movement.get('exemplar'):
         path = files.get(movement['exemplar'], ('.json',), 'what.movement.exemplar')
@@ -260,13 +332,21 @@ def _movement(what, files, missing):
                            '(gamst recipe enroll).')
             return None
         return dict(exemplar=path, rule=None, text=movement.get('text') or value.get('text'),
-                    label=value.get('label') or movement.get('text') or Path(path).stem)
+                    label=value.get('label') or movement.get('text') or Path(path).stem, examples=[], negatives=[])
     rule = movement.get('rule')
-    if rule is None:
+    if rule is None and not examples:
         missing.append('what.movement: GAMST has no hidden LLM to read a movement in words: write it as a rule '
-                       '(what.movement.rule, the JSON of gamst/providers/movement_rule.py, with its text) or give an '
-                       'enrolled movement file (what.movement.exemplar).')
+                       '(what.movement.rule, the JSON of gamst/providers/movement_rule.py, with its text), give example '
+                       'clips (what.movement.examples), both, or an enrolled movement file (what.movement.exemplar).')
         return None
+    clips = [_clip_text(item, files, f'what.movement.examples[{index}]') for index, item in enumerate(examples)]
+    looks = [_clip_text(item, files, f'what.movement.negatives[{index}]') for index, item in enumerate(negatives)]
+    if None in clips or None in looks:
+        return None
+    text = movement.get('text')
+    if rule is None:
+        return dict(exemplar=None, rule=None, text=text, label=movement.get('label') or text or 'movement',
+                    examples=clips, negatives=looks, combine=None)
     if isinstance(rule, str):
         path = files.get(rule, ('.json',), 'what.movement.rule')
         if path is None:
@@ -278,7 +358,7 @@ def _movement(what, files, missing):
             return None
         if isinstance(rule, dict) and rule.get('kind') == 'exemplar' and isinstance(rule.get('rule'), dict):
             rule = rule['rule']     # an enrolled rule file: its rule
-    if not movement.get('text'):
+    if not text:
         missing.append('what.movement.text: a rule needs the text it stands for (e.g. "raises both arms").')
         return None
     from ..providers.movement_rule import validate_rule
@@ -287,7 +367,8 @@ def _movement(what, files, missing):
     except ValueError as error:
         missing.append(f'what.movement.rule: {error}.')
         return None
-    return dict(exemplar=None, rule=rule, text=movement['text'], label=movement.get('label') or movement['text'])
+    return dict(exemplar=None, rule=rule, text=text, label=movement.get('label') or text, examples=clips,
+                negatives=looks, combine=movement.get('combine'))
 
 
 def _words(what, files, missing):
@@ -450,13 +531,63 @@ def _hosted_asr(recipe, include, asr):
     return list(dict.fromkeys(found))
 
 
-def compose(request, *, folders=None, out=None, out_dir=None, actor='user'):
+ENROLL_RECIPE = 'person-action-count'     # the movement and who lanes of a composed recipe are this recipe's
+
+
+def _enroll(argv):
+    """``gamst recipe enroll`` with ``argv`` (its JSON line goes to stderr: MCP's stdout is the protocol); an error
+    sentence or None."""
+    import contextlib
+    from . import main as recipe
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            recipe(['enroll', ENROLL_RECIPE, *argv])
+    except SystemExit as error:
+        if error.code not in (None, 0):
+            return str(error.code)
+    return None
+
+
+def enroll_examples(movement, path, *, profile=None, actor='user'):
+    """Enroll the request's example clips (and its rule, when given) into ``path``; an error sentence or None."""
+    argv = ['--mode', 'sequence', '--name', movement['label'], '--out', str(path)]
+    for clip in movement['examples']:
+        argv += ['--video', clip]
+    for clip in movement['negatives']:
+        argv += ['--negative', clip]
+    if movement.get('text'):
+        argv += ['--text', movement['text']]
+    if movement['rule'] is not None:
+        rule_path = Path(path).with_suffix('.rule.json')
+        rule_path.write_text(json.dumps(movement['rule'], ensure_ascii=False))
+        argv += ['--rule', str(rule_path)]
+    if movement.get('combine'):
+        argv += ['--combine', movement['combine']]
+    if actor != 'user':
+        argv.append('--no-confirm')
+    if profile:
+        argv += ['--profile', str(profile)]
+    return _enroll(argv)
+
+
+def enroll_photos(who, path, *, profile=None):
+    """Enroll the request's photos of the person into ``path``; an error sentence or None."""
+    argv = ['--kind', 'person', '--name', who['name'], '--consent', who['consent'], '--out', str(path)]
+    for photo in who['photos']:
+        argv += ['--image', str(photo)]
+    if profile:
+        argv += ['--profile', str(profile)]
+    return _enroll(argv)
+
+
+def compose(request, *, folders=None, out=None, out_dir=None, actor='user', profile=None):
     """The recipe for ``request`` (a dict, the module docstring), validated, with ``reasons`` and the ``run`` command.
 
     ``folders``: the owner's ``--clips`` folders every file must be inside (MCP), or None (the command line: any path).
     ``out``: the recipe file to write (a rule becomes ``<out>.movement.json`` beside it); None writes nothing;
     ``out_dir``: write it there as ``<name>.json`` instead.
     ``actor``: who wrote a rule (``user``: confirmed; ``jev``: recorded as unconfirmed, as with set_instruction).
+    ``profile``: the setup profile example clips and photos are enrolled with (they run the pose and identity models).
     Returns ``{ok: false, missing: [sentence, ...]}`` when something must be provided first.
     """
     from . import check as sampling, not_given, read_recipe, roles as setup_roles, validate, with_pose, with_settings
@@ -550,7 +681,7 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user'):
     pose = _pose_reason(chosen, timing, request.get('pose'))
     if pose:
         reasons.insert(0, pose)
-    if who:
+    if who and not who.get('photos'):
         reasons.append(dict(capability='who', chose=who['name'], why=f"few-shot person reference checked "
                             f"(gamst/person_reference.py): identified by {', '.join(who['check']['basis'])}; events of "
                             'a track take the person bound to it, also retroactively within the track'))
@@ -578,7 +709,48 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user'):
     saved, before = {}, []
     target = Path(out) if out else Path(out_dir) / f"{raw['name']}.json" if out_dir else None
     recipe_path = target if target else Path(f"{raw['name']}.json")
-    if movement and movement['rule'] is not None:
+    if (movement and movement['examples'] or who and who.get('photos')) and not target:
+        return dict(ok=False, missing=['example clips and photos are enrolled into files beside the recipe: give --out '
+                                       'FILE (over MCP the recipe is saved in the first --clips folder).'])
+    if who and who.get('photos'):
+        from ..person_reference import check, refusal as refused, session_of
+        person_path = recipe_path.with_suffix('.person.json')
+        person_path.parent.mkdir(parents=True, exist_ok=True)
+        problem = enroll_photos(who, person_path, profile=profile)
+        if problem:
+            return dict(ok=False, missing=[refused(who['name'], [problem])])
+        value = json.loads(person_path.read_text())
+        if who.get('text'):
+            value['description'] = who['text']
+            from .enrollment import _save
+            _save(str(person_path), value)
+        pictures = inputs['pictures']
+        verdict = check(value, session=session_of(pictures[1]) if pictures and pictures[0] == 'video' else None)
+        if not verdict['ok']:
+            return dict(ok=False, missing=[refused(who['name'], verdict['problems'])])
+        who = dict(who, person=person_path, check=verdict)
+        saved['person'] = str(person_path)
+        reasons.append(dict(capability='who', chose=who['name'], why=f"few-shot person reference enrolled from "
+                            f"{len(who['photos'])} photo(s) and checked (gamst/person_reference.py): identified by "
+                            f"{', '.join(verdict['basis'])}; events of a track take the person bound to it, also "
+                            'retroactively within the track'))
+    if movement and movement['examples']:
+        movement_path = recipe_path.with_suffix('.movement.json')
+        movement_path.parent.mkdir(parents=True, exist_ok=True)
+        problem = enroll_examples(movement, movement_path, profile=profile, actor=actor)
+        if problem:
+            return dict(ok=False, missing=[f'what.movement.examples: {problem}'])
+        enrolled = json.loads(movement_path.read_text())
+        saved['movement'] = str(movement_path)
+        movement = dict(movement, exemplar=movement_path)
+        reasons.append(dict(capability='movement', chose=f"{enrolled.get('mode')} {enrolled.get('id')}", why=(
+            f"{len(movement['examples'])} example clip(s)" + (f", {len(movement['negatives'])} negative(s)" if
+                                                              movement['negatives'] else '') +
+            (f" with the rule for {movement['text']!r} as the skeleton ({enrolled.get('rule_source')}): counted when "
+             f"{'the rule and an example both' if (enrolled.get('combine') or ('any' if mode == 'search' else 'all')) == 'all' else 'the rule or an example'} "
+             'say so (decision 58)' if movement['rule'] is not None else ', compared by dynamic time warping') +
+            f"; thresholds {enrolled.get('threshold_source')} (enter {enrolled.get('enter')}, exit {enrolled.get('exit')})")))
+    elif movement and movement['rule'] is not None:
         from .movement import _rule
         movement_path = recipe_path.with_suffix('.movement.json')
         args = argparse.Namespace(name=movement['label'], text=movement['text'], out=None)
@@ -665,6 +837,7 @@ def main(argv=None):
     parser.add_argument('request', help='the request as a JSON file, or - for stdin')
     parser.add_argument('--out', help='recipe file to write (a rule is written beside it as NAME.movement.json)')
     parser.add_argument('--start', action='store_true', help='run it at once, as gamst recipe run (needs --out)')
+    parser.add_argument('--profile', help='setup profile that example clips and photos are enrolled with')
     args = parser.parse_args(argv)
     try:
         request = json.loads(sys.stdin.read() if args.request == '-' else Path(args.request).read_text())
@@ -673,7 +846,7 @@ def main(argv=None):
     start = args.start or isinstance(request, dict) and request.get('start') is True
     if start and not args.out:
         raise SystemExit('--start runs a saved recipe: give --out FILE')
-    result = compose(request, out=args.out)
+    result = compose(request, out=args.out, profile=args.profile)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str), flush=True)
     if not result['ok']:
         raise SystemExit(1)
