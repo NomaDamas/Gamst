@@ -262,8 +262,12 @@ def _setup_tool(name: str, args: dict) -> Any:
 class MCPServer:
     """All tools share the supplied runtime and optional active device session."""
 
-    def __init__(self, human: Any, *, movement_proposals: str | None = None, clips: list | tuple = ()):
+    def __init__(self, human: Any, *, movement_proposals: str | None = None, clips: list | tuple = (),
+                 run_profile: str | None = None):
+        """``clips``: the owner's folders compose_recipe reads files from and saves recipes in; ``run_profile``: the
+        setup profile of the runs it starts (default: gamst setup's)."""
         self.human = human
+        self.run_profile = run_profile
         self.movement_proposals = movement_proposals
         self.clips = [Path(folder).expanduser().resolve(strict=True) for folder in clips]
         for folder in self.clips:
@@ -519,7 +523,8 @@ class MCPServer:
             return dict(result, ok=False, started=False, missing=result["before_run"])
         from .recipes import prepare_run
         argv = [*result["run"][3:], *[item for folder in folders for item in ("--clips", str(folder))],
-                *(["--proposals", self.movement_proposals] if self.movement_proposals else [])]
+                *(["--proposals", self.movement_proposals] if self.movement_proposals else []),
+                *(["--profile", str(self.run_profile)] if self.run_profile else [])]
         try:
             recipe, run_args = await asyncio.to_thread(prepare_run, argv, out=sys.stderr)
         except SystemExit as error:
@@ -679,7 +684,7 @@ async def _main(args: argparse.Namespace) -> None:
         backend = backend_from_env()
         if backend is not None:
             human.set_analysis_backend(backend)
-        adapter = MCPServer(human, movement_proposals=args.proposals, clips=args.clips or ())
+        adapter = MCPServer(human, movement_proposals=args.proposals, clips=args.clips or (), run_profile=args.run_profile)
         runtime = None
         if args.profile is not None:
             from .profile import ProfileRuntime
@@ -703,6 +708,8 @@ def main() -> None:
     parser.add_argument("--clips", action="append", metavar="DIR",
                         help="a folder whose files compose_recipe may read (videos, enrolled persons, voices, "
                              "movements) and where it saves recipes; repeat it")
+    parser.add_argument("--run-profile", metavar="FILE",
+                        help="setup profile of the recipes compose_recipe starts (default ~/.config/gamst/profile.json)")
     parser.add_argument("--max-records", type=int, metavar="N",
                         help="records the store retains (default 5000; a pose run started by compose_recipe commits "
                              "several per frame)")

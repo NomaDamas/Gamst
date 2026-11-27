@@ -24,6 +24,8 @@ A recipe composes parts GAMST already has (``gamst/recipes/parts.py``) into a
   gamst recipe run scene --video FILE ...                               a file's pictures and its own sound
   gamst recipe run person-action-count ... --with-role vision.depth@500 any registry role, here every 500 ms
   gamst recipe roles                                                    which roles that can be, and why not
+  gamst recipe compose request.json --out mine.json [--start]           a recipe from a structured request
+                                                                        (inputs, who, what, mode, timing; recipes/compose.py)
 
 Recipe file::
 

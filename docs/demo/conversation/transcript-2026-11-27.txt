@@ -1,0 +1,923 @@
+# Transcript of one run of docs/demo/conversation/conversation.py (2026-11-27, Mac M2 Pro, through try-it/guard.sh).
+# Paths shortened to try-it/...; the ANSWER lines are a sentence template that stands in for the LLM.
+
+====================================================================================================
+USER: 감스트가 샷건을 몇 번 쳤어? 언제?
+====================================================================================================
+
+>>> LLM calls compose_recipe
+{
+ "name": "shotgun-gamst",
+ "inputs": {
+  "video": "b.mp4"
+ },
+ "who": {
+  "name": "감스트",
+  "person": "gamst.person.json"
+ },
+ "what": {
+  "movement": {
+   "text": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+   "rule": "{... the rule, 3 steps}"
+  }
+ },
+ "mode": "count",
+ "timing": "post",
+ "start": true,
+ "wait": true
+}
+<<< compose_recipe: 9454 bytes of JSON (printed bounded)
+{
+ "ok": true,
+ "name": "shotgun-gamst",
+ "recipe": "{... saved: 7 module items, 1 input(s), references ['exemplar', 'person']}",
+ "reasons": [
+  {
+   "capability": "pose model",
+   "chose": "rtmw.l_384x288",
+   "why": "decision 38: RTMW-l 384x288 is the default; post: a finished file is counted on every frame with nothing late, so the most accurate model counts"
+  },
+  {
+   "capability": "movement",
+   "lanes": [
+    "pose",
+    "person_binding",
+    "target_person",
+    "pose_channels",
+    "exemplar",
+    "repetition"
+   ],
+   "recipe": "person-action-count",
+   "why": "a movement counted for every tracked person, each event with start, end and who"
+  },
+  {
+   "capability": "who",
+   "chose": "감스트",
+   "why": "few-shot person reference checked (gamst/person_reference.py): identified by face; events of a track take the person bound to it, also retroactively within the ... (165 chars)"
+  },
+  {
+   "capability": "semantic",
+   "chose": "off",
+   "why": "the VLM interpretation stays OFF (decision 47); with \"with\": [\"semantic\"] it runs as a causal state chain (explain_state)"
+  },
+  {
+   "capability": "timing",
+   "chose": "post",
+   "why": "post: a finished file, every frame in the largest batches, nothing late"
+  },
+  {
+   "capability": "movement",
+   "chose": "rule 6bc882af8d78e7db",
+   "why": "the rule the caller wrote for '샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다', validated (gamst/providers/movement_rule.py)"
+  }
+ ],
+ "run": [
+  "gamst",
+  "recipe",
+  "run",
+  "try-it/demo/conversation/clips/recipes/shotgun-gamst.json",
+  "--video",
+  "try-it/demo/conversation/clips/b.mp4",
+  "--exemplar",
+  "try-it/demo/conversation/clips/recipes/shotgun-gamst.movement.json",
+  "... 7 more"
+ ],
+ "saved": {
+  "movement": "try-it/demo/conversation/clips/recipes/shotgun-gamst.movement.json",
+  "recipe": "try-it/demo/conversation/clips/recipes/shotgun-gamst.json"
+ },
+ "before_run": [],
+ "inputs": [
+  "camera"
+ ],
+ "modules": [
+  "pose",
+  "person_binding",
+  "pose_channels",
+  "exemplar",
+  "repetition"
+ ],
+ "left_out": [
+  "target_person",
+  "semantic"
+ ],
+ "records": [
+  "temporal.exemplar_events",
+  "temporal.repetition_count",
+  "vision.person_binding"
+ ],
+ "setup_roles": {
+  "input.video": "opencv",
+  "vision.pose": "rtmw.l_384x288",
+  "vision.face_identity": "lvface.b",
+  "vision.body_identity": "osnet.ain_x1_0_msmt17"
+ },
+ "required_fps": 4.0,
+ "setup": "gamst recipe setup try-it/demo/conversation/clips/recipes/shotgun-gamst.json --dry-run",
+ "started": true,
+ "finished": true,
+ "report": {
+  "ok": true,
+  "recipe": "shotgun-gamst",
+  "timing": "post",
+  "mode": "count",
+  "frames": 714,
+  "start_ms": 1795780475765,
+  "run_s": 16.09,
+  "counts": {
+   "temporal.exemplar_events": {
+    "exemplar.matched": 16
+   },
+   "temporal.repetition_count": {
+    "repetition": 16
+   },
+   "vision.person_binding": {
+    "person.bound": 1,
+    "person.unbound": 1
+   }
+  },
+  "complete": true,
+  "lost": {
+   "temporal.exemplar_events": {
+    "gaps": 0,
+    "frames": 0
+   },
+   "temporal.repetition_count": {
+    "gaps": 0,
+    "frames": 0
+   },
+   "vision.person_binding": {
+    "gaps": 0,
+    "frames": 0
+   }
+  },
+  "warnings": [],
+  "errors": {}
+ }
+}
+
+>>> LLM calls count_events
+{
+ "capability_id": "temporal.exemplar_events",
+ "event": "exemplar.matched",
+ "who": "감스트",
+ "window": "1h",
+ "max_evidence": 40
+}
+<<< count_events: 9113 bytes of JSON (printed bounded)
+{
+ "count": 16,
+ "evidence": [
+  {
+   "record_id": "66f94a9e-b0cd-4a87-bf5a-469ad79593c2",
+   "timestamp_ms": 1795780477832,
+   "capability_id": "temporal.exemplar_events",
+   "event": {
+    "event": "exemplar.matched",
+    "index": 1,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780477498,
+    "end_ms": 1795780477832,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 1
+   }
+  },
+  {
+   "record_id": "6f09505d-8059-4895-a6fc-7d81ec9e6e59",
+   "timestamp_ms": 1795780478248,
+   "capability_id": "temporal.exemplar_events",
+   "event": {
+    "event": "exemplar.matched",
+    "index": 2,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780478032,
+    "end_ms": 1795780478248,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 2
+   }
+  },
+  {
+   "record_id": "89b09791-fed3-4370-a5c7-dd2a76f42194",
+   "timestamp_ms": 1795780478732,
+   "capability_id": "temporal.exemplar_events",
+   "event": {
+    "event": "exemplar.matched",
+    "index": 3,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780478532,
+    "end_ms": 1795780478732,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 3
+   }
+  },
+  "... 13 more"
+ ],
+ "evidence_truncated": false,
+ "instructions": [
+  {
+   "reference": "exemplar",
+   "reference_id": "6bc882af8d78e7db",
+   "reference_revision": 1
+  }
+ ],
+ "who": "감스트",
+ "capability_id": "temporal.exemplar_events",
+ "window_start_ms": 1795776905051,
+ "window_end_ms": 1795780505051,
+ "scanned_records": 714,
+ "scan_truncated": false,
+ "complete": true,
+ "lost": {
+  "gaps": 0,
+  "frames": 0,
+  "longest_ms": 0
+ }
+}
+
+>>> LLM calls count_events
+{
+ "capability_id": "temporal.exemplar_events",
+ "event": "exemplar.matched",
+ "window": "1h",
+ "group_by": "who",
+ "max_evidence": 0
+}
+<<< count_events: 421 bytes of JSON (printed bounded)
+{
+ "count": 16,
+ "evidence": [],
+ "evidence_truncated": true,
+ "groups": {
+  "감스트": 16
+ },
+ "instructions": [
+  {
+   "reference": "exemplar",
+   "reference_id": "6bc882af8d78e7db",
+   "reference_revision": 1
+  }
+ ],
+ "capability_id": "temporal.exemplar_events",
+ "window_start_ms": 1795776905105,
+ "window_end_ms": 1795780505105,
+ "scanned_records": 714,
+ "scan_truncated": false,
+ "complete": true,
+ "lost": {
+  "gaps": 0,
+  "frames": 0,
+  "longest_ms": 0
+ }
+}
+
+>>> LLM calls get_timeline
+{
+ "start_ms": 1795780475765,
+ "end_ms": 1795780487765,
+ "step_ms": 2000,
+ "capabilities": [
+  "temporal.exemplar_events"
+ ],
+ "who": "감스트",
+ "max_bytes": 8192
+}
+<<< get_timeline: 7666 bytes of JSON (printed bounded)
+{
+ "subject_id": "local-user",
+ "step_ms": 2000,
+ "start_ms": 1795780474000,
+ "end_ms": 1795780488000,
+ "known_ms": 1795780505146,
+ "now_ms": 1795780505146,
+ "complete_until_ms": null,
+ "columns": [
+  {
+   "key": "temporal.exemplar_events",
+   "capability": "temporal.exemplar_events",
+   "module": null,
+   "complete_until_ms": null,
+   "freshness_ms": 1000,
+   "source_id": "shotgun-gamst",
+   "sensor_id": "pose_joints",
+   "interpretation": "estimate",
+   "modality": "video",
+   "models": [
+    "gamst.exemplar_events:3.tracks"
+   ],
+   "late_intervals": true
+  }
+ ],
+ "columns_omitted": [],
+ "uncalibrated_clocks": [],
+ "scan_truncated": false,
+ "removed_until_ms": null,
+ "rows": [
+  {
+   "t_ms": 1795780474000,
+   "change": "added",
+   "complete": false,
+   "revision": "e28f609ce0592ef2",
+   "cells": {
+    "temporal.exemplar_events": {
+     "status": "exact",
+     "records": 15,
+     "ref": "7e97e778b8"
+    }
+   },
+   "known_ms": 1795780489233
+  },
+  {
+   "t_ms": 1795780476000,
+   "change": "added",
+   "complete": false,
+   "revision": "2527a6f1c9af801f",
+   "cells": {
+    "temporal.exemplar_events": {
+     "status": "exact",
+     "records": 120,
+     "ref": "dec5eb164d",
+     "intervals": [
+      "e844d8cc91"
+     ]
+    }
+   },
+   "known_ms": 1795780491760
+  },
+  "... 1 more"
+ ],
+ "evidence": {
+  "7e97e778b8": {
+   "capability": "temporal.exemplar_events",
+   "kind": "record",
+   "at_ms": 1795780475998,
+   "value": {
+    "status": "watching",
+    "events": [],
+    "tracks": 1,
+    "by_who": {},
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "distance": 0.90808,
+    "who": "감스트",
+    "count": 0,
+    "count_all": 0
+   },
+   "known_ms": 1795780489233,
+   "evidence_id": "4c4d6494-9461-48a4-bf23-c5a76f4d4119"
+  },
+  "dec5eb164d": {
+   "capability": "temporal.exemplar_events",
+   "kind": "record",
+   "at_ms": 1795780477998,
+   "value": {
+    "status": "watching",
+    "events": [],
+    "tracks": 1,
+    "by_who": {
+     "감스트": 1
+    },
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "distance": 0.22582,
+    "who": "감스트",
+    "count": 1,
+    "count_all": 1
+   },
+   "known_ms": 1795780491760,
+   "evidence_id": "0afc9a80-695d-4b86-bd6c-425cb0891260"
+  },
+  "e844d8cc91": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780477498,
+   "end_ms": 1795780477832,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 1,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780477498,
+    "end_ms": 1795780477832,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 1
+   },
+   "known_ms": 1795780491593,
+   "evidence_id": "66f94a9e-b0cd-4a87-bf5a-469ad79593c2"
+  },
+  "bbe2357cfa": {
+   "capability": "temporal.exemplar_events",
+   "kind": "record",
+   "at_ms": 1795780479998,
+   "value": {
+    "status": "watching",
+    "events": [],
+    "tracks": 1,
+    "by_who": {
+     "감스트": 7
+    },
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "distance": 0.44817,
+    "who": "감스트",
+    "count": 7,
+    "count_all": 7
+   },
+   "known_ms": 1795780494327,
+   "evidence_id": "04c812f5-9007-4300-a183-4941f2594dbf"
+  },
+  "a4ba8114de": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780478032,
+   "end_ms": 1795780478248,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 2,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780478032,
+    "end_ms": 1795780478248,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 2
+   },
+   "known_ms": 1795780492099,
+   "evidence_id": "6f09505d-8059-4895-a6fc-7d81ec9e6e59"
+  },
+  "9bed6530bb": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780478532,
+   "end_ms": 1795780478732,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 3,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780478532,
+    "end_ms": 1795780478732,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 3
+   },
+   "known_ms": 1795780492747,
+   "evidence_id": "89b09791-fed3-4370-a5c7-dd2a76f42194"
+  },
+  "03af7dcc0e": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780478882,
+   "end_ms": 1795780479032,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 4,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780478882,
+    "end_ms": 1795780479032,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 4
+   },
+   "known_ms": 1795780493108,
+   "evidence_id": "4e8ddcdd-236e-4249-980e-4910569f6369"
+  },
+  "ad1cb90393": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780479182,
+   "end_ms": 1795780479332,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 5,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780479182,
+    "end_ms": 1795780479332,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 5
+   },
+   "known_ms": 1795780493465,
+   "evidence_id": "ff1a85fb-0c40-482e-b296-5425a352ea52"
+  },
+  "c1575fff94": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780479432,
+   "end_ms": 1795780479632,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 6,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780479432,
+    "end_ms": 1795780479632,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 6
+   },
+   "known_ms": 1795780493797,
+   "evidence_id": "300f2a6a-249d-4890-8596-116c6f118597"
+  },
+  "a47cc6b9c3": {
+   "capability": "temporal.exemplar_events",
+   "kind": "events",
+   "start_ms": 1795780479732,
+   "end_ms": 1795780479915,
+   "value": {
+    "event": "exemplar.matched",
+    "index": 7,
+    "reference": "exemplar",
+    "label": "샷건: 주먹을 어깨 위로 들었다가 빠르게 아래로 내리친다",
+    "method": "rule",
+    "confirmed": true,
+    "start_ms": 1795780479732,
+    "end_ms": 1795780479915,
+    "distance": 0.0,
+    "reference_id": "6bc882af8d78e7db",
+    "reference_revision": 1,
+    "track_id": "local-user:body:person-1",
+    "who": "감스트",
+    "track_index": 7
+   },
+   "known_ms": 1795780494299,
+   "evidence_id": "59c3a3dd-9d45-48af-a4ad-ec2edac415c3"
+  }
+ },
+ "rows_total": 7,
+ "rows_complete": 0,
+ "has_more": true,
+ "byte_budget": 8192,
+ "next_cursor": "of6oW6FAkSE_PMjjm1Hl8HZZcrR9Ml5L7Dhn2C0qzxR7ImF0IjoxNzk1NzgwNDgwMDAwLCJiYXNlIjpudWxsLCJiYXNlX3N0b3AiOm51bGwsImZpcnN0IjoxNzk1NzgwNDc0MDAwLCJraW5kIjoidGltZWxpbmUi... (284 chars)",
+ "values": "retained records; summarized, never interpolated",
+ "who": {
+  "name": "감스트",
+  "filtered_events": 0,
+  "seen": [
+   {
+    "track_id": "local-user:body:person-1",
+    "start_ms": 1795780475765,
+    "end_ms": 1795780487648
+   }
+  ],
+  "note": "events of other people and of unknown tracks are left out; next_cursor is of the unfiltered read"
+ }
+}
+
+[LLM stand-in: sentence template filled from the tool results above]
+ANSWER: 감스트는 샷건을 16번 쳤어요. 영상 시작부터 각 동작이 끝난 때는 2.07초, 2.48초, 2.97초, 3.27초, 3.57초, 3.87초, 4.15초, 4.43초, 4.73초, 5.02초, 5.32초, 5.62초, 5.92초, 6.23초, 6.53초, 6.83초입니다. 사람별로는 감스트 16번. 감스트가 화면에 보인 구간: 0.00초-11.88초.
+
+====================================================================================================
+USER: 뽀또라고 몇 번 말했어?
+====================================================================================================
+
+>>> LLM calls compose_recipe
+{
+ "name": "bbo-gamst",
+ "inputs": {
+  "audio": "a.wav"
+ },
+ "who": {
+  "name": "감스트",
+  "person": "gamst.person.json",
+  "voice": "voice.json"
+ },
+ "what": {
+  "words": [
+   "뽀또"
+  ]
+ },
+ "mode": "count",
+ "timing": "realtime",
+ "with": [
+  "verification",
+  "vote",
+  "tse"
+ ]
+}
+<<< compose_recipe: 12212 bytes of JSON (printed bounded)
+{
+ "ok": true,
+ "name": "bbo-gamst",
+ "recipe": "{... saved: 18 module items, 1 input(s), references ['voice', 'person', 'terms']}",
+ "reasons": [
+  {
+   "capability": "words",
+   "lanes": [
+    "speaker",
+    "target_voice",
+    "separation",
+    "identify",
+    "asr",
+    "diarization",
+    "tse",
+    "tracks",
+    "... 10 more"
+   ],
+   "recipe": "person-term-count",
+   "why": "words counted as they are said, with the word lanes of person-term-count unchanged (decision 48)"
+  },
+  {
+   "capability": "who",
+   "chose": "감스트",
+   "why": "few-shot person reference checked (gamst/person_reference.py): identified by face; events of a track take the person bound to it, also retroactively within the ... (165 chars)"
+  },
+  {
+   "capability": "words",
+   "chose": [
+    "elevenlabs.scribe_v3_live.hosted",
+    "speechmatics.enhanced.hosted"
+   ],
+   "why": "the state-of-the-art live recogniser by published results (decision 31) is hosted and paid: it needs consent.remote_asr; said by 감스트, told apart by the enrolled... (166 chars)"
+  },
+  {
+   "capability": "timing",
+   "chose": "realtime",
+   "why": "realtime: counts as frames arrive; what the live lane cannot reach in time is counted late by L2, as corrections"
+  }
+ ],
+ "run": [
+  "gamst",
+  "recipe",
+  "run",
+  "try-it/demo/conversation/clips/recipes/bbo-gamst.json",
+  "--audio",
+  "try-it/demo/conversation/clips/a.wav",
+  "--voice",
+  "try-it/demo/conversation/clips/voice.json",
+  "... 11 more"
+ ],
+ "saved": {
+  "recipe": "try-it/demo/conversation/clips/recipes/bbo-gamst.json"
+ },
+ "before_run": [
+  "words: elevenlabs.scribe_v3_live.hosted, speechmatics.enhanced.hosted is hosted and paid: set consent.remote_asr true (the owner's consent to sending the sound)... (196 chars)",
+  "with: the verification and hosted diarization parts send sound to paid services; run with --allow-remote-diarization once the owner consents."
+ ],
+ "inputs": [
+  "microphone"
+ ],
+ "modules": [
+  "asr",
+  "diarization",
+  "tse",
+  "speaker_check",
+  "tse_decision",
+  "vote_asr",
+  "verification",
+  "terms"
+ ],
+ "left_out": [
+  "speaker",
+  "target_voice",
+  "separation",
+  "identify",
+  "tracks",
+  "verify",
+  "faces",
+  "face_identity",
+  "... 2 more"
+ ],
+ "records": [
+  "speech.term_events"
+ ],
+ "setup_roles": {
+  "input.microphone": "sounddevice",
+  "audio.asr": "elevenlabs.scribe_v3_live.hosted",
+  "audio.diarization": "nemotron3",
+  "audio.target_speech": "ps4.bsrnn_real",
+  "audio.speaker_verify": "sherpa.campplus_zh_en",
+  "audio.word_alignment": "qwen3.forced_aligner_0_6b"
+ },
+ "required_fps": 0,
+ "setup": "gamst recipe setup try-it/demo/conversation/clips/recipes/bbo-gamst.json --dry-run"
+}
+
+NOT STARTED: the recipe would send the sound to hosted, paid recognisers (before_run above); that needs the owner's OK. The answer below reads the records that an earlier run of this same recipe stored (try-it/testbed/tse/runs/m1, 2026-11-26), through the same MCP tools.
+
+>>> LLM calls count_events
+{
+ "capability_id": "speech.term_events",
+ "event": "term.spoken",
+ "window": "60d",
+ "max_evidence": 20
+}
+<<< count_events: 5829 bytes of JSON (printed bounded)
+{
+ "count": 8,
+ "evidence": [
+  {
+   "record_id": "e60d7330-d484-4366-89d6-96c15919fe53",
+   "timestamp_ms": 1795690288201,
+   "capability_id": "speech.term_events",
+   "event": {
+    "event": "term.spoken",
+    "state": "final",
+    "term": "뽀또",
+    "event_id": "te:5cdcc76abcc108c9c5b1",
+    "spoken": "뽀또",
+    "reference": "terms",
+    "reference_id": "a2ae7c8f68071184",
+    "reference_revision": 1,
+    "utterance_id": "elevenlabs.scribe_v3_live:6",
+    "start_ms": 1795690269901,
+    "end_ms": 1795690270101,
+    "word_timed": true,
+    "method": "text",
+    "confirmed": true,
+    "speaker_score": 0.51382,
+    "word_ids": [
+     "elevenlabs.scribe_v3_live:6#11"
+    ],
+    "revised_by": {
+     "record_id": "68bdcf1c-2c7c-4dd6-80f1-c6e2f6e5b46a",
+     "timestamp_ms": 1795690300601,
+     "basis": "heard_by_3(first+second+third)+person_speaker"
+    }
+   }
+  },
+  {
+   "record_id": "6eaebf43-8102-4f18-9724-c991b4567ee1",
+   "timestamp_ms": 1795690300401,
+   "capability_id": "speech.term_events",
+   "event": {
+    "event": "term.spoken",
+    "state": "final",
+    "term": "뽀또",
+    "event_id": "te:9bb8fa6f1ab7c7620b3f",
+    "spoken": "뽀또",
+    "reference": "terms",
+    "reference_id": "a2ae7c8f68071184",
+    "reference_revision": 1,
+    "utterance_id": "elevenlabs.scribe_v3_live:10",
+    "start_ms": 1795690285821,
+    "end_ms": 1795690286061,
+    "word_timed": true,
+    "method": "text",
+    "confirmed": true,
+    "speaker_score": 0.54445,
+    "word_ids": [
+     "elevenlabs.scribe_v3_live:10#9"
+    ],
+    "revised_by": {
+     "record_id": "f33bc0f5-087c-48b2-a9e3-29f911c9ba6f",
+     "timestamp_ms": 1795690302136,
+     "basis": "heard_by_3(first+second+third)+person_speaker"
+    }
+   }
+  },
+  {
+   "record_id": "6eaebf43-8102-4f18-9724-c991b4567ee1",
+   "timestamp_ms": 1795690300401,
+   "capability_id": "speech.term_events",
+   "event": {
+    "event": "term.spoken",
+    "state": "final",
+    "term": "뽀또",
+    "event_id": "te:ac764d1ff3e0781050be",
+    "spoken": "뽀또",
+    "reference": "terms",
+    "reference_id": "a2ae7c8f68071184",
+    "reference_revision": 1,
+    "utterance_id": "elevenlabs.scribe_v3_live:10",
+    "start_ms": 1795690294141,
+    "end_ms": 1795690294541,
+    "word_timed": true,
+    "method": "text",
+    "confirmed": true,
+    "speaker_score": 0.54808,
+    "word_ids": [
+     "elevenlabs.scribe_v3_live:10#22"
+    ],
+    "revised_by": {
+     "record_id": "f33bc0f5-087c-48b2-a9e3-29f911c9ba6f",
+     "timestamp_ms": 1795690302136,
+     "basis": "heard_by_3(first+second+third)+person_speaker"
+    }
+   }
+  },
+  "... 5 more"
+ ],
+ "evidence_truncated": false,
+ "states": {
+  "provisional": 0,
+  "final": 8,
+  "revoked": 0,
+  "uncertain": 2
+ },
+ "instructions": [
+  {
+   "reference": "terms",
+   "reference_id": "a2ae7c8f68071184",
+   "reference_revision": 1
+  }
+ ],
+ "capability_id": "speech.term_events",
+ "window_start_ms": 1790596505325,
+ "window_end_ms": 1795780505325,
+ "scanned_records": 9,
+ "scan_truncated": false,
+ "complete": true,
+ "lost": {
+  "gaps": 0,
+  "frames": 0,
+  "longest_ms": 0
+ }
+}
+
+>>> LLM calls count_events
+{
+ "capability_id": "speech.term_events",
+ "event": "term.spoken",
+ "window": "60d",
+ "where": {
+  "state": "uncertain"
+ },
+ "max_evidence": 0
+}
+<<< count_events: 452 bytes of JSON (printed bounded)
+{
+ "count": 2,
+ "evidence": [],
+ "evidence_truncated": true,
+ "states": {
+  "provisional": 0,
+  "final": 0,
+  "revoked": 0,
+  "uncertain": 2
+ },
+ "instructions": [
+  {
+   "reference": "terms",
+   "reference_id": "a2ae7c8f68071184",
+   "reference_revision": 1
+  }
+ ],
+ "capability_id": "speech.term_events",
+ "window_start_ms": 1790596505328,
+ "window_end_ms": 1795780505328,
+ "scanned_records": 9,
+ "scan_truncated": false,
+ "complete": true,
+ "lost": {
+  "gaps": 0,
+  "frames": 0,
+  "longest_ms": 0
+ }
+}
+
+[LLM stand-in: sentence template filled from the tool results above]
+ANSWER: 감스트는 '뽀또'를 8번 말했어요 (확정 8, 잠정 0). 녹음 시작부터 11.56초, 19.82초, 21.26초, 22.10초, 27.22초, 38.02초, 46.34초, 47.56초에 말했어요 (녹음 시작 시각은 그 실행의 보고서 파일에서 읽었고 MCP 도구에서 온 것이 아니에요). 목소리가 겹쳐 아직 판단하지 못한 것이 2개 있고, 세지 않았지만 '말하지 않았다'는 뜻은 아니에요.

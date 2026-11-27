@@ -222,8 +222,8 @@ class OverMCP(Files, unittest.IsolatedAsyncioTestCase):
             from unittest import mock
             with mock.patch('gamst.recipes.run_pipeline', run_pipeline):
                 result = await server.call_tool('compose_recipe', dict(
-                    name='shotgun', inputs=dict(video='b.mp4'), who=dict(name='감스트', person='gamst.json'),
-                    what=dict(movement=dict(exemplar='move.json')), start=True, wait=True))
+                    name='shotgun', inputs=dict(camera=0), who=dict(name='감스트', person='gamst.json'),
+                    what=dict(movement=dict(exemplar='move.json')), consent=dict(capture=True), start=True, wait=True))
             self.assertTrue(result['ok'], result)
             self.assertEqual((result['started'], result['finished'], result['report']['counts']), (True, True, {'x': {'y': 1}}))
             self.assertIs(seen['human'], human)
