@@ -17,7 +17,8 @@
   잠정은 바로, 고침은 결정된 순간에. 밀려도 소리를 버리지 않는다.
 - 찾기 모드 측정(뽀또): 찾은 비율 78% → 89%, 센 것 중 맞은 비율 78% → 53% (놓침을 줄이는 대신 다른 사람 말이 후보로 들어옴).
 - HUD: 영상 HUD 구성과 라이브 실행 명령은 `docs/hud-demo.md`. 데모 영상은 저작권 때문에 올리지 않는다(로컬에만 있음).
-- 결정 1–34: `decision-log-2026-11-26.md` · 교훈 1–27: `lessons-2026-11-26.md` · 측정: `measurements/*-2026-11-26.md`.
+- 통합 설계(누구·무엇·말, 사장님 승인 2026-11-27): `design-2026-11-27-integrated-perception.md`
+- 결정 1–50: `decision-log-2026-11-26.md` · 교훈 1–37: `lessons-2026-11-26.md` · 측정: `measurements/*-2026-11-26.md`.
 
 ## What GAMST can do now (all measured on owner clips, Mac CPU + hosted recognisers)
 

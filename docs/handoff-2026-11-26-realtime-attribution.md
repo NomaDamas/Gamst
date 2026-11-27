@@ -145,3 +145,31 @@ replace → flag). v6 vs owner labels (L1 / final, right/counted): 뽀또 7/14 /
 - Decision 33: `--mode count|search` (search: recall first, candidates with reasons; MCP `set_count_mode`). Live sound-only HUD window.
 - Wrap-up: `docs/wrapup-2026-11-26-person-words-and-movements.md`; HUD demo: `docs/hud-demo.md`; demo issue NomaDamas/Gamst#371.
 - Decision 34: merge PR #366 into Main after the wrap-up (owner). Next improvements are listed in the wrap-up.
+
+## 12. Update (owner discussion, 2026-11-27) — read this section first
+
+- **Read first:** [design-2026-11-27-integrated-perception.md](design-2026-11-27-integrated-perception.md). It covers the philosophy, the owner-approved
+  integrated structure (who / what / words), how each is specified (identity few-shot required and enforced), realtime
+  vs post modes, L2 continuity, the answers to the owner's questions, and Ultralytics and the sports track.
+- **Decisions 35-50** are in the decision log; **lessons 33-37** are in the lessons file.
+- **Branches and worktrees:**
+  - `feat/realtime-pose` (`.local-run/wt-rt-pose`, Draft PR #373):
+    - one model (RTMW-l) counts every frame;
+    - verification lane removed;
+    - realtime/post timing;
+    - benchmark-based model choice;
+    - L2 person-lock handover;
+    - CI numpy fix.
+    - Not merged: owner OK needed.
+  - `feat/sapiens2-pose` (`.local-run/wt-sapiens2`): Sapiens2 1B opt-in provider, weights downloaded (5.7 GB) under
+    `try-it/models/sapiens2.pose_1b`; measurements in progress.
+  - `feat/sports-recipes` (`.local-run/wt-sports`, tmux window `gamst-sports`): sports recipes. It is a separate session the
+    owner works with directly.
+- **Next, in order:**
+  1. identity: few-shot enforcement, face + whole-body appearance (pick a replacement for SOLIDER), photo enrollment,
+     LVFace-B download, `person_binding`, MCP `enroll_person`, `who` in `set_instruction`, keypoint-set-aware face
+     alignment (RTMW);
+  2. MCP `compose_recipe`, and the semantic module as a causal state chain (kept off);
+  3. a conversational demo over MCP.
+- **Needed from the owner:** multi-person clips with labels of who did what, and when, to measure identity.
+- **Removed today:** multilingual-e5 (1.1 GB, unused); the labelling tool server was stopped.
