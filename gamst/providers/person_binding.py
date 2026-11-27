@@ -51,8 +51,10 @@ is unconfirmed and every ``confirm_every_ms`` once it is bound: every track is c
 It also works in a lane of its own (the camera frame then comes before its joints and is kept only when faces are due).
 
 Tracker swaps: when the track holding a person leaves the frame and a never-bound track appears where it was within
-``continue_ms`` (box overlap ``continue_iou``), the person continues on it (``by: continuation``) unless its face or
-appearance contradicts; the face confirms it as for any track.
+``continue_ms`` (box overlap ``continue_iou``), the person continues on it (``by: continuation``) when its face or its
+appearance of this scene says so. When the tracker swaps two people on one track, a contradicting face (or a sustained
+jump in the track's appearance) splits the track (``track.split``) and the binding is withdrawn back to the last
+confirmation. Scene cuts (:mod:`.scene_cut`) end every binding and start every track again.
 
 L2 (gamst.pipeline): a fork names its tracks ``<track>@<first frame ms>`` (a forked pose tracker numbers its tracks
 again) and takes over the bindings of the cut by box overlap (:meth:`snapshot`, :meth:`restore`); a track it cannot hand

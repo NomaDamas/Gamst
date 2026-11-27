@@ -312,3 +312,144 @@ The two models' scores are on different scales, so the appearance thresholds are
 - The voice part of a person reference in a run (it is stored and checked; speaker attribution uses it in the speech
   recipes, not wired to tracks here).
 - MCP `enroll_person` with real models (the unit tests use test doubles).
+
+## 12. One person, one track; everyone a person; scene cuts and track switches (2026-11-28)
+
+The owner saw "감스트" as several people at the same moment in the label tool on the two multi-person clips
+(`try-it/testbed/multi/gwan` = 감스트-관제탑 모음집, 522 s, a compilation joined by one-second dissolves;
+`try-it/testbed/multi/man` = 맨까송, 63 s, hard cuts). Runs: post mode, the label tool's runner unchanged
+(`label_video/run_multi.py`, its options: `--person 감스트.person.json --mode search`, profile `profile-identity.json`:
+MediaPipe pose, LVFace-B face, OSNet-AIN appearance) and a copy of it in the scratchpad that also writes the per-frame
+face readings, the duplicate boxes and `NAME.persons.json`; outputs in `try-it/testbed/multi_fix/` only. Statistics:
+`scratchpad/overlap/*.py`. Labels: the owner's labels in `truth_identity.json` (4 tracks 감스트, 12 others, read while the
+owner was still labelling) and Claude's proposals (`claude_proposals.json`, not truth). **No claim of correctness rests
+on them; they are used only where named.**
+
+### 12.1 Where the doubling was (before)
+
+GAMST's own bindings (`person.bound` / `person.unbound`, resolved per frame with `intervals_of` / `resolve`):
+
+| run | frames with two tracks bound to 감스트 | all at a handover instant | of these: new binding retroactive / same-frame face |
+|---|---|---|---|
+| gwan `cand_first` (label tool) | 12 (0.40 s) | 12 | 11 / 1 |
+| gwan `cand_loose` (label tool) | 8 (0.27 s) | 8 | 5 / 3 |
+| man `cand_first` (label tool) | 2 (0.07 s) | 2 | 2 / 0 |
+| gwan `base` (this branch before the fix) | 13 (0.43 s) | 13 | 10 / 3 |
+| man `base` | 2 (0.07 s) | 2 | 2 / 0 |
+
+No two bindings of 감스트 overlapped over any span; every double was one frame where the old binding ended at `ts`
+and the new one started at `ts` (both ends inclusive). By the boxes at that frame: box IoU >= 0.5 (duplicate boxes)
+1 + 4 + 0 + 2 + 0; a scene change within 1 s 4 + 3 + 2 + 4 + 2; two different places 7 + 1 + 0 + 7 + 0.
+
+Where the owner saw several 감스트 at once:
+
+| source | gwan `cand_first` | gwan `cand_loose` | man `cand_first` |
+|---|---|---|---|
+| label tool rows (one guess per whole track, its majority) overlapping in time | 14 pairs, 16.8 s with two in view | 14 pairs, 17.0 s | 2 pairs, 7.2 s |
+| Claude's proposals (whole tracks labelled 감스트) | 33 pairs, 27.9 s with two in view (duplicate 7 pairs / 2.5 s, scene change 4 / 2.2 s, two places 16 / 24.4 s) | – | 4 pairs, 7.6 s (all at scene changes) |
+| the owner's labels so far | 2 pairs over time, 0.4 s in view (the dissolve at 89.5-89.9 s: the old and the new scene's 감스트 both on screen) | – | – |
+
+The two-places cases in the proposals are tracks the tracker carried from one person to another (e.g. person-24 is
+감스트 seated in scene 2 and continues on the man in the Chelsea shirt after the dissolve at 184.7 s): a label per whole
+track cannot be right on both parts. GAMST's binding of person-24 ended at 186.2 s, 1.5 s after the cut (see 12.4).
+
+**Duplicate boxes.** Track pairs with box IoU >= 0.5 in one frame (gwan `cand_first` / man `cand_first`): 43 / 14 pairs,
+461 / 124 frames. Cause by time and size: a new track id while the old box lingered (within 0.5 s of either track's
+start or end) 35 / 12 pairs; one box inside the other (area ratio < 0.6) 2 / 1; both tracks alive before and after with
+similar boxes 6 / 1. By the labels of the two tracks, many pairs joined 감스트 and someone else (gwan 115 of 461 frames,
+man 69 of 124), so box overlap alone is not "the same body".
+
+### 12.2 What changed (commits on `feat/person-identity`)
+
+1. **One person, one track at any timestamp** (`TrackBindings`): a handover ends the old binding at its track's last
+   frame before the new one starts; a retroactive start never reaches to or before the end of the person's earlier
+   bindings; binding a person moves them off the track that holds them. When several tracks claim a person in a frame,
+   the best keeps them: face higher by the margin, then appearance higher by the margin, then continuity; the others
+   go to unknown or to their own best other person.
+2. **Duplicate boxes**: box IoU >= 0.5 *and* joints within 0.05 of the box height (median): the track seen first is
+   kept, the other is `duplicate_of` it, not scored, bound or counted (binding and per-track counter, same rule).
+   Safety net keyed by person: one action of a person on two tracks within 100 ms counts once.
+3. **Everyone is a person** (`person_id`: P1, P2, ...). A face that is nobody known twice on a track starts a person;
+   faces bound in the run join the person; enrolled 감스트 is a person with a name. Naming later: `person.named`,
+   `enroll_person {person_id}`, or a names map (label tool), all retroactive.
+4. **Scene cuts** (`scene_cut.py`): at a cut every binding ends, every track starts a new segment, tracks not seen
+   since are finished, appearance from before the cut binds nobody after it, the person needs a fresh confirmation
+   (a face after the cut); readers also end any binding that reaches over a cut (a dissolve is decided up to 1.5 s
+   late).
+5. **Track switches** (the tracker swaps people): a face that contradicts the bound person releases it at once and
+   withdraws the binding within the track back to the last confirmation; the track is split there (`track.split`).
+   A sustained appearance jump (two looks in a row below `body_reject` against the track's recent look, agreeing with
+   each other) splits it too; one odd look does not.
+6. **Continuation** (a new track where the person just was) now needs the new track's face, or its appearance of this
+   scene; a box alone no longer carries a person.
+
+### 12.3 Before / after (post mode; `base`/`base2` = this branch before, `fix` = item 1-2 only, `final` = all)
+
+| clip | run | two tracks on 감스트 (frames) | 감스트 on a track whose face says not 감스트 | 감스트 bindings over a scene cut | frames with 감스트 bound | owner labels: G->G / G->not G / O->G (s) |
+|---|---|---|---|---|---|---|
+| 관제탑 | base2 | 13 (0.43 s) | 10.13 s | 5 | 82.7 % | 169.5 / 15.9 / 0 |
+| 관제탑 | fix | 0 | – | 5 | 82.5 % | 169.3 / 16.1 / 0 |
+| 관제탑 | final | 0 | 2.47 s | 0 | 84.8 % | 172.2 / 13.1 / 0 |
+| 맨까송 | base2 | 2 (0.07 s) | 6.47 s | 7 | 69.5 % | (no owner labels) |
+| 맨까송 | fix | 0 | – | 6 | 69.6 % | |
+| 맨까송 | final | 0 | 1.63 s | 0 | 52.7 % | |
+
+- "Face says not 감스트": a frame of a track bound to 감스트 (final bindings, retroactive) whose latest face reading
+  within the last second scores 감스트 below 0.15. The remaining 2.47 s on 관제탑 are at dissolves (track 60 at 372.6 s,
+  track 103 at 477.5 s: the face crop is a blend of two scenes) and 0.3 s on track 22 at 88.0 s.
+- Owner labels: 25 owner segments on 관제탑 (4 감스트, 18 others, 3 skipped), read while the owner was still labelling;
+  per frame inside each labelled segment. None of the runs put 감스트 on a segment the owner labelled as someone else.
+- 맨까송: fewer frames bound to 감스트 (69.5 % -> 52.7 %): bindings now end at each of the 17 cuts and need a face after
+  it; appearance no longer carries 감스트 over a cut. Without labels this is not shown to be better or worse.
+- Scene cuts detected by the run: 관제탑 11 (89.1, 184.7, 277.8, 372.0, 413.0, 477.5, 480.7, 510.9, 514.2, 519.2,
+  520.9 s), 맨까송 17. Seen by eye on 관제탑: 8 scene changes (dissolves) plus zooms within a scene (480.7, 519.2); on
+  맨까송 the hard cuts, one fade to black at 63.2 s and one false cut from a person moving close to the camera (the
+  offline run of the same detector found it at 1.5 s; the pipeline run found 2.1 s).
+- Track switches detected (`track.split`), all by a contradicting face, none by appearance: 관제탑 38 (e.g. 35.6, 50.2,
+  71.6, 80.6, 88.0, 126.8-138.2 (track 25, 5 times), 182.0, 189.0, 192.2, 220.6-237.8, 316.8, 318.4, 372.6, 412.8, 465.0,
+  477.0, 517.2 s), 맨까송 8 (21.2, 23.2, 52.3, 53.5, 56.5, 58.9, 61.3, 61.3 s). The appearance test (OSNet-AIN, 0.6) did
+  not fire on these clips.
+- Duplicate boxes suppressed (pose-frame pairs, `duplicate_of`): 관제탑 438, 맨까송 68; a person moved to the kept
+  track (`by: duplicate`) 15 / 4 times.
+- Action candidates (label-tool merge, loose rule) per person, final: 관제탑 P1 (감스트) 33, P4 9, P7 3, P3 2, P10 2,
+  unknown 11; 맨까송 P2 18, P1 (감스트) 15, P3 8, P4 2, P5 1, unknown 35. Before (base2): 관제탑 감스트 27 / unknown 33,
+  맨까송 감스트 19 / unknown 63.
+
+### 12.4 The owner's case at 3:05 (관제탑, 180-210 s)
+
+Check frames: `try-it/testbed/multi_fix/check/gwan_305_*.jpg` (base2 left, final right; red = 감스트, green = another
+person id, grey = nobody), every 2 s.
+
+| track | base2 | final |
+|---|---|---|
+| person-24 (scene 2: 감스트 seated on the right; after the dissolve at 184.7 s the tracker keeps it on the man in the Chelsea shirt) | 감스트 until 186.2 s, so 1.5 s on the other man after the cut | 감스트 until 184.4 s; after the cut P4 (the Chelsea man, the same id as his scene-2 track person-28), later P5 / P3 for short stretches |
+| person-32 (scene 3: 감스트 standing, red shirt) | 감스트 from 185.7 s, a gap 198.4-198.7 s | 감스트 (P1) from 185.4 s, no gap |
+| person-35 (the Chelsea man, jumping at 198 s) | 감스트 198.0-198.7 s (a continuation from person-32's box) | P4 |
+
+What the frames show: at 184 s the Chelsea man jumps in scene 2 (final: P4); at 186-192 s 감스트 stands in the red
+shirt (person-32, 감스트 in both); the man on the right at 192 s (person-24) is unknown in both at that moment; at 198 s
+base2 had 감스트 on the jumping Chelsea man (person-35), final has P4. In this window, 감스트 on the wrong man: base2
+2.2 s, final 0. The owner's view showed person-24 as 감스트 until 196 s because the label tool labels a whole track by its
+majority; with the persons file it is split at the cut.
+
+Other check frames (`gwan_contra_*.jpg`): at 317.5 s base2 had 감스트 on the man in the blue shirt seen from behind
+(track 49), final has nobody; at 414.5 s base2 had 감스트 on a face in a poster on the wall (track 87), final has a
+person of its own there (P8); at 373.2 and 478.0 s (dissolves) final has 감스트 on 감스트's tracks while the faces
+are blended.
+
+### 12.5 Persons found (final)
+
+| clip | persons (>= 1 s) | seconds per person | segments per person | two tracks on one person |
+|---|---|---|---|---|
+| 관제탑 | 10 (8) | P1 감스트 467, P4 241, P7 95, P2 79.5, P3 50.2, P8 45.7, P10 4.2, P9 1.5, P6 0.6, P5 0.2 | 51, 36, 4, 29, 25, 31, 2, 1, 2, 1 | 0 frames |
+| 맨까송 | 7 (5) | P1 감스트 37.0, P3 34.1, P2 31.2, P6 3.5, P4 1.8, P5 0.6, P7 0.2 | 17, 15, 12, 1, 1, 3, 1 | 0 frames |
+
+People seen by eye (Claude, not labels): 관제탑 about 6-8 (감스트; the man in the Honze hoodie, scene 1; the man in
+the Chelsea shirt, scenes 2-4; the man in the PUMA shirt, scene 5; two or three performers on the TV stage) plus faces
+on posters; 맨까송 about 5 performers. P4 follows the Chelsea man over three scenes by face. P3 appears from 33 s to
+477 s in several scenes and is probably more than one person (a weak face merged); P8 is mostly the wall poster.
+Tracker tracks that reach over a scene cut: 20 / 19; person segments over a cut: 0 / 0.
+
+The per-run persons file the label tool reads: `try-it/testbed/multi_fix/{gwan,man}/final.persons.json`,
+`{start_ms, cuts, persons: [{person_id, name, segments: [{track_id, start, end, start_ms, end_ms}]}]}` (seconds from
+the first frame; `end: null` = to the end of the clip). Field name: `person_id`.
