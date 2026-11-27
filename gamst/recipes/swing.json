@@ -1,0 +1,170 @@
+{
+ "name": "swing",
+ "summary": "Count swings (golf, baseball, tennis strokes) that match a demonstrated swing, mark the ones that made an impact sound, and compare each swing's joint angles with the demonstration.",
+ "skill": "skills/gamst-sports/SKILL.md",
+ "category": "sports",
+ "hardware": {
+  "min_fps": null,
+  "camera": "a fixed side or front camera on the player; 60 fps or more for the fastest phase",
+  "microphone": "the camera's sound (optional: --without onsets)",
+  "compute": "one pose model in its own environment"
+ },
+ "inputs": [
+  {
+   "id": "camera",
+   "use": "camera",
+   "sources": [
+    "camera",
+    "video",
+    "take"
+   ]
+  },
+  {
+   "id": "microphone",
+   "use": "microphone",
+   "sources": [
+    "microphone",
+    "audio",
+    "video"
+   ]
+  }
+ ],
+ "references": [
+  {
+   "name": "exemplar",
+   "kind": "exemplar",
+   "label": "the demonstrated swing"
+  }
+ ],
+ "modules": [
+  {
+   "name": "pose",
+   "use": "rtmw-pose",
+   "candidate": "rtmw.l_384x288",
+   "max_poses": 4,
+   "tracker": "ocsort",
+   "consumes": [
+    "camera"
+   ],
+   "joints": "pose_joints",
+   "emits": [
+    "pose_joints"
+   ],
+   "det_every_ms": 500,
+   "backlog": "spill",
+   "batch": 8,
+   "choose": {
+    "fallback": "mediapipe.pose_full",
+    "persons": 1,
+    "seconds": 2
+   },
+   "catch_up": {
+    "lag_ms": 1000,
+    "max_lookback_ms": "pre_roll",
+    "tail_ms": "pre_roll",
+    "workers": 1,
+    "min_free_pct": 25,
+    "replica_mb": 2500
+   }
+  },
+  {
+   "name": "pose_channels",
+   "use": "pose-channels",
+   "consumes": [
+    "pose_joints"
+   ],
+   "source": "rtmw"
+  },
+  {
+   "name": "exemplar",
+   "use": "exemplar",
+   "mode": "sequence",
+   "max_reps_s": 1,
+   "consumes": [
+    "pose_channels",
+    "pose_joints"
+   ],
+   "source": "rtmw"
+  },
+  {
+   "name": "onsets",
+   "use": "audio-onsets",
+   "optional": "on",
+   "consumes": [
+    "microphone"
+   ]
+  },
+  {
+   "name": "impact",
+   "use": "coincidence",
+   "optional": "on",
+   "of": "exemplar",
+   "by": "onsets",
+   "of_event": "exemplar.matched",
+   "by_event": "audio.onset",
+   "before_ms": 600,
+   "after_ms": 200,
+   "consumes": [
+    "exemplar",
+    "onsets"
+   ]
+  },
+  {
+   "name": "form",
+   "use": "form",
+   "channels": "pose_channels",
+   "exemplar": "exemplar",
+   "reference": "exemplar",
+   "consumes": [
+    "pose_channels",
+    "exemplar"
+   ]
+  }
+ ],
+ "stacks": {
+  "default": "sota",
+  "sota": {
+   "summary": "RTMW-l whole-body pose (COCO-WholeBody 70.1 AP), MediaPipe full when it cannot keep up (#373 rule)",
+   "modules": {},
+   "post": {
+    "modules": {
+     "pose": {
+      "choose": null
+     }
+    }
+   }
+  },
+  "ultralytics": {
+   "summary": "Ultralytics' combination: YOLO26-pose (17 COCO points), like its AIGym rep counting by joint angles",
+   "modules": {
+    "pose": {
+     "use": "yolo26-pose",
+     "candidate": "yolo26.pose_x",
+     "det_every_ms": null,
+     "batch": 4,
+     "choose": null
+    }
+   },
+   "realtime": {
+    "modules": {
+     "pose": {
+      "candidate": "yolo26.pose_m",
+      "choose": {
+       "fallback": "yolo26.pose_s",
+       "persons": 1,
+       "seconds": 2
+      }
+     }
+    }
+   }
+  }
+ },
+ "view": "count",
+ "records": [
+  "temporal.exemplar_events",
+  "temporal.coincidence",
+  "sports.form"
+ ],
+ "limits": "a practice swing and a real one look the same to the pose (the impact sound tells them apart when there is one); club or bat speed is not measured; tempo (backswing to downswing) is not computed yet",
+ "measured": "not yet"
+}

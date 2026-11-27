@@ -200,6 +200,12 @@ def capability(profile, config):
         args = configuration(config)
         return RFDETRTrajectories.capability('1.12.1.eager.sha256.'+args['sha256'],
             **{k:v for k,v in args.items() if k not in ('path','sha256')})
+    if profile == 'ultralytics.objects':
+        from .providers.ultralytics_sports import UltralyticsObjects
+        return UltralyticsObjects.capability(config)
+    if profile == 'tracknet.ball':
+        from .providers.tracknet_ball import TrackNetBall
+        return TrackNetBall.capability(config)
     if profile in ('rfdetr.nano', 'rfdetr.large'):
         from .providers.detection import RFDETRObjects
         import re

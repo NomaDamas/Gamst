@@ -71,6 +71,10 @@ class WorkerModule:
         if self.spec.stateful:
             await self.worker.reset()
 
+    async def finish(self):
+        """What a stateful worker still holds when the input ends (a ball model's last frames), or None."""
+        return await self.worker.finish() if self.spec.stateful else None
+
     async def close(self):
         await self.worker.close()
 

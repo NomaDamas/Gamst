@@ -91,6 +91,9 @@ def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=MEDIAPIPE_MIN_
     if kind == 'coco_wholebody133':
         from .rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
         return ({**COCO_WHOLEBODY_BODY, **COCO_WHOLEBODY_HANDS} if hands else COCO_WHOLEBODY_BODY), MIN_VISIBILITY
+    if kind == 'coco17':    # YOLO26-pose: the first 17 points of COCO-WholeBody, the same indices; no hands
+        from .rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return COCO_WHOLEBODY_BODY, MIN_VISIBILITY
     if kind == 'goliath308':
         from .sapiens2_pose import GOLIATH_BODY
         # the official Sapiens2 demo's --kpt-thr (as recipes/parts.py)

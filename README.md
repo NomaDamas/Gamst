@@ -233,6 +233,11 @@ gamst demo rotation --camera 0 --targets coin,wheel,fan --expected-max-rev-s 8
 gamst demo rotation --video spin.mp4 --detector motion  # no detector required
 ```
 
+**Sports** (branch `feat/sports-recipes`, not yet measured on real footage): six recipes on generic parts — `racket-rally`,
+`team-field`, `body-reps`, `swing`, `body-rotation`, `billiards` — each with model stacks `ultralytics`, `roboflow` and
+`sota`, for realtime or post (`gamst recipe stacks racket-rally`; [docs/sports.md](docs/sports.md),
+[`skills/gamst-sports`](skills/gamst-sports/SKILL.md)).
+
 For fans, wheels and turntables, the `rotation` recipe counts in-plane turns by polar registration: it correlates,
 in angle around the axis, what moved between frames, so static grills cancel and repeating blades still count. Pass the
 number of identical blades or spokes as `--symmetry`. A camera counts only below `fps / (2 × symmetry)` rev/s, and

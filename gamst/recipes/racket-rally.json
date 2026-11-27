@@ -1,0 +1,288 @@
+{
+ "name": "racket-rally",
+ "summary": "Count hits, bounces and rallies of a racket sport (tennis, badminton, table tennis, padel, squash) and who hit, from a fixed camera and its sound.",
+ "skill": "skills/gamst-sports/SKILL.md",
+ "category": "sports",
+ "hardware": {
+  "min_fps": null,
+  "camera": "a fixed camera that sees the whole court (gamst recipe check racket-rally --sport S --fps F says which frame rate the sport needs)",
+  "microphone": "the camera's own sound or a microphone near the court (optional: --without onsets)",
+  "compute": "one detector, one tracker and (sota) one ball model, each in its own environment; whether this Mac keeps up in realtime is measured at start (choose)"
+ },
+ "inputs": [
+  {
+   "id": "camera",
+   "use": "camera",
+   "sources": [
+    "camera",
+    "video",
+    "take"
+   ]
+  },
+  {
+   "id": "microphone",
+   "use": "microphone",
+   "sources": [
+    "microphone",
+    "audio",
+    "video"
+   ]
+  }
+ ],
+ "modules": [
+  {
+   "name": "detect",
+   "use": "detect",
+   "candidate": "rfdetr.large",
+   "consumes": [
+    "camera"
+   ],
+   "choose": {
+    "fallback": "rfdetr.nano",
+    "seconds": 2
+   }
+  },
+  {
+   "name": "players",
+   "use": "object-track",
+   "objects": "detect",
+   "tracker": "botsort",
+   "labels": [
+    "person"
+   ],
+   "video": "camera",
+   "consumes": [
+    "detect",
+    "camera"
+   ],
+   "candidate": "trackers.2_7_1"
+  },
+  {
+   "name": "ballmodel",
+   "use": "ball-model",
+   "candidate": "tracknetv3.shuttlecock",
+   "consumes": [
+    "camera"
+   ]
+  },
+  {
+   "name": "ball",
+   "use": "ball-track",
+   "ball": "ballmodel",
+   "consumes": [
+    "ballmodel"
+   ]
+  },
+  {
+   "name": "onsets",
+   "use": "audio-onsets",
+   "optional": "on",
+   "consumes": [
+    "microphone"
+   ]
+  },
+  {
+   "name": "contacts",
+   "use": "contacts",
+   "ball": "ball",
+   "players": "players",
+   "sound": "onsets",
+   "consumes": [
+    "ball",
+    "players",
+    "onsets"
+   ],
+   "consumes_without": {
+    "onsets": [
+     "ball",
+     "players"
+    ]
+   }
+  },
+  {
+   "name": "rally",
+   "use": "rally",
+   "contacts": "contacts",
+   "ball": "ball",
+   "consumes": [
+    "contacts",
+    "ball"
+   ]
+  },
+  {
+   "name": "occupancy",
+   "use": "occupancy",
+   "players": "players",
+   "every_ms": 1000,
+   "consumes": [
+    "players"
+   ]
+  }
+ ],
+ "sports": {
+  "default": "tennis",
+  "tennis": {
+   "modules": {
+    "contacts": {
+     "reach": 0.05
+    }
+   }
+  },
+  "badminton": {
+   "modules": {
+    "contacts": {
+     "reach": 0.05
+    },
+    "rally": {
+     "double_bounce": false
+    }
+   }
+  },
+  "table-tennis": {
+   "modules": {
+    "contacts": {
+     "reach": 0.06,
+     "min_contact_ms": 80
+    },
+    "rally": {
+     "max_gap_ms": 1500
+    }
+   }
+  },
+  "padel": {
+   "modules": {
+    "contacts": {
+     "reach": 0.05
+    }
+   }
+  },
+  "squash": {
+   "modules": {
+    "contacts": {
+     "reach": 0.05
+    },
+    "rally": {
+     "double_bounce": false
+    }
+   }
+  }
+ },
+ "stacks": {
+  "default": "sota",
+  "sota": {
+   "summary": "GAMST's pick per part (authors' numbers, not yet measured here): RF-DETR (Apache-2.0, COCO 56.5 AP at L), Roboflow trackers BoT-SORT (SportsMOT HOTA 73.8), TrackNetV3 ball heatmaps (MIT, shuttlecock F1 98.56); post adds the authors' temporal ensemble",
+   "modules": {},
+   "realtime": {
+    "modules": {
+     "detect": {
+      "candidate": "rfdetr.large",
+      "choose": {
+       "fallback": "rfdetr.nano",
+       "seconds": 2
+      }
+     }
+    }
+   },
+   "post": {
+    "modules": {
+     "detect": {
+      "candidate": "rfdetr.large",
+      "choose": null
+     }
+    }
+   }
+  },
+  "roboflow": {
+   "summary": "Roboflow's own combination: RF-DETR detector, trackers ByteTrack, the ball as the detector's 'sports ball' followed by a gate (Roboflow Sports follows it with a small position filter)",
+   "modules": {
+    "players": {
+     "tracker": "bytetrack",
+     "candidate": "trackers.2_7_1"
+    },
+    "ballmodel": {
+     "remove": true
+    },
+    "ball": {
+     "ball": "detect",
+     "consumes": [
+      "detect"
+     ]
+    }
+   },
+   "realtime": {
+    "modules": {
+     "detect": {
+      "candidate": "rfdetr.large",
+      "choose": {
+       "fallback": "rfdetr.nano",
+       "seconds": 2
+      }
+     }
+    }
+   },
+   "post": {
+    "modules": {
+     "detect": {
+      "candidate": "rfdetr.large",
+      "choose": null
+     }
+    }
+   }
+  },
+  "ultralytics": {
+   "summary": "Ultralytics' own combination (its sports page): YOLO26 detecting players and the ball with Ultralytics' BoT-SORT tracker; COCO weights, Ultralytics publishes no sports weights (AGPL-3.0)",
+   "modules": {
+    "detect": {
+     "candidate": "yolo26.x",
+     "settings": {
+      "tracker": "botsort"
+     },
+     "choose": null
+    },
+    "players": {
+     "tracker": "none",
+     "consumes": [
+      "detect"
+     ],
+     "video": null,
+     "candidate": "gamst.ocsort"
+    },
+    "ballmodel": {
+     "remove": true
+    },
+    "ball": {
+     "ball": "detect",
+     "consumes": [
+      "detect"
+     ]
+    }
+   },
+   "realtime": {
+    "modules": {
+     "detect": {
+      "candidate": "yolo26.m",
+      "choose": {
+       "fallback": "yolo26.s",
+       "seconds": 2
+      }
+     }
+    }
+   },
+   "post": {
+    "modules": {
+     "detect": {
+      "candidate": "yolo26.x"
+     }
+    }
+   }
+  }
+ },
+ "view": "count",
+ "records": [
+  "sports.contacts",
+  "sports.rally",
+  "sports.occupancy"
+ ],
+ "limits": "a fixed camera; a ball the models do not see makes no contact (a sound alone never counts); hit = a break of the ball's image path near a player box, bounce = a downward-to-upward turn away from players, so a lob or a high bounce in a broadcast view can be confused; court positions only with --court; TrackNetV3's checkpoint is trained on badminton (shuttlecock) and is used for the other ball sports untrained",
+ "measured": "not yet: synthetic trajectories only (tests/test_sports.py); the dataset runs are the GCP stage (docs/sports.md)"
+}

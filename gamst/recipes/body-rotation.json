@@ -1,0 +1,99 @@
+{
+ "name": "body-rotation",
+ "summary": "Count a person's turns about the vertical axis and each jump's airtime and turns (figure skating, diving, gymnastics, dance). Experimental.",
+ "skill": "skills/gamst-sports/SKILL.md",
+ "category": "sports",
+ "hardware": {
+  "min_fps": null,
+  "camera": "a fixed camera that keeps the whole body in view; a turn shows two shoulder-line sign changes, so the frame rate must exceed 4 x the fastest turns per second",
+  "compute": "one pose model in its own environment"
+ },
+ "inputs": [
+  {
+   "id": "camera",
+   "use": "camera",
+   "sources": [
+    "camera",
+    "video",
+    "take"
+   ]
+  }
+ ],
+ "modules": [
+  {
+   "name": "pose",
+   "use": "rtmw-pose",
+   "candidate": "rtmw.l_384x288",
+   "max_poses": 4,
+   "tracker": "ocsort",
+   "consumes": [
+    "camera"
+   ],
+   "joints": "pose_joints",
+   "emits": [
+    "pose_joints"
+   ],
+   "det_every_ms": 500,
+   "backlog": "spill",
+   "batch": 8,
+   "choose": {
+    "fallback": "mediapipe.pose_full",
+    "persons": 1,
+    "seconds": 2
+   }
+  },
+  {
+   "name": "spin",
+   "use": "body-spin",
+   "symmetry": 2,
+   "max_rev_s": 6,
+   "consumes": [
+    "pose_joints"
+   ]
+  }
+ ],
+ "stacks": {
+  "default": "sota",
+  "sota": {
+   "summary": "RTMW-l whole-body pose (COCO-WholeBody 70.1 AP), MediaPipe full when it cannot keep up (#373 rule)",
+   "modules": {},
+   "post": {
+    "modules": {
+     "pose": {
+      "choose": null
+     }
+    }
+   }
+  },
+  "ultralytics": {
+   "summary": "Ultralytics' combination: YOLO26-pose (17 COCO points), like its AIGym rep counting by joint angles",
+   "modules": {
+    "pose": {
+     "use": "yolo26-pose",
+     "candidate": "yolo26.pose_x",
+     "det_every_ms": null,
+     "batch": 4,
+     "choose": null
+    }
+   },
+   "realtime": {
+    "modules": {
+     "pose": {
+      "candidate": "yolo26.pose_m",
+      "choose": {
+       "fallback": "yolo26.pose_s",
+       "persons": 1,
+       "seconds": 2
+      }
+     }
+    }
+   }
+  }
+ },
+ "view": "count",
+ "records": [
+  "sports.spin"
+ ],
+ "limits": "experimental: checked on synthetic joints only; the direction of a turn is not told from 2D joints; a turn seen from above or a somersault (about a horizontal axis) is not counted",
+ "measured": "not yet"
+}

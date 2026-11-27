@@ -1,0 +1,129 @@
+{
+ "name": "billiards",
+ "summary": "Count shots and ball-to-ball contacts on a billiards table (pool, carom, snooker) from a fixed camera above or beside the table.",
+ "skill": "skills/gamst-sports/SKILL.md",
+ "category": "sports",
+ "hardware": {
+  "min_fps": null,
+  "camera": "a fixed camera that sees the whole table; --court with the four table corners maps positions to metres",
+  "compute": "one detector and the GAMST tracker"
+ },
+ "inputs": [
+  {
+   "id": "camera",
+   "use": "camera",
+   "sources": [
+    "camera",
+    "video",
+    "take"
+   ]
+  }
+ ],
+ "modules": [
+  {
+   "name": "detect",
+   "use": "detect",
+   "candidate": "rfdetr.large",
+   "consumes": [
+    "camera"
+   ],
+   "choose": {
+    "fallback": "rfdetr.nano",
+    "seconds": 2
+   }
+  },
+  {
+   "name": "balls",
+   "use": "object-track",
+   "objects": "detect",
+   "tracker": "ocsort",
+   "labels": [
+    "sports ball"
+   ],
+   "consumes": [
+    "detect"
+   ],
+   "candidate": "gamst.ocsort"
+  },
+  {
+   "name": "motion",
+   "use": "object-motion",
+   "objects": "balls",
+   "labels": [
+    "sports ball"
+   ],
+   "consumes": [
+    "balls"
+   ]
+  }
+ ],
+ "sports": {
+  "default": "billiards",
+  "billiards": {
+   "modules": {}
+  }
+ },
+ "stacks": {
+  "default": "sota",
+  "sota": {
+   "summary": "RF-DETR + GAMST OC-SORT",
+   "modules": {},
+   "post": {
+    "modules": {
+     "detect": {
+      "choose": null
+     }
+    }
+   }
+  },
+  "roboflow": {
+   "summary": "RF-DETR + trackers ByteTrack",
+   "modules": {
+    "balls": {
+     "tracker": "bytetrack",
+     "candidate": "trackers.2_7_1"
+    }
+   },
+   "post": {
+    "modules": {
+     "detect": {
+      "choose": null
+     }
+    }
+   }
+  },
+  "ultralytics": {
+   "summary": "Ultralytics' combination (its page names billiards): YOLO26 with its BoT-SORT tracker",
+   "modules": {
+    "detect": {
+     "candidate": "yolo26.x",
+     "settings": {
+      "tracker": "botsort"
+     },
+     "choose": null
+    },
+    "balls": {
+     "tracker": "none",
+     "candidate": "gamst.ocsort"
+    }
+   },
+   "realtime": {
+    "modules": {
+     "detect": {
+      "candidate": "yolo26.m",
+      "choose": {
+       "fallback": "yolo26.s",
+       "seconds": 2
+      }
+     }
+    }
+   }
+  }
+ },
+ "view": "count",
+ "records": [
+  "sports.motion"
+ ],
+ "limits": "COCO's 'sports ball' class is not trained on billiard balls; touching balls at rest and the cue are not told apart; pocketed balls are not reported",
+ "measured": "not yet"
+}

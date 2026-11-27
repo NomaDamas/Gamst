@@ -1,0 +1,228 @@
+{
+ "name": "team-field",
+ "summary": "Players' positions, distance and heat maps per team, ball possession and estimated passes and turnovers of a team sport (football, basketball, futsal, handball, hockey, volleyball).",
+ "skill": "skills/gamst-sports/SKILL.md",
+ "category": "sports",
+ "hardware": {
+  "min_fps": null,
+  "camera": "a fixed wide camera (broadcast cuts and replays are not handled); --court maps positions to metres",
+  "compute": "a detector, a tracker and a team split; Roboflow's team split also runs SigLIP in its own environment"
+ },
+ "inputs": [
+  {
+   "id": "camera",
+   "use": "camera",
+   "sources": [
+    "camera",
+    "video",
+    "take"
+   ]
+  }
+ ],
+ "modules": [
+  {
+   "name": "detect",
+   "use": "detect",
+   "candidate": "rfdetr.large",
+   "consumes": [
+    "camera"
+   ],
+   "choose": {
+    "fallback": "rfdetr.nano",
+    "seconds": 2
+   }
+  },
+  {
+   "name": "players",
+   "use": "object-track",
+   "objects": "detect",
+   "tracker": "botsort",
+   "labels": [
+    "person"
+   ],
+   "video": "camera",
+   "consumes": [
+    "detect",
+    "camera"
+   ],
+   "candidate": "trackers.2_7_1"
+  },
+  {
+   "name": "teams",
+   "use": "team-split",
+   "players": "players",
+   "video": "camera",
+   "teams": 2,
+   "fit_ms": 5000,
+   "consumes": [
+    "players",
+    "camera"
+   ]
+  },
+  {
+   "name": "ball",
+   "use": "ball-track",
+   "ball": "detect",
+   "consumes": [
+    "detect"
+   ],
+   "max_speed": 2.0,
+   "lost_ms": 800
+  },
+  {
+   "name": "possession",
+   "use": "possession",
+   "ball": "ball",
+   "players": "teams",
+   "consumes": [
+    "ball",
+    "teams"
+   ]
+  },
+  {
+   "name": "contacts",
+   "use": "contacts",
+   "ball": "ball",
+   "players": "teams",
+   "consumes": [
+    "ball",
+    "teams"
+   ],
+   "reach": 0.03,
+   "min_contact_ms": 200
+  },
+  {
+   "name": "occupancy",
+   "use": "occupancy",
+   "players": "teams",
+   "every_ms": 1000,
+   "consumes": [
+    "teams"
+   ]
+  }
+ ],
+ "sports": {
+  "default": "football",
+  "football": {
+   "modules": {}
+  },
+  "futsal": {
+   "modules": {}
+  },
+  "basketball": {
+   "modules": {
+    "possession": {
+     "reach": 0.04
+    }
+   }
+  },
+  "handball": {
+   "modules": {
+    "possession": {
+     "reach": 0.04
+    }
+   }
+  },
+  "ice-hockey": {
+   "modules": {}
+  },
+  "volleyball": {
+   "modules": {
+    "possession": {
+     "remove": true
+    },
+    "contacts": {
+     "min_contact_ms": 150
+    }
+   }
+  }
+ },
+ "stacks": {
+  "default": "sota",
+  "sota": {
+   "summary": "RF-DETR + Roboflow trackers BoT-SORT + colour team split (no model); post fits the teams over 30 s",
+   "modules": {},
+   "post": {
+    "modules": {
+     "detect": {
+      "choose": null
+     },
+     "teams": {
+      "fit_ms": 30000,
+      "samples_per_track": 6
+     }
+    }
+   }
+  },
+  "roboflow": {
+   "summary": "Roboflow Sports' combination: RF-DETR, trackers ByteTrack, SigLIP embeddings + k-means team split (Roboflow reduces with UMAP, here PCA)",
+   "modules": {
+    "players": {
+     "tracker": "bytetrack",
+     "candidate": "trackers.2_7_1"
+    },
+    "teams": {
+     "use": "team-split-siglip"
+    }
+   },
+   "post": {
+    "modules": {
+     "detect": {
+      "choose": null
+     },
+     "teams": {
+      "fit_ms": 30000,
+      "samples_per_track": 6
+     }
+    }
+   }
+  },
+  "ultralytics": {
+   "summary": "Ultralytics' combination: YOLO26 with its BoT-SORT tracker (COCO weights), colour team split",
+   "modules": {
+    "detect": {
+     "candidate": "yolo26.x",
+     "settings": {
+      "tracker": "botsort"
+     },
+     "choose": null
+    },
+    "players": {
+     "tracker": "none",
+     "consumes": [
+      "detect"
+     ],
+     "video": null,
+     "candidate": "gamst.ocsort"
+    }
+   },
+   "realtime": {
+    "modules": {
+     "detect": {
+      "candidate": "yolo26.m",
+      "choose": {
+       "fallback": "yolo26.s",
+       "seconds": 2
+      }
+     }
+    }
+   },
+   "post": {
+    "modules": {
+     "teams": {
+      "fit_ms": 30000,
+      "samples_per_track": 6
+     }
+    }
+   }
+  }
+ },
+ "view": "count",
+ "records": [
+  "sports.possession",
+  "sports.contacts",
+  "sports.occupancy"
+ ],
+ "limits": "estimated possession and passes, never official statistics; the ball is often hidden by players (hidden_ms keeps the holder); team letters A/B are arbitrary; referees and goalkeepers join the nearer team unless teams is 3; basketball shots, offsides and in/out are not judged",
+ "measured": "not yet: synthetic trajectories only (tests/test_sports.py); the dataset runs are the GCP stage (docs/sports.md)"
+}

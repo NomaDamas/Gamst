@@ -847,6 +847,121 @@ MATH = {'kinematics': 'kinematics:MetricKinematics', 'image-trajectories': 'traj
         'optical-flow': 'motion:OpenCVFlow'}
 
 
+# ---------------------------------------------------------------- sports parts (docs/sports.md)
+
+SETTINGS_KEYS = ('device', 'threshold', 'max_objects', 'tracker', 'labels', 'conf', 'iou', 'imgsz', 'ensemble',
+                 'median_frames', 'median_every_ms', 'half')
+
+
+def _merged(options, context, profile):
+    """The installed config with the item's ``settings`` (its own keys win); the device of the run when it names none."""
+    config, python, profile = _entry(options, context, profile)
+    settings = dict(options.get('settings') or {})
+    unknown = set(settings) - set(SETTINGS_KEYS)
+    if unknown:
+        raise SystemExit(f"{options.get('name')}: unknown settings {sorted(unknown)}; known: {', '.join(SETTINGS_KEYS)}")
+    config.update(settings)
+    return config, python, profile
+
+
+async def _detect(options, context):
+    """A ``vision.detect`` candidate (RF-DETR, YOLO26 with its own tracker, ...) as a worker: ``objects`` records."""
+    from ..crew.modules import open_worker
+    from ..crew.registry import candidate
+    chosen = candidate('vision.detect', options.get('candidate', 'rfdetr.nano'))
+    config, python, _ = _merged(options, context, chosen.provider_profile)
+    module = await open_worker(python, chosen.provider_profile, config)
+    return dict(module=module, spec=module.spec)
+
+
+async def _ball_model(options, context):
+    """A ``vision.ball`` candidate (TrackNetV3) as a worker: ``frames`` of ball candidates."""
+    from ..crew.modules import open_worker
+    from ..crew.registry import candidate
+    chosen = candidate('vision.ball', options.get('candidate', 'tracknetv3.shuttlecock'))
+    config, python, _ = _merged(options, context, chosen.provider_profile)
+    if context.get('timing') == 'post' and 'ensemble' not in (options.get('settings') or {}):
+        config['ensemble'] = 'weight'       # a finished file: the authors' temporal ensemble (docs/sports.md)
+    module = await open_worker(python, chosen.provider_profile, config)
+    return dict(module=module, spec=module.spec)
+
+
+async def _yolo26_pose(options, context):
+    """YOLO26-pose (17 COCO points) in its own environment, followed in this process like RTMW."""
+    from ..providers.rtmw_pose import RTMWPosePlugin
+    config, python, profile = _entry(options, context, 'ultralytics.pose')
+    for key in ('device', 'imgsz', 'conf', 'max_poses'):
+        if key in options:
+            config[key] = options[key]
+
+    async def opener(settings):
+        return await _open('RemoteRTMW', (dict(config, **settings), python, profile))
+    remote = await opener({})
+    return dict(module=RTMWPosePlugin(remote, joints=options.get('joints'), tracker=options.get('tracker', 'ocsort'),
+                                      batch=int(options.get('batch') or 1), opener=opener))
+
+
+def _court(options, context):
+    """The item's ``court`` (image points and court name), else the run's ``--court`` reference, else None."""
+    return options.get('court') or (context.get('references') or {}).get('court') or context.get('court')
+
+
+OPTIONAL_LINKS = ('sound', 'players', 'video')
+
+
+def _sports(name, **fixed):
+    """A sports computation module: the item's keys that its class takes, plus the run's court reference."""
+    async def build(options, context):
+        import inspect
+        module_name, class_name = name.split(':')
+        kind = getattr(importlib.import_module(f'gamst.providers.{module_name}'), class_name)
+        accepted = set(inspect.signature(kind).parameters)
+        arguments = {key: value for key, value in options.items() if key in accepted and key not in ('name',)}
+        read = {source.split(':', 1)[0] for source in options.get('consumes') or ()}
+        for key in OPTIONAL_LINKS:      # a module it reads only when that one is in the run (--without onsets)
+            if isinstance(arguments.get(key), str) and arguments[key] not in read:
+                arguments[key] = None
+        if 'court' in accepted and _court(options, context) is not None:
+            arguments['court'] = _court(options, context)
+        for key, value in fixed.items():
+            arguments.setdefault(key, value(options, context) if callable(value) else value)
+        module = kind(**arguments)
+        return dict(module=module, spec=module.spec)
+    return build
+
+
+async def _team_split_siglip(options, context):
+    from ..providers.sports_team import TeamSplit
+    embedder = await _open('RemoteEmbedder', _entry(options, context, 'image.embedding'))
+    keys = ('players', 'video', 'player_labels', 'teams', 'fit_ms', 'samples_per_track', 'min_samples', 'votes',
+            'downsample', 'capability_id')
+    module = TeamSplit(**{key: options[key] for key in keys if key in options}, embed='siglip', embedder=embedder)
+    return dict(module=module, spec=module.spec)
+
+
+def sports_parts(Part):
+    from ..sports.presets import ball_sampling
+    from .parts import rotation_sampling
+    return {
+        'detect': Part('module', role='vision.detect', candidate='rfdetr.nano', build=_detect),
+        'ball-model': Part('module', role='vision.ball', candidate='tracknetv3.shuttlecock', build=_ball_model),
+        'yolo26-pose': Part('module', role='vision.pose', candidate='yolo26.pose_m', build=_yolo26_pose),
+        'object-track': Part('module', role='vision.object_track', candidate='gamst.ocsort',
+                             build=_sports('sports_track:ObjectTracker')),
+        'ball-track': Part('module', build=_sports('sports_ball:BallTrack'), sampling=ball_sampling),
+        'contacts': Part('module', build=_sports('sports_contacts:BallContacts')),
+        'rally': Part('module', build=_sports('sports_rally:Rally')),
+        'possession': Part('module', build=_sports('sports_possession:Possession')),
+        'occupancy': Part('module', build=_sports('sports_occupancy:Occupancy')),
+        'team-split': Part('module', build=_sports('sports_team:TeamSplit')),
+        'team-split-siglip': Part('module', role='vision.image_embedding', candidate='siglip.base_patch16_224',
+                                  build=_team_split_siglip),
+        'form': Part('module', build=_sports('sports_form:FormCompare')),
+        'body-spin': Part('module', build=_sports('sports_spin:BodySpin'), sampling=rotation_sampling),
+        'object-motion': Part('module', build=_sports('sports_motion:ObjectMotion')),
+    }
+
+
 def parts(Part):
     speech = dict(role='audio.speaker_verify', candidate='sherpa.campplus_zh_en')
     result = {
@@ -892,5 +1007,6 @@ def parts(Part):
                                build=_semantic_scene),
     }
     result['rhythm'] = Part('module', build=_rhythm)
+    result.update(sports_parts(Part))
     result.update({name: Part('module', build=_math(path)) for name, path in MATH.items()})
     return result
