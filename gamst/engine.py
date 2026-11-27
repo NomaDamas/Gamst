@@ -870,17 +870,34 @@ class Gamst:
 
     @staticmethod
     def _with_who(rows, intervals):
-        """Stored rows whose events that name a track carry the person bound to it (retroactive within the track)."""
-        from .providers.person_binding import resolve
+        """Stored rows whose events that name a track carry the person bound to it (retroactive within the track). One
+        action of a person counted on two tracks (one body seen twice) within ``SAME_EVENT_MS`` is kept once
+        (:class:`gamst.providers.person_binding.PersonOnce`, the earlier one)."""
+        from .providers.person_binding import PersonOnce, resolve
+        mine = lambda item: isinstance(item, dict) and item.get('track_id') and \
+            str(item.get('event', '')).startswith('exemplar.')
+        found = []
+        for index, record in enumerate(rows):
+            value = (record.get('observation') or {}).get('value')
+            for position, item in enumerate((value.get('events') if isinstance(value, dict) else None) or ()):
+                if mine(item):
+                    end_ms = item.get('end_ms')
+                    found.append((end_ms if type(end_ms) in (int, float) else 0, index, position))
+        once, dropped = PersonOnce(), set()
+        for end_ms, index, position in sorted(found):
+            item = rows[index]['observation']['value']['events'][position]
+            if not once.fresh(resolve(item, intervals), item['track_id'], item.get('end_ms'),
+                              (item.get('event'), item.get('label'))):
+                dropped.add((index, position))
         shown = []
-        for record in rows:
+        for index, record in enumerate(rows):
             value = (record.get('observation') or {}).get('value')
             events = value.get('events') if isinstance(value, dict) else None
             if isinstance(events, list) and any(isinstance(item, dict) and item.get('track_id') for item in events):
                 events = [dict(item, who=resolve(item, intervals), **({'who_when_counted': item['who']} if item.get('who')
                                and item.get('who') != resolve(item, intervals) else {}))
-                          if isinstance(item, dict) and item.get('track_id') and str(item.get('event', '')).startswith('exemplar.')
-                          else item for item in events]
+                          if mine(item) else item
+                          for position, item in enumerate(events) if (index, position) not in dropped]
                 record = dict(record, observation=dict(record['observation'], value=dict(value, events=events)))
             shown.append(record)
         return shown

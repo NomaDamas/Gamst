@@ -69,6 +69,45 @@ def box_iou(a, b):
     return inter / union if union > 0 else 0.
 
 
+DUPLICATE_IOU = .5        # two poses of one frame are one person seen twice when their boxes overlap this much ...
+DUPLICATE_JOINTS = .05    # ... and their joints agree: median distance of the joints both see, over the box height
+DUPLICATE_MIN_JOINTS = 5  # joints both must see for the joint test (fewer: never a duplicate)
+
+
+def same_body(a, b, *, iou=DUPLICATE_IOU, joints=DUPLICATE_JOINTS, min_joints=DUPLICATE_MIN_JOINTS, min_visibility=.5):
+    """Whether two poses of one frame are the same person detected twice (a tracker that keeps a second box on one
+    body): boxes overlap at least ``iou`` and the joints both poses see lie within ``joints`` x the box height of each
+    other (median). Two people standing close overlap in box but not in joints (their heads and shoulders differ)."""
+    if not isinstance(a, dict) or not isinstance(b, dict) or box_iou(a.get('bbox'), b.get('bbox')) < iou:
+        return False
+    first, second = a.get('landmarks') or [], b.get('landmarks') or []
+    if len(first) != len(second) or a.get('keypoint_set') != b.get('keypoint_set'):
+        return False
+    seen = lambda point: min(point.get('visibility', 1.), point.get('presence', 1.)) >= min_visibility
+    gaps = sorted(math.dist((p['x'], p['y']), (q['x'], q['y'])) for p, q in zip(first, second) if seen(p) and seen(q))
+    if len(gaps) < min_joints:
+        return False
+    height = max(a['bbox']['height'], b['bbox']['height'], 1e-6)
+    return gaps[len(gaps) // 2] / height <= joints
+
+
+def duplicates(poses, first_seen):
+    """``{duplicate track: kept track}`` among ``{track: pose}`` of one frame (:func:`same_body`). The kept track is the
+    one seen first (``first_seen``: track -> ms; then the larger box, then the track id), so the choice is stable over
+    frames and the same in every module that applies it (the counter counts the track the binding binds)."""
+    order = sorted(poses, key=lambda track: (first_seen.get(track, float('inf')),
+                                             -(poses[track].get('bbox') or {}).get('width', 0) *
+                                             (poses[track].get('bbox') or {}).get('height', 0), str(track)))
+    found = {}
+    for index, track in enumerate(order):
+        if track in found:
+            continue
+        for other in order[index + 1:]:
+            if other not in found and same_body(poses[track], poses[other]):
+                found[other] = track
+    return found
+
+
 def face_reading(pose, indices=MEDIAPIPE_FACE_POINTS, min_visibility=.5):
     """(indices, min_visibility) of the five face points of this pose: by its ``keypoint_set`` when it names one
     (a set without known face points, e.g. Sapiens2 ``goliath308`` here, gives None: no face is aligned); a pose

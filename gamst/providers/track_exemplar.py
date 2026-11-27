@@ -19,7 +19,7 @@ from __future__ import annotations
 from ..capabilities import CapabilitySpec, OutputField
 from ..plugins import InputFrame
 from ..private_payload import PrivatePoses, poses_of
-from .person_binding import CAPABILITY as BINDING, UNKNOWN, TrackBindings, intervals_of, resolve
+from .person_binding import CAPABILITY as BINDING, UNKNOWN, PersonOnce, TrackBindings, intervals_of, resolve
 from .pose_exemplar import ExemplarEvents, largest_pose
 
 MAX_TRACKS = 32          # counters kept at once (a crowd beyond it: the longest unseen ones go first)
@@ -27,6 +27,8 @@ TRACK_LOST_MS = 10000    # a track not seen this long is finished
 MAX_EVENTS_KEPT = 4096   # event times kept for the retroactive by_who
 CONTINUE_IOU = .5        # an untracked pose continues the track it overlaps this much in the frame before
 UNTRACKED = 'untracked'
+FIRST_SEEN_MS = 5000     # a track unseen this long starts again (the person binding's lost_ms): who is kept of two
+                         # duplicate tracks of one body is the one seen first, the same choice as the binding's
 
 
 class TrackExemplar(ExemplarEvents):
@@ -44,6 +46,7 @@ class TrackExemplar(ExemplarEvents):
         self._options = dict(options)
         self._binding_events, self._forked, self._namespace = [], False, None
         self.bindings = TrackBindings()
+        self._first_seen, self._last_seen, self.duplicates = {}, {}, 0     # duplicate boxes of one body: not counted
 
     def _clear(self):
         super()._clear()
@@ -95,11 +98,14 @@ class TrackExemplar(ExemplarEvents):
         del self._binding_events[:-MAX_EVENTS_KEPT]
 
     def by_who(self):
+        """Counts per person, resolved from the bindings (retroactive); one action of a person counted on two tracks
+        within ``SAME_EVENT_MS`` counts once (:class:`PersonOnce`)."""
         intervals = intervals_of(self._binding_events)
-        counts = {}
-        for track, end_ms in self._counted:
+        counts, once = {}, PersonOnce()
+        for track, end_ms in sorted(self._counted, key=lambda item: item[1]):
             who = resolve(dict(track_id=track, end_ms=end_ms), intervals)
-            counts[who] = counts.get(who, 0) + 1
+            if once.fresh(who, track, end_ms):
+                counts[who] = counts.get(who, 0) + 1
         return counts
 
     # ------------------------------------------------------------------ frames
@@ -108,7 +114,7 @@ class TrackExemplar(ExemplarEvents):
         """``{track: pose}``. A pose the tracker gave no track continues the track whose box it overlaps most in the
         frame before (IoU >= :data:`CONTINUE_IOU`), else the one ``untracked`` stream (a pose model without a tracker:
         one person); further untracked poses of that frame are not counted."""
-        from .person_match import box_iou
+        from .person_match import box_iou, duplicates
         found, loose = {}, []
         for index, pose in enumerate(poses):
             if not isinstance(pose, dict) or not pose.get('landmarks'):
@@ -125,7 +131,17 @@ class TrackExemplar(ExemplarEvents):
             if track not in found:
                 found[track] = pose
         self._boxes = {track: pose.get('bbox') for track, pose in found.items() if pose.get('bbox')}
-        return found
+        first = self._first_seen
+        for track in [track for track, ms in first.items()
+                      if self._frame_ms - self._last_seen.get(track, ms) > FIRST_SEEN_MS]:
+            first.pop(track, None)
+            self._last_seen.pop(track, None)
+        for track in found:
+            first.setdefault(track, self._frame_ms)
+            self._last_seen[track] = self._frame_ms
+        doubles = duplicates({track: pose for track, pose in found.items() if track != UNTRACKED}, first)
+        self.duplicates += len(doubles)
+        return {track: pose for track, pose in found.items() if track not in doubles}
 
     def _feed(self, counter, pose, ts):
         if self.rule is not None and self.rule.needs_joints:
@@ -224,10 +240,12 @@ class TrackExemplar(ExemplarEvents):
         with self._lock:
             super().reset()
             self.bindings, self._binding_events, self._namespace = TrackBindings(), [], None
+            self._first_seen, self._last_seen = {}, {}
 
     def status(self):
-        return dict(super().status(), count=self.by_who().get(self.wanted, 0) if self.wanted else len(self._counted),
-                    tracks=len(self._tracks), who=self.wanted, per_track=True)
+        counts = self.by_who()
+        return dict(super().status(), count=counts.get(self.wanted, 0) if self.wanted else sum(counts.values()),
+                    tracks=len(self._tracks), who=self.wanted, per_track=True, duplicates=self.duplicates)
 
 
 def reads_bindings(options):

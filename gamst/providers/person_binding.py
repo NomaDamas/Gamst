@@ -21,18 +21,26 @@ person by ``margin``; an unbound track is bound by body when its appearance scor
 P's appearance of this session and no face contradicts it (default 0.8: on the shop clip, OSNet-AIN, the person's
 face-confirmed tracks scored median 0.87, the best other track median 0.64 and 90th percentile 0.79; one clip, not
 labelled, docs/measurements/person-identity-2026-11-27.md). A pose the tracker gave no track is never bound. A bound track is released when its face contradicts P (score
-below ``face_reject``: the tracker may have switched people) or when it is lost (not seen for ``lost_ms``). One person is
-on one track at a time: a face binding moves P off any other track. A person moves to another track only when that track's face
-beats the holding track's face of the same frame by ``margin``. Scores are uncalibrated cosines; the face thresholds are
-the same defaults as ``target_person``; none is measured on labelled people yet.
+below ``face_reject``: the tracker may have switched people) or when it is lost (not seen for ``lost_ms``).
+
+One person is on at most one track at any timestamp (:class:`TrackBindings`), also in the past and at the instant of a
+handover (the old binding ends at its track's last frame before the new one starts). When several tracks claim a person
+in a frame, the best claim keeps them (:meth:`PersonBinding._beats`): the face (this frame's or the last second's) higher
+by ``margin``, then the appearance higher by ``margin``, then continuity (the holder, else the track seen first); the
+others are released to unknown or to their own best other person. Two poses of one frame that are one body seen twice
+(box overlap and joints that agree, :func:`gamst.providers.person_match.same_body`) are one track: the one seen first;
+the other is reported ``duplicate_of`` it and is not scored, bound or counted (:mod:`gamst.providers.track_exemplar`
+applies the same rule). Scores are uncalibrated cosines; the face thresholds are the same defaults as
+``target_person``; none is measured on labelled people yet.
 
 Retroactive: the first binding of a track starts at the track's first frame (``retroactive: true``): what that track did
 before its face was seen was the same person. After a release, a new binding starts when it is decided.
 
 Output, capability ``vision.person_binding`` (records, so count_events, get_timeline and :func:`resolve` read them):
 ``{tracks, bound, events}``; ``events`` are ``person.bound`` (``track_id, who, start_ms`` = from when, ``end_ms`` = when it
-was decided, ``by: face | body | handover``, scores, ``retroactive``) and ``person.unbound`` (``track_id, who, start_ms,
-end_ms, reason``). Embeddings and crops never leave this process.
+was decided, ``by: face | body | handover | continuation | duplicate``, scores, ``retroactive``) and ``person.unbound``
+(``track_id, who, start_ms, end_ms, reason``). Embeddings and crops never leave this process. Readers count one action
+of a person once even when two tracks counted it within ``SAME_EVENT_MS`` (:class:`PersonOnce`).
 
 Where it runs: in the pose module's lane (it pairs each camera frame with the joints of the same capture), so an L2
 chain of that lane forks it too. The face and body models never run in the lane: crops of the tracks that are due go
@@ -56,8 +64,8 @@ from then on, and back to the first frame of a track that is still followed (ret
 from __future__ import annotations
 
 from ..capabilities import CapabilitySpec, OutputField
-from .person_match import (HANDOVER_IOU, MEDIAPIPE_FACE_POINTS, align_face, body_crop, box_iou, face_points,
-                           face_reading)
+from .person_match import (HANDOVER_IOU, MEDIAPIPE_FACE_POINTS, align_face, body_crop, box_iou, duplicates,
+                           face_points, face_reading)
 from .speaker_verify import centroid, cosine, embed, l2_normalize
 
 CAPABILITY = 'vision.person_binding'
@@ -78,17 +86,23 @@ def appearance_defaults(body):
 # ---------------------------------------------------------------- bindings as data (no model)
 
 class TrackBindings:
-    """track_id <-> who intervals. The first binding of a track reaches back to the track's first frame."""
+    """track_id <-> who intervals. The first binding of a track reaches back to the track's first frame.
+
+    One person is on at most one track at any time, also in the past and at the instant of a handover: a binding ends
+    at the old track's last frame *before* the new one starts (``person.unbound`` ``end_ms`` < the next ``person.bound``
+    ``start_ms`` of the same person), a retroactive start never reaches back to or before the end of any earlier
+    binding of the person, and binding a person moves them off the track that holds them."""
 
     def __init__(self):
-        self.tracks = {}       # track -> {first_ms, last_ms, who, from_ms, by, bound_before}
+        self.tracks = {}       # track -> {first_ms, last_ms, prev_ms, who, from_ms, by, bound_before}
         self.closed = []       # finished intervals {track_id, who, from_ms, to_ms, by}
-        self.released = {}     # who -> when their last binding ended
+        self.released = {}     # who -> when their latest binding ended (the end of every earlier one, at the latest)
 
     def seen(self, track, ts):
-        state = self.tracks.setdefault(track, dict(first_ms=ts, last_ms=ts, who=None, from_ms=None, by=None,
-                                                   bound_before=False))
-        state['last_ms'] = max(state['last_ms'], ts)
+        state = self.tracks.setdefault(track, dict(first_ms=ts, last_ms=ts, prev_ms=None, who=None, from_ms=None,
+                                                   by=None, bound_before=False))
+        if ts > state['last_ms']:
+            state['prev_ms'], state['last_ms'] = state['last_ms'], ts
         return state
 
     def who(self, track):
@@ -99,16 +113,23 @@ class TrackBindings:
         return next((track for track, state in self.tracks.items() if state['who'] == who), None)
 
     def bind(self, track, who, ts, by, **scores):
-        """A ``person.bound`` event, or None when the track is already ``who``'s."""
+        """A ``person.bound`` event (a list, with the ``person.unbound`` events it caused), or None when the track is
+        already ``who``'s."""
         state = self.seen(track, ts)
         if state['who'] == who:
             return None
         events = []
         if state['who'] is not None:
-            events.append(self.unbind(track, ts, 'another_person'))
-        # The first binding of a track reaches back to its first frame, but never before the person was released from
-        # another track: one person is on one track at a time, also in the past.
-        start = max(state['first_ms'], self.released.get(who, state['first_ms'])) if not state['bound_before'] else ts
+            events.append(self.unbind(track, ts, 'another_person', before=True))
+        holder = self.holder(who)
+        if holder is not None:      # one person, one track: the person leaves the track that holds them first
+            events.append(self.unbind(holder, ts, 'another_track', before=True))
+        # The first binding of a track reaches back to its first frame, but never to or before the end of the person's
+        # earlier bindings: one person is on one track at a time, also in the past.
+        start = state['first_ms'] if not state['bound_before'] else ts
+        released = self.released.get(who)
+        if released is not None and start <= released:
+            start = released + 1
         start = min(start, ts)
         retroactive = start < ts
         state.update(who=who, from_ms=start, by=by, bound_before=True)
@@ -116,15 +137,21 @@ class TrackBindings:
                      retroactive=retroactive, **{key: round(value, 5) for key, value in scores.items() if value is not None})
         return [*events, event] if events else event
 
-    def unbind(self, track, ts, reason):
-        """A ``person.unbound`` event: the binding ends when the track was last seen (``ts`` at the latest)."""
+    def unbind(self, track, ts, reason, *, before=False):
+        """A ``person.unbound`` event: the binding ends when the track was last seen (``ts`` at the latest). ``before``:
+        another track takes the person at ``ts``, so this binding ends at its track's last frame before ``ts`` (a
+        binding that began at ``ts`` itself is then empty: ``end_ms`` < ``start_ms``, it covers no time)."""
         state = self.tracks.get(track)
         if state is None or state['who'] is None:
             return None
-        ts = max(state['from_ms'], min(ts, state['last_ms']))
-        self.released[state['who']] = ts
-        self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=ts, by=state['by']))
-        event = dict(event='person.unbound', track_id=track, who=state['who'], start_ms=state['from_ms'], end_ms=ts,
+        end = min(ts, state['last_ms'])
+        if before and end >= ts:
+            prev = state.get('prev_ms')
+            end = prev if prev is not None and prev < ts else ts - 1
+        end = max(state['from_ms'] - 1, end)
+        self.released[state['who']] = max(end, self.released.get(state['who'], end))
+        self.closed.append(dict(track_id=track, who=state['who'], from_ms=state['from_ms'], to_ms=end, by=state['by']))
+        event = dict(event='person.unbound', track_id=track, who=state['who'], start_ms=state['from_ms'], end_ms=end,
                      reason=reason)
         state.update(who=None, from_ms=None, by=None)
         return event
@@ -164,6 +191,28 @@ def resolve(event, intervals):
                 return who
     own = event.get('who') if isinstance(event, dict) else None
     return own if isinstance(own, str) and own else UNKNOWN
+
+
+SAME_EVENT_MS = 100     # as gamst.pipeline.SAME_EVENT_MS (the L2 safety net), keyed by person here
+
+
+class PersonOnce:
+    """The safety net keyed by person: an event of an enrolled person that ends within ``SAME_EVENT_MS`` of one already
+    counted for that person on another track is the same action (one body on two tracks) and is not counted again.
+    Events of unknown tracks are never merged (unknown is anybody)."""
+
+    def __init__(self, same_ms=SAME_EVENT_MS):
+        self.same_ms, self.seen, self.dropped = same_ms, {}, 0
+
+    def fresh(self, who, track, end_ms, key=None):
+        if not isinstance(who, str) or not who or who == UNKNOWN or type(end_ms) not in (int, float):
+            return True
+        ends = self.seen.setdefault((who, key), [])
+        if any(other != track and abs(end - end_ms) <= self.same_ms for end, other in ends[-16:]):
+            self.dropped += 1
+            return False
+        ends.append((end_ms, track))
+        return True
 
 
 def binding_events(rows):
@@ -567,40 +616,100 @@ class PersonBinding:
         """Scores that arrived for this frame's decision (each result is decided on once)."""
         return scores.get('new_' + kind) or {}
 
-    def _decide(self, track, scores, ts, events, candidates):
+    def _assign(self, candidates, ts, events):
+        """This frame's decisions. Each enrolled person is held by at most one track: when several tracks claim a
+        person, the best keeps them (:meth:`_beats`: face, then appearance, then continuity) and the others are released
+        to unknown or to their own best other person."""
         bindings = self.bindings
-        if track.startswith('frame:'):      # the tracker gave this pose no track: nothing to bind it over time
-            return
-        current = bindings.who(track)
-        face, body = self._fresh(scores, 'face', ts), self._fresh(scores, 'body', ts)
-        if current is not None and face.get(current) is not None and face[current] < self.face_reject:
-            events.append(bindings.unbind(track, ts, 'face_contradicts'))
-            current = None
-        chosen = self._best(face, self.face_threshold)
-        if chosen is not None:
-            name, score = chosen
-            other = bindings.holder(name)
-            if other is not None and other != track:
-                held = ((candidates.get(other) or (None, {}))[1].get('face') or {}).get(name)
-                if other in candidates and held is not None and held >= score - self.margin:
-                    return      # the track that holds the person still shows their face as well: no flip
-                events.append(bindings.unbind(other, ts, 'seen_on_another_track'))
-            events.append(bindings.bind(track, name, ts, 'face', face_score=score, body_score=body.get(name)))
-            self.bindings.tracks[track]['confirmed_ms'] = ts
-            person = next(item for item in self.persons if item.name == name)
-            if body and scores.get('body_embedding') is not None:
-                person.session.append(l2_normalize(scores['body_embedding']))
-            return
-        if current is not None:
-            if face.get(current) is not None and face[current] >= self.face_threshold:
-                self.bindings.tracks[track]['confirmed_ms'] = ts
-            return
-        chosen = self._best(body, self.body_threshold)
-        if chosen is not None:
-            name, score = chosen
-            contradicted = face.get(name) is not None and face[name] < self.face_reject
-            if not contradicted and bindings.holder(name) is None:
-                events.append(bindings.bind(track, name, ts, 'body', body_score=score, face_score=face.get(name)))
+        tracks = {track: scores for track, (_, scores) in candidates.items()
+                  if not track.startswith('frame:')}       # the tracker gave a pose no track: nothing to bind over time
+        for track, scores in tracks.items():
+            current, face = bindings.who(track), self._fresh(scores, 'face')
+            if current is not None and face.get(current) is not None and face[current] < self.face_reject:
+                events.append(bindings.unbind(track, ts, 'face_contradicts', before=True))
+        # faces: rounds of claims; a track that loses a person may claim its next best person in the next round
+        open_tracks = {track for track, scores in tracks.items() if self._fresh(scores, 'face')}
+        decided = set()
+        for _ in range(len(self.persons)):
+            claims = {}
+            for track in sorted(open_tracks):
+                face = {name: value for name, value in self._fresh(tracks[track], 'face').items()
+                        if name not in decided}
+                chosen = self._best(face, self.face_threshold)
+                if chosen is not None:
+                    claims.setdefault(chosen[0], []).append(track)
+            if not claims:
+                break
+            for name, claimants in claims.items():
+                decided.add(name)
+                winner = self._winner(name, claimants, candidates)
+                if winner is None:          # the holder keeps the person; its own face claim confirms it
+                    winner = bindings.holder(name)
+                    if winner not in claimants:
+                        continue
+                open_tracks.discard(winner)
+                scores = tracks[winner]
+                face, body = self._fresh(scores, 'face'), self._fresh(scores, 'body')
+                if bindings.who(winner) != name:
+                    holder = bindings.holder(name)
+                    if holder is not None:
+                        events.append(bindings.unbind(holder, ts, 'seen_on_another_track', before=True))
+                    events.append(bindings.bind(winner, name, ts, 'face', face_score=face.get(name),
+                                                body_score=body.get(name)))
+                bindings.tracks[winner]['confirmed_ms'] = ts
+                person = next(item for item in self.persons if item.name == name)
+                if body and scores.get('body_embedding') is not None:
+                    person.session.append(l2_normalize(scores['body_embedding']))
+        # appearance (this session only): an unbound track, a person nobody holds, no face that contradicts
+        claims = {}
+        for track, scores in tracks.items():
+            if bindings.who(track) is not None:
+                continue
+            face, body = self._fresh(scores, 'face'), self._fresh(scores, 'body')
+            chosen = self._best(body, self.body_threshold)
+            if chosen is None or bindings.holder(chosen[0]) is not None:
+                continue
+            if face.get(chosen[0]) is not None and face[chosen[0]] < self.face_reject:
+                continue
+            claims.setdefault(chosen[0], []).append(track)
+        for name, claimants in claims.items():
+            winner = self._winner(name, claimants, candidates)
+            if winner is not None:
+                scores = tracks[winner]
+                events.append(bindings.bind(winner, name, ts, 'body', body_score=self._fresh(scores, 'body').get(name),
+                                            face_score=self._fresh(scores, 'face').get(name)))
+
+    def _evidence(self, track, name, candidates):
+        """(face, appearance) of a track for a person: this frame's or the last second's (``_state`` forgets older)."""
+        scores = (candidates.get(track) or (None, {}))[1]
+        return (scores.get('face') or {}).get(name), (scores.get('body') or {}).get(name)
+
+    def _beats(self, challenger, holder, name, candidates):
+        """Whether ``challenger`` has the better claim on the person than ``holder``: a face score higher by ``margin``;
+        faces within ``margin`` (or neither seen): an appearance score higher by ``margin``; else continuity (the holder,
+        or the track seen first, keeps the person)."""
+        face, body = self._evidence(challenger, name, candidates)
+        held_face, held_body = self._evidence(holder, name, candidates)
+        if face is not None and (held_face is None or face > held_face + self.margin):
+            return True
+        if held_face is not None and (face is None or face < held_face - self.margin):
+            return False
+        return body is not None and held_body is not None and body > held_body + self.margin
+
+    def _winner(self, name, claimants, candidates):
+        """The track that holds ``name`` after this frame among ``claimants`` and the current holder (when in view), or
+        None when the holder keeps the person."""
+        holder = self.bindings.holder(name)
+        if len(set(claimants) | ({holder} if holder in candidates else set())) > 1:
+            self.counts['contested'] = self.counts.get('contested', 0) + 1     # tracks competed for a person
+        first = lambda track: (self.bindings.tracks.get(track) or {}).get('first_ms', 0)
+        order = sorted(claimants, key=lambda track: (-(self._evidence(track, name, candidates)[0] or -1.), first(track),
+                                                     track))
+        best = holder if holder in candidates else order[0]
+        for track in order:
+            if track != best and self._beats(track, best, name, candidates):
+                best = track
+        return None if best == holder else best
 
     def _continue(self, candidates, ts, events):
         """A tracker that starts a new track for the same person (a swap): when the track that holds a person has just
@@ -640,6 +749,30 @@ class PersonBinding:
             if best[0] >= HANDOVER_IOU and self.bindings.who(best[1]) is None and self.bindings.holder(item['who']) is None:
                 events.append(self.bindings.bind(best[1], item['who'], ts, 'handover', iou=best[0]))
         self._handover = []
+
+    def _duplicates(self, candidates, ts, events):
+        """``{track: kept track}``: poses of this frame that are one body seen twice (:func:`person_match.duplicates`:
+        box overlap and joints that agree; the track seen first is kept). A duplicate is not scored, bound or counted
+        (the per-track counter applies the same rule); a person it held goes over to the kept track (``by:
+        duplicate``). Two tracks bound to two different people are never duplicates (their faces said so)."""
+        poses = {track: pose for track, (pose, _) in candidates.items() if not track.startswith('frame:')}
+        if len(poses) < 2:
+            return {}
+        bindings = self.bindings
+        found = duplicates(poses, {track: state['first_ms'] for track, state in bindings.tracks.items()})
+        for track, kept in list(found.items()):
+            mine, theirs = bindings.who(track), bindings.who(kept)
+            if mine is not None and theirs is not None and mine != theirs:
+                del found[track]
+                continue
+            self.counts['duplicates'] = self.counts.get('duplicates', 0) + 1
+            if mine is not None and theirs is None:
+                events.append(bindings.unbind(track, ts, 'duplicate', before=True))
+                events.append(bindings.bind(kept, mine, ts, 'duplicate',
+                                            iou=box_iou(poses[track].get('bbox'), poses[kept].get('bbox'))))
+            elif mine is not None:
+                events.append(bindings.unbind(track, ts, 'duplicate', before=True))
+        return found
 
     def _wants_image(self, ts):
         """Keep this camera frame until its joints come (this module in a lane of its own sees the frame first)? Only
@@ -702,10 +835,11 @@ class PersonBinding:
             self._boxes.pop(track, None)
         if self._collect is not None and image is not None:
             self._collected(candidates, image, ts)
+        doubles = self._duplicates(candidates, ts, events)
+        candidates = {track: item for track, item in candidates.items() if track not in doubles}
         if self._handover:
             self._hand_over(candidates, ts, events)
-        for track, (_, scores) in candidates.items():
-            self._decide(track, scores, ts, events, candidates)
+        self._assign(candidates, ts, events)
         self._continue(candidates, ts, events)
         for track, (pose, _) in candidates.items():
             self._boxes[track] = pose['bbox']
@@ -713,7 +847,7 @@ class PersonBinding:
         flat = []
         for item in events:
             flat.extend(item if isinstance(item, list) else [item] if item else [])
-        tracks = []
+        tracks = [dict(track_id=track, who=UNKNOWN, duplicate_of=kept) for track, kept in doubles.items()]
         for track, (_, scores) in candidates.items():
             who = self.bindings.who(track)
             entry = dict(track_id=track, who=who or UNKNOWN)

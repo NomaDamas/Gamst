@@ -123,7 +123,7 @@ class BindingDataTest(unittest.TestCase):
         bindings.seen('t1', 3000)
         released = bindings.unbind('t1', 4000, 'seen_on_another_track')    # t1 was last seen at 3000
         moved = bindings.bind('t2', 'P', 4000, 'face')
-        self.assertEqual((released['end_ms'], moved['start_ms'], moved['retroactive']), (3000, 3000, True))
+        self.assertEqual((released['end_ms'], moved['start_ms'], moved['retroactive']), (3000, 3001, True))  # not both at 3000
 
     def test_appearance_thresholds_are_per_model_and_provisional(self):
         from gamst.providers.person_binding import APPEARANCE, appearance_defaults
@@ -527,6 +527,31 @@ class StoreWhoTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([(item['track_id'], item['who']) for item in shown], [('a', 'P')])
             self.assertEqual(timeline['who']['seen'][0]['track_id'], 'a')
 
+    async def test_count_events_counts_one_action_of_a_person_on_two_tracks_once(self):
+        from gamst import Gamst
+        from gamst.capabilities import CapabilitySpec, OutputField, SensorMetadata
+        from gamst.providers.person_binding import CAPABILITY
+        from tests.test_speaker_verify import now
+        async with Gamst(consent=True) as human:
+            start = now() - 5000
+            human.register_capability(CapabilitySpec('temporal.exemplar_events', 'temporal.exemplar_events', 'video',
+                                                     'test', '1', (OutputField('count', 'integer'),
+                                                                   OutputField('events', 'array')), 'native'))
+            human.register_capability(CapabilitySpec(CAPABILITY, CAPABILITY, 'video', 'test', '1',
+                                                     (OutputField('events', 'array'),), 'frame'))
+            matched = lambda track, ts: dict(event='exemplar.matched', track_id=track, who='unknown', start_ms=ts - 50,
+                                             end_ms=ts, label='raise')
+            await human.push_observation('temporal.exemplar_events', dict(count=3, events=[
+                matched('a', start + 100), matched('b', start + 160), matched('b', start + 900)]),
+                sensor=SensorMetadata('t', 'camera', 1), timestamp_ms=start + 900)
+            await human.push_observation(CAPABILITY, dict(events=[
+                dict(event='person.bound', track_id='a', who='P', start_ms=start, end_ms=start + 120, by='face'),
+                dict(event='person.unbound', track_id='a', who='P', start_ms=start, end_ms=start + 120, reason='x'),
+                dict(event='person.bound', track_id='b', who='P', start_ms=start + 121, end_ms=start + 1000, by='face')]),
+                sensor=SensorMetadata('t', 'camera', 2), timestamp_ms=start + 1000)
+            mine = await human.count_events('temporal.exemplar_events', who='P')
+            self.assertEqual(mine['count'], 2)          # a at 100 and b at 160 are one action of P; b at 900 another
+
 
 class MCPToolsTest(unittest.TestCase):
     def test_enroll_person_and_who_are_tools(self):
@@ -648,6 +673,176 @@ class PhotoEnrollmentTest(unittest.IsolatedAsyncioTestCase):
                 await self.enroll(folder, [1, 1, 2])
             with self.assertRaisesRegex(SystemExit, 'only 2 usable face'):
                 await self.enroll(folder, [1, 1])
+
+
+# ---------------------------------------------------------------- one person, one track at any time
+
+def at_once(events, who, times):
+    """The instants (of ``times``) at which two or more tracks resolve to ``who``."""
+    intervals = intervals_of([item for item in events if item])
+    return [ts for ts in times
+            if sum(1 for track in intervals if resolve(dict(track_id=track, end_ms=ts), intervals) == who) > 1]
+
+
+def stripes(*parts):
+    """An image of vertical stripes: (from column, to column, BGR) on black."""
+    image = np.zeros((400, 400, 3), np.uint8)
+    for low, high, color in parts:
+        image[:, low:high] = color
+    return image
+
+
+class OneTrackDataTest(unittest.TestCase):
+    def test_a_handover_in_one_frame_leaves_no_instant_with_two_tracks(self):
+        bindings = TrackBindings()
+        events = []
+        for ts in (0, 33, 66):
+            bindings.seen('a', ts)
+        events.append(bindings.bind('a', 'P', 66, 'face'))
+        for ts in (100, 133):
+            bindings.seen('a', ts)
+            bindings.seen('b', ts)
+        events += bindings.bind('b', 'P', 133, 'face')      # takes P from a in a frame where both are seen
+        unbound = next(item for item in events if item['event'] == 'person.unbound')
+        bound = events[-1]
+        self.assertEqual((unbound['track_id'], unbound['end_ms'], unbound['reason']), ('a', 100, 'another_track'))
+        self.assertEqual((bound['start_ms'], bound['retroactive']), (101, True))
+        self.assertEqual(at_once(events, 'P', range(0, 140)), [])
+        self.assertIsNone(bindings.holder('Q'))
+        self.assertEqual(bindings.holder('P'), 'b')
+
+    def test_a_late_retroactive_binding_never_reaches_over_an_earlier_one(self):
+        bindings, events = TrackBindings(), []
+        bindings.seen('b', 0)                    # b is seen from the start, its face only much later
+        bindings.seen('a', 500)
+        events.append(bindings.bind('a', 'P', 500, 'face'))
+        for ts in (1000, 2000, 3000):
+            bindings.seen('a', ts)
+            bindings.seen('b', ts)
+        events.append(bindings.unbind('a', 3000, 'face_contradicts', before=True))      # a ends at 2000
+        bindings.seen('b', 4000)
+        events.append(bindings.bind('b', 'P', 4000, 'face'))      # retroactive, but only after a's binding
+        self.assertEqual(events[-1]['start_ms'], 2001)
+        self.assertEqual(at_once(events, 'P', range(0, 4001, 10)), [])
+        bindings.seen('c', 100)                  # an even older track, bound later still
+        bindings.seen('c', 5000)
+        bindings.seen('b', 5000)
+        events += bindings.bind('c', 'P', 5000, 'face')
+        self.assertGreater(events[-1]['start_ms'], 4000)
+        self.assertEqual(at_once(events, 'P', range(0, 5001, 10)), [])
+
+    def test_an_action_on_two_tracks_of_one_person_counts_once(self):
+        from gamst.providers.person_binding import PersonOnce
+        once = PersonOnce()
+        self.assertTrue(once.fresh('P', 'a', 1000))
+        self.assertFalse(once.fresh('P', 'b', 1060))         # the same action seen on a second track
+        self.assertTrue(once.fresh('P', 'a', 1060))          # one track counts what it counts
+        self.assertTrue(once.fresh('P', 'b', 1200))
+        self.assertTrue(once.fresh('unknown', 'c', 1000) and once.fresh('unknown', 'd', 1000))   # unknown is anybody
+        self.assertEqual(once.dropped, 1)
+
+    def test_duplicate_poses_need_both_box_and_joints(self):
+        from gamst.providers.person_match import duplicates, same_body
+        one, again = person(.5, 'a'), person(.5, 'b')
+        self.assertTrue(same_body(one, again))
+        close = person(.55, 'c')                 # two people side by side: boxes overlap (IoU .6), joints .05 apart
+        self.assertFalse(same_body(one, close))
+        shifted = dict(person(.6, 'd'), bbox=dict(one['bbox']))     # one box, joints of another place: two people
+        self.assertFalse(same_body(one, shifted))
+        self.assertEqual(duplicates(dict(a=one, b=again), dict(a=0, b=100)), dict(b='a'))     # the first seen stays
+        self.assertEqual(duplicates(dict(a=one, b=again), dict(a=100, b=0)), dict(a='b'))
+        self.assertEqual(duplicates(dict(a=one, d=shifted), dict(a=0, d=0)), {})
+
+
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class OneTrackModuleTest(PersonBindingTest):
+    def binding(self, **options):
+        from gamst.providers.person_binding import PersonBinding
+        module = PersonBinding(Color('face'), Color('body'), face_every_ms=0, body_every_ms=0, confirm_every_ms=0,
+                               session='file:s', **dict(dict(face_threshold=.9, face_reject=.5, body_threshold=.95),
+                                                        **options))
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        return module
+
+    async def test_two_tracks_that_both_show_the_face_bind_one_and_the_better_face_takes_over(self):
+        module, events, times = self.binding(), [], []
+        left, right = (80, 160), (240, 320)
+        for ts, a, b in ((1000, RED, RED), (2000, (0, 80, 255), RED), (3000, (0, 150, 255), RED)):
+            value = await self.step(module, ts, [person(.3, 'a'), person(.7, 'b')], stripes((*left, a), (*right, b)))
+            events += value['events']
+            times += [ts, ts + 1]
+            if ts == 1000:      # both faces score 1: one track holds P (the first seen, then by id)
+                self.assertEqual([(item['event'], item['track_id']) for item in value['events']], [('person.bound', 'a')])
+            if ts == 2000:      # a's face .95, b's 1: within the margin, the holder keeps P (no flip)
+                self.assertEqual(value['events'], [])
+            if ts == 3000:      # a's face .86, b's 1: b's face is better by more than the margin
+                self.assertEqual([(item['event'], item['track_id'], item.get('reason') or item.get('by'))
+                                  for item in value['events']],
+                                 [('person.unbound', 'a', 'seen_on_another_track'), ('person.bound', 'b', 'face')])
+            self.assertEqual(sum(1 for item in value['tracks'] if item['who'] == 'P'), 1)
+        self.assertEqual(at_once(events, 'P', times), [])
+        self.assertGreaterEqual(module.counts['contested'], 3)      # frames where both claimed P
+
+    async def test_the_track_that_loses_a_person_goes_to_its_own_best_other_person(self):
+        module = self.binding(face_threshold=.5, face_reject=.1)
+        module.set_references(dict(p=reference(name='P') | dict(face=[[0., 0., 1.]] * 3),
+                                   q=reference(name='Q') | dict(face=[[0., 1., 0.]] * 3)))
+        # a: pure red (P 1.0); b: P .79, Q .62: b claims P first, loses it to a, then takes Q
+        value = await self.step(module, 1000, [person(.3, 'a'), person(.7, 'b')],
+                                stripes((80, 160, RED), (240, 320, (0, 200, 255))))
+        self.assertEqual(value['bound'], {'P': 'a', 'Q': 'b'})
+
+    async def test_a_duplicate_box_is_neither_bound_nor_counted_and_hands_its_person_to_the_kept_track(self):
+        module = self.binding()
+        await self.step(module, 1000, [person(.3, 'a', face=False)], stripes((0, 400, BLUE)))       # a is seen first
+        bound = await self.step(module, 1100, [person(.3, 'a', face=False), person(.75, 'b')],
+                                stripes((0, 200, BLUE), (200, 400, RED)))
+        self.assertEqual(bound['bound'], {'P': 'b'})
+        same = await self.step(module, 1200, [person(.75, 'a', face=False), person(.75, 'b')], stripes((200, 400, RED)))
+        moved = [(item['event'], item['track_id'], item.get('reason') or item.get('by')) for item in same['events']]
+        self.assertEqual(moved, [('person.unbound', 'b', 'duplicate'), ('person.bound', 'a', 'duplicate')])
+        self.assertEqual(same['bound'], {'P': 'a'})
+        self.assertIn(dict(track_id='b', who='unknown', duplicate_of='a'), same['tracks'])
+        self.assertGreaterEqual(module.counts['duplicates'], 2)
+        events = bound['events'] + same['events']
+        self.assertEqual(at_once(events, 'P', range(1000, 1202)), [])
+
+    async def test_at_a_scene_cut_the_person_moves_to_the_new_track_without_an_instant_on_both(self):
+        module = self.binding()
+        events = []
+        for ts in (1000, 1500):         # scene 1: P on the right, track a
+            events += (await self.step(module, ts, [person(.75, 'a')], stripes((200, 400, RED))))['events']
+        # the cut: the tracker keeps track a on the person now on the right (someone else), P is a new track on the left
+        cut = await self.step(module, 2000, [person(.75, 'a'), person(.25, 'b')], stripes((0, 200, RED), (200, 400, BLUE)))
+        events += cut['events']
+        self.assertEqual(cut['bound'], {'P': 'b'})
+        self.assertEqual([(item['event'], item['track_id'], item.get('reason') or item.get('by')) for item in cut['events']],
+                         [('person.unbound', 'a', 'face_contradicts'), ('person.bound', 'b', 'face')])
+        ended = next(item for item in cut['events'] if item['event'] == 'person.unbound')
+        self.assertLess(ended['end_ms'], cut['events'][-1]['start_ms'])
+        self.assertEqual(at_once(events, 'P', [1000, 1001, 1500, 1501, 2000, 2001]), [])
+
+
+@unittest.skipUnless(HAS_CV, 'needs numpy and opencv')
+class OneCountTest(TrackExemplarTest):
+    def test_two_tracks_on_one_body_count_one_action(self):
+        module = self.counter()
+        events = []
+        self.push(module, 0, [person(.5, 'a')])                 # a is seen first
+        for ts, up in ((100, False), (200, True), (300, False), (400, True), (500, False)):
+            value = self.push(module, ts, [person(.5, 'a', wrist_up=up), person(.5, 'b', wrist_up=up)])
+            events += [item for item in value['events'] if item['event'] == 'exemplar.matched']
+        self.assertEqual([item['track_id'] for item in events], ['a', 'a'])
+        self.assertEqual((value['count'], module.status()['duplicates']), (2, 5))
+
+    def test_one_action_of_a_person_on_two_tracks_within_100_ms_counts_once(self):
+        module = self.counter()
+        for ts, a_up, b_up in ((0, False, False), (100, True, False), (150, False, True), (250, False, False)):
+            self.push(module, ts, [person(.25, 'a', wrist_up=a_up), person(.75, 'b', wrist_up=b_up)])
+        self.bind(module, 300, [dict(event='person.bound', track_id='a', who='P', start_ms=0, end_ms=120, by='face'),
+                                dict(event='person.unbound', track_id='a', who='P', start_ms=0, end_ms=120, reason='x'),
+                                dict(event='person.bound', track_id='b', who='P', start_ms=121, end_ms=300, by='face')])
+        self.assertEqual(module.by_who(), {'P': 1})         # matched at 100 on a and at 150 on b: one action of P
 
 
 if __name__ == '__main__':
