@@ -19,7 +19,20 @@ counter as examples do (:class:`gamst.providers.pose_exemplar.ExemplarEvents`).
                 {"height": [A, B]}                how far A is above B, in shoulder widths
                 {"offset": [A, B]}                how far A is to the image right of B, in shoulder widths
                 {"distance": [A, B]}              in shoulder widths
+                {"hand_open": "left" | "right"}   how open that hand is, in palm lengths (a fist is low)
                 {"rate": MEASURE}                 how fast a measure changes, its unit per second (over 50 ms)
+
+Joints are the 12 body joints (``left_shoulder``, ``right_wrist``, ``left_knee``, ...) and the 21 points of each hand:
+``left_hand_wrist``, ``left_thumb_cmc|mcp|ip|tip``, ``left_index|middle|ring|pinky_mcp|pip|dip|tip``, the same for
+``right_`` (:data:`gamst.providers.pose_exemplar.HAND_JOINTS`). Each pose model is read by its own keypoint set and
+score gate (:func:`gamst.providers.pose_exemplar.keypoint_reading`): RTMW and Sapiens2 have hands, MediaPipe Pose has
+none, so a hand joint or ``hand_open`` is unknown there.
+
+``hand_open`` is the mean distance from the hand's wrist to its fingertips (index, middle, ring, pinky; the thumb
+folds across the palm in a fist and stays out) divided by the palm length (hand wrist to middle-finger MCP); it needs
+the wrist, the middle MCP and at least two of the four tips visible, and averages the visible tips. A stretched hand
+is about 1.8-2 (palm plus finger), a fist about 1 or less (the tips curl back to the palm). It does not depend on how
+large the hand appears, so it needs no shoulders.
 
 One step is a *hold*: it matches after ``hold_ms`` and ends when its violation exceeds ``margin``. Several
 steps are an *ordered movement*: each later step must be reached ``within_ms`` of the step before it, else
@@ -39,6 +52,9 @@ import math
 MAX_STEPS, MAX_NODES, MAX_DEPTH, MAX_BYTES = 8, 64, 6, 16384
 OPS = ('gt', 'gte', 'lt', 'lte')
 RELATIONS = dict(angle=3, height=2, offset=2, distance=2)
+HAND_MEASURES = ('hand_open',)
+TIPS = ('index_tip', 'middle_tip', 'ring_tip', 'pinky_tip')
+MIN_TIPS = 2       # hand_open: fingertips that must be visible (a fist hides some)
 RATE_MS = 50       # a rate is the change over about this long: two frames at 30 fps, three at 60
 STRICT = 1e-9      # a strict comparison is violated at equality
 POSE = 'vision.pose_channels'
@@ -55,8 +71,31 @@ def channel_names(channels):
 
 
 def joint_names():
-    from .pose_exemplar import MEDIAPIPE_BODY
-    return tuple(MEDIAPIPE_BODY)
+    from .pose_exemplar import HAND_JOINTS, MEDIAPIPE_BODY
+    return tuple(MEDIAPIPE_BODY) + HAND_JOINTS
+
+
+def hand_open(points, side):
+    """Mean wrist-to-fingertip distance over the palm length of one hand (``points``: {joint: (x, y)}), or None."""
+    wrist, middle = points.get(f'{side}_hand_wrist'), points.get(f'{side}_middle_mcp')
+    tips = [points[name] for name in (f'{side}_{tip}' for tip in TIPS) if name in points]
+    if wrist is None or middle is None or len(tips) < MIN_TIPS:
+        return None
+    palm = math.dist(wrist, middle)
+    if palm <= 0:
+        return None
+    return sum(math.dist(wrist, tip) for tip in tips) / len(tips) / palm
+
+
+def _hands(measure):
+    """Whether a checked measure reads hand points."""
+    [(kind, argument)] = measure.items()
+    if kind == 'rate':
+        return _hands(argument)
+    if kind in HAND_MEASURES:
+        return True
+    from .pose_exemplar import HAND_JOINTS
+    return kind in RELATIONS and any(name in HAND_JOINTS for name in argument)
 
 
 def _keys(value, allowed, required, where):
@@ -81,7 +120,7 @@ def _milliseconds(value, where):
 
 def _measure(value, channels, where):
     if type(value) is not dict or len(value) != 1:
-        raise ValueError(f'{where}: exactly one of channel, angle, height, offset or distance')
+        raise ValueError(f'{where}: exactly one of channel, angle, height, offset, distance, hand_open or rate')
     [(kind, argument)] = value.items()
     if kind == 'rate':
         if type(argument) is dict and 'rate' in argument:
@@ -91,6 +130,12 @@ def _measure(value, channels, where):
         if argument not in channel_names(channels):
             raise ValueError(f'{where}: unknown channel; one of {", ".join(channel_names(channels))}')
         return dict(channel=argument)
+    if kind in HAND_MEASURES:
+        if channels != POSE:
+            raise ValueError(f'{where}: {kind} needs {POSE}')
+        if argument not in ('left', 'right'):
+            raise ValueError(f'{where}: {kind} is "left" or "right"')
+        return {kind: argument}
     if kind not in RELATIONS:
         raise ValueError(f'{where}: unknown measure')
     if channels != POSE:
@@ -163,6 +208,7 @@ class RuleScorer:
         self.steps, self.margin = self.rule['steps'], float(self.rule['margin'])
         self._index = {name: i for i, name in enumerate(channel_names(self.rule['channels']))}
         self.needs_joints = any(self._relations(step['when']) for step in self.steps)
+        self.needs_hands = any(self._relations(step['when'], _hands) for step in self.steps)
         self._now = None
         self._history = {}      # key of a measure -> deque of (ms, value) for its rate
         for step in self.steps:
@@ -199,12 +245,13 @@ class RuleScorer:
             return None
         return 1000 * (value - earlier[1]) / (now - earlier[0])
 
-    def _relations(self, condition):
+    def _relations(self, condition, test=None):
+        """Whether a condition reads joints (``test``: whether one of its measures passes it)."""
         for group in ('all', 'any'):
             if group in condition:
-                return any(self._relations(item) for item in condition[group])
+                return any(self._relations(item, test) for item in condition[group])
         measure = condition['measure']
-        return 'channel' not in measure.get('rate', measure)
+        return test(measure) if test is not None else 'channel' not in measure.get('rate', measure)
 
     def violation(self, step, channels, mask, points=None):
         """0 when satisfied, None when unknown. ``points``: {joint: (x, y)} with square units, y down."""
@@ -236,6 +283,8 @@ class RuleScorer:
         if kind == 'channel':
             index = self._index[argument]
             return float(channels[index]) if mask[index] else None
+        if kind == 'hand_open':
+            return hand_open(points, argument)
         if any(name not in points for name in argument):
             return None
         if kind == 'angle':

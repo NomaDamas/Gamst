@@ -60,6 +60,21 @@ class VideoMemoryTest(unittest.TestCase):
         finally:
             video_memory.VideoMemory._free = original
 
+    def test_a_released_place_in_the_file_is_written_again(self):
+        from gamst.providers.video_memory import VideoMemory
+        memory = VideoMemory(memory_bytes=0, disk_bytes=2 * 300, disk_floor_bytes=0)
+        frames = [np.full((10, 10, 3), index % 256, np.uint8) for index in range(400)]
+        held = [memory.keep(frames[0]), memory.keep(frames[1])]
+        for index in range(2, 400):     # always one frame spilled (as a lane with a pre-roll): the file never empties
+            memory.release(held.pop(0))
+            held.append(memory.keep(frames[index]))
+            self.assertIsNotNone(held[-1])
+            self.assertTrue(np.array_equal(memory.take(held[0]), frames[index - 1]))
+            self.assertTrue(np.array_equal(memory.take(held[1]), frames[index]))
+        status = memory.status()
+        self.assertEqual((status['dropped'], status['file_bytes'], status['spilled_frames']), (0, 600, 400))
+        memory.close()
+
     def test_a_frame_beyond_the_disk_bound_is_dropped_not_kept(self):
         from gamst.providers.video_memory import VideoMemory
         memory = VideoMemory(memory_bytes=0, disk_bytes=300, disk_floor_bytes=0)
@@ -341,35 +356,76 @@ class SafetyNet(unittest.TestCase):
         self.assertIsNone(pipeline._once(entry, hit(1350), 2))                    # a second L2 interval: still once
 
 
+class SlowReader:
+    """A pose stand-in for a long file in post: every call takes ``seconds``; it notes how far ahead the reader was."""
+    owns_process, modalities = True, ('video',)
+
+    def __init__(self, recording, seconds=.002):
+        self.recording, self.seconds, self.seen, self.ahead = recording, seconds, [], 0
+
+    async def process_batch(self, frames):
+        await asyncio.sleep(self.seconds)
+        outputs = []
+        for frame in frames:
+            index = int(frame.data[0, 0, 0]) + 256 * int(frame.data[0, 1, 0])
+            self.seen.append(index)
+            self.ahead = max(self.ahead, self.recording.read - index)
+            outputs.append([Derived('joints', index, 'video')])
+        return outputs
+
+    async def process(self, frame):
+        return (await self.process_batch([frame]))[0]
+
+    async def fork(self):
+        raise AssertionError('post mode never cuts an L2 interval')
+
+
+class LongRecording:
+    """A finished file of ``count`` frames (the first two pixels number them); ``read``: how many were taken."""
+    modality, live, missed = 'video', False, 0
+
+    def __init__(self, count, base):
+        self.count, self.base, self.read = count, base, 0
+
+    async def frames(self):
+        for index in range(self.count):
+            self.read = index
+            yield InputFrame(np.dstack([np.array([[index % 256, index // 256]], np.uint8)] * 3), 'video',
+                             self.base + index * 33)
+
+
 @unittest.skipIf(np is None, 'numpy')
-class PostChunks(unittest.IsolatedAsyncioTestCase):
-    async def test_a_recording_in_chunks_counts_each_hit_once_and_nothing_is_late(self):
+class PostMode(unittest.IsolatedAsyncioTestCase):
+    async def test_a_long_file_in_post_is_read_at_the_pace_of_processing_and_loses_no_frame(self):
+        from gamst.providers.video_memory import VideoMemory
+        count, batch = 3000, 8
         async with Gamst(consent=True) as human:
-            pipeline, poser = Pipeline(human, 'file'), Poser(slow=range(0, 150))    # slow everywhere: chunks help
-            base = timestamp() - 60000
-
-            class Recording:
-                modality, live, missed = 'video', False, 0
-
-                async def frames(self):
-                    for index in range(150):
-                        yield InputFrame(np.full((2, 2, 3), index, np.uint8), 'video', base + index * FRAME)
-            pipeline.add_input('camera', Recording())
-            pipeline.add_module('pose', poser, consumes='camera', emits=('joints',), backlog='spill', batch=4,
-                                catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=150, workers=1,
-                                              post_chunk_ms=500))
+            pipeline = Pipeline(human, 'file')
+            recording = LongRecording(count, timestamp() - 600_000)
+            reader = SlowReader(recording)
+            pipeline.add_input('camera', recording)
+            pipeline.add_module('pose', reader, consumes='camera', emits=('joints',), backlog='spill', batch=batch,
+                                catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=150, workers=1))
             pipeline.add_module('hits', Hits(), consumes='joints', spec=HITS)
+            # a spill that could keep nothing: in realtime every waiting frame would be a backlog gap
+            pipeline._video_memory = VideoMemory(memory_bytes=0, disk_bytes=0, disk_floor_bytes=0)
             await pipeline.run()
-            status = pipeline.status()['modules']['pose']
-            rows = human.store.query('local-user', kind='observation.signal', limit=500, registered_only=True,
-                                     capability_id='test.hits')
-            events = [event for row in rows for event in row['observation']['value']['events']]
+            status = pipeline.status()
             await pipeline.close()
-        ends = sorted(round((event['end_ms'] - base) / FRAME) for event in events)
-        self.assertEqual(ends, [index for index in range(150) if index % 12 == 7])
-        self.assertGreaterEqual(status['catch_up']['done'], 1)                      # some ran as chunks
-        self.assertFalse(any(event.get('correction') for event in events))           # nothing is late in post
-        self.assertEqual(status['gaps'], 0)
+        pose = status['modules']['pose']
+        self.assertEqual(reader.seen, list(range(count)))                        # every frame, in order, once
+        self.assertEqual((pose['gaps'], pose['gap_frames'], pose['dropped']), (0, 0, 0))
+        self.assertEqual(status['modules']['hits']['gaps'], 0)
+        self.assertEqual((status['video_memory']['frames'], status['video_memory']['dropped']), (0, 0))   # never spilled
+        self.assertEqual(pose['catch_up']['skips'], 0)                          # no L2 interval in post
+        self.assertLessEqual(reader.ahead, 2 * batch + 1)                       # pulled: the reader waits for the lane
+        self.assertGreater(max(pose['batch']['largest'], 1), 1)                 # and still fills its batches
+
+    def test_post_chunks_are_gone(self):
+        pipeline = Pipeline(SimpleNamespace(register_capability=lambda spec: None, pipeline=None), 'x')
+        pipeline.add_input('camera')
+        with self.assertRaises(ValueError):
+            pipeline.add_module('pose', Poser(), consumes='camera', backlog='spill', catch_up=dict(post_chunk_ms=500))
 
 
 @unittest.skipIf(np is None, 'numpy')
@@ -382,7 +438,10 @@ class RTMWBatch(unittest.TestCase):
 
         def detector(image):
             models.detections.append(int(image[0, 0, 0]))
+            if models.black_is_nobody and not image.any():   # a black frame: no person (rtmlib: an empty array)
+                return np.zeros((0, 4), 'f4') if models.empty_shape else np.array([])
             return np.array([[100., 50., 300., 400.]])
+        models.empty_shape, models.black_is_nobody = True, False
 
         def postprocess(outputs, center, scale):
             points = np.zeros((1, POINTS, 2), 'f4')
@@ -413,6 +472,73 @@ class RTMWBatch(unittest.TestCase):
         after = models.infer_batch(images[:1], [551])
         self.assertNotEqual(after[0][0], found[0][0])        # next batch: the box around the last keypoints
         self.assertEqual(models.detections, [0, 4])
+
+    def test_a_frame_without_a_person_gives_no_pose_also_in_a_mixed_batch(self):
+        for every in (0, 500):
+            for empty_shape in (True, False):
+                models = self.models(det_every_ms=every)
+                models.empty_shape, models.black_is_nobody = empty_shape, True
+                black, person = np.zeros((480, 640, 3), np.uint8), np.full((480, 640, 3), 7, np.uint8)
+                found = models.infer_batch([black, black], [0, 17])          # nothing detected: no pose call at all
+                self.assertEqual([len(boxes) for boxes, _, _ in found], [0, 0])
+                self.assertEqual([points.shape for _, points, _ in found], [(0, 133, 2)] * 2)
+                self.assertEqual(models.calls, [])
+                found = models.infer_batch([person, black, person, black], [600, 617, 1200, 1217])
+                expected = [1, 0, 1, 0] if not every else [1, 1, 1, 1]   # det every 500 ms: the box of its detection
+                self.assertEqual([len(boxes) for boxes, _, _ in found], expected, (every, empty_shape))
+                self.assertEqual(sum(models.calls), sum(expected))           # one pose call for the batch's crops
+                fade = models.infer_batch([black] * 3, [1800, 1817, 1834])   # a fade to black after people
+                if every:     # the tracked box carries over until the next detection finds nobody
+                    self.assertEqual([len(boxes) for boxes, _, _ in fade][1:], [len(fade[0][0])] * 2)
+                else:
+                    self.assertEqual([len(boxes) for boxes, _, _ in fade], [0, 0, 0])
+
+    def test_the_worker_answers_an_empty_frame_with_no_pose_through_its_contract(self):
+        from gamst.private_payload import pack, unpack
+        from gamst.providers.model_workers import RemoteRTMW, _RTMW, capability
+        models = self.models(det_every_ms=0)
+        models.version, models.black_is_nobody = 'rtmw:test', True
+        images = [np.zeros((480, 640, 3), np.uint8), np.full((480, 640, 3), 7, np.uint8), np.zeros((480, 640, 3), np.uint8)]
+        spec = capability('rtmw.pose', dict(path='p', sha256='0' * 64, det_path='d', det_sha256='1' * 64))
+        for batch in ([images[0]], images):
+            public, joints = _RTMW(models).query(SimpleNamespace(data=np.concatenate(batch)),
+                                                 dict(frames=len(batch), timestamps_ms=list(range(len(batch)))))
+            public = spec.validate(public)
+            descriptor, payload = pack('rtmw.pose', public, joints, None)
+            private = unpack('rtmw.pose', public, descriptor, payload, None)
+
+            class Worker:
+                async def query(self, frame, request):
+                    return public, private
+            remote = object.__new__(RemoteRTMW)
+            remote.worker, remote._sequence = Worker(), 0
+            found = asyncio.run(remote.infer_batch(batch, list(range(len(batch)))))
+            self.assertEqual([len(poses) for poses in found], [0] if len(batch) == 1 else [0, 1, 0])
+
+    def test_the_module_tracks_through_frames_without_a_person(self):
+        from gamst.pipeline import Derived
+        from gamst.providers.rtmw_pose import RTMWPosePlugin
+
+        def person(x):
+            return dict(frame_pose_index=0, bbox=dict(x=x, y=.1, width=.2, height=.6), keypoint_set='coco_wholebody133',
+                        image_width=640, image_height=480, track_id=None, association_quality='unavailable',
+                        identity_verified=False, speaker_association='unavailable',
+                        landmarks=[dict(x=x + .1, y=.4, visibility=.9, presence=1.)] * 133)
+
+        class Remote:
+            model_id = 'rtmw:test'
+
+            async def infer_batch(self, images, timestamps_ms):
+                return [[person(.3)] if image.any() else [] for image in images]
+        plugin = RTMWPosePlugin(Remote(), joints='joints', batch=8)
+        frames = [InputFrame(np.full((4, 4, 3), value, np.uint8), 'video', 1000 + 33 * index)
+                  for index, value in enumerate((7, 0, 0, 7, 0, 7))]
+        outputs = asyncio.run(plugin.process_batch(frames))
+        counts = [next(item['value'] for item in output if isinstance(item, dict) and item['name'] == 'scene.pose_count')
+                  for output in outputs]
+        self.assertEqual(counts, [1, 0, 0, 1, 0, 1])
+        joints = [next(item for item in output if isinstance(item, Derived)).data.poses for output in outputs]
+        self.assertEqual([len(poses) for poses in joints], counts)          # an empty frame: an empty joints input
 
     def test_the_worker_splits_stacked_frames_and_names_each_pose_s_frame(self):
         from gamst.providers.model_workers import _RTMW

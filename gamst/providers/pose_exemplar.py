@@ -50,19 +50,51 @@ ANGLES = (('left_elbow', 'left_shoulder', 'left_wrist'), ('right_elbow', 'right_
 CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
     'left_wrist_dx', 'left_wrist_dy', 'right_wrist_dx', 'right_wrist_dy', 'wrist_gap')
 CHANNELS_VERSION = 2
+MEDIAPIPE_MIN_VISIBILITY = .5    # MediaPipe's own landmark gate (``mediapipe.tasks.python.vision.drawing_utils``)
+
+# The 21 points of one hand, in the order of COCO-WholeBody, MediaPipe Hands and OpenPose: the wrist, then each finger
+# from the palm out (thumb: cmc, mcp, ip, tip; the others: mcp, pip, dip, tip). A rule names them per side:
+# ``left_hand_wrist``, ``left_thumb_tip``, ``left_index_mcp``, ..., ``right_pinky_tip``.
+FINGERS = ('thumb', 'index', 'middle', 'ring', 'pinky')
+HAND_POINTS = ('hand_wrist',) + tuple(f'{finger}_{joint}' for finger in FINGERS for joint in (
+    ('cmc', 'mcp', 'ip', 'tip') if finger == 'thumb' else ('mcp', 'pip', 'dip', 'tip')))
+SIDES = ('left', 'right')
+HAND_JOINTS = tuple(f'{side}_{point}' for side in SIDES for point in HAND_POINTS)
+# RTMW (COCO-WholeBody 133): left hand 91-111, right hand 112-132, in HAND_POINTS order (``left_hand_root``,
+# ``left_thumb1``..``4``, ``left_forefinger1``..``4``, ..., ``left_pinky_finger4``; rtmlib ``coco133.py``).
+COCO_WHOLEBODY_HANDS = {f'{side}_{point}': first + offset for side, first in zip(SIDES, (91, 112))
+                        for offset, point in enumerate(HAND_POINTS)}
+# Sapiens2 (Goliath 308, Meta's ``keypoints308.py`` at 7e5bae8): right hand 21-41, left 42-62; per finger the tip first
+# (``right_thumb4``, ``3``, ``2``, ``right_thumb_third_joint``: tip to the joint nearest the wrist, as its skeleton links
+# wrist -> third_joint -> 2 -> 3 -> 4 show), the wrist last (41 and 62 are also the body's wrists).
+def _goliath_hand(first):
+    points = {'hand_wrist': first + 20}
+    for number, _ in enumerate(FINGERS):
+        for joint, point in enumerate(HAND_POINTS[1 + 4 * number:5 + 4 * number]):     # from the palm out
+            points[point] = first + 4 * number + 3 - joint                                # Goliath lists the tip first
+    return points
 
 
-def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=.5):
+GOLIATH_HANDS = {f'{side}_{point}': index for side, first in zip(SIDES, (42, 21))
+                 for point, index in _goliath_hand(first).items()}
+
+
+def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=MEDIAPIPE_MIN_VISIBILITY, *, hands=False):
     """(mapping, min_visibility) to read this pose's joints with: its own ``keypoint_set`` decides when it names a
     known one (RTMW ``coco_wholebody133``, Sapiens2 ``goliath308``), so joints are never read by another model's
-    indices; a pose without one (MediaPipe) is read with the given mapping."""
+    indices; a pose without one (MediaPipe) is read with the given mapping. Each model's joints are gated by its own
+    score threshold (RTMW 0.3, rtmlib's; Sapiens2 0.3, its demo's; MediaPipe 0.5, its own), hands as the body.
+
+    ``hands``: the mapping also holds the 42 hand joints (:data:`HAND_JOINTS`) where the model has them; MediaPipe Pose
+    has none (its 33 landmarks end the hand at the wrist and three finger points), so there they are unknown."""
     kind = pose.get('keypoint_set') if isinstance(pose, dict) else None
     if kind == 'coco_wholebody133':
         from .rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
-        return COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return ({**COCO_WHOLEBODY_BODY, **COCO_WHOLEBODY_HANDS} if hands else COCO_WHOLEBODY_BODY), MIN_VISIBILITY
     if kind == 'goliath308':
         from .sapiens2_pose import GOLIATH_BODY
-        return GOLIATH_BODY, .3      # the official Sapiens2 demo's --kpt-thr (as recipes/parts.py)
+        # the official Sapiens2 demo's --kpt-thr (as recipes/parts.py)
+        return ({**GOLIATH_BODY, **GOLIATH_HANDS} if hands else GOLIATH_BODY), .3
     if kind not in (None, 'mediapipe33'):
         raise ValueError(f'poses of keypoint set {kind!r} have no joint mapping here')
     return mapping, min_visibility
@@ -406,7 +438,8 @@ class ExemplarEvents:
             if best is None:
                 return None
             channels, mask, index, aspect = best
-            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility)
+            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility,
+                                               hands=self.rule.needs_hands)
             return channels, mask, body_points(poses[index]['landmarks'], own, min_visibility=visibility,
                                                aspect=1. if aspect is None else aspect)
         value = frame.data if isinstance(frame.data, dict) else {}
