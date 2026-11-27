@@ -91,9 +91,10 @@ class FrameMemory:
 
     def put(self, frame):
         """(header, b'') of a frame whose array is written into the segment, or None when it goes by the pipe."""
-        import numpy as np
+        import sys
+        np = sys.modules.get('numpy')    # a frame can only be an ndarray when numpy is already loaded
         data = frame.data
-        if type(data) is not np.ndarray or data.nbytes < FRAME_MEMORY_MIN or data.nbytes > PAYLOAD_LIMIT:
+        if np is None or type(data) is not np.ndarray or data.nbytes < FRAME_MEMORY_MIN or data.nbytes > PAYLOAD_LIMIT:
             return None
         header, _ = encode_frame(replace_data(frame, None))
         dtype, shape = data.dtype.str, list(data.shape)
