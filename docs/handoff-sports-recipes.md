@@ -75,3 +75,16 @@ RF-DETR's README re-benchmarks YOLO with its own protocol (YOLO26-N 40.3); cross
 | Diving | FineDiving | signed release agreement | step transitions |
 | Soccer | SoccerNet | NDA | ball actions, tracking |
 | Team MOT | SportsMOT | CC BY-NC 4.0 | player boxes + IDs |
+
+## 7. Final plan v1 sent to the owner (2026-11-27, waiting for approval)
+
+- Build on #373's integrated structure (timing realtime/post, one model per run chosen by a start benchmark, video
+  memory, L2 correction): proposed to stack this branch on `feat/realtime-pose` (PR base = that branch).
+- Recipe = sport graph of generic parts; **stack** = which candidate fills each role (`ultralytics`, `roboflow`, `sota`);
+  `--timing realtime|post` picks the stack's variant; `recipe setup --stack X` installs only those models.
+- Parts: perception (detect, ball, track, pose, court keypoints, team split, audio onsets) and computation (court-map,
+  hits, bounce, rally, possession, occupancy, speed, form score, ball sampling check).
+- Recipes: racket-rally, team-field, body-reps (+form), swing, body-rotation, billiards; sport presets on top.
+- Measure racket first (TrackNet tennis, OpenTTGames, Shuttlecock): ball F1@4px, hit P/R and time error, rally length,
+  ms/frame and real-time factor per stack. Realtime numbers on this Mac; post numbers may run on GCP.
+- Open questions: stacking on #373, compute (disk/GCP), who builds `compose_recipe`, the name "stack".
