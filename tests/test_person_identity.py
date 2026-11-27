@@ -819,7 +819,8 @@ class OneTrackModuleTest(PersonBindingTest):
         events += cut['events']
         self.assertEqual(cut['bound'], {'P': 'b'})
         self.assertEqual([(item['event'], item['track_id'], item.get('reason') or item.get('by')) for item in cut['events']],
-                         [('person.unbound', 'a', 'face_contradicts'), ('person.bound', 'b', 'face')])
+                         [('person.unbound', 'a', 'face_contradicts'), ('track.split', 'a', 'face'),
+                          ('person.bound', 'b', 'face')])
         ended = next(item for item in cut['events'] if item['event'] == 'person.unbound')
         self.assertLess(ended['end_ms'], cut['events'][-1]['start_ms'])
         self.assertEqual(at_once(events, 'P', [1000, 1001, 1500, 1501, 2000, 2001]), [])
@@ -943,6 +944,45 @@ class EveryoneTest(PersonBindingTest):
         intervals = intervals_of(events)
         self.assertEqual(resolve(dict(track_id='b', end_ms=2500), intervals), 'unknown')     # withdrawn, not only ended
         self.assertEqual(resolve(dict(track_id='b', end_ms=1000), intervals), 'P')
+
+    async def frames(self, module, items):
+        """One frame at a time (joints, then the camera frame); the scorer settles after each."""
+        from gamst.plugins import InputFrame
+        from gamst.private_payload import PrivatePoses
+        events = []
+        for ts, poses, image in items:
+            await module.process(InputFrame(PrivatePoses(poses), 'video', ts))
+            value = await module.process(InputFrame(image, 'video', ts))
+            await module.settled()
+            events += (value or {}).get('events', [])
+        return events
+
+    async def test_two_people_crossing_with_swapped_boxes_split_the_tracks_where_they_swapped(self):
+        module = self.everyone(anonymous=False)
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        people = frame_of(RED, GREEN)       # P (red) on the left, someone in green on the right, all along
+        events = await self.frames(module, [(ts, [person(.25, 'a'), person(.75, 'b')], people)
+                                            for ts in range(1000, 1400, 100)])
+        self.assertEqual(module.bindings.who('a'), module._ids['P'])
+        # they cross; the tracker swaps the boxes: a now follows the green person, b the red one (faces turned away)
+        events += await self.frames(module, [(ts, [person(.25, 'b', face=False), person(.75, 'a', face=False)], people)
+                                             for ts in range(1400, 2200, 100)])
+        splits = [(item['track_id'], item['start_ms'], item['reason']) for item in events if item['event'] == 'track.split']
+        self.assertIn(('a', 1400, 'appearance'), splits)
+        intervals = intervals_of(events)
+        self.assertEqual(resolve(dict(track_id='a', end_ms=1300), intervals), 'P')
+        self.assertEqual(resolve(dict(track_id='a', end_ms=1800), intervals), 'unknown')    # not P after the swap
+        self.assertEqual(module.bindings.who('b'), module._ids['P'])        # re-linked by appearance in this scene
+        self.assertEqual(at_once(events, 'P', range(1000, 2200, 10)), [])
+
+    async def test_one_odd_look_does_not_split_a_track(self):
+        module = self.everyone(anonymous=False)
+        module.set_references(dict(person=reference(name='P') | dict(face=[[0., 0., 1.]] * 3)))
+        seen, hidden = frame_of(BLUE, RED), frame_of(BLUE, (0, 0, 0))      # one frame: P hidden behind something
+        items = [(ts, [person(.75, 'b')], hidden if ts == 1500 else seen) for ts in range(1000, 2200, 100)]
+        events = await self.frames(module, items)
+        self.assertEqual([item for item in events if item['event'] in ('track.split', 'person.unbound')], [])
+        self.assertEqual(module.bindings.who('b'), module._ids['P'])
 
     async def test_a_track_carried_over_a_scene_cut_onto_someone_else_is_split_there(self):
         module, events = self.everyone(scene_cuts=True), []
