@@ -1296,6 +1296,9 @@ async def run_pipeline(recipe, args):
             if any(item.get('module') not in optional for item in report['failures']):
                 report['complete'] = False
             report['warnings'] = pipeline.warnings()
+            built = (getattr(pipeline, 'recipe_context', None) or {}).get('notes') or {}
+            if built:       # what a module left out while it was built (e.g. appearance off: its model is not set up)
+                report['setup_notes'] = dict(built)
             report['mode'] = pipeline.mode            # gamst.counting; an instruction may have switched it
             if pipeline.mode_changes:
                 report['mode_changes'] = [dict(item) for item in pipeline.mode_changes]
@@ -1331,7 +1334,7 @@ async def run_pipeline(recipe, args):
                 await live.close()
             await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'mode', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
-                                                   'states', 'failures', 'warnings', 'errors', 'score', 'score_provisional')
+                                                   'states', 'failures', 'warnings', 'setup_notes', 'errors', 'score', 'score_provisional')
                       if key in report and (key not in ('lost', 'errors', 'failures', 'warnings', 'mode') or key == 'lost' and not report['complete']
                                             or key == 'mode' and report[key] != 'count' or key not in ('lost', 'mode') and report[key])},
                      ensure_ascii=False), flush=True)
