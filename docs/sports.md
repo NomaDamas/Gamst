@@ -1,8 +1,9 @@
 # Sports: generic parts, recipes per sport, stacks per vendor
 
-Status (2026-11-28): implemented on branch `feat/sports-recipes` (stacked on PR #373). Every part is tested on
-synthetic data only (`tests/test_sports.py`); **no accuracy on real sports footage has been measured yet**. The
-dataset runs are the next stage, on GCP (section 9).
+Status (2026-11-28): implemented on branch `feat/sports-recipes` (stacked on PR #373). First real measurement
+(`racket-rally`, table tennis, OpenTTGames, GCP CPU VM): docs/measurements/sports-2026-11-28.md. Post: the sota stack
+(TrackNetV3 ball) ball F1 0.84 and bounces 19/28; the detector-only stacks about 0.2. Realtime at 120 fps: no stack
+keeps up on an 8-vCPU CPU. The other recipes are tested on synthetic data only.
 
 ## 요약 (한국어)
 

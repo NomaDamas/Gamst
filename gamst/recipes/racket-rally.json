@@ -284,5 +284,5 @@
   "sports.occupancy"
  ],
  "limits": "a fixed camera; a ball the models do not see makes no contact (a sound alone never counts); hit = a break of the ball's image path near a player box, bounce = a downward-to-upward turn away from players, so a lob or a high bounce in a broadcast view can be confused; court positions only with --court; TrackNetV3's checkpoint is trained on badminton (shuttlecock) and is used for the other ball sports untrained",
- "measured": "not yet: synthetic trajectories only (tests/test_sports.py); the dataset runs are the GCP stage (docs/sports.md)"
+ "measured": "2026-11-28, OpenTTGames test_2 (table tennis, 30 s), GCP e2-standard-8 CPU, post at 60 fps: sota ball F1 0.84, bounces 19/28 (F1 0.67, 6.2 ms), 92.7x slower than the clip; roboflow ball F1 0.22, ultralytics 0.18. Realtime at 120 fps: no stack keeps up on that CPU (5-6 % of frames processed, gaps declared). docs/measurements/sports-2026-11-28.md"
 }

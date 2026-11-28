@@ -51,3 +51,12 @@ Keep adding to this file. Each lesson says what happened, the evidence, and what
     prepared with `--set ballmodel.config=...`, which setup leaves out.
 14. **The physics check refused a frame rate on its own data, as designed.** Table tennis at 30 fps: 3.6 frames
     between the fastest two contacts; the bench runs at 60 and 120 fps instead.
+15. **The ball part decides a racket recipe.** Same clip, same computation parts: a COCO detector finds the table-tennis
+    ball in one labelled frame in ten (ball F1 0.18-0.22); TrackNetV3 in 79 % (F1 0.84), bounces 3 -> 19 of 28. Now: a
+    stack's ball part is compared first; a generic detector is not a ball tracker.
+16. **Realtime is a property of the machine, and GAMST says so.** On 8 vCPUs every stack processed 5-6 % of a 120 fps
+    stream; the run declared the rest as gaps and was marked incomplete. Now: realtime numbers name the machine; a
+    realtime claim for racket sports needs a GPU measurement.
+17. **Two tries to get a usable recording.** Shell functions do not cross `script`/`asciinema`; `agg` needs a newer glibc
+    than Ubuntu 22.04; headless output has no live events. Now: the recorded script is a file, the cast is rendered with
+    pyte + PIL, and the live view reads the run's Store read-only.
