@@ -39,7 +39,8 @@ How the current state measures up against this philosophy:
 | "when did it happen" is indexed | yes: `count_events`, `get_timeline` (start/end), `search_retained` (past records, no model run) |
 | realtime answers through GAMST | yes: MCP queries; `create_watch` pushes alarms |
 | LLM sets *who* | yes (PR `feat/person-identity`): MCP `enroll_person` (photos, a video range or camera seconds, consent, the same check) and `who` in `set_instruction`, `count_events`, `get_timeline`; refused without a checked few-shot reference ([person-identity.md](person-identity.md)) |
-| conversational UX | **not yet**: demos so far are CLI and HUD. Planned: a demo where the LLM answers "how many shotguns, when?" only through GAMST MCP |
+| LLM composes the pipeline | yes (PR `feat/compose-recipe`): MCP `compose_recipe` / `gamst recipe compose` turn a structured request (inputs, who, what, mode, timing) into a validated recipe with a reason per choice, or one sentence per missing piece ([compose-recipe.md](compose-recipe.md)) |
+| conversational UX | a scripted demo (PR `feat/compose-recipe`, `docs/demo/conversation/`): the LLM side answers "감스트가 샷건을 몇 번 쳤어? 언제?" only through MCP (`compose_recipe` start+wait, `count_events`, `get_timeline`): 16, all 감스트, with each end time; "뽀또라고 몇 번 말했어?" from an earlier run's stored records (8 counted, 2 uncertain), not re-run (hosted ASR). The answer sentence is a template standing in for the LLM; no real LLM was connected |
 
 ## 2. Integrated structure (owner-approved)
 
@@ -217,9 +218,9 @@ So the misses come from GAMST's side: person choice, the shoulder-width definiti
 
 **Can models be swapped?** Yes: `--pose` selects MediaPipe or RTMW (Sapiens2 being added), and the same rule file works. The exception is target-person face alignment (above).
 
-**Does the Pipeline wire models by itself?** Yes, once a recipe names its parts: `consumes` links them, and `plan_setup` picks models for the hardware. Choosing or composing the recipe for a request is the agent's job. There are 6 recipes today (coin-flip, person-action-count, person-term-count, person-voice-style-count, rotation, scene). Recipes are used as they are or customised: `set_instruction`, `--with`/`--without`, `configure_pipeline_module`, `--set`. Owner requirement: a request without a recipe is composed by the agent at once, through the new MCP tool `compose_recipe`.
+**Does the Pipeline wire models by itself?** Yes, once a recipe names its parts: `consumes` links them, and `plan_setup` picks models for the hardware. Choosing or composing the recipe for a request is the agent's job. There are 6 recipes today (coin-flip, person-action-count, person-term-count, person-voice-style-count, rotation, scene). Recipes are used as they are or customised: `set_instruction`, `--with`/`--without`, `configure_pipeline_module`, `--set`. Owner requirement: a request without a recipe is composed by the agent at once, through the new MCP tool `compose_recipe`. Built: [compose-recipe.md](compose-recipe.md).
 
-**What is the semantic module?** `semantic` (Qwen3.5 VLM endpoint) reads the last 4 s every 500 ms and writes a scene state. It is OFF by default in all three recipes that have it, and stays off (owner: not needed). Owner requirement: to tell a story it must know cause and effect before and after, so states form a **causal state chain**. Each state links the previous state, what changed, and the events that caused it. Independent 4 s snapshots are not enough.
+**What is the semantic module?** `semantic` (Qwen3.5 VLM endpoint) reads the last 4 s every 500 ms and writes a scene state. It is OFF by default in all three recipes that have it, and stays off (owner: not needed). Owner requirement: to tell a story it must know cause and effect before and after, so states form a **causal state chain**. Each state links the previous state, what changed, and the events that caused it. Independent 4 s snapshots are not enough. Built (still OFF): each `vision.streaming_semantic` record carries `chain` (`previous_state_id`, a field diff, `caused_by` record ids of movements, words, bindings and utterances that ended since the previous state, attribution by interval, not a proven cause); MCP `explain_state` walks it backwards, bounded ([compose-recipe.md](compose-recipe.md)). Tested with a stand-in model only; no VLM endpoint was called.
 
 ## 6. Ultralytics sports and the sports track
 
@@ -262,8 +263,8 @@ The owner's request: build the sports analysis Ultralytics claims as a recipe ca
 | one-model movement counting, no skips, L2 correction, realtime / post, memory budget | in progress, PR #373 |
 | Sapiens2 1B opt-in | downloaded (5.7 GB); measured runs in progress (an fp32 profile took free memory to 1-6% and the guard stopped it) |
 | person few-shot enforcement, face + appearance, photo enrollment, LVFace-B (455 MB), `person_binding`, `enroll_person` | built (Draft PR #374 on `feat/person-identity`, against PR #373). The binding runs with nobody enrolled, so MCP can enroll mid-run. Faces are scored beside the pose lane, never in it. Tracker swaps are continued by box overlap. Realtime keeps up with 0 pose frames lost. Accuracy waits for the owner's labelled multi-person clips; the appearance threshold 0.8 is provisional. |
-| `compose_recipe`, semantic causal state chain | next |
-| conversational demo (LLM answers only through GAMST MCP) | after the above |
+| `compose_recipe`, semantic causal state chain | built (Draft PR on `feat/compose-recipe`, against PR #374): composed plans equal the hand-assembled recipes in tests (issue #369's acceptance); the chain is tested with a stand-in VLM, never with an endpoint |
+| conversational demo (LLM answers only through GAMST MCP) | built: scripted MCP client, transcript `docs/demo/conversation/transcript-2026-11-27.txt` (shotgun 16/16 on `b.mp4`, all 감스트; words from the stored run m1). A real LLM client has not been connected |
 | sports recipes | separate PR (`feat/sports-recipes`) |
 | owner-labelled multi-person clips | needed from the owner to measure identity |
 | merge of PR #373 | after the owner sees its results |

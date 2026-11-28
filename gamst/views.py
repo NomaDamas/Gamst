@@ -24,6 +24,7 @@ class _Window:
         self.capabilities = tuple(capabilities)
         self.latest = {}
         self.printed, self.windows = set(), {}
+        self.out = None                 # where headless JSON lines go (None: stdout)
 
     async def _refresh(self, records):
         for record in records:
@@ -35,7 +36,7 @@ class _Window:
                 if events and record['id'] not in self.printed:
                     self.printed.add(record['id'])
                     print(json.dumps(dict(capability=capability, timestamp_ms=record['timestamp_ms'],
-                                          events=events), ensure_ascii=False), flush=True)
+                                          events=events), ensure_ascii=False), file=self.out, flush=True)
 
     def _title(self, input_id):
         """One window per video input; the first has the plain title."""

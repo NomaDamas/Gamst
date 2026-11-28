@@ -1173,13 +1173,60 @@ class Gamst:
     async def push_semantic_state(self, state, *, subject_id="local-user",
                                   timestamp_ms=None, events=None, evidence_ids=None,
                                   sources=None, model_id="semantic_state.rules",
-                                  model_version="1"):
-        """Append a bounded state-chain update; never calls a heavy model."""
+                                  model_version="1", caused_by=None):
+        """Append a bounded state-chain update linked to the previous one; never calls a heavy model."""
         self._check()
         item = self.semantic_states.append(subject_id, timestamp_ms=timestamp_ms,
             state=state, events=events, evidence_ids=evidence_ids, sources=sources,
-            model_id=model_id, model_version=model_version)
+            model_id=model_id, model_version=model_version, caused_by=caused_by)
         return item
+
+    async def explain_state(self, subject_id="local-user", *, state_id=None, at_ms=None, steps=8,
+                            max_bytes=65536):
+        """The causal state chain read backwards from one state (:func:`gamst.state_chain.walk`): the semantic lane's
+        retained ``vision.streaming_semantic`` records and the short-term chain. Each state's causes say their ``who``
+        as it is resolved now (a binding decided later reaches back within the track). Read-only, no model call."""
+        if self.closed:
+            raise RuntimeError("runtime is closed")
+        from .counting import MAX_SCAN
+        from .state_chain import walk
+        replaced = self.store.superseded(subject_id)
+        states = []
+        for record in self.store.query(subject_id, None, None, "observation.signal", limit=MAX_SCAN,
+                                       registered_only=True, capability_id="vision.streaming_semantic"):
+            value = record["observation"].get("value")
+            if record["id"] in replaced or not isinstance(value, dict) or not isinstance(value.get("chain"), dict):
+                continue
+            window = value.get("window") or {}
+            states.append(dict(record_id=record["id"], source="vision.streaming_semantic", start_ms=window.get("start_ms"),
+                               end_ms=window.get("end_ms", record["timestamp_ms"]), state=value.get("state"),
+                               summary=str(value.get("summary", ""))[:500], events=list(value.get("events") or ())[:8],
+                               model=value.get("model"), chain=value["chain"]))
+        for item in self.semantic_states.items(subject_id):
+            states.append(dict(source="semantic_state_chain", start_ms=item["timestamp_ms"], end_ms=item["timestamp_ms"],
+                               state=item["state"], events=item["events"][:8], sources=item["sources"],
+                               model={"id": item["model_id"], "version": item["model_version"]}, chain=item["chain"]))
+        result = walk(states, state_id=state_id, at_ms=at_ms, steps=steps, max_bytes=max_bytes)
+        ids = list(dict.fromkeys(cause["record_id"] for state in result["states"]
+                                 for cause in state["chain"].get("caused_by", ())))
+        records = {record["id"]: record for record in self._with_who(
+            self.store.get_many(ids), self._who_intervals(subject_id))} if ids else {}
+        for state in result["states"]:
+            for cause in state["chain"].get("caused_by", ()):
+                record = records.get(cause["record_id"])
+                if record is None:
+                    cause["retained"] = False
+                    continue
+                value = record["observation"].get("value")
+                now = next((event.get("who") for event in (value.get("events") or ()) if isinstance(value, dict)
+                            and isinstance(event, dict) and event.get("event") == cause.get("event")
+                            and event.get("end_ms", record["timestamp_ms"]) == cause.get("end_ms")), None) \
+                    if isinstance(value, dict) else None
+                if now is not None and now != cause.get("who"):
+                    cause["who_now"] = now
+        return dict(result, subject_id=subject_id, scope="causal_state_chain",
+                    attribution="caused_by: records that ended in the interval since the previous state "
+                                "(co-occurrence, not a proven cause)")
 
     async def get_semantic_state(self, subject_id="local-user", *, window="5m",
                                  limit=32):
