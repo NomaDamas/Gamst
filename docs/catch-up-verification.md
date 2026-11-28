@@ -185,15 +185,20 @@ and skipped 101-259 of 714 frames live).
 camera ─▶ pose lane (RTMW-l, batch: the frames that wait, up to 8 per call) ─▶ channels ─▶ count   (live: final at once)
             │ a frame not reached by its deadline (lag_ms)
             ▼
-          video memory (RAM, then a spill file; bounded) ─▶ L2 chain: forks of the same modules, same models
+          video memory (RAM, then: a file's frame index, or a camera frame PNG-compressed) ─▶ L2 chain: forks of the same modules, same models
             pre-roll (state only) │ owned interval │ tail (the live lane's warm-up after its jump)  ─▶ corrections (late)
 ```
 
 - **Batches** (`add_module(..., batch=N)`, recipe `"batch"`): a module with `process_batch(frames)` gets the frames that wait
   when it is free (never waits for more), one output per frame in order; its next call starts while the last batch is
   committed. A recording (`timing: post`) fills its batches. RTMW runs all crops of a batch in one CoreML call.
-- **Every frame**: `backlog="spill"` keeps waiting frames in `Pipeline.video_memory()` (memory, then an unnamed spill file);
-  only beyond its disk bound is a frame not kept, and that is a declared `backlog` gap. `sample="newest"` still exists as a
+- **Every frame**: `backlog="spill"` keeps waiting frames in `Pipeline.video_memory()`: in memory first (256 MB); beyond
+  it, a frame of a seekable recording (`--realtime` / `--as-live` replay of a file) keeps only its index and a CRC-32 and
+  is decoded again from the file when a lane reaches it (`gamst.inputs.FileFrames`; a CRC mismatch decodes again from the
+  file's start, and a frame that still differs is a declared gap, never another frame); a camera frame is compressed
+  losslessly (PNG level 1, a worker thread) into unnamed chunk files deleted once their frames are taken (`codec="raw"`
+  keeps the old uncompressed spill file). Only beyond the disk bound is a frame not kept, and that is a declared
+  `backlog` gap. Measured: docs/measurements/realtime-post-gap-2026-11-28.md. `sample="newest"` still exists as a
   module option but no movement recipe uses it.
 - **L2 for video** (`catch_up` on a spilling video lane; the same mechanism and status as audio catch-up: `todos`, `claims`,
   `status()['modules'][name]['catch_up']`): when the oldest waiting frame is more than `lag_ms` older than the input's
@@ -208,6 +213,11 @@ camera ─▶ pose lane (RTMW-l, batch: the frames that wait, up to 8 per call) 
 - **States**: live counts are final for the live lane's range. L2 counts are final too and carry `correction: true`,
   `decided_by: "catch_up"`; the report's `event_states` has when each was known (`committed_ms`), so a HUD shows it late.
   Nothing is revoked. There are no corrections in `--timing post`.
+- **Who a track is** (`person_binding`, every track): its events are lane state, not counts (`events_by_lane`): each lane
+  keeps them whole (no owned-range trim, no merge across lanes), so the counter of that lane and the Store see every
+  binding, also one a fork made in its pre-roll. A fork takes over the cut's bindings by box overlap at the cut's own
+  frame (`snapshot()['at_ms']`, after its pre-roll built its tracks), and waits for its own face and body scores (the
+  live lane's jobs still go first; the live lane never waits).
 - **Person lock** (`target_person`): at a cut the live module's `snapshot()` (locked box, last face confirmation, session
   body glue) goes to the fork's `restore()`; during the pre-roll it holds the person whose box overlaps the locked box
   (IoU >= 0.3); else only a face confirmation inside the interval locks it, and events before that stay unattributed.
@@ -216,7 +226,7 @@ camera ─▶ pose lane (RTMW-l, batch: the frames that wait, up to 8 per call) 
 - **Memory budget** (`gamst/memory_budget.py`): an L2 chain starts only while free system memory stays at or above
   `min_free_pct` after `replica_mb` more (person-action-count: 25 %, 2500 MB); else the frames stay in video memory
   (latency grows, nothing is lost). Checked at every cut.
-- **Disk budget** (`gamst/providers/video_memory.py`): the spill file keeps 5 GB of the disk free (`disk_floor_bytes`;
+- **Disk budget** (`gamst/providers/video_memory.py`): the spill files keep 5 GB of the disk free (`disk_floor_bytes`;
   `GAMST_SPILL_FLOOR_GB` overrides it for a run): its bound is min(8 GB, free - 5 GB) when the memory is made, checked again at every write; a frame beyond it is a
   declared `backlog` gap. When the bound is smaller than asked, `status()['notes']['video_memory']` (report, MCP
   `get_pipeline`) and the HUD say so. CoreML sessions compile once into `<root>/cache/coreml/<sha>-<unit>-<batch>`
