@@ -164,7 +164,7 @@ async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
     consent = consent_record(args.consent)
     item = _item(recipe, 'target-person')
     face, body = await face_embedder(item, context), await body_embedder(item, context)
-    upstream = [entry for entry in recipe['modules'] if entry['use'] in ('mediapipe-pose',)]
+    upstream = [entry for entry in recipe['modules'] if entry['use'] in ('mediapipe-pose', 'rtmw-pose')][:1]
     found = dict(face=[], body=[])
     first, last, joints = {}, {}, _Joints()
     async with Gamst(consent=True) as human:

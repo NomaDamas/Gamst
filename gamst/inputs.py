@@ -7,7 +7,9 @@ hosts that own capture themselves keep using ``Gamst.push_video`` / ``push_audio
 
 A source may say more: ``live`` (default True; a recorded source waits for the modules, a live one
 cannot), ``missed`` (how many frames or chunks it lost so far; the Pipeline turns an increase into a gap
-before the next frame) and ``status()``.
+before the next frame), ``status()`` and ``describe()``: what it is and where its first frame was in it (``source``,
+``name``, ``fps``, ``frames_in_source``, ``position_ms``; the Pipeline commits it with the first frame,
+:data:`gamst.pipeline.INPUTS`).
 
 ``IPhone240Input`` is the GAMST 240 iPhone app (live over TCP, or a ``raw.gmst`` replayed): its
 frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
@@ -180,6 +182,10 @@ class CameraInput:
         finally:
             self.close()
 
+    def describe(self):
+        """A live camera: no place in a recording (``position_ms`` None)."""
+        return dict(source='camera', name=f'camera {self.index}', live=True, position_ms=None)
+
     def slow_hint(self):
         return f"{'a smaller ' if self.max_side else ''}--camera-max-side PX shrinks camera frames as they are read" + (
             f' (now {self.max_side})' if self.max_side else '')
@@ -211,7 +217,11 @@ class VideoFileInput:
         self.path, self.capture_fps, self.max_frames = str(path), capture_fps, max_frames
         self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
         self.clock, self.at_s = clock, float(at_s)
-        self._cap = None
+        self._cap, self._read = None, {}
+
+    def describe(self):
+        """The file, its rate and frame count (as the container says) and where the first frame read is in it."""
+        return dict(source='video_file', name=Path(self.path).name, live=False, **self._read)
 
     def fps(self):
         import cv2
@@ -242,6 +252,7 @@ class VideoFileInput:
         total = self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
         base = self.origin_ms = _now_ms() - round(1000 * total / fps) - 1000 if self.clock is None else \
             self.clock.base_ms + round(1000 * self.at_s)
+        self._read = dict(fps=round(float(fps), 3), frames_in_source=int(total) if total > 0 else None, position_ms=None)
         position = first = round(self.start_s * fps)
         if first and not (self._cap.set(cv2.CAP_PROP_POS_FRAMES, first)
                           and round(self._cap.get(cv2.CAP_PROP_POS_FRAMES)) == first):
@@ -260,6 +271,8 @@ class VideoFileInput:
                 break
             stamp = base + round(offset)
             stamp = stamp if last is None or stamp > last else last + 1
+            if last is None:
+                self._read['position_ms'] = stamp - base
             last, position = stamp, position + 1
             yield InputFrame(frame, 'video', stamp)
 
@@ -658,6 +671,11 @@ class AudioFileInput:
         self.path, self.chunk_ms = str(path), int(chunk_ms)
         self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
         self.clock, self.at_s = clock, float(at_s)
+        self._read = {}
+
+    def describe(self):
+        """The file, its sample rate and where the first chunk's time (its last sample) is in it."""
+        return dict(source='audio_file', name=Path(self.path).name, live=False, **self._read)
 
     def duration_s(self):
         import wave
@@ -675,6 +693,7 @@ class AudioFileInput:
             chunk = max(1, rate * self.chunk_ms // 1000)
             base = self.origin_ms = _now_ms() - round(1000 * total / rate) - 1000 if self.clock is None else \
                 self.clock.base_ms + round(1000 * self.at_s)
+            self._read = dict(sample_rate=rate, position_ms=None)
             done = 0
             while True:
                 raw = source.readframes(chunk)
@@ -688,6 +707,8 @@ class AudioFileInput:
                 done += len(samples)
                 if len(kept):
                     # The frame's time is the capture time of its last sample, like push_audio.
+                    if self._read['position_ms'] is None:
+                        self._read['position_ms'] = round(1000 * (begin + len(kept)) / rate)
                     yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
                 await asyncio.sleep(0)
 
@@ -781,6 +802,11 @@ class SoundTrackInput:
         self.path, self.sample_rate, self.chunk_ms = str(path), int(sample_rate), int(chunk_ms)
         self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
         self.clock, self.at_s, self._process = clock, float(at_s), None
+        self._read = {}
+
+    def describe(self):
+        """The media file, the sample rate and where the first chunk's time is, from the track's first sample."""
+        return dict(source='sound_track', name=Path(self.path).name, live=False, **self._read)
 
     def command(self):
         return [_media_tool('ffmpeg'), '-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-i', _media_url(self.path),
@@ -810,6 +836,7 @@ class SoundTrackInput:
         errors = asyncio.create_task(drain())
         try:
             base = self.origin_ms = clock.base_ms + round(1000 * self.at_s)
+            self._read = dict(sample_rate=rate, position_ms=None)
             done, more = 0, True
             while more:
                 try:
@@ -821,6 +848,8 @@ class SoundTrackInput:
                 kept, begin = _part(self.start_s, self.end_s, done, samples, rate)
                 done += len(samples)
                 if len(kept):
+                    if self._read['position_ms'] is None:
+                        self._read['position_ms'] = round(1000 * (begin + len(kept)) / rate)
                     yield InputFrame(kept, 'audio', base + round(1000 * (begin + len(kept)) / rate), sample_rate=rate)
                 if self.end_s is not None and done >= self.end_s * rate:
                     return
@@ -1097,6 +1126,11 @@ class PacedInput:
     @property
     def missed(self):
         return getattr(self.source, 'missed', 0)
+
+    def describe(self):
+        """The recording's own description; given as live, at the recording's pace."""
+        describe = getattr(self.source, 'describe', None)
+        return dict(describe() if callable(describe) else {}, live=True, paced=True)
 
     async def frames(self):
         from dataclasses import replace

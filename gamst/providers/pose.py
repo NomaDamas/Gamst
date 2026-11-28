@@ -188,10 +188,17 @@ class PoseWorkerPlugin(PerceptionPlugin):
     modalities = ("video",)
     owns_process = True
 
-    def __init__(self, worker, *, joints=None, tracker='iou', **tracker_options):
+    def __init__(self, worker, *, joints=None, tracker='iou', opener=None, **tracker_options):
         self.worker, self.joints, self.version = worker, joints, f"mediapipe:{worker.spec.version}"
         self.tracker = create_tracker(tracker, **tracker_options)
-        self.tracker_name = tracker
+        self.tracker_name, self._opener, self._tracker_options = tracker, opener, tracker_options
+        if opener is None:
+            self.fork = None
+
+    async def fork(self):
+        """Another worker of the same model with a fresh tracker (an L2 chain of the Pipeline)."""
+        return type(self)(await self._opener(), joints=self.joints, tracker=self.tracker_name, opener=self._opener,
+                          **self._tracker_options)
 
     async def process(self, frame: InputFrame) -> list[dict]:
         from dataclasses import replace

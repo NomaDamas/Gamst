@@ -5,7 +5,7 @@
   "hardware": {
     "min_fps": null,
     "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
-    "compute": "CPU (MediaPipe Pose Landmarker in VIDEO mode and LVFace face matching, each in its own process and environment)"
+    "compute": "RTMW-l 384x288 whole-body pose + YOLOX-m detector (rtmlib ONNX; CoreML GPU on Apple silicon, ONNX Runtime CPU elsewhere) and LVFace face matching, each in its own process and environment; MediaPipe Pose stays selectable with --pose mediapipe.pose_full"
   },
   "inputs": [
     {
@@ -34,8 +34,8 @@
   "modules": [
     {
       "name": "pose",
-      "use": "mediapipe-pose",
-      "candidate": "mediapipe.pose_full",
+      "use": "rtmw-pose",
+      "candidate": "rtmw.l_384x288",
       "max_poses": 4,
       "tracker": "ocsort",
       "consumes": [
@@ -44,7 +44,23 @@
       "joints": "pose_joints",
       "emits": [
         "pose_joints"
-      ]
+      ],
+      "det_every_ms": 500,
+      "backlog": "spill",
+      "batch": 8,
+      "choose": {
+        "fallback": "mediapipe.pose_full",
+        "persons": 1,
+        "seconds": 2
+      },
+      "catch_up": {
+        "lag_ms": 1000,
+        "max_lookback_ms": "pre_roll",
+        "tail_ms": "pre_roll",
+        "workers": 1,
+        "min_free_pct": 25,
+        "replica_mb": 2500
+      }
     },
     {
       "name": "target_person",
@@ -70,7 +86,8 @@
         "target_person": [
           "pose_joints"
         ]
-      }
+      },
+      "source": "rtmw"
     },
     {
       "name": "exemplar",
@@ -87,7 +104,8 @@
           "pose_channels",
           "pose_joints"
         ]
-      }
+      },
+      "source": "rtmw"
     },
     {
       "name": "repetition",

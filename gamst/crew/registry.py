@@ -436,6 +436,22 @@ def _sapiens2(size, revision, sha, count):
         environment="sapiens2", python="3.11", automatic=False, config={})
 
 
+RTMW_ZIP = "https://download.openmmlab.com/mmpose/v1/projects/rtmw/onnx_sdk/rtmw-dw-x-l_simcc-cocktail14_270e-384x288_20231122.zip"
+YOLOX_HUMANART_ZIP = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_m_8xb8-300e_humanart-c2c7a14a.zip"
+
+
+def _rtmw():
+    # The weights are the end2end.onnx inside each zip (sha256 and size measured on the unpacked files, 2026-11-27).
+    return _candidate(
+        "rtmw.l_384x288", "rtmw.pose", ("rtmlib==0.0.16", "onnxruntime==1.32.0", "numpy>=1.24,<2.3", "opencv-python>=4.8"),
+        ("cpu", "mps"), 2048, 0, 330, ESTIMATED, "Apache-2.0 (rtmlib, mmpose); OpenMMLab weights: see the mmpose model zoo",
+        "COCO-WholeBody 70.1 AP (mmpose table; RTMW-x 70.2 has no ONNX export); GAMST measured on the owner's shotgun clip: "
+        "docs/measurements/testbed-2026-11-26.md",
+        (_weight("end2end.onnx", RTMW_ZIP, "bd033156e5104c4f5d2edfe0453e02661e30a2f3da453ec93c8764d561b83054", 229320930, "measured on the unpacked file"),
+         _weight("yolox_m_humanart.onnx", YOLOX_HUMANART_ZIP, "3dea6513388889f0fff4b77bf7a26013600321b9eb9ceb0e9a400a82572f5f23", 101400344, "measured on the unpacked file")),
+        environment="rtmlib", python="3.11", automatic=False, config={"device": "coreml"})
+
+
 LIGHT_ASD_SOURCE = {"url": "https://github.com/Junhua-Liao/Light-ASD", "revision": "ed38c232de5efe0261dbd68627c0ade7cdfe14eb"}
 
 
@@ -551,6 +567,7 @@ ROLES = {
         "mediapipe.pose_lite": _mediapipe("pose_lite", "pose_landmarker_lite.task", POSE_LITE_URL, "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a", 5777746, "scripts/local_models.py pinned; real target-host acceptance unmeasured"),
         "mediapipe.pose_full": _mediapipe("pose_full", "pose_landmarker_full.task", POSE_FULL_URL, "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1", 9398198, "pinned float16/1 bytes (size and SHA256 measured on a downloaded copy); target-host acceptance unmeasured"),
         "mediapipe.pose_heavy": _mediapipe("pose_heavy", "pose_landmarker_heavy.task", POSE_HEAVY_URL, "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b", 30664242, "VERIFY.md: real-video CPU success, 32.3 ms compute, 91.6 ms p95"),
+        "rtmw.l_384x288": _rtmw(),
         "sapiens2.1b": _sapiens2("1b", "f5fed8b97b99698d5eea1d14ff0855d0b4c3f000", "2dab7014a17e99e460c18817325a71dd7a81ce48d87027f01c2ee7d7b3af969f", 6079194752),
         "sapiens2.5b": _sapiens2("5b", "ada1f29aa1fd454ca28665c700923a0101b6b24f", "b4848da8691c72e14d3ff71319f077363107129bf4128019eb39d072129b2a52", 20480899148),
     }, _defaults("mediapipe.pose_lite")),

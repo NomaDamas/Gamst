@@ -171,3 +171,61 @@ counted 7 more right words and 3 wrong ones (24.16) over the three runs: the own
 ## Not decided here
 
 - The thresholds and windows above are module defaults, not chosen on a clip; they need the owner's set of clips.
+
+## Video: one model, every frame, L2 for what the live lane cannot reach (2026-11-27, owner decision)
+
+The owner decided (decision-log 2026-11-26, "Movement counting: one model"): a movement is counted by **one** pose model,
+the most accurate usable one (RTMW-l 384x288 on this Mac), over **every** frame; there is no verification lane, no
+`uncertain` movement count, and no skipped frame. The earlier design (a MediaPipe live lane that sampled the newest
+frame, settled by an RTMW verification lane, `--with verification`, `count_verification.py`) was removed by that decision;
+its measurements stay in [testbed-2026-11-26.md](measurements/testbed-2026-11-26.md) (it reached 16/16 only after 7-14 s
+and skipped 101-259 of 714 frames live).
+
+```text
+camera ─▶ pose lane (RTMW-l, batch: the frames that wait, up to 8 per call) ─▶ channels ─▶ count   (live: final at once)
+            │ a frame not reached by its deadline (lag_ms)
+            ▼
+          video memory (RAM, then a spill file; bounded) ─▶ L2 chain: forks of the same modules, same models
+            pre-roll (state only) │ owned interval │ tail (the live lane's warm-up after its jump)  ─▶ corrections (late)
+```
+
+- **Batches** (`add_module(..., batch=N)`, recipe `"batch"`): a module with `process_batch(frames)` gets the frames that wait
+  when it is free (never waits for more), one output per frame in order; its next call starts while the last batch is
+  committed. A recording (`timing: post`) fills its batches. RTMW runs all crops of a batch in one CoreML call.
+- **Every frame**: `backlog="spill"` keeps waiting frames in `Pipeline.video_memory()` (memory, then an unnamed spill file);
+  only beyond its disk bound is a frame not kept, and that is a declared `backlog` gap. `sample="newest"` still exists as a
+  module option but no movement recipe uses it.
+- **L2 for video** (`catch_up` on a spilling video lane; the same mechanism and status as audio catch-up: `todos`, `claims`,
+  `status()['modules'][name]['catch_up']`): when the oldest waiting frame is more than `lag_ms` older than the input's
+  newest, the waiting frames become one interval for an L2 chain: forks (`fork()`) of every module in the lane, the same
+  models (a second worker process of the same weights). The chain processes `max_lookback_ms` of frames before the cut
+  (pre-roll: they only build state: the rule's steps and rates, the pose model's tracking boxes, the person lock), then the
+  interval, then `tail_ms` more, which the live lane also processes after its jump (its own warm-up).
+- **Ownership**: an event belongs to the lane whose owned range holds its **end** time. The chain owns
+  `[first waiting frame, newest waiting frame + tail_ms]`; the live lane's events there are dropped (`claims`), the chain's
+  events outside it too. Owned ranges are disjoint and cover the timeline, so nothing is counted twice or not at all (test:
+  `tests/test_realtime_pose.py`, hits that straddle a cut).
+- **States**: live counts are final for the live lane's range. L2 counts are final too and carry `correction: true`,
+  `decided_by: "catch_up"`; the report's `event_states` has when each was known (`committed_ms`), so a HUD shows it late.
+  Nothing is revoked. There are no corrections in `--timing post`.
+- **Person lock** (`target_person`): at a cut the live module's `snapshot()` (locked box, last face confirmation, session
+  body glue) goes to the fork's `restore()`; during the pre-roll it holds the person whose box overlaps the locked box
+  (IoU >= 0.3); else only a face confirmation inside the interval locks it, and events before that stay unattributed.
+- **Pre-roll** (`catch_up` value `"pre_roll"`, `recipes.pre_roll_ms`): an ordered rule's `within_ms` and `hold_ms` summed
+  plus 3 x `RATE_MS` plus 200 ms pose warm-up (hit_10_3: 800 ms), or the longest few-shot example plus the same.
+- **Memory budget** (`gamst/memory_budget.py`): an L2 chain starts only while free system memory stays at or above
+  `min_free_pct` after `replica_mb` more (person-action-count: 25 %, 2500 MB); else the frames stay in video memory
+  (latency grows, nothing is lost). Checked at every cut.
+- **Disk budget** (`gamst/providers/video_memory.py`): the spill file keeps 5 GB of the disk free (`disk_floor_bytes`;
+  `GAMST_SPILL_FLOOR_GB` overrides it for a run): its bound is min(8 GB, free - 5 GB) when the memory is made, checked again at every write; a frame beyond it is a
+  declared `backlog` gap. When the bound is smaller than asked, `status()['notes']['video_memory']` (report, MCP
+  `get_pipeline`) and the HUD say so. CoreML sessions compile once into `<root>/cache/coreml/<sha>-<unit>-<batch>`
+  (`ModelCacheDirectory`) instead of a temp copy per session; temp copies of dead processes are removed at start
+  (lesson 38).
+- **Pose model by measured speed** (`recipes.choose_pose`, recipe item `"choose"`): realtime without `--pose`, the live
+  worker and (budget allowing) an L2 worker are benchmarked at the same time at start (synthetic frames through the real
+  transfer path, one person, the detector at its interval). If together they reach the input frame rate RTMW counts, else
+  MediaPipe full (`choose.fallback`) counts; never both in one run. The numbers are in the report (`pose_choice`), on stderr,
+  and in `status()['notes']` (MCP `get_pipeline`). `--pose` forces either.
+- **Timing** (`--timing realtime|post`, default realtime for a camera / `--as-live` / `--realtime`, post for a file):
+  realtime as above; post processes every frame of a finished file in the largest batches and has no late counts.

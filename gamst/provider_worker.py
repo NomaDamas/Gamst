@@ -235,6 +235,9 @@ def main():
                         result['private_protocol'] = PRIVATE_PROTOCOL
                     if separation_protocol is not None:
                         result['separation_protocol'] = separation_protocol
+                    from .provider_wire import FRAME_MEMORY
+                    if request.get('frame_memory') == FRAME_MEMORY and separation_protocol is None:
+                        result['frame_memory'] = FRAME_MEMORY
                 elif operation == 'query' and provider is not None and private is not None:
                     from .private_payload import pack
                     public, value = provider.query(decode_frame(request['frame'], payload), request.get('request'))
@@ -277,8 +280,10 @@ def main():
                     result = None
                 elif operation == 'close' and provider is not None and not payload:
                     provider.close()
-                    provider = None
                     output.write(envelope(dict(id=number, ok=True, result=None)))
+                    if callable(getattr(output, 'flush', None)):
+                        output.flush()
+                    provider = None    # answered first: freeing large models (several CoreML sessions) takes seconds
                     return
                 else:
                     raise ValueError('invalid provider operation/state')

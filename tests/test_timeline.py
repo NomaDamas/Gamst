@@ -656,6 +656,87 @@ class RevisionTest(Base):
                 self.assertIsNone(next(iter(answer['evidence'].values()))['known_ms'])
 
 
+class Described(Source):
+    """A recording that says what it is, as :class:`gamst.inputs.VideoFileInput` does."""
+    live = False
+
+    def describe(self):
+        return dict(source='video_file', name='/Users/someone/clips/shot.mp4', live=False, fps=60., frames_in_source=714,
+                    position_ms=2500, folder='/Users/someone/clips')
+
+
+class InputStartTest(Base):
+    async def test_each_input_commits_where_it_began_once_and_reads_answer_it(self):
+        start = grid()
+        pipeline = Pipeline(self.human, 'p')
+        pipeline.add_input('camera', Described(start, 5, 100))
+        pipeline.add_input('host')
+        module = Module('fast', freshness=0)
+        pipeline.add_module('fast', module, consumes='camera', spec=module.spec)
+        await pipeline.run()
+        await pipeline.push('host', 1, timestamp_ms=start + 50, modality='video')
+        await pipeline.push('host', 2, timestamp_ms=start + 90, modality='video')
+        found = self.human.store.query(capability_id='pipeline.inputs')
+        events = [event for record in found for event in record['observation']['value']['events']]
+        self.assertEqual(len(events), 2)        # one per input, at its first frame only
+        camera = next(event for event in events if event['input'] == 'camera')
+        self.assertEqual(camera, dict(event='pipeline.input_start', input='camera', modality='video', start_ms=start,
+                                      offset_ms=0, source='video_file', name='shot.mp4', live=False, fps=60.,
+                                      frames_in_source=714, position_ms=2500))     # a file's name, never its folder
+        host = next(event for event in events if event['input'] == 'host')
+        self.assertEqual((host['source'], host['start_ms'], host['position_ms']), ('host', start + 50, None))
+        self.assertEqual(pipeline.status()['inputs']['camera']['start'], camera)
+        server = MCPServer(self.human)
+        self.assertEqual((await server.call_tool('get_pipeline', {}))['inputs']['camera']['start'], camera)
+        answer, rows = await self.rows(start, start + 500)
+        self.assertEqual(answer['input_starts'], [camera, host])
+        self.assertNotIn('pipeline.inputs', {column['key'] for column in answer['columns']})   # not a column
+        # "from the start of the video": a capture time t is position_ms + t - start_ms into the recording
+        self.assertEqual(camera['position_ms'] + (start + 300) - camera['start_ms'], 2800)
+        known = min(known for _, known in self.human.store.query(capability_id='pipeline.inputs', with_known=True))
+        before, _ = await self.rows(start, start + 500, as_of_ms=known - 1)
+        self.assertNotIn('input_starts', before)          # what was known then: not yet begun
+        await pipeline.close()
+
+    async def test_derived_inputs_and_sources_without_describe(self):
+        start = grid()
+        pipeline = Pipeline(self.human, 'p')
+        pipeline.add_input('camera', Source(start, 2, 100))
+        module = Module('fast', freshness=0)
+        pipeline.add_module('fast', module, consumes='camera', spec=module.spec)
+        await pipeline.run()
+        events = [event for record in self.human.store.query(capability_id='pipeline.inputs')
+                  for event in record['observation']['value']['events']]
+        self.assertEqual([(event['input'], event['source'], event['position_ms']) for event in events],
+                         [('camera', 'Source', None)])
+        await pipeline.close()
+
+
+@unittest.skipIf(__import__('importlib').util.find_spec('cv2') is None, 'needs OpenCV')
+class VideoFileStartTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_video_file_says_its_rate_count_and_where_the_first_frame_read_is(self):
+        import cv2
+        import numpy as np
+        from gamst.inputs import PacedInput, VideoFileInput
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'clip.avi')
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'MJPG'), 20., (32, 24))
+            for index in range(40):
+                writer.write(np.full((24, 32, 3), index * 5, np.uint8))
+            writer.release()
+            source = VideoFileInput(path, start_s=1.)
+            stamps = [frame.timestamp_ms async for frame in source.frames()]
+            said = source.describe()
+            self.assertEqual((said['source'], said['name'], said['fps'], said['frames_in_source']),
+                             ('video_file', 'clip.avi', 20., 40))
+            self.assertEqual(said['position_ms'], 1000)          # the first frame read is 1 s into the file
+            self.assertEqual(stamps[0] - source.origin_ms, said['position_ms'])
+            paced = PacedInput(VideoFileInput(path, max_frames=1))
+            [frame async for frame in paced.frames()]
+            self.assertEqual({key: paced.describe()[key] for key in ('live', 'paced', 'position_ms')},
+                             dict(live=True, paced=True, position_ms=0))
+
+
 class MCPTimelineTest(Base):
     async def test_schema_validation_and_round_trip(self):
         server = MCPServer(self.human)

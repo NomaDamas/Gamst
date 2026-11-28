@@ -75,7 +75,10 @@ class ModuleTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([frame.timestamp_ms - start for frame in sink.frames], list(range(100, 2600, 100)))
             np.testing.assert_allclose(np.concatenate([f.data for f in sink.frames]), audio)
             self.assertEqual(extractor.calls[0][1], 8000)
-            self.assertEqual(await human.get_history(), [])   # media moved between modules; nothing was stored
+            # media moved between modules; nothing was stored but where the microphone input began
+            stored = [record for record in await human.get_history() if record['type'] == 'observation.signal']
+            self.assertEqual([(record['observation']['name'], record['observation']['value']['events'][0]['input'])
+                              for record in stored], [('pipeline.inputs', 'microphone')])
 
     async def test_gate_passes_only_matched_chunks(self):
         gate = SpeakerGate(reference='voice', emits='voice', segment_ms=1000)

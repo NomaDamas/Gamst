@@ -5,6 +5,7 @@ GAMST_TEST_USEF=<source>:<checkpoint>       GAMST_TEST_QWEN_ALIGNER=<snapshot di
 GAMST_TEST_WHISPER=<faster-whisper dir>     GAMST_TEST_LVFACE=<onnx>
 GAMST_TEST_SOLIDER=<source>:<checkpoint>    GAMST_TEST_SAPIENS2=<pose dir>:<detr dir>
 GAMST_TEST_PERSON_IMAGE=<image of a person> GAMST_TEST_DEVICE=cpu|mps|cuda (default cpu)
+GAMST_TEST_RTMW=<rtmw onnx>:<yolox onnx>    GAMST_TEST_RTMW_DEVICE=cpu|coreml (default cpu)
 
 These check that the official package loads the weights and answers in the declared shape. They measure
 no accuracy; that needs a human-counted take (``gamst recipe run --truth``). CAM++ has its own test in
@@ -33,6 +34,7 @@ WHISPER, whisper = given('WHISPER')
 LVFACE, lvface = given('LVFACE')
 SOLIDER, solider = given('SOLIDER')
 SAPIENS2, sapiens2 = given('SAPIENS2')
+RTMW, rtmw = given('RTMW')
 IMAGE = os.environ.get('GAMST_TEST_PERSON_IMAGE')
 
 
@@ -104,6 +106,24 @@ class RealModelTest(unittest.IsolatedAsyncioTestCase):
         poses = plugin.infer(cv2.imread(IMAGE))
         self.assertGreaterEqual(len(poses), 1)
         self.assertEqual(len(poses[0]['landmarks']), 308)
+
+    @RTMW
+    def test_rtmw_on_frames_without_a_person(self):
+        # CoreML refused the detector's zero-sized NMS tensors on an empty frame, and the worker died with it
+        from gamst.providers.rtmw_pose import RTMWModels, _sha256
+        models = RTMWModels(rtmw[0], _sha256(rtmw[0]), rtmw[1], _sha256(rtmw[1]),
+                            device=os.environ.get('GAMST_TEST_RTMW_DEVICE', 'cpu'))
+        black = np.zeros((720, 1280, 3), np.uint8)
+        self.assertEqual(len(models.infer(black, 0)[0]), 0)
+        found = models.infer_batch([black, np.full((720, 1280, 3), 127, np.uint8), black], [33, 66, 99])
+        self.assertEqual([len(boxes) for boxes, _, _ in found], [0, 0, 0])
+        self.assertEqual(found[0][1].shape, (0, 133, 2))
+        if IMAGE:
+            import cv2
+            person = cv2.imread(IMAGE)
+            found = models.infer_batch([np.zeros_like(person), person, np.zeros_like(person)], [132, 165, 198])
+            self.assertEqual(([len(found[0][0]), len(found[2][0])], found[1][1].shape[1:]), ([0, 0], (133, 2)))
+            self.assertGreaterEqual(len(found[1][0]), 1)
 
 
 if __name__ == '__main__':

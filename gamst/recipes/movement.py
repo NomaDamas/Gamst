@@ -24,7 +24,7 @@ MAX_SEQUENCE_ITEMS = 30
 SOURCES = ('camera', 'video', 'take', 'audio', 'microphone', 'iphone', 'sensor')
 PROPOSALS = 'gamst-movement-proposals.json'
 FEATURES = ('vision.pose_channels', 'audio.voice_channels')
-FEATURE_PARTS = ('mediapipe-pose', 'mediapipe-graph', 'sapiens2-pose', 'pose-channels', 'prosody', 'voice-channels')
+FEATURE_PARTS = ('mediapipe-pose', 'mediapipe-graph', 'sapiens2-pose', 'rtmw-pose', 'pose-channels', 'prosody', 'voice-channels')
 
 
 @dataclass

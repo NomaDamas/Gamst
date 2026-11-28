@@ -48,6 +48,34 @@ ARCFACE_112 = ((38.2946, 51.6963), (73.5318, 51.5014), (56.0252, 71.7366), (41.5
 # MediaPipe Pose landmarks in that order for a frontal face: the subject's right eye and right mouth
 # corner appear on the image's left. 0 nose, 2 left_eye, 5 right_eye, 9 mouth_left, 10 mouth_right.
 MEDIAPIPE_FACE_POINTS = (5, 2, 0, 10, 9)
+# COCO-WholeBody (RTMW) in the same order: 2 right_eye, 1 left_eye, 0 nose, then the 68 face points from index 23
+# (iBUG 68: 48 is the mouth corner on the image's left of a frontal face, 54 the other): 23 + 48, 23 + 54.
+COCO_WHOLEBODY_FACE_POINTS = (2, 1, 0, 71, 77)
+FACE_POINTS = {'mediapipe33': (MEDIAPIPE_FACE_POINTS, .5), 'coco_wholebody133': (COCO_WHOLEBODY_FACE_POINTS, .3)}
+
+
+HANDOVER_IOU = .3    # an L2 chain holds the cut's locked person only on a box that overlaps it at least this much
+
+
+def box_iou(a, b):
+    """Overlap of two normalized boxes {x, y, width, height} (0 when either is missing)."""
+    if not a or not b:
+        return 0.
+    ax1, ay1, bx1, by1 = a['x'] + a['width'], a['y'] + a['height'], b['x'] + b['width'], b['y'] + b['height']
+    width, height = min(ax1, bx1) - max(a['x'], b['x']), min(ay1, by1) - max(a['y'], b['y'])
+    inter = max(0., width) * max(0., height)
+    union = a['width'] * a['height'] + b['width'] * b['height'] - inter
+    return inter / union if union > 0 else 0.
+
+
+def face_reading(pose, indices=MEDIAPIPE_FACE_POINTS, min_visibility=.5):
+    """(indices, min_visibility) of the five face points of this pose: by its ``keypoint_set`` when it names one
+    (a set without known face points, e.g. Sapiens2 ``goliath308`` here, gives None: no face is aligned); a pose
+    without one (MediaPipe) uses ``indices``."""
+    kind = pose.get('keypoint_set') if isinstance(pose, dict) else None
+    if kind is None:
+        return indices, min_visibility
+    return FACE_POINTS.get(kind, (None, min_visibility))
 
 
 def _np():
@@ -82,6 +110,8 @@ def umeyama(source, target):
 def face_points(landmarks, width, height, indices=MEDIAPIPE_FACE_POINTS, *, min_visibility=.5):
     """Five face points in pixels from normalized keypoints, or None when any is not visible."""
     points = []
+    if indices is None:
+        return None
     for index in indices:
         if index >= len(landmarks):
             return None
@@ -280,7 +310,8 @@ async def enroll_person(face_embedder, body_embedder, images, poses, face_indice
         height, width = image.shape[:2]
         landmarks = pose.get('landmarks') or []
         if face_embedder is not None:
-            face = align_face(image, face_points(landmarks, width, height, face_indices))
+            indices, visibility = face_reading(pose, face_indices)
+            face = align_face(image, face_points(landmarks, width, height, indices, min_visibility=visibility))
             if face is not None:
                 faces.append(await embed(face_embedder, face))
         if body_embedder is not None and pose.get('bbox'):
@@ -337,6 +368,36 @@ class TargetPerson:
         if not face and not body:
             raise ValueError('the person reference has no embeddings this module can use')
         self.gallery = PersonGallery(face=face, body=body)
+        self._reference_value = value
+
+    # ------------------------------------------------------------------ an L2 chain (gamst.pipeline): handover at a cut
+
+    def snapshot(self):
+        """The lock at a cut: the locked person's last box, when the face last confirmed it, the session's body glue."""
+        return dict(bbox=self._locked_bbox if self._locked is not None else None, confirmed_ms=self._confirmed_ms,
+                    session=list(self.gallery.session) if self.gallery is not None else [])
+
+    def fork(self):
+        """The same person matcher from a fresh state; it shares this module's face and body models (never closes
+        them)."""
+        twin = type(self)(self.face, self.body, reference=self.reference_name, face_threshold=self._count_thresholds[0],
+                          face_reject=self.face_reject, body_threshold=self._count_thresholds[1],
+                          face_every_ms=self.face_every_ms, body_every_ms=self.body_every_ms, hold_ms=self.hold_ms,
+                          emits=self.emits, joints=self.joints, crop_pad=self.crop_pad, face_indices=self.face_indices,
+                          mode=self.mode)
+        twin._shares_models = True
+        if getattr(self, '_reference_value', None) is not None:
+            twin.set_reference(self._reference_value)
+        return twin
+
+    def restore(self, state):
+        """Take over a cut's lock: during the pre-roll the person whose box overlaps the locked box most (IoU at least
+        ``HANDOVER_IOU``) is held as before; if none does, only a face confirmation inside the interval locks, and
+        what comes before it stays unattributed."""
+        self._handover = dict(state) if state and state.get('bbox') else None
+        if self.gallery is not None:
+            for embedding in (state or {}).get('session') or ():
+                self.gallery.session.append(embedding)
 
     def set_mode(self, mode, search=None):
         """``count`` or ``search`` (module doc) from the next frame on; ``search``: :data:`gamst.counting.SEARCH`."""
@@ -351,7 +412,8 @@ class TargetPerson:
     def reset(self):
         self._poses = {}
         self._tracks = {}
-        self._locked = self._confirmed_ms = None
+        self._locked = self._confirmed_ms = self._locked_bbox = None
+        self._handover = None
         if self.gallery is not None:
             self.gallery.session.clear()
 
@@ -361,7 +423,9 @@ class TargetPerson:
         state['seen_ms'] = ts
         if self.face is not None and self.gallery.face is not None and \
                 (state['face_ms'] is None or ts - state['face_ms'] >= self.face_every_ms):
-            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, self.face_indices))
+            indices, visibility = face_reading(pose, self.face_indices)
+            crop = align_face(image, face_points(pose.get('landmarks') or [], width, height, indices,
+                                                 min_visibility=visibility))
             if crop is not None:
                 state['face'], state['face_ms'] = self.gallery.face_score(await embed(self.face, crop)), ts
         if self.body is not None and pose.get('bbox') and \
@@ -404,6 +468,7 @@ class TargetPerson:
             del self._tracks[track]
         target, state_name = self._select(candidates, ts)
         pose, scores = candidates[target] if target is not None else (None, {})
+        self._locked_bbox = pose.get('bbox') if pose and target == self._locked else self._locked_bbox
         if state_name == 'face' and scores.get('body_embedding') is not None:
             self.gallery.remember_body(scores['body_embedding'])
         value = dict(reference=self.reference_name, state=state_name, track_id=target,
@@ -422,6 +487,8 @@ class TargetPerson:
         return output
 
     async def close(self):
+        if getattr(self, '_shares_models', False):
+            return
         for embedder in (self.face, self.body):
             close = getattr(embedder, 'close', None)
             if callable(close):
@@ -431,6 +498,13 @@ class TargetPerson:
 
     def _select(self, candidates, ts):
         """(track_id, state): best matching face; else the locked track while it holds; else best body."""
+        if self._handover is not None and self._locked is None:     # an L2 chain takes over the lock at its cut
+            overlaps = [(box_iou(pose.get('bbox'), self._handover['bbox']), track)
+                        for track, (pose, _) in candidates.items() if pose.get('bbox')]
+            best = max(overlaps, default=(0., None))
+            if best[0] >= HANDOVER_IOU:
+                self._locked, self._confirmed_ms = best[1], self._handover['confirmed_ms'] or ts
+            self._handover = None
         faces = [(state['face'], track) for track, (_, state) in candidates.items()
                  if state.get('face') is not None and state['face'] >= self.face_threshold]
         if faces:

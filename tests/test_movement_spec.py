@@ -622,7 +622,8 @@ class RecipeTest(unittest.TestCase):
         self.long = grey_video(self.tmp / 'long.avi', rest + (repetition() + rest) * 4)
 
     def run_recipe(self, action, *args):
-        return recipes.main([action, 'person-action-count', *args])
+        # the stand-in is a MediaPipe-shaped pose model: selected with --pose (the recipe's default is RTMW)
+        return recipes.main([action, 'person-action-count', *args, '--pose', 'mediapipe.pose_full'])
 
     def clips(self, peaks=(230, 240, 250)):
         return [grey_video(self.tmp / f'ok{peak}.avi', repetition(peak)) for peak in peaks]

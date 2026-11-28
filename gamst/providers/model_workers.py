@@ -23,6 +23,7 @@ profile                    worker (real model)                                  
 ``streaming.asr.words``     a local streaming recogniser (sherpa-onnx, Voxtral)  ``RemoteStreamingWords``
 ``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
 ``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
+``rtmw.pose``              RTMW whole-body + YOLOX (rtmlib ONNX)                ``RemoteRTMW``
 =========================  ==================================================  ====================
 
 ``active_speaker.lightasd`` (Light-ASD: face crops and sound -> speaking logits) answers ``RemoteActiveSpeaker``.
@@ -58,6 +59,10 @@ FIELDS = {
     'faster_whisper.align': ('audio', (OutputField('items', 'array'),)),
     'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                                 OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
+    'rtmw.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
+                            OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
+                            OutputField('frames', 'integer', required=False),
+                            OutputField('benchmark', 'object', required=False))),
     'active_speaker.lightasd': ('video', (OutputField('scores', 'array'),)),
 }
 PROFILES = frozenset(FIELDS)
@@ -69,7 +74,7 @@ def model_id(profile, config):
     if type(digest) is not str or re.fullmatch('[0-9a-f]{64}', digest) is None:
         raise ValueError(f'{profile} needs the sha256 of its weight file')
     name = {'face.embedding': 'lvface', 'body.embedding': 'solider-reid', 'qwen3.forced_aligner': 'qwen3-forced-aligner',
-            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'qwen3.asr.words': 'qwen3-asr',
+            'faster_whisper.words': 'faster-whisper', 'sapiens2.pose': 'sapiens2', 'rtmw.pose': 'rtmw', 'qwen3.asr.words': 'qwen3-asr',
             'hosted.asr.words': 'hosted-asr', 'active_speaker.lightasd': 'lightasd', 'pixit.sources': 'pyannote-pixit',
             'sepformer.sources': 'sepformer', 'faster_whisper.align': 'whisper-align',
             'streaming.asr.words': config.get('backend')}.get(profile) or {
@@ -84,6 +89,9 @@ def capability(profile, config):
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
     if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
         raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
+    if profile == 'rtmw.pose':
+        from .rtmw_pose import check_config as check_rtmw
+        check_rtmw(config)
     if profile == 'active_speaker.lightasd':
         from .active_speaker import check_weights
         check_weights(config.get('sha256'), config.get('allow_noncommercial', False))
@@ -225,6 +233,54 @@ class _Pose(_Worker):
                     image_width=int(width), image_height=int(height)), joints
 
 
+class _RTMW(_Worker):
+    """Consecutive frames -> boxes and joints. ``frame.data`` is one image, or ``request["frames"]`` images of one size
+    stacked by rows; ``request["timestamps_ms"]``: their capture times (for the detection interval)."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def query(self, frame, request):
+        from .rtmw_pose import MAX_FRAMES, POINTS, RAW_LIMIT
+        np = _numpy()
+        request = request or {}
+        if request.get('benchmark'):
+            count = request.get('frames', 1)
+            if type(count) is not int or not 1 <= count <= MAX_FRAMES or frame.data.shape[0] % count:
+                raise ValueError(f'rtmw.pose benchmarks 1..{MAX_FRAMES} stacked frames')
+            rows = frame.data.shape[0] // count
+            images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
+            measured = self.models.benchmark(images, detect=bool(request.get('detect')))
+            return dict(poses=[], model=self.models.version, image_width=int(frame.data.shape[1]), image_height=rows,
+                        benchmark=measured), np.zeros((0, POINTS, 4), dtype='<f4')
+        count = request.get('frames', 1)
+        times = request.get('timestamps_ms') or [request.get('timestamp_ms')]
+        if type(count) is not int or not 1 <= count <= MAX_FRAMES or len(times) != count \
+                or frame.data.shape[0] % count:
+            raise ValueError(f'rtmw.pose takes 1..{MAX_FRAMES} stacked frames with one capture time each')
+        rows = frame.data.shape[0] // count
+        images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
+        height, width = rows, frame.data.shape[1]
+        public, joints = [], []
+        for index, (boxes, keypoints, scores) in enumerate(self.models.infer_batch(images, times)):
+            for box, points, values in zip(boxes, keypoints, scores):
+                rows_ = np.zeros((POINTS, 4), dtype='<f4')     # x, y, visibility, raw_score
+                rows_[:, 0], rows_[:, 1], rows_[:, 2] = points[:, 0] / width, points[:, 1] / height, np.clip(values, 0., 1.)
+                rows_[:, 3] = np.clip(values, -RAW_LIMIT, RAW_LIMIT)
+                joints.append(rows_)
+                box = [float(value) for value in box]
+                x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
+                x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
+                public.append(dict(in_batch=index, bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
+                                   if x1 > x0 and y1 > y0 else None))
+        joints = np.stack(joints) if joints else np.zeros((0, POINTS, 4), dtype='<f4')
+        return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height),
+                    frames=count), joints
+
+    def reset(self):
+        self.models.reset()
+
+
 class _ActiveSpeaker(_Worker):
     """One window of one face: ``frame.data`` is ``active_speaker.pack_window``, the request says how many frames."""
 
@@ -304,6 +360,9 @@ def load(profile, config):
         from .whisper_phrases import PhraseWorker, Phrases
         phrases = config.pop('phrases', None) or {}
         return _Whisper(PhraseWorker(Phrases(load_decoder(config), **phrases)))
+    if profile == 'rtmw.pose':
+        from .rtmw_pose import RTMWModels
+        return _RTMW(RTMWModels(**config))
     from .sapiens2_pose import Sapiens2PosePlugin
     config['pose_sha256'] = config.pop('sha256')
     return _Pose(Sapiens2PosePlugin.from_local(**config))
@@ -466,6 +525,66 @@ class RemotePose(_Client):
                      image_width=result['image_width'], image_height=result['image_height'],
                      landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
                 for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
+
+
+class RemoteRTMW(_Client):
+    """Async stand-in for :class:`gamst.providers.rtmw_pose.RTMWModels`; tracking stays in this process."""
+
+    async def infer(self, image, timestamp_ms):
+        return (await self.infer_batch([image], [timestamp_ms]))[0]
+
+    def _stacked(self, images, timestamp_ms=0):
+        """One wire frame of consecutive images: through shared memory without stacking them first, else stacked."""
+        import numpy as np
+        from dataclasses import replace
+        if len(images) == 1:
+            return self._frame(images[0], 'video', timestamp_ms=timestamp_ms)
+        if getattr(self.worker, '_frames', None) is not None:
+            return replace(self._frame(images[0], 'video', timestamp_ms=timestamp_ms), data=tuple(images))
+        return self._frame(np.concatenate(images), 'video', timestamp_ms=timestamp_ms)
+
+    async def infer_batch(self, images, timestamps_ms):
+        """Consecutive frames of one size -> one list of poses per frame (one worker call: the frames go stacked)."""
+        import numpy as np
+        from ..crew.modules import bounded_image
+        from ..private_payload import CONTRACTS, landmarks
+        images = [np.ascontiguousarray(bounded_image(image)) for image in images]
+        frame = self._stacked(images, timestamps_ms[0])
+        result, private = await self.worker.query(
+            frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
+        joints = private.take('joints')
+        columns = CONTRACTS['rtmw.pose'].columns_for(joints.shape[2])    # raw_score when the worker sends it
+        found = [[] for _ in images]
+        for pose, rows in zip(result['poses'], joints):
+            poses = found[pose.get('in_batch', 0)]
+            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set='coco_wholebody133',
+                              track_id=None, association_quality='unavailable', identity_verified=False,
+                              speaker_association='unavailable', image_width=result['image_width'],
+                              image_height=result['image_height'],
+                              landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)]))
+        return found
+
+    async def benchmark(self, *, seconds=2., frames=8, size=(720, 1280)):
+        """This worker's speed now, as a live lane would get it (shared-memory transfer included): calls of ``frames``
+        synthetic frames for ``seconds``; ms per frame of the pose path, and one detection's ms. Several workers
+        measured at the same time show what they give together."""
+        import time
+        import numpy as np
+        frame = self._stacked([np.full((*size, 3), 127, np.uint8) for _ in range(frames)])
+        result, private = await self.worker.query(frame, {'benchmark': True, 'frames': frames, 'detect': True})
+        private.take('joints')
+        first, calls, started = result['benchmark'], 0, time.perf_counter()    # the first call also warms up
+        while not calls or time.perf_counter() - started < seconds:
+            result, private = await self.worker.query(frame, {'benchmark': True, 'frames': frames})
+            private.take('joints')
+            calls += 1
+        wall = (time.perf_counter() - started) * 1000 / (calls * frames)
+        detect = dict(result['benchmark'], detect_ms=first['detect_ms'])
+        return dict(ms_per_frame=round(wall, 2), model_ms_per_frame=detect['ms_per_frame'], detect_ms=detect['detect_ms'],
+                    det_every_ms=detect['det_every_ms'], frames=frames, seconds=seconds, version=detect['version'])
+
+    async def reset(self):
+        await self.worker.reset()
 
 
 class RemoteActiveSpeaker(_Client):

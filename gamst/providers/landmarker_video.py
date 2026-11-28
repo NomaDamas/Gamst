@@ -12,6 +12,7 @@ from .hand_context import MediaPipeHandContext
 from .face_context import MediaPipeFaceContext
 from .gesture_context import MediaPipeGestureContext
 
+DELEGATES = ('cpu', 'gpu')   # MediaPipe Tasks delegates; 'gpu' is Metal on macOS (docs/measurements/testbed-2026-11-26.md)
 _FORMATTERS = {'body': (MediaPipeBodyContext, 'max_poses'),
                'hand': (MediaPipeHandContext, 'max_hands'),
                'face': (MediaPipeFaceContext, 'max_faces'),
@@ -20,9 +21,10 @@ _FORMATTERS = {'body': (MediaPipeBodyContext, 'max_poses'),
 
 class MediaPipeVideoContext:
     def __init__(self, kind, detector_factory, image_api, *, sha256,
-                 max_entities=4, max_gap_ms=1000, allow_skips=False):
+                 max_entities=4, max_gap_ms=1000, allow_skips=False, delegate='cpu'):
         self.spec = self.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
-                                    allow_skips=allow_skips)
+                                    allow_skips=allow_skips, delegate=delegate)
+        self.image_api, self.delegate = image_api, delegate
         if not callable(detector_factory):
             raise ValueError('a fresh VIDEO detector factory is required')
         self.factory = detector_factory
@@ -35,11 +37,20 @@ class MediaPipeVideoContext:
         # Reuse bounded geometry conversion; this proxy owns no native resource.
         self.formatter = formatter(SimpleNamespace(detect=self._detect, close=lambda: None),
                                    image_api, sha256=sha256, **{count_key: max_entities})
+        if delegate == 'gpu' and callable(getattr(self.formatter, '_image', None)):
+            self.formatter._image = self._rgba    # one conversion instead of a reversed copy and then another
+
+    def _rgba(self, data):
+        import cv2
+        return self.image_api.Image(image_format=self.image_api.ImageFormat.SRGBA,
+                                    data=cv2.cvtColor(data, cv2.COLOR_BGR2RGBA))
 
     @staticmethod
-    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False):
+    def capability(kind, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False, delegate='cpu'):
         if type(kind) is not str or kind not in _FORMATTERS:
             raise ValueError('kind must be body, hand, face or gesture')
+        if delegate not in DELEGATES:
+            raise ValueError(f"delegate must be one of {', '.join(DELEGATES)}")
         if type(max_gap_ms) is not int or not 1 <= max_gap_ms <= 60000:
             raise ValueError('max_gap_ms must be integer milliseconds in 1..60000')
         if type(allow_skips) is not bool:
@@ -47,12 +58,13 @@ class MediaPipeVideoContext:
         formatter, count_key = _FORMATTERS[kind]
         base = formatter.capability(sha256, **{count_key: max_entities})
         return replace(base, id=f'vision.mediapipe.{kind}_video_context',
-            provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms)+('.skips' if allow_skips else ''),
+            provider=f'mediapipe.{kind}.video', version=base.version+'.g'+str(max_gap_ms)+('.skips' if allow_skips else '')+('' if delegate == 'cpu' else '.'+delegate),
             streaming_mode='native', stateful=True, reset_on_gap=True)
 
     @classmethod
-    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False):
-        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms, allow_skips=allow_skips)
+    def from_local(cls, kind, path, sha256, *, max_entities=4, max_gap_ms=1000, allow_skips=False, delegate='cpu'):
+        cls.capability(kind, sha256, max_entities=max_entities, max_gap_ms=max_gap_ms, allow_skips=allow_skips,
+                       delegate=delegate)
         path = Path(path).expanduser()
         if not path.is_absolute() or not path.is_file():
             raise ValueError('absolute existing local task path required')
@@ -73,7 +85,7 @@ class MediaPipeVideoContext:
             from mediapipe.tasks.python.components.processors import classifier_options
             def factory():
                 return vision.GestureRecognizer.create_from_options(vision.GestureRecognizerOptions(
-                    base_options=python.BaseOptions(model_asset_buffer=payload, delegate=python.BaseOptions.Delegate.CPU),
+                    base_options=python.BaseOptions(model_asset_buffer=payload, delegate=getattr(python.BaseOptions.Delegate, delegate.upper())),
                     running_mode=vision.RunningMode.VIDEO, num_hands=max_entities,
                     min_hand_detection_confidence=.5, min_hand_presence_confidence=.5,
                     min_tracking_confidence=.5,
@@ -90,10 +102,10 @@ class MediaPipeVideoContext:
             if kind == 'face' else {})
         def factory():
             return detector_type.create_from_options(options_type(
-                base_options=python.BaseOptions(model_asset_buffer=payload, delegate=python.BaseOptions.Delegate.CPU),
+                base_options=python.BaseOptions(model_asset_buffer=payload, delegate=getattr(python.BaseOptions.Delegate, delegate.upper())),
                 running_mode=vision.RunningMode.VIDEO, **{count_key: max_entities}, **extra))
         return cls(kind, factory, mp, sha256=sha256, max_entities=max_entities, max_gap_ms=max_gap_ms,
-                   allow_skips=allow_skips)
+                   allow_skips=allow_skips, delegate=delegate)
 
     def _detect(self, image):
         method = 'recognize_for_video' if self.kind == 'gesture' else 'detect_for_video'
@@ -104,6 +116,13 @@ class MediaPipeVideoContext:
                 raise ValueError('factory must return a fresh VIDEO detector with close')
             self.detector = detector
             self.origin_ts, self.segment_id = self.current_ts, uuid.uuid4().hex
+        if self.delegate == 'gpu' and image.image_format == self.image_api.ImageFormat.SRGB:
+            # The macOS GPU path takes 4-channel images only (SRGB fails a check in the CVPixelBuffer storage).
+            import numpy as np
+            rgb = image.numpy_view()
+            rgba = np.empty(rgb.shape[:2] + (4,), dtype=rgb.dtype)
+            rgba[..., :3], rgba[..., 3] = rgb, 255
+            image = self.image_api.Image(image_format=self.image_api.ImageFormat.SRGBA, data=rgba)
         return getattr(self.detector, method)(image, self.current_ts-self.origin_ts)
 
     def _reset(self):

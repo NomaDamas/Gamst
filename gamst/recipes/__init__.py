@@ -151,6 +151,94 @@ def choose(recipe, include=(), exclude=()):
                 records=[item['id'] if isinstance(item, dict) else item for item in recipe.get('records', ()) if kept(item)])
 
 
+POSE_PARTS = {'mediapipe': 'mediapipe-pose', 'rtmw': 'rtmw-pose', 'sapiens2': 'sapiens2-pose'}
+POSE_SOURCES = {'mediapipe-pose': None, 'rtmw-pose': 'rtmw', 'sapiens2-pose': 'sapiens2'}
+
+
+def with_pose(recipe, candidate, *, module=None):
+    """The recipe with ``candidate`` (a vision.pose candidate) as its pose module (``module``: by name, default the
+    first pose item); the modules that read its joints read them that way. One pose model counts: the parts it
+    selects are :data:`POSE_PARTS` (a new pose model adds its part there and in ``POSE_SOURCES``)."""
+    from ..crew.registry import ROLES
+    if candidate not in ROLES['vision.pose'].candidates:
+        raise SystemExit(f"--pose: no vision.pose candidate {candidate!r}; candidates: "
+                         f"{', '.join(sorted(ROLES['vision.pose'].candidates))}")
+    part = POSE_PARTS[candidate.split('.', 1)[0]]
+    items = recipe['modules']
+    target = next((item for item in items if item['use'] in POSE_SOURCES and (
+        item['name'] == module if module else True)), None)
+    if target is None:
+        raise SystemExit(f"--pose: {recipe['name']} has no pose module")
+    joints = set(target.get('emits', ())) | {target['name']}
+    source = POSE_SOURCES[part]
+
+    def changed(item):
+        if item is target:
+            kept = {key: value for key, value in item.items() if key not in ('delegate', 'candidate', 'use')}
+            return dict(kept, use=part, candidate=candidate)
+        reads = {name.split(':', 1)[0] for name in item.get('consumes', ())} | {
+            name.split(':', 1)[0] for names in (item.get('consumes_without') or {}).values() for name in names}
+        if item['use'] in ('pose-channels', 'exemplar') and reads & joints:
+            return {key: value for key, value in dict(item, source=source).items() if value is not None}
+        return item
+    # what reads the joints of what reads them (target_person passes the pose joints on as its own)
+    for item in items:
+        if item['use'] == 'target-person' and set(item.get('consumes', ())) & joints:
+            joints |= set(item.get('emits', ())) | {item['name']}
+    return dict(recipe, modules=[changed(item) for item in items])
+
+
+WARM_UP_MS = 200      # a pose model's own state after a cut (tracking boxes, VIDEO mode): about 12 frames at 60 fps
+
+
+def pre_roll_ms(movement):
+    """How much video before a cut an L2 worker (or the live lane after its jump) needs to see a movement that ends
+    after the cut: an ordered rule's ``within_ms`` and ``hold_ms`` summed plus three rate windows, or the longest
+    example; plus the pose model's warm-up."""
+    from ..providers.movement_rule import RATE_MS
+    rule = movement.get('rule') if isinstance(movement, dict) else None
+    if isinstance(rule, dict) and isinstance(rule.get('steps'), list):
+        steps = rule['steps']
+        return int(sum(step.get('within_ms', 0) + step.get('hold_ms', 0) for step in steps) + 3 * RATE_MS + WARM_UP_MS)
+    spans = [example.get('span_ms') for example in (movement.get('positives') or ()) if isinstance(example, dict)] \
+        if isinstance(movement, dict) else []
+    spans = [span for span in spans if type(span) in (int, float)]
+    return int(max(spans) + 3 * RATE_MS + WARM_UP_MS) if spans else 1000
+
+
+def with_pre_roll(recipe, exemplar):
+    """``catch_up`` of a module item with ``"max_lookback_ms": "pre_roll"`` / ``"tail_ms": "pre_roll"``: the
+    movement's :func:`pre_roll_ms`."""
+    wanted = [item for item in recipe['modules'] if 'pre_roll' in (item.get('catch_up') or {}).values()]
+    if not wanted:
+        return recipe
+    try:
+        movement = json.loads(Path(exemplar).read_text())
+    except (OSError, ValueError):
+        movement = {}
+    pre = pre_roll_ms(movement)
+    return dict(recipe, modules=[dict(item, catch_up={key: pre if value == 'pre_roll' else value
+                                                      for key, value in item['catch_up'].items()})
+                                 if item in wanted else item for item in recipe['modules']])
+
+
+def with_settings(recipe, settings):
+    """``MODULE.KEY=VALUE`` settings of module items (VALUE as JSON, else as text)."""
+    modules = [dict(item) for item in recipe['modules']]
+    for setting in settings:
+        name, _, value = setting.partition('=')
+        module, _, key = name.partition('.')
+        item = next((item for item in modules if item['name'] == module), None)
+        if not key or not _ or item is None:
+            raise SystemExit(f"--set {setting!r}: MODULE.KEY=VALUE of a module of {recipe['name']} "
+                             f"({', '.join(item['name'] for item in modules)})")
+        try:
+            item[key] = json.loads(value)
+        except ValueError:
+            item[key] = value
+    return dict(recipe, modules=modules)
+
+
 def input_modality(item):
     """The modality of an input's frames, or None when only its own recipe's modules read them."""
     if item['use'] == 'plugin':
@@ -448,9 +536,14 @@ def installed(recipe, item, profile=None):
     from ..profile import read_profile
     role, model = _role(item)
     try:
-        entry = read_profile(profile)['roles'].get(role)
+        read = read_profile(profile)
     except FileNotFoundError:
-        entry = None
+        read = {}
+    entry = (read.get('roles') or {}).get(role)
+    if model is not None and (entry is None or entry.get('model') != model):
+        # another candidate of the role, set up beside the profile's default one
+        entry = (read.get('candidates') or {}).get(model)
+        entry = entry if isinstance(entry, dict) and entry.get('model') == model else None
     if entry is None or model is not None and entry.get('model') != model:
         raise SystemExit(f"{role}{' ' + model if model else ''} is not set up; run: gamst recipe setup {recipe['name']}" + (
             f' --with-role {role}' if item['use'] == 'role' else ''))
@@ -505,6 +598,59 @@ def _device():
 
 def _given(args):
     return [name for name in SOURCES if getattr(args, name, None) is not None and getattr(args, name) is not False]
+
+
+TIMINGS = ('realtime', 'post')
+
+
+def timing(args):
+    """``realtime`` (a camera, ``--as-live``, ``--realtime``: counts as frames arrive; frames the live lane cannot
+    reach in time go to L2 and are counted late, as corrections) or ``post`` (a finished file: every frame, the
+    largest batches, nothing is late). ``--timing`` names it; without it a live input or pacing is realtime."""
+    live = any(name in LIVE for name in _given(args)) or getattr(args, 'as_live', False) or getattr(args, 'realtime', None)
+    wanted = getattr(args, 'timing', None)
+    if wanted == 'post' and live:
+        raise SystemExit('--timing post counts a finished file; a camera, --as-live or --realtime is realtime')
+    return wanted or ('realtime' if live else 'post')
+
+
+async def choose_pose(recipe, args, pipeline):
+    """Realtime, when the owner did not name ``--pose``: measure the recipe's pose model now (its live worker and, as
+    far as the memory budget allows, an L2 worker, at the same time) and keep it if together they give at least the
+    input's frame rate; else the item's ``choose.fallback`` (never both in one run). Returns what was measured and
+    decided, or None when nothing was chosen."""
+    import asyncio
+    from ..memory_budget import budget, free_pct
+    item = next((item for item in recipe['modules'] if item['use'] in POSE_SOURCES and item.get('choose')), None)
+    if item is None or getattr(args, 'pose', None) or timing(args) != 'realtime':
+        return None
+    module = pipeline.modules[item['name']]['module']
+    if not callable(getattr(module, 'benchmark', None)):
+        return None
+    choose, catch = item['choose'], item.get('catch_up') or {}
+    fps = _source_fps(args) or float(choose.get('camera_fps', 30))
+    persons, seconds = int(choose.get('persons', 1)), float(choose.get('seconds', 2))
+    replicas = budget(replica_mb=float(catch.get('replica_mb') or 0), min_free_pct=float(catch.get('min_free_pct') or 0),
+                      most=1) if catch else 0
+    spare = await module.prestart() if replicas else None
+    measured = await asyncio.gather(module.benchmark(seconds=seconds),
+                                    *([spare.benchmark(seconds=seconds)] if spare is not None else []))
+
+    def rate(found):     # frames per second for ``persons`` people, the detector at its interval
+        detect = found['detect_ms'] or 0.
+        per_frame = found['ms_per_frame'] * persons + (detect * 1000. / fps / found['det_every_ms']
+                                                      if found['det_every_ms'] else detect)
+        return 1000. / per_frame
+    live = rate(measured[0])
+    late = rate(measured[1]) if len(measured) > 1 else 0.
+    keeps = live + late >= fps
+    chosen = item['candidate'] if keeps else choose['fallback']
+    reason = (f"{item['candidate']} gives {live:.1f} fps live" + (f" + {late:.1f} fps on an L2 worker" if late else "") +
+              f" measured now for {persons} person(s); the input is {fps:g} fps: " +
+              ('it keeps up' if keeps else f"too heavy for this machine, {choose['fallback']} counts instead"))
+    return dict(model=item['candidate'], chosen=chosen, input_fps=fps, live_fps=round(live, 1), l2_fps=round(late, 1),
+                l2_workers=len(measured) - 1, persons=persons, free_memory_pct=free_pct(), measured=list(measured),
+                reason=reason)
 
 
 def _pairs(values, option):
@@ -767,11 +913,12 @@ def _reference_value(reference, args):
         if not args.exemplar:
             raise SystemExit(f"this recipe needs a demonstrated exemplar: run 'gamst recipe enroll' and pass "
                              f'--exemplar FILE ({name})')
-        saved = json.loads(Path(args.exemplar).read_text())
+        path = args.exemplar
+        saved = json.loads(Path(path).read_text())
         if isinstance(saved, dict) and 'value' in saved:
-            _check_exemplar(saved, args.exemplar)
+            _check_exemplar(saved, path)
         if isinstance(saved, dict) and saved.get('format') == 2:
-            _check_exemplar(saved, args.exemplar)
+            _check_exemplar(saved, path)
             return saved, None
         return (saved['value'] if isinstance(saved, dict) and 'value' in saved else saved), None
     if kind == 'terms':
@@ -873,13 +1020,21 @@ async def build_module(item, context):
         raise SystemExit(f"{item['name']} did not start: {public_text(error)}") from error
 
 
+def _catch_up(config):
+    """A module item's ``catch_up``; a ``pre_roll`` that no movement resolved (:func:`with_pre_roll`) is 1 s."""
+    if not isinstance(config, dict):
+        return config
+    return {key: 1000 if value == 'pre_roll' else value for key, value in config.items()}
+
+
 def module_options(item, built, *, lanes=True):
     """How the Pipeline runs a built module item (``Pipeline.add_module``)."""
     return dict(consumes=item['consumes'], spec=built.get('spec'), every_ms=built.get('every_ms'),
                 queue=item.get('queue', built.get('queue', 'auto')) if lanes else None,
                 optional=bool(item.get('optional')) and item.get('pausable', True), emits=tuple(item.get('emits', ())),
-                enabled=item.get('enabled', True), catch_up=item.get('catch_up') if lanes else False,
-                slowdown=item.get('slowdown'))
+                enabled=item.get('enabled', True), catch_up=_catch_up(item.get('catch_up')) if lanes else False,
+                slowdown=item.get('slowdown'), sample=item.get('sample') if lanes else None,
+                backlog=item.get('backlog') if lanes else None, batch=item.get('batch') if lanes else None)
 
 
 def slowdowns(values):
@@ -980,6 +1135,18 @@ async def run_pipeline(recipe, args):
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
         pipeline = await build_pipeline(recipe, args, human)
+        report['timing'] = timing(args)
+        choice = await choose_pose(recipe, args, pipeline)
+        if choice is not None:
+            print(json.dumps(dict(pose_choice={key: choice[key] for key in choice if key != 'measured'})),
+                  file=sys.stderr, flush=True)
+            if choice['chosen'] != choice['model']:
+                await pipeline.close()
+                recipe = with_pose(recipe, choice['chosen'])
+                pipeline = await build_pipeline(recipe, args, human)
+            report['pose_choice'] = choice
+            pipeline.notes['pose_choice'] = choice
+        pipeline.notes['timing'] = report['timing']
         view, idle, live, warned = None, None, None, dict(at=0., seen=set())
         pipeline.notify = lambda text: print(text, file=sys.stderr, flush=True)
 
@@ -1011,6 +1178,9 @@ async def run_pipeline(recipe, args):
                 if not report['input_frames'][input_id]:
                     report['start_ms'] = min(started, report.get('start_ms', started))
                 report['input_frames'][input_id] += 1
+            if 'start_ms' not in report and getattr(args, 'realtime', None):
+                # replayed at its pace on the recording's own clock: knowledge time - this = capture clock
+                report.update(realtime=args.realtime, clock_shift_ms=timestamp() - frame.timestamp_ms)
             report.setdefault('start_ms', started)
             report['frames'] += input_id == first
             keep(records)
@@ -1028,7 +1198,9 @@ async def run_pipeline(recipe, args):
         if callable(getattr(view, 'idle', None)):
             idle = asyncio.create_task(view.idle())  # an interactive view stays drawn between frames
         try:
+            began = time.monotonic()
             keep(await pipeline.run(on_frame=on_frame, stop_on_failure=bool(getattr(args, 'stop_on_failure', False))) or [])
+            report['run_s'] = round(time.monotonic() - began, 2)   # the run itself: models were loaded before
             now = timestamp()
             for capability in wanted:   # plus the records of modules that commit their own
                 keep(human.store.query('local-user', report.get('start_ms', 0), now, 'observation.signal',
@@ -1050,6 +1222,11 @@ async def run_pipeline(recipe, args):
                         own, human.store.known_times([row['id'] for row in own]), paced=bool(report.get('paced')))
                     report['decision_clock'] = 'capture (paced as live: knowledge time)' if report.get('paced') else \
                         'capture (record time: the run was not paced, knowledge times are on another clock)'
+                elif (report.get('paced') or 'clock_shift_ms' in report) and counted['groups']:   # when each was known
+                    report.setdefault('event_states', {})[capability] = event_states(
+                        own, human.store.known_times([row['id'] for row in own]), paced=True,
+                        events=set(counted['groups']) - {'exemplar.ended'})
+                    report['decision_clock'] = 'capture (paced as live: knowledge time)'
                 report['lost'][capability] = pipeline.lost(capability)
             # Complete: no frame the count depends on was lost, failed or captured while a module was off.
             report['complete'] = not any(lost['gaps'] for lost in report['lost'].values())
@@ -1104,7 +1281,7 @@ async def run_pipeline(recipe, args):
     return report
 
 
-def event_states(rows, known, *, paced=False):
+def event_states(rows, known, *, paced=False, events=None):
     """Each event with a revision state as it stands now, and when it was committed and settled.
 
     ``committed_ms`` / ``settled_ms``: when the Store learned the event and its revision (``known``: record ID ->
@@ -1128,7 +1305,14 @@ def event_states(rows, known, *, paced=False):
 
     for row in rows:
         for item in row['observation']['value'].get('events') or ():
-            if not isinstance(item, dict) or item.get('event') == REVISION or 'event_id' not in item:
+            if not isinstance(item, dict) or item.get('event') == REVISION:
+                continue
+            if 'event_id' not in item:   # final as committed: only when it was asked for (``events``: these names)
+                if events is not None and item.get('event') in events:
+                    found.append(dict(item, state=item.get('state', 'final'), committed_ms=known.get(row['id']),
+                                      capture_ms=row['timestamp_ms'], committed_state=item.get('state', 'final'),
+                                      history=[dict(state=item.get('state', 'final'), capture_ms=row['timestamp_ms'],
+                                                    decided_ms=decided(row))]))
                 continue
             entry = dict(with_state(item, revised), committed_ms=known.get(row['id']), capture_ms=row['timestamp_ms'],
                          committed_state=item.get('state', 'final'))
@@ -1203,6 +1387,17 @@ def _optional_options(parser):
                         help='add a registry role as a module (gamst recipe roles); @MS: look at one frame per MS')
 
 
+def _module_options(parser):
+    parser.add_argument('--pose', metavar='CANDIDATE',
+                        help='the vision.pose candidate that counts (person-action-count: rtmw.l_384x288 by default; '
+                             'e.g. mediapipe.pose_full, mediapipe.pose_heavy); the part that builds it replaces the '
+                             'recipe\'s, joints are read its way')
+    parser.add_argument('--set', dest='settings', action='append', default=[], metavar='MODULE.KEY=VALUE',
+                        help='one setting of a module item (VALUE is JSON, else text), e.g. pose.delegate=gpu, '
+                             'pose.batch=4 (frames per pose call), pose.device=cpu, pose.sample=newest (a lane that skips to the '
+                             'newest frame while busy; not the default: every frame is counted)')
+
+
 def _asr_options(parser, consent=True):
     """``--asr`` (and ``--allow-remote-asr``) for the actions that transcribe or set up the transcribing module."""
     if consent:
@@ -1251,6 +1446,10 @@ def _source_options(parser, *, clips=False):
     parser.add_argument('--frames', type=int, help='stop after this many frames (several inputs: of the video)')
     parser.add_argument('--as-live', action='store_true',
                         help='give a recording at its own pace, as a live capture: nothing waits for slow modules')
+    parser.add_argument('--timing', choices=TIMINGS,
+                        help='realtime: count as frames arrive, frames the live lane cannot reach in time are counted '
+                             'late by L2 (corrections); post: a finished file, every frame in the largest batches, '
+                             'nothing late (default: realtime for a camera, --as-live or --realtime, else post)')
     parser.add_argument('--models', help='weight root or an existing flat weights directory (default: the setup profile)')
     parser.add_argument('--worker-python', help='python for model worker processes (default: the setup profile)')
     parser.add_argument('--device', choices=['cpu', 'mps', 'cuda'])
@@ -1492,6 +1691,7 @@ def main(argv=None):
         command.add_argument('--out', help='file to write')
     for command in (show, install, learn, start, search, seek):
         _optional_options(command)
+        _module_options(command)
     takes = start.add_argument_group('GAMST 240 takes (coin-flip)')
     takes.add_argument('--record-dir', help='one folder per take: raw.gmst, hud.mp4, refined.json/mp4 '
                                             '(default gamst-takes)')
@@ -1527,6 +1727,15 @@ def main(argv=None):
                   _kept(args) if args.action == 'run' else None)
     if getattr(args, 'asr', None):
         recipe = with_asr(recipe, args.asr)
+    if getattr(args, 'pose', None):
+        recipe = with_pose(recipe, args.pose)
+    if getattr(args, 'settings', None):
+        recipe = with_settings(recipe, args.settings)
+    if getattr(args, 'timing', None) == 'realtime' and not getattr(args, 'realtime', None) and \
+            not any(name in LIVE for name in _given(args)):
+        args.as_live = True        # a file counted in realtime: given at its own pace, as a camera would
+    if getattr(args, 'exemplar', None):
+        recipe = with_pre_roll(recipe, args.exemplar)
     if len(recipe['inputs']) == 1 and args.action in ('run', 'enroll', 'find') and len(_given(args)) > 1:
         unread = [name for name in _given(args) if name not in recipe['inputs'][0]['sources']]
         if unread and len(read_recipe(args.recipe)[1]['inputs']) > 1:

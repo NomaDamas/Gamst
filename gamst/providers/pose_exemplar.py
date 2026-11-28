@@ -50,6 +50,66 @@ ANGLES = (('left_elbow', 'left_shoulder', 'left_wrist'), ('right_elbow', 'right_
 CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
     'left_wrist_dx', 'left_wrist_dy', 'right_wrist_dx', 'right_wrist_dy', 'wrist_gap')
 CHANNELS_VERSION = 2
+MEDIAPIPE_MIN_VISIBILITY = .5    # MediaPipe's own landmark gate (``mediapipe.tasks.python.vision.drawing_utils``)
+
+# The 21 points of one hand, in the order of COCO-WholeBody, MediaPipe Hands and OpenPose: the wrist, then each finger
+# from the palm out (thumb: cmc, mcp, ip, tip; the others: mcp, pip, dip, tip). A rule names them per side:
+# ``left_hand_wrist``, ``left_thumb_tip``, ``left_index_mcp``, ..., ``right_pinky_tip``.
+FINGERS = ('thumb', 'index', 'middle', 'ring', 'pinky')
+HAND_POINTS = ('hand_wrist',) + tuple(f'{finger}_{joint}' for finger in FINGERS for joint in (
+    ('cmc', 'mcp', 'ip', 'tip') if finger == 'thumb' else ('mcp', 'pip', 'dip', 'tip')))
+SIDES = ('left', 'right')
+HAND_JOINTS = tuple(f'{side}_{point}' for side in SIDES for point in HAND_POINTS)
+# RTMW (COCO-WholeBody 133): left hand 91-111, right hand 112-132, in HAND_POINTS order (``left_hand_root``,
+# ``left_thumb1``..``4``, ``left_forefinger1``..``4``, ..., ``left_pinky_finger4``; rtmlib ``coco133.py``).
+COCO_WHOLEBODY_HANDS = {f'{side}_{point}': first + offset for side, first in zip(SIDES, (91, 112))
+                        for offset, point in enumerate(HAND_POINTS)}
+# Sapiens2 (Goliath 308, Meta's ``keypoints308.py`` at 7e5bae8): right hand 21-41, left 42-62; per finger the tip first
+# (``right_thumb4``, ``3``, ``2``, ``right_thumb_third_joint``: tip to the joint nearest the wrist, as its skeleton links
+# wrist -> third_joint -> 2 -> 3 -> 4 show), the wrist last (41 and 62 are also the body's wrists).
+def _goliath_hand(first):
+    points = {'hand_wrist': first + 20}
+    for number, _ in enumerate(FINGERS):
+        for joint, point in enumerate(HAND_POINTS[1 + 4 * number:5 + 4 * number]):     # from the palm out
+            points[point] = first + 4 * number + 3 - joint                                # Goliath lists the tip first
+    return points
+
+
+GOLIATH_HANDS = {f'{side}_{point}': index for side, first in zip(SIDES, (42, 21))
+                 for point, index in _goliath_hand(first).items()}
+
+
+def keypoint_reading(pose, mapping=MEDIAPIPE_BODY, min_visibility=MEDIAPIPE_MIN_VISIBILITY, *, hands=False):
+    """(mapping, min_visibility) to read this pose's joints with: its own ``keypoint_set`` decides when it names a
+    known one (RTMW ``coco_wholebody133``, Sapiens2 ``goliath308``), so joints are never read by another model's
+    indices; a pose without one (MediaPipe) is read with the given mapping. Each model's joints are gated by its own
+    score threshold (RTMW 0.3, rtmlib's; Sapiens2 0.3, its demo's; MediaPipe 0.5, its own), hands as the body, except
+    RTMW's hands, gated on their raw score (:func:`raw_score_gates`).
+
+    ``hands``: the mapping also holds the 42 hand joints (:data:`HAND_JOINTS`) where the model has them; MediaPipe Pose
+    has none (its 33 landmarks end the hand at the wrist and three finger points), so there they are unknown."""
+    kind = pose.get('keypoint_set') if isinstance(pose, dict) else None
+    if kind == 'coco_wholebody133':
+        from .rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return ({**COCO_WHOLEBODY_BODY, **COCO_WHOLEBODY_HANDS} if hands else COCO_WHOLEBODY_BODY), MIN_VISIBILITY
+    if kind == 'goliath308':
+        from .sapiens2_pose import GOLIATH_BODY
+        # the official Sapiens2 demo's --kpt-thr (as recipes/parts.py)
+        return ({**GOLIATH_BODY, **GOLIATH_HANDS} if hands else GOLIATH_BODY), .3
+    if kind not in (None, 'mediapipe33'):
+        raise ValueError(f'poses of keypoint set {kind!r} have no joint mapping here')
+    return mapping, min_visibility
+
+
+def raw_score_gates(pose, mapping):
+    """{joint: least raw score} for the joints of ``mapping`` this pose's model gates on its raw keypoint score, or
+    None: RTMW's hand joints (:data:`gamst.providers.rtmw_pose.HAND_MIN_RAW_SCORE`). A landmark without
+    ``raw_score`` (a worker from before it was sent) keeps the ``visibility`` gate."""
+    if not isinstance(pose, dict) or pose.get('keypoint_set') != 'coco_wholebody133':
+        return None
+    from .rtmw_pose import HAND_MIN_RAW_SCORE
+    gates = {name: HAND_MIN_RAW_SCORE for name in mapping if name in COCO_WHOLEBODY_HANDS}
+    return gates or None
 
 
 def joint_angle(a, vertex, b):
@@ -62,13 +122,20 @@ def joint_angle(a, vertex, b):
     return math.acos(cosine) / math.pi
 
 
-def body_points(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1.):
-    """{joint: (x, y)} of the visible mapped joints, x scaled so both axes have one unit."""
+def body_points(landmarks, mapping=MEDIAPIPE_BODY, *, min_visibility=.5, aspect=1., raw_gates=None):
+    """{joint: (x, y)} of the visible mapped joints, x scaled so both axes have one unit.
+
+    ``raw_gates`` (:func:`raw_score_gates`): joints read by their ``raw_score`` instead, where a landmark has one."""
     points = {}
     for name, index in mapping.items():
         if index < len(landmarks):
             point = landmarks[index]
-            if point.get('visibility', 1.) >= min_visibility:
+            gate = raw_gates.get(name) if raw_gates else None
+            if gate is not None and type(point.get('raw_score')) in (int, float):
+                visible = point['raw_score'] >= gate
+            else:
+                visible = point.get('visibility', 1.) >= min_visibility
+            if visible:
                 points[name] = (float(point['x']) * aspect, float(point['y']))
     return points
 
@@ -116,7 +183,8 @@ def largest_pose(poses, mapping=MEDIAPIPE_BODY, min_visibility=.5):
         if not landmarks:
             continue
         aspect = _aspect(pose)
-        values, mask = pose_channels(landmarks, mapping, min_visibility=min_visibility,
+        own, visibility = keypoint_reading(pose, mapping, min_visibility)
+        values, mask = pose_channels(landmarks, own, min_visibility=visibility,
                                      aspect=1. if aspect is None else aspect)
         if best is None or sum(mask) > sum(best[1]):
             best = (values, mask, index, aspect)
@@ -132,14 +200,20 @@ class PoseChannels:
     ``image_aspect``.
     """
 
-    def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5):
+    def __init__(self, *, mapping=MEDIAPIPE_BODY, source='mediapipe_pose', min_visibility=.5,
+                 capability_id='vision.pose_channels'):
+        """``capability_id``: another one for a second pose model's channels in the same run."""
         self.mapping, self.min_visibility = mapping, min_visibility
+        self._args = dict(mapping=mapping, source=source, min_visibility=min_visibility, capability_id=capability_id)
         self.spec = CapabilitySpec(
-            'vision.pose_channels', 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
+            capability_id, 'vision.pose_channels', 'video', 'gamst.pose_channels', f'{CHANNELS_VERSION}.{source}',
             (OutputField('channels', 'array'), OutputField('mask', 'array'), OutputField('visible', 'integer'),
              OutputField('pose_index', 'integer', required=False),
              OutputField('image_aspect', 'number', unit='width/height', required=False)),
             'frame', freshness_ms=1000, interpretation='measurement', devices=('cpu',), license='Apache-2.0')
+
+    def fork(self):
+        return type(self)(**self._args)
 
     def process(self, frame):
         poses = poses_of(frame.data)
@@ -241,9 +315,17 @@ class ExemplarEvents:
                            min_visibility=self.min_visibility, contract=self.contract, speaker_bound=self.speaker_bound,
                            **self._defaults)
         ready.set_exemplar(reference['value'])
+        ready._reference = reference
         ready.label = reference['label']
         ready.identity = {f'reference_{key}': reference[key] for key in ('id', 'revision') if reference.get(key) is not None}
         return ready
+
+    def fork(self):
+        """A counter of the same movement from a fresh state (an L2 chain of :class:`gamst.pipeline.Pipeline`)."""
+        reference = getattr(self, '_reference', None)
+        if reference is None:
+            raise ValueError('this counter has no movement to fork')
+        return self.prepare(reference)
 
     def offline(self, reference):
         """A separate counter for records that were kept (nothing of it is committed)."""
@@ -258,7 +340,7 @@ class ExemplarEvents:
             self._next = [item for item in self._next if item[0] < from_ms] + [(from_ms, ready)]
 
     def _adopt(self, ready, from_ms):
-        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity'):
+        for name in ('label', 'scorer', 'rule', 'mode', 'enter', 'exit', '_methods', 'identity', '_reference'):
             setattr(self, name, getattr(ready, name) if ready is not None else None if name in ('scorer', 'rule', 'mode') else
                     getattr(self, name))
         self.info, self.from_ms = dict(ready.info, removed=False) if ready is not None else dict(self.info, removed=True), from_ms
@@ -375,9 +457,11 @@ class ExemplarEvents:
             if best is None:
                 return None
             channels, mask, index, aspect = best
-            return channels, mask, body_points(poses[index]['landmarks'], self.mapping,
-                                               min_visibility=self.min_visibility,
-                                               aspect=1. if aspect is None else aspect)
+            own, visibility = keypoint_reading(poses[index], self.mapping, self.min_visibility,
+                                               hands=self.rule.needs_hands)
+            return channels, mask, body_points(poses[index]['landmarks'], own, min_visibility=visibility,
+                                               aspect=1. if aspect is None else aspect,
+                                               raw_gates=raw_score_gates(poses[index], own))
         value = frame.data if isinstance(frame.data, dict) else {}
         channels, mask = value.get('channels'), value.get('mask')
         if not isinstance(channels, list) or not isinstance(mask, list):

@@ -105,9 +105,10 @@ class Environments(Temporary):
             self.assertLessEqual(len(registry.cv2_distributions(packages)), 1, name)
         self.assertEqual(registry.cv2_distributions(['mediapipe==0.10.35']), {'opencv-contrib-python'})
         self.assertEqual(registry.cv2_distributions(['ultralytics==8.4.212', 'opencv-python>=4.8,<5']), {'opencv-python'})
-        merged = recipes.plan(recipes.load('person-action-count', exclude=['target_person']), hardware=HOST, isolation='current')
+        with_mediapipe = recipes.with_pose(recipes.load('person-action-count'), 'mediapipe.pose_full')   # + LVFace
+        merged = recipes.plan(with_mediapipe, hardware=HOST, isolation='current')
         self.assertTrue(any('overwrite each other' in warning for warning in merged['warnings']))
-        apart = recipes.plan(recipes.load('person-action-count'), hardware=HOST)
+        apart = recipes.plan(with_mediapipe, hardware=HOST)
         self.assertFalse(any('overwrite each other' in warning for warning in apart['warnings']))
 
     def test_a_shared_environment_has_no_conflicting_pins(self):
@@ -374,7 +375,8 @@ class PoseWorker(Temporary):
 
     def run_frames(self, frames, *, between=None, target=False):
         VideoDetector.made = []
-        recipe = recipes.load('person-action-count', exclude=[] if target else ['target_person'])
+        recipe = recipes.with_pose(recipes.load('person-action-count', exclude=[] if target else ['target_person']),
+                                   'mediapipe.pose_full')       # the MediaPipe part, selectable with --pose
         entry = dict(model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python='/env/python',
                      config=dict(path='/m/pose.task', sha256='1' * 64))
 
@@ -501,7 +503,8 @@ class PoseWorker(Temporary):
             config=dict(path='/m/pose.task', sha256='1' * 64))}}))
         out = self.tmp / 'exemplar.json'
         with patch('gamst.crew.modules.open_private_worker', self.open), patch('gamst.inputs.open_source', lambda *a, **k: Clip()):
-            recipes.main(['enroll', 'person-action-count', '--video', 'x.mp4', '--out', str(out), '--profile', str(profile)])
+            recipes.main(['enroll', 'person-action-count', '--video', 'x.mp4', '--out', str(out), '--profile', str(profile),
+                          '--pose', 'mediapipe.pose_full'])
         saved = json.loads(out.read_text())
         self.assertTrue(saved['channels'].startswith('vision.pose_channels@2.'))
         self.assertEqual(recipes._reference_value(dict(kind='exemplar', name='exemplar'),

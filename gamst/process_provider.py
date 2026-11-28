@@ -7,7 +7,7 @@ import tempfile
 
 from .capabilities import bounded_json
 from .redact import public_text
-from .provider_wire import envelope, sizes, parse_header, encode_frame, spec_value
+from .provider_wire import FRAME_MEMORY, FrameMemory, envelope, sizes, parse_header, encode_frame, spec_value
 from .provider_profiles import capability
 from .streams import _finish
 
@@ -77,6 +77,7 @@ class ProcessProvider:
     _errors = None      # the task reading the child's error output while it starts
     # True: this worker answers ``query`` of its owning module only (gamst.private_payload).
     private = False
+    _frames = None      # FrameMemory: large frames go through shared memory (the worker agreed at start)
 
     @classmethod
     async def open(cls, python, profile, config, *, startup_timeout=120, inference_timeout=30,
@@ -142,15 +143,19 @@ class ProcessProvider:
             extra = {'separation_protocol': PROTOCOL} if separation_owner is not None else {}
             if private:
                 extra['private_protocol'] = PRIVATE_PROTOCOL
+            asked = {} if separation_owner is not None else {'frame_memory': FRAME_MEMORY}
             try:
                 response = await self._request('start', profile=profile, config=self.config,
-                                               timeout=startup_timeout, **extra)
+                                               timeout=startup_timeout, **extra, **asked)
             except (asyncio.IncompleteReadError, BrokenPipeError, ConnectionResetError) as ended:
                 raise RuntimeError(await self._ended_early(kept)) from ended
             except asyncio.TimeoutError as late:
                 raise asyncio.TimeoutError(f'{profile} worker did not start within {startup_timeout:g} s') from late
+            agreed = isinstance(response, dict) and asked and response.pop('frame_memory', None) == FRAME_MEMORY
             if response != {'spec': spec_value(self.spec), **extra}:
                 raise RuntimeError('worker capability/provenance differs from selected contract')
+            if agreed:
+                self._frames = FrameMemory()
             return self
         except BaseException:
             if self._process is None and spawn is not None:
@@ -177,6 +182,9 @@ class ProcessProvider:
 
     async def _stop(self):
         self.closed = True
+        frames, self._frames = self._frames, None
+        if frames is not None:
+            frames.close()
         errors, self._errors = self._errors, None
         if errors is not None:
             errors.cancel()
@@ -256,7 +264,10 @@ class ProcessProvider:
                 raise RuntimeError('provider worker is closed; explicitly reopen its stream')
             if owner is not None and (owner.reset_pending or request_revision != owner.revision):
                 raise PermissionError('separation request invalidated by provider reset')
-            if input_frame is not None:
+            shared = self._frames.put(input_frame) if input_frame is not None and self._frames is not None else None
+            if shared is not None:
+                fields['frame'], payload = shared
+            elif input_frame is not None:
                 fields['frame'], payload = encode_frame(input_frame)
                 if self._separation_owner is not None:
                     from .separation_media import request_binding

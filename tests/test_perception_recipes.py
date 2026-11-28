@@ -153,7 +153,7 @@ class SpeechRecipeTest(unittest.TestCase):
                 mock.patch.object(PARTS['mediapipe-pose'], 'build', build):
             recipes.main(['enroll', 'person-action-count', '--kind', 'person', '--video', str(path), '--seconds',
                           '2', '--consent', 'owner, pose counting', '--out', str(self.tmp / 'me.json'),
-                          '--profile', str(self.profile)])
+                          '--profile', str(self.profile), '--pose', 'mediapipe.pose_full'])
         saved = json.loads((self.tmp / 'me.json').read_text())
         self.assertEqual(set(saved), {'kind', 'recipe', 'face_model', 'body_model', 'face', 'body', 'consent'})
         self.assertEqual((len(saved['face']), saved['body']), (10, []))   # every second frame had one person

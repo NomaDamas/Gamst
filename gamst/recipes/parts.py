@@ -100,13 +100,16 @@ async def _mediapipe_pose(options, context):
     from ..crew.modules import open_private_worker
     from ..providers.pose import PoseWorkerPlugin
     entry = context['installed'](options)
-    worker = await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
-                                       entry['provider_profile'],
-                                       dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
-                                            allow_skips=True))
+
+    async def opener():
+        return await open_private_worker(context.get('worker_python') or entry.get('python') or sys.executable,
+                                         entry['provider_profile'],
+                                         dict(entry['config'], max_entities=int(options.get('max_poses', 1)),
+                                              allow_skips=True,
+                                              **({'delegate': options['delegate']} if options.get('delegate') else {})))
     # allow_skips: a frame lost on a loaded machine must not rebuild the detector (docs/landmarker-video.md).
-    return dict(module=PoseWorkerPlugin(worker, joints=options.get('joints'),
-                                        tracker=options.get('tracker', 'iou')))
+    return dict(module=PoseWorkerPlugin(await opener(), joints=options.get('joints'),
+                                        tracker=options.get('tracker', 'iou'), opener=opener))
 
 
 async def _mediapipe_graph(options, context):
@@ -119,6 +122,9 @@ async def _mediapipe_graph(options, context):
 
 def _pose_source(options):
     """How to read the joints of the item's pose model (``"source"``; default MediaPipe Pose)."""
+    if options.get('source') == 'rtmw':
+        from ..providers.rtmw_pose import COCO_WHOLEBODY_BODY, MIN_VISIBILITY
+        return dict(mapping=COCO_WHOLEBODY_BODY, min_visibility=MIN_VISIBILITY)
     if options.get('source') != 'sapiens2':
         return {}
     from ..providers.sapiens2_pose import GOLIATH_BODY
@@ -127,7 +133,8 @@ def _pose_source(options):
 
 async def _pose_channels(options, context):
     from ..providers.pose_exemplar import PoseChannels
-    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **_pose_source(options))
+    module = PoseChannels(source=options.get('source', 'mediapipe_pose'), **_pose_source(options),
+                          capability_id=options.get('capability_id', 'vision.pose_channels'))
     return dict(module=module, spec=module.spec)
 
 
@@ -146,8 +153,14 @@ class _Channels:
     A sensor sample with a missing channel is not a sample of the movement; a pose's hidden joints are part of it.
     """
 
-    def __init__(self, counter):
-        self.counter, self.spec = counter, counter.spec
+    def __init__(self, counter, make=None):
+        self.counter, self.spec, self._make = counter, counter.spec, make
+
+    def fork(self):
+        """The same counter from a fresh state (an L2 chain)."""
+        if self._make is None:
+            raise ValueError('this counter cannot fork')
+        return _Channels(self._make(), self._make)
 
     def process(self, frame):
         from dataclasses import replace
@@ -170,10 +183,12 @@ async def _repetition(options, context):
     sensor = _sensor(options, context)
     if sensor is not None and sensor.modality != 'imu':
         raise SystemExit('the repetition counter reads imu samples')
-    counter = RepetitionCounter(channels=len(CHANNELS if sensor is None else sensor.columns),
-                                modality='video' if sensor is None else 'imu', min_period_s=max(.05, 1 / (2 * rate)),
-                                max_period_s=float(options.get('max_period_s', 6.7)))
-    return dict(module=_Channels(counter), spec=counter.spec)
+    def make():
+        return RepetitionCounter(channels=len(CHANNELS if sensor is None else sensor.columns),
+                                 modality='video' if sensor is None else 'imu', min_period_s=max(.05, 1 / (2 * rate)),
+                                 max_period_s=float(options.get('max_period_s', 6.7)))
+    counter = make()
+    return dict(module=_Channels(counter, make), spec=counter.spec)
 
 
 async def _exemplar(options, context):
