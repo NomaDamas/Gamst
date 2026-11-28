@@ -1827,9 +1827,15 @@ def main(argv=None):
     if given[:1] == ['compose']:     # a structured request in, a recipe out (gamst/recipes/compose.py)
         from .compose import main as compose
         return compose(given[1:])
+    if given[:1] == ['hud']:         # the live HUD with its setup step first (gamst/hud_setup.py)
+        from ..hud_setup import main as hud
+        return hud(given[1:])
     actions.add_parser('bench', help='one recipe on several owner clips, paced as live, one table (gamst/recipes/bench.py)')
     actions.add_parser('compose', help='compose a recipe from a structured request (inputs, who, what, mode, timing): '
                                        'gamst recipe compose REQUEST.json [--out FILE] [--start] (gamst/recipes/compose.py)')
+    actions.add_parser('hud', help='the live window with a setup step first: input, who (text + photos), what (action '
+                                   'text, clips trimmed in the window, words), mode, timing; Start composes and runs it '
+                                   '(gamst/hud_setup.py)')
     args = parser.parse_args(argv)
     if getattr(args, 'all_throws', False):
         args.fast = False

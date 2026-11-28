@@ -23,7 +23,10 @@ Request::
             "rhythm": {"input", "channel", "band"}},
    "mode": "count" | "search", "timing": "realtime" | "post",
    "pose": CANDIDATE, "asr": CANDIDATE, "with": [...], "without": [...], "set": ["MODULE.KEY=VALUE"],
-   "consent": {"capture": true, "remote_asr": true}, "start": false, "wait": false}
+   "consent": {"remote_asr": true}, "start": false, "wait": false}
+                       remote_asr: the cost of a hosted, paid recogniser was accepted (a cost notice, not consent);
+                       a camera or microphone needs nothing more: installing GAMST is the consent (owner, 2026-11-28;
+                       "capture" is still accepted and changes nothing)
 
 How the lanes are chosen (:data:`CAPABILITIES`): each capability names the lane that answers it, taken from the built-in
 recipe it was measured in, so a composed plan is the hand-assembled one (issue #369's acceptance); every ``use`` is a
@@ -51,6 +54,7 @@ VIDEO_FILES = ('.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi')
 SOUND_FILES = ('.wav',)
 SENSOR_FILES = ('.csv', '.jsonl', '.ndjson')
 MAX_FILE = 4 << 20
+CLIP = re.compile(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?:@(\d*\.?\d+),(\d*\.?\d+))?')   # FILE@START-END[@X,Y]
 MAX_MEDIA = 8 << 30
 
 # capability -> (the built-in recipe it was measured in, its module items, its references, what it answers)
@@ -266,7 +270,7 @@ def _clip_text(item, files, where):
     """``FILE@START-END`` (the enroll form) of one clip given as that string or as {file, start_s, end_s}; None if bad."""
     from .instructions import VIDEO
     if isinstance(item, str):
-        found = re.fullmatch(r'(.+)@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?:@(\d*\.?\d+),(\d*\.?\d+))?', item)
+        found = CLIP.fullmatch(item)
         item = dict(file=found[1], start_s=float(found[2]), end_s=float(found[3]), **(
             dict(at=[float(found[4]), float(found[5])]) if found[4] else {})) if found else dict(file=item)
     if not isinstance(item, dict) or set(item) - {'file', 'start_s', 'end_s', 'at'}:
@@ -599,21 +603,34 @@ def enroll_photos(who, path, *, profile=None):
     return _enroll(argv)
 
 
-def compose(request, *, folders=None, out=None, out_dir=None, actor='user', profile=None):
-    """The recipe for ``request`` (a dict, the module docstring), validated, with ``reasons`` and the ``run`` command.
+def photo_reference(who, path, *, profile=None, session_file=None):
+    """``(check, None)`` or ``(None, refusal sentence)``: ``who``'s photos ({name, text, photos, consent}) enrolled into
+    ``path`` (the description kept as ``description``) and checked by :func:`gamst.person_reference.check` against the
+    run's video (``session_file``). compose and the HUD's setup step both enroll photos with this."""
+    from ..person_reference import check, refusal, session_of
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    problem = enroll_photos(who, path, profile=profile)
+    if problem:
+        return None, refusal(who['name'], [problem])
+    value = json.loads(Path(path).read_text())
+    if who.get('text'):
+        value['description'] = who['text']
+        from .enrollment import _save
+        _save(str(path), value)
+    verdict = check(value, session=session_of(session_file) if session_file else None)
+    if not verdict['ok']:
+        return None, refusal(who['name'], verdict['problems'])
+    return verdict, None
 
-    ``folders``: the owner's ``--clips`` folders every file must be inside (MCP), or None (the command line: any path).
-    ``out``: the recipe file to write (a rule becomes ``<out>.movement.json`` beside it); None writes nothing;
-    ``out_dir``: write it there as ``<name>.json`` instead.
-    ``actor``: who wrote a rule (``user``: confirmed; ``jev``: recorded as unconfirmed, as with set_instruction).
-    ``profile``: the setup profile example clips and photos are enrolled with (they run the pose and identity models).
-    Returns ``{ok: false, missing: [sentence, ...]}`` when something must be provided first.
-    """
-    from . import check as sampling, not_given, read_recipe, roles as setup_roles, validate, with_pose, with_settings
+
+def _plan(request, folders):
+    """``(missing, plan)``: every rule :func:`compose` applies to a request before it writes or enrolls anything.
+    ``missing`` is one sentence per thing to provide (empty when the request can be composed)."""
+    from . import not_given, read_recipe, validate, with_pose, with_settings
     from ..person_reference import refusal
     missing = []
     if not isinstance(request, dict):
-        return dict(ok=False, missing=['the request is a JSON object: inputs, who, what, mode, timing.'])
+        return ['the request is a JSON object: inputs, who, what, mode, timing.'], None
     unknown = sorted(set(request) - set(KEYS))
     if unknown:
         missing.append(f'request: unknown {", ".join(unknown)}; the keys are {", ".join(KEYS)}.')
@@ -640,6 +657,8 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
     if inputs['sensors'] and not rhythm and not base and not missing:
         missing.append(f"inputs.sensors: nothing in this request reads {inputs['sensors'][0]['id']}: add what.rhythm "
                        '{input, channel, band}, or leave the sensor out.')
+    if movement and movement.get('examples_from') == 'who' and not who and not missing:
+        missing.append("what.movement.examples_from 'who': name the person (who) to learn the clips from.")
     for key in ('with', 'without', 'set'):
         if request.get(key) is not None and (not isinstance(request[key], list) or not all(
                 isinstance(item, str) and item for item in request[key])):
@@ -648,16 +667,16 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
             r'[a-z0-9][a-z0-9-]{0,63}', request['name'])):
         missing.append('name: lowercase letters, digits and dashes, at most 64.')
     if missing:
-        return dict(ok=False, missing=missing)
+        return missing, None
     include, exclude = list(request.get('with') or ()), list(request.get('without') or ())
     reasons = []
     if base:
         if folders is not None and (not isinstance(base, str) or not re.fullmatch(r'[a-z0-9-]{1,64}', base)):
-            return dict(ok=False, missing=['recipe: the name of a built-in recipe (gamst recipe list).'])
+            return ['recipe: the name of a built-in recipe (gamst recipe list).'], None
         try:
             raw = deepcopy(read_recipe(base)[1])
         except SystemExit as error:
-            return dict(ok=False, missing=[f'recipe: {error}.'])
+            return [f'recipe: {error}.'], None
         reasons.append(dict(capability='recipe', chose=raw['name'], why='named in the request: used as it is' + (
             ', customised by with / without / set / pose / asr' if include or exclude or request.get('set')
             or request.get('pose') or request.get('asr') else '')))
@@ -671,10 +690,10 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
     # what is given for each kind of reference
     given = dict(exemplar=movement, person=who, voice=who and who.get('voice'), terms=words)
     if who and not any(item.get('use') in ('person-binding', 'target-person', 'speaker-verify') for item in raw['modules']):
-        return dict(ok=False, missing=[refusal(who['name'], [f"{raw['name']} has nothing that tells people apart "
-                                                             '(person binding or a voice)'])])
+        return [refusal(who['name'], [f"{raw['name']} has nothing that tells people apart (person binding or a voice)"])], \
+            None
     if who and movement and not any(item.get('use') == 'person-binding' for item in raw['modules']):
-        return dict(ok=False, missing=[refusal(who['name'], [f"{raw['name']} has no person-binding module"])])
+        return [refusal(who['name'], [f"{raw['name']} has no person-binding module"])], None
     try:
         # what the run leaves out by itself: optional parts whose optional reference is not given
         unread = [name for name in not_given(raw, argparse.Namespace(**{kind: bool(value) for kind, value in
@@ -688,15 +707,59 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
             chosen = with_settings(chosen, request['set'])
             raw = with_settings(raw, request['set'])
     except (ValueError, SystemExit) as error:
-        return dict(ok=False, missing=[f'{error}'.rstrip('.') + '.'])
+        return [f'{error}'.rstrip('.') + '.'], None
     lacking = [reference for reference in chosen.get('references', ()) if not reference.get('optional')
                and reference['kind'] in given and not given[reference['kind']]]
     hints = dict(exemplar='what.movement (a rule with its text, or an enrolled movement file)',
                  terms='what.words (the words to count)', voice='who.voice (an enrolled voice file)',
                  person='who.person (an enrolled person file)')
     if lacking:
-        return dict(ok=False, missing=[f"{chosen['name']} needs {reference['label']}: give {hints[reference['kind']]}."
-                                       for reference in lacking])
+        return [f"{chosen['name']} needs {reference['label']}: give {hints[reference['kind']]}."
+                for reference in lacking], None
+    # what costs money before it runs (composing never sends anything). A camera or microphone is not asked about:
+    # GAMST is open source and installing it is the consent (owner, 2026-11-28). Cost is not consent: a paid hosted
+    # call still waits until its cost is accepted.
+    before, consent = [], request.get('consent') or {}
+    hosted = _hosted_asr(chosen, include, request.get('asr')) if words else []
+    if hosted and consent.get('remote_asr') is not True:
+        before.append(f"words: {', '.join(hosted)} is hosted and paid (a cost notice): set consent.remote_asr true once "
+                      'the cost is accepted, or name a local recogniser in asr.')
+    if any(name in include for name in ('verification', 'hosted', 'vote', 'tracks', 'tse')):
+        before.append('with: the verification and hosted diarization parts send sound to paid services (a cost notice); '
+                      'run with --allow-remote-diarization once the cost is accepted.')
+    return [], dict(inputs=inputs, timing=timing, mode=mode, movement=movement, words=words, rhythm=rhythm, who=who,
+                    base=base, raw=raw, chosen=chosen, include=include, exclude=exclude, reasons=reasons, hosted=hosted,
+                    before=before)
+
+
+def validate_request(request, *, folders=None):
+    """``{ok, missing, before_run}`` of a request, by the same rules as :func:`compose` (this is the function compose
+    runs first), writing and enrolling nothing: the HUD's setup step (gamst/hud_setup.py) calls it while the request
+    is being filled in. ``missing``: one sentence per thing to provide; ``before_run``: the cost notices of paid hosted
+    calls, waiting until the cost is accepted (a camera or microphone is not asked about: installing is the consent). A photo few-shot is checked after it is
+    enrolled (:func:`enroll_photos`, then :func:`gamst.person_reference.check`, as compose does)."""
+    missing, plan = _plan(request, folders)
+    return dict(ok=not missing, missing=missing, before_run=plan['before'] if plan else [])
+
+
+def compose(request, *, folders=None, out=None, out_dir=None, actor='user', profile=None):
+    """The recipe for ``request`` (a dict, the module docstring), validated, with ``reasons`` and the ``run`` command.
+
+    ``folders``: the owner's ``--clips`` folders every file must be inside (MCP), or None (the command line: any path).
+    ``out``: the recipe file to write (a rule becomes ``<out>.movement.json`` beside it); None writes nothing;
+    ``out_dir``: write it there as ``<name>.json`` instead.
+    ``actor``: who wrote a rule (``user``: confirmed; ``jev``: recorded as unconfirmed, as with set_instruction).
+    ``profile``: the setup profile example clips and photos are enrolled with (they run the pose and identity models).
+    Returns ``{ok: false, missing: [sentence, ...]}`` when something must be provided first.
+    """
+    from . import check as sampling, roles as setup_roles
+    missing, plan = _plan(request, folders)
+    if missing:
+        return dict(ok=False, missing=missing)
+    inputs, timing, mode, movement, words, who = (plan[key] for key in ('inputs', 'timing', 'mode', 'movement', 'words',
+                                                                         'who'))
+    raw, chosen, include, exclude, reasons, before = (plan[key] for key in ('raw', 'chosen', 'include', 'exclude',
+                                                                             'reasons', 'before'))
     pose = _pose_reason(chosen, timing, request.get('pose'))
     if pose:
         reasons.insert(0, pose)
@@ -725,28 +788,19 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
         reasons.append(dict(capability='mode', chose='search', why='never miss the person: what would be uncertain or '
                             'revoked for its voice or identity is counted as a candidate with its reason'))
     # files written for the run, and the command that runs it
-    saved, before = {}, []
+    saved = {}
     target = Path(out) if out else Path(out_dir) / f"{raw['name']}.json" if out_dir else None
     recipe_path = target if target else Path(f"{raw['name']}.json")
     if (movement and movement['examples'] or who and who.get('photos')) and not target:
         return dict(ok=False, missing=['example clips and photos are enrolled into files beside the recipe: give --out '
                                        'FILE (over MCP the recipe is saved in the first --clips folder).'])
     if who and who.get('photos'):
-        from ..person_reference import check, refusal as refused, session_of
         person_path = recipe_path.with_suffix('.person.json')
-        person_path.parent.mkdir(parents=True, exist_ok=True)
-        problem = enroll_photos(who, person_path, profile=profile)
-        if problem:
-            return dict(ok=False, missing=[refused(who['name'], [problem])])
-        value = json.loads(person_path.read_text())
-        if who.get('text'):
-            value['description'] = who['text']
-            from .enrollment import _save
-            _save(str(person_path), value)
         pictures = inputs['pictures']
-        verdict = check(value, session=session_of(pictures[1]) if pictures and pictures[0] == 'video' else None)
-        if not verdict['ok']:
-            return dict(ok=False, missing=[refused(who['name'], verdict['problems'])])
+        verdict, problem = photo_reference(who, person_path, profile=profile, session_file=pictures[1] if pictures and
+                                           pictures[0] == 'video' else None)
+        if problem:
+            return dict(ok=False, missing=[problem])
         who = dict(who, person=person_path, check=verdict)
         saved['person'] = str(person_path)
         reasons.append(dict(capability='who', chose=who['name'], why=f"few-shot person reference enrolled from "
@@ -756,9 +810,6 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
     if movement and movement['examples']:
         movement_path = recipe_path.with_suffix('.movement.json')
         movement_path.parent.mkdir(parents=True, exist_ok=True)
-        if movement.get('examples_from') == 'who' and not who:
-            return dict(ok=False, missing=["what.movement.examples_from 'who': name the person (who) to learn the clips "
-                                           'from.'])
         problem = enroll_examples(movement, movement_path, profile=profile, actor=actor,
                                   who=who if movement.get('examples_from') == 'who' else None)
         if problem:
@@ -819,23 +870,12 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
         run += ['--without', name]
     if request.get('pose'):
         run += ['--pose', request['pose']]
-    consent = request.get('consent') or {}
-    if words and _hosted_asr(chosen, include, request.get('asr')):
-        if consent.get('remote_asr') is True:
-            run.append('--allow-remote-asr')
-        else:
-            before.append(f"words: {', '.join(_hosted_asr(chosen, include, request.get('asr')))} is hosted and paid: "
-                          'set consent.remote_asr true (the owner\'s consent to sending the sound), or name a local '
-                          'recogniser in asr.')
-    if any(name in include for name in ('verification', 'hosted', 'vote', 'tracks', 'tse')):
-        before.append('with: the verification and hosted diarization parts send sound to paid services; run with '
-                      '--allow-remote-diarization once the owner consents.')
-    if (pictures and pictures[0] == 'camera' or sound and sound[0] == 'microphone') and consent.get('capture') is not True:
-        before.append('consent.capture: a camera or microphone is opened only with the owner\'s explicit consent: set '
-                      'consent.capture true.')
+    if words and plan['hosted'] and (request.get('consent') or {}).get('remote_asr') is True:
+        run.append('--allow-remote-asr')
     run.append('--headless')
+    left_out = [item['name'] for item in raw['modules'] if item['name'] not in {other['name'] for other in chosen['modules']}]
     recipe = dict(raw, composed=dict(request={key: value for key, value in request.items() if key not in (
-        'start', 'wait', 'consent')}, reasons=reasons, run=run, by='gamst.recipes.compose', version=1))
+        'start', 'wait', 'consent')}, reasons=reasons, run=run, left_out=left_out, by='gamst.recipes.compose', version=1))
     if target:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(recipe, indent=2, ensure_ascii=False) + '\n')
@@ -848,8 +888,7 @@ def compose(request, *, folders=None, out=None, out_dir=None, actor='user', prof
     return dict(ok=True, name=raw['name'], recipe=recipe, reasons=reasons, run=run, saved=saved or None,
                 before_run=before, inputs=[item['id'] for item in chosen['inputs']],
                 modules=[item['name'] for item in chosen['modules']],
-                left_out=[item['name'] for item in raw['modules'] if item['name'] not in
-                          {other['name'] for other in chosen['modules']}],
+                left_out=left_out,
                 records=list(chosen.get('records', ())), setup_roles=roles, required_fps=verdict.get('required_fps'),
                 setup=f'gamst recipe setup {recipe_path} --dry-run')
 
