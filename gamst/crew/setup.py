@@ -552,6 +552,8 @@ def _role_config(selection, weight_paths, source_dir):
         config.update(checkpoint_path=checkpoint["path"], checkpoint_sha256=checkpoint["sha256"],
                       encoder_path=encoder["path"], encoder_sha256=encoder["sha256"],
                       runtime_root=str(Path(checkpoint["path"]).parent))
+    elif model.startswith(("yolo26.", "siglip.")):       # one pinned file (docs/sports.md)
+        config.update(path=first["path"], sha256=first["sha256"])
     elif model.startswith("mediapipe.") or model in ("silero.vad", "yamnet", "depth_anything_v2.small"):
         config.update(path=first["path"], sha256=first["sha256"])
     elif (selection.get("config") or {}).get("backend") in ("sherpa-zipformer", "voxtral-mlx"):
@@ -653,6 +655,9 @@ def apply_plan(plan, *, prefix=None, profile_path=None, models_dir=None):
         existing = value
     existing["hardware"] = plan["hardware"]
     existing["roles"].update(profile_roles)
+    # every candidate set up is kept by name too, so a recipe that names another candidate of a role (a stack, a
+    # realtime fallback) finds it after a later setup made a different one the role's default (recipes.installed)
+    existing.setdefault("candidates", {}).update({entry["model"]: entry for entry in profile_roles.values()})
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = profile_path.with_name(profile_path.name + ".tmp")
     temporary.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
