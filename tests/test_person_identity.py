@@ -242,6 +242,24 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(item['by'], item['track_id'], item['start_ms']) for item in bound],
                          [('handover', 'person-1@700', 700)])      # never the untracked pose; back to the track's start
 
+    async def test_an_l2_fork_s_binding_reaches_back_over_the_live_track_it_continues(self):
+        from gamst.providers.person_binding import intervals_of, resolve
+        module = self.module()
+        await self.step(module, 1000, [person(.75, 'b', face=False)], frame_of(BLUE, RED))     # nobody knows b yet
+        await self.step(module, 1500, [person(.75, 'b', face=False)], frame_of(BLUE, RED))
+        snapshot = module.snapshot()
+        twin = module.fork()
+        twin.restore(snapshot)
+        await self.step(twin, 1300, [person(.74, 'person-1', face=False)], frame_of(BLUE, RED))   # pre-roll
+        found = await self.step(twin, 1501, [person(.75, 'person-1')], frame_of(BLUE, RED))       # its face: P
+        back = [item for item in found['events'] if item.get('by') == 'l2']
+        self.assertEqual([(item['track_id'], item['who'], item['start_ms'], item['until_ms'], item['continued_by'])
+                          for item in back], [('b', 'P', 1000, 1501, 'person-1@1300')])
+        intervals = intervals_of(back + [dict(event='person.bound', track_id='b', who='Q', start_ms=3000, end_ms=3000)])
+        self.assertEqual(resolve(dict(track_id='b', end_ms=1200), intervals), 'P')    # the live lane's frames of b
+        self.assertEqual(resolve(dict(track_id='b', end_ms=3500), intervals), 'Q')    # a later binding stays its own
+        self.assertEqual(resolve(dict(track_id='b', end_ms=2000), intervals), 'unknown')
+
     async def test_an_l2_fork_waits_for_its_own_scores_and_decides_on_them(self):
         from gamst.plugins import InputFrame
         from gamst.private_payload import PrivatePoses
