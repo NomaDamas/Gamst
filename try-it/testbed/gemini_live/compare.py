@@ -39,7 +39,8 @@ def gamst_rows():
         frames = d.get('frames') or 0
         lost = ((d.get('lost') or {}).get('temporal.exemplar_events') or {}).get('frames', 0)   # the counter's lane
         seen = frames - lost
-        rows.append(_row('GAMST', d['clip'], f"realtime ({d['name']}): 프레임 {lost:,}/{frames:,} 잃음 (디스크)", 1,
+        movement = {'gwan_search_rt': '글+예시 search', 'man_punch_rt': '펀치 고른 설정'}.get(d['name'], d['name'])
+        rows.append(_row('GAMST', d['clip'], f"실시간 ({movement}; 잃은 프레임 {lost:,}/{frames:,})", 1,
                          d['score'], wall_s=d.get('wall_s'),
                          fps_seen=round(seen / le.CLIPS[d['clip']]['duration_s'], 1) if frames else None,
                          tok_in=0, tok_out=0, usd=0.0, latency=(d['score'][G].get('latency') or None),

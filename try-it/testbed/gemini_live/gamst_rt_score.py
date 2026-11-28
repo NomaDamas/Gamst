@@ -48,9 +48,6 @@ def score_run(name, clip):
             stated.setdefault(_key(e), e)
     by_key = {_key(e): e for e in dump['events'] if e.get('event') == 'exemplar.matched'}
     events = []
-    for o, raw in zip(occ, sorted((e for e in dump['events'] if e.get('event') == 'exemplar.matched'),
-                                  key=lambda e: e['start_ms'])):
-        pass
     for o in occ:
         e = dict(start=o['start'], end=o['end'], who=le.TARGET if o['who'] == le.TARGET else le.OTHER,
                  track_id=o['track_id'])
@@ -60,15 +57,30 @@ def score_run(name, clip):
     for key, raw in by_key.items():
         s = stated.get(key)
         if s is not None:
-            known[(raw.get('track_id'), round((raw['start_ms'] - start) / 1000, 3))] = (s['committed_ms'] - shift - start) / 1000
+            known[(raw.get('track_id'), round((raw['start_ms'] - start) / 1000, 3))] = (
+                (s['committed_ms'] - shift - start) / 1000, s.get('decided_by') or 'L1')
     for e in events:
-        e['said_at'] = known.get((e['track_id'], round(e['start'], 3)))
+        e['said_at'], e['lane'] = known.get((e['track_id'], round(e['start'], 3)), (None, None))
     result = le.score(clip, events)
     truth = le.load_truth(clip)
     g = mp.restrict([e for e in events if e['who'] == le.TARGET], exclude=truth['examples'])
     t = mp.restrict([o for o in truth['occurrences'] if o['who'] == le.TARGET], exclude=truth['examples'])
     pairs = mp.match(g, t)
     decision = _pct([e['said_at'] - e['end'] for e, _ in pairs if e.get('said_at') is not None])
+    by_lane = {lane: _pct([e['said_at'] - o['end'] for e, o in pairs if e.get('lane') == lane and e.get('said_at') is not None])
+               for lane in sorted({e.get('lane') for e, _ in pairs if e.get('lane')})}
+    lanes = {}
+    for e in (report.get('event_states') or {}).get(CAP) or ():
+        if e.get('event') == 'exemplar.matched':
+            lane = e.get('decided_by') or 'L1'
+            lanes[lane] = lanes.get(lane, 0) + 1
+    handoffs, handed_ms = 0, 0
+    log = OUT / f'{name}.log'
+    if log.exists():
+        import re
+        for m in re.finditer(r'fell (\d+) ms behind its input: frames (\d+)\.\.(\d+)', log.read_text()):
+            handoffs += 1
+            handed_ms += int(m.group(3)) - int(m.group(2))
     wall = OUT / f'{name}.wall_s'
     info = le.CLIPS[clip]
     out = dict(name=name, clip=clip, timing=report.get('timing'), realtime=report.get('realtime'),
@@ -76,6 +88,9 @@ def score_run(name, clip):
                complete=report.get('complete'), run_s=report.get('run_s'),
                wall_s=float(wall.read_text()) if wall.exists() else None,
                events=len(events), with_known_time=sum(e['said_at'] is not None for e in events),
+               events_by_lane=lanes, l2_handoffs=handoffs,
+               l2_handed_frames=round(handed_ms / 1000 * info['fps']), latency_by_lane=by_lane,
+               lost_frames=((report.get('lost') or {}).get(CAP) or {}).get('frames', 0),
                score=result, counter_decision_delay=decision)
     if out['wall_s']:
         out['real_time_factor'] = round(out['wall_s'] / info['duration_s'], 3)
