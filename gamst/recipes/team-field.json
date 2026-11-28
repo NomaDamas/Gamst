@@ -224,5 +224,5 @@
   "sports.occupancy"
  ],
  "limits": "estimated possession and passes, never official statistics; the ball is often hidden by players (hidden_ms keeps the holder); team letters A/B are arbitrary; referees and goalkeepers join the nearer team unless teams is 3; basketball shots, offsides and in/out are not judged",
- "measured": "not yet: synthetic trajectories only (tests/test_sports.py); the dataset runs are the GCP stage (docs/sports.md)"
+ "measured": "2026-11-28, SportsMOT example (3 clips), GCP T4, player tracks only: post MOTA / IDF1 football 0.83 / 0.72 (roboflow), 0.80 / 0.67 (sota), 0.79 / 0.71 (ultralytics); basketball 0.62 / 0.52 best (roboflow); volleyball 0.35 / 0.55 best (roboflow); realtime lower with dropped frames. Possession and passes not measured. docs/measurements/sports-2026-11-28.md"
 }

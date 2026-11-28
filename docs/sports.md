@@ -3,7 +3,9 @@
 Status (2026-11-28): implemented on branch `feat/sports-recipes` (stacked on PR #373). First real measurement
 (`racket-rally`, table tennis, OpenTTGames, GCP CPU VM): docs/measurements/sports-2026-11-28.md. Post: the sota stack
 (TrackNetV3 ball) ball F1 0.84 and bounces 19/28; the detector-only stacks about 0.2. Realtime at 120 fps: no stack
-keeps up on an 8-vCPU CPU. The other recipes are tested on synthetic data only.
+keeps up on an 8-vCPU CPU, nor on one T4 (16-78 ms per frame against 8 ms). `team-field` player tracking on SportsMOT
+(T4): post MOTA 0.35-0.83 by clip, Roboflow's RF-DETR + ByteTrack best. The other recipes are tested on synthetic data
+only.
 
 ## 요약 (한국어)
 
