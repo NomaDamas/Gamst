@@ -35,6 +35,7 @@ import subprocess
 from .halo import ACCENT, BG, DIM, GOOD, LINE, MUTED, PANEL, REC, WARN, WHITE, Text
 
 KOREAN = '/System/Library/Fonts/AppleSDGothicNeo.ttc'
+NANUM = ('/usr/share/fonts/truetype/nanum/NanumGothic.ttf', '/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf')  # Linux
 WIDTH, HEIGHT, VIEW_W, VIEW_H, SIDE = 1920, 1080, 1376, 774, 1440
 HOLD_S = .55
 HOLD_MAX_S = 30.
@@ -73,7 +74,11 @@ class KoreanText(Text):
         key = (family, size, weight)
         if key not in self._fonts:
             try:
-                self._fonts[key] = self._font_cls.truetype(KOREAN, size, index=0 if weight == 'regular' else 6)
+                import os
+                if os.path.exists(KOREAN):
+                    self._fonts[key] = self._font_cls.truetype(KOREAN, size, index=0 if weight == 'regular' else 6)
+                else:       # Linux: Nanum Gothic (apt fonts-nanum)
+                    self._fonts[key] = self._font_cls.truetype(NANUM[0 if weight == 'regular' else 1], size)
             except OSError:
                 return super()._font(family, size, weight)
         return self._fonts[key]

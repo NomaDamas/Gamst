@@ -34,6 +34,15 @@ ACCENT, GOOD, WARN, REC = (255, 196, 64), (120, 214, 96), (60, 180, 255), (70, 7
 CANVAS = (1920, 1080)
 VIDEO = (32, 104, 1376, 774)  # x, y, width, height (16:9)
 FONT_FILES = {'sans': '/System/Library/Fonts/SFNS.ttf', 'mono': '/System/Library/Fonts/SFNSMono.ttf'}
+# Linux (e.g. a cloud VM rendering a HUD): DejaVu, used when the macOS files are not there
+LINUX_FONT_FILES = {'sans': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                    'mono': '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'}
+
+
+def font_file(family):
+    import os
+    path = FONT_FILES[family]
+    return path if os.path.exists(path) else LINUX_FONT_FILES[family]
 
 
 class Text:
@@ -48,7 +57,7 @@ class Text:
         key = (family, size, weight)
         if key not in self._fonts:
             try:
-                font = self._font_cls.truetype(FONT_FILES[family], size)
+                font = self._font_cls.truetype(font_file(family), size)
                 if weight != 'regular':
                     try:
                         font.set_variation_by_name(weight.capitalize())
