@@ -143,7 +143,8 @@ gamst mcp --clips DIR [--run-profile PROFILE.json] [--store run.sqlite --max-rec
   `get_pipeline`, `set_instruction` and `enroll_person` read and change that run. Its JSON lines go to stderr, never to
   the protocol's stdout. One run at a time; `wait: true` waits for a finished file's run and returns its report.
   After the run `get_pipeline` returns `{running: false, last_run}`.
-- A run with a camera or microphone needs `consent.capture`; a hosted recogniser `consent.remote_asr`.
+- A camera or microphone needs nothing more (owner, 2026-11-28: installing GAMST is the consent; `consent.capture` is
+  still accepted and changes nothing). A hosted, paid recogniser waits for `consent.remote_asr` (a cost notice).
 - Inside a running recipe (`gamst recipe run --serve`) `compose_recipe` composes with the run's `--clips` folders; it
   cannot start a second run.
 

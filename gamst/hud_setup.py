@@ -1,7 +1,7 @@
 """The setup step of the live HUD: the user-defined input module of the perception input, shown before the run starts.
 
-    gamst recipe hud [--video FILE | --camera N] [--microphone] [--sensor SPEC.json]
-                     [--who NAME] [--who-text TEXT] [--photo JPG ...] [--consent TEXT] [--voice V.json]
+    gamst recipe hud [--input FILE|DEVICE ...]
+                     [--who NAME] [--who-text TEXT] [--photo JPG ...] [--voice V.json]
                      [--action TEXT] [--rule RULE.json] [--example FILE@A-B[@X,Y] ...] [--negative ...] [--words W,W]
                      [--mode count|search] [--timing realtime|post] [--out-dir DIR] [--profile P.json]
                      [--allow-remote-asr] [-- more options of gamst recipe run]
@@ -9,8 +9,9 @@
 One window, the live view's (:class:`gamst.views.CountView`): first the setup step, then, on Start, the same window
 shows the run. Everything the command line gives is filled in already; the rest is set in the window.
 
-- **입력 (input)**: camera, video file, microphone, sensors (a sensor is given by its declaration file, the object of
-  ``compose_recipe``'s ``inputs.sensors``: columns and time are declared, never guessed).
+- **입력 (input)**: files or devices; the user never picks the kind, it is detected from the path or device
+  (:func:`detect_input`): a video file, a WAV file, a sensor declaration (the JSON object of ``compose_recipe``'s
+  ``inputs.sensors``: columns and time are declared, never guessed), a camera number, or the microphone.
 - **누구 (who, optional)**: a name or description AND photos (owner decision 59: both, or nobody). Photos come from files
   or are grabbed from the camera or video; they are enrolled at once in the background (:func:`compose.photo_reference`,
   embeddings only) and the person check (:func:`gamst.person_reference.check`: faces agree, one person per photo) is
@@ -24,8 +25,10 @@ Validation is :func:`gamst.recipes.compose.validate_request`, the rules of ``com
 is missing, Start is off and one Korean line (:func:`korean`) says what to add. Start composes through
 :func:`gamst.recipes.compose.compose` and runs the composed recipe in this window.
 
-The camera opens only when it is chosen here, by the person at this computer; that choice is the capture consent the
-composed request carries (``consent.capture``). Sound goes to a paid recogniser only with ``--allow-remote-asr``.
+Nothing here asks for consent (owner, 2026-11-28): GAMST is open source and installing it is the consent for the camera,
+the microphone and recognition. The person reference format still keeps a consent record; it is filled in as
+:data:`INSTALL_CONSENT`. What is said before a run is a cost: sound goes to a hosted, paid recogniser only with
+``--allow-remote-asr`` (a cost notice, not consent).
 """
 from __future__ import annotations
 
@@ -42,16 +45,17 @@ ACCENT, GOOD, BAD, LATE, MUTED, WHITE = (80, 220, 255), (110, 220, 120), (80, 80
     (240, 240, 240)
 BG, PANEL, EDGE = (16, 16, 16), (24, 24, 24), (70, 70, 70)
 PREVIEW_W, PREVIEW_H, BAR_H, PANEL_W, HEIGHT = 960, 540, 64, 640, 760
+INSTALL_CONSENT = 'GAMST 설치·사용자 동의'     # the consent record a person reference needs (installing is the consent)
 
 
 # ---------------------------------------------------------------- what is missing, in one Korean line
 
 KOREAN = [   # (a phrase of compose's sentence, the Korean line); the first that matches
-    ('inputs: give at least one input', '입력을 고르세요: 카메라, 영상 파일, 마이크 또는 센서.'),
-    ('one picture source', '화면 입력은 하나만 고르세요: 카메라 또는 영상 파일.'),
-    ('one sound source', '소리 입력은 하나만 고르세요.'),
-    ('a movement and a person are seen on pictures', '동작과 사람은 화면으로 봅니다: 카메라나 영상 파일을 고르세요.'),
-    ('words are heard', '단어는 소리로 듣습니다: 마이크나 소리가 있는 영상 파일을 고르세요.'),
+    ('inputs: give at least one input', '입력을 넣으세요: 영상이나 소리(.wav) 파일, 센서 설명(.json), 카메라 번호 또는 마이크.'),
+    ('one picture source', '화면 입력은 하나만 됩니다: 카메라와 영상 파일 중 하나를 빼세요.'),
+    ('one sound source', '소리 입력은 하나만 됩니다: 마이크와 소리 파일 중 하나를 빼세요.'),
+    ('a movement and a person are seen on pictures', '동작과 사람은 화면으로 봅니다: 영상 파일이나 카메라 번호를 넣으세요.'),
+    ('words are heard', '단어는 소리로 듣습니다: 마이크, 소리 파일, 또는 소리가 있는 영상 파일을 넣으세요.'),
     ('nothing in this request reads', '센서를 읽는 것이 없습니다: 리듬(채널, 대역)을 고르거나 센서를 빼세요.'),
     ('timing: post counts a finished file', '카메라와 마이크는 실시간만 됩니다: 때를 실시간으로 바꾸세요.'),
     ('say who it is in words as well', '누구인지 글로도 적어 주세요(이름이나 설명): 사진만으로는 누구를 세는지 모릅니다.'),
@@ -74,9 +78,8 @@ KOREAN = [   # (a phrase of compose's sentence, the Korean line); the first that
     ('a point goes with', '사람을 고른 점은 구간과 함께 저장합니다.'),
     ('what: say what to look for', '무엇을 셀지 정하세요: 동작(글과 규칙, 또는 예시 구간), 단어, 또는 센서 리듬.'),
     ('what.words', '단어를 쉼표 없이 하나씩 적어 주세요.'),
-    ('is hosted and paid', '단어 인식기는 유료 원격 서비스입니다: --allow-remote-asr 로 동의해야 시작합니다.'),
-    ('hosted diarization', '원격 화자 분리는 유료입니다: --allow-remote-diarization 동의가 필요합니다.'),
-    ('consent.capture', '카메라와 마이크는 여기서 고를 때만 켭니다.'),
+    ('is hosted and paid', '비용 안내: 단어 인식기는 유료 원격 서비스라 돈이 듭니다. 비용을 확인했으면 --allow-remote-asr 로 시작하세요.'),
+    ('hosted diarization', '비용 안내: 원격 화자 분리는 유료입니다. 비용을 확인했으면 --allow-remote-diarization 을 주세요.'),
     ('there is no file', '파일이 없습니다: 다시 고르세요.'),
     ('is not one of', '이 형식의 파일은 쓸 수 없습니다: 다시 고르세요.'),
 ]
@@ -104,6 +107,37 @@ def parse_clip(value):
     return clip
 
 
+def detect_input(value):
+    """``(kind, value)`` of an input given as a path or a device, or ``(None, a Korean line)``. The user never picks the
+    kind (owner, 2026-11-28): a camera number (``0``, ``camera 1``, ``카메라``), the microphone (``mic``, ``마이크``),
+    a video file, a WAV file (``audio``) or a sensor declaration (``.json``; ``sensor``) by its suffix."""
+    from .recipes.compose import SENSOR_FILES, SOUND_FILES, VIDEO_FILES
+    if isinstance(value, int) and not isinstance(value, bool):
+        return ('camera', value) if value >= 0 else (None, '카메라 번호는 0 이상입니다.')
+    text = str(value or '').strip()
+    low = text.lower()
+    if low in ('camera', '카메라', 'cam'):
+        return 'camera', 0
+    number = re.fullmatch(r'(?:camera|cam|카메라)?\s*:?\s*(\d{1,2})', low)
+    if number:
+        return 'camera', int(number[1])
+    if low in ('mic', 'microphone', '마이크'):
+        return 'microphone', True
+    path = Path(text).expanduser()
+    if not text or not path.is_file():
+        return None, f'파일이나 장치를 찾지 못했습니다: {text or "(빈칸)"} (영상·소리 파일, 센서 설명 .json, 카메라 번호, 마이크)'
+    suffix = path.suffix.lower()
+    if suffix in VIDEO_FILES:
+        return 'video', path.absolute()
+    if suffix in SOUND_FILES:
+        return 'audio', path.absolute()
+    if suffix == '.json':
+        return 'sensor', path.absolute()
+    if suffix in SENSOR_FILES:
+        return None, '센서 기록은 설명 파일(.json: id, file, modality, columns, time)로 넣으세요: 열과 시간은 적어 줘야 합니다.'
+    return None, f'이 형식의 파일은 입력으로 쓸 수 없습니다: {path.name} (영상 {" ".join(VIDEO_FILES)}, 소리 .wav, 센서 설명 .json)'
+
+
 class Setup:
     """What the setup step holds; :meth:`request` is a ``compose_recipe`` request and :meth:`state` says whether it
     can start. Nothing here draws (:class:`SetupWindow` does)."""
@@ -112,8 +146,10 @@ class Setup:
         self.out_dir, self.profile = Path(out_dir), profile
         self.pictures = None            # ('camera', index) | ('video', path)
         self.microphone = False
+        self.audio = None               # a sound file (WAV)
         self.sensors, self.rhythm = [], None        # sensor declarations; {input, channel, band}
-        self.name = self.text = self.consent = ''
+        self.name = self.text = ''
+        self.consent = INSTALL_CONSENT  # never asked: installing GAMST is the consent (owner, 2026-11-28)
         self.photos, self.voice = [], None
         self.action, self.rule = '', None
         self.examples, self.negatives, self.words = [], [], []
@@ -136,6 +172,29 @@ class Setup:
     def trim_file(self):
         """The video clips are trimmed on: the input video, else a clip file chosen for it."""
         return self.video or self.clip_file
+
+    def add_input(self, value):
+        """An input given as a path or a device, its kind detected (:func:`detect_input`); an error line or None. A
+        picture source replaces the other picture source, a sound source the other sound source."""
+        kind, found = detect_input(value)
+        if kind is None:
+            return found
+        if kind in ('camera', 'video'):
+            self.pictures = (kind, found)
+        elif kind == 'microphone':
+            self.microphone, self.audio = True, None
+        elif kind == 'audio':
+            self.microphone, self.audio = False, found
+        else:
+            problem = self.add_sensor(found)
+            if problem:
+                return problem
+            if not self.rhythm:
+                self.cycle_rhythm('none')
+        return None
+
+    def clear_inputs(self):
+        self.pictures, self.microphone, self.audio, self.sensors, self.rhythm = None, False, None, [], None
 
     def add_sensor(self, path):
         """A sensor declaration file ({id, file, modality, columns, time}); returns an error line or None."""
@@ -168,8 +227,8 @@ class Setup:
 
     # -- who
     def _key(self):
-        return (self.name.strip() or self.text.strip(), tuple(str(path) for path in self.photos), self.consent.strip(),
-                self.text.strip(), self.video)
+        return (self.name.strip() or self.text.strip(), tuple(str(path) for path in self.photos),
+                self.consent.strip() or INSTALL_CONSENT, self.text.strip(), self.video)
 
     def enrolled(self):
         """The person file enrolled from exactly these photos, name and consent, or None."""
@@ -185,7 +244,7 @@ class Setup:
         return dict(key=key, file=path, check=verdict) if verdict else dict(key=key, error=problem)
 
     def enroll(self, *, wait=False):
-        """Enroll the photos in the background when name, consent and photos are given and changed."""
+        """Enroll the photos in the background when a name (or description) and photos are given and changed."""
         key = self._key()
         if not (key[0] and key[1] and key[2]) or self.enrolling or (self.person and self.person['key'] == key):
             return None
@@ -235,6 +294,8 @@ class Setup:
             inputs[self.pictures[0]] = self.pictures[1] if self.pictures[0] == 'camera' else str(self.pictures[1])
         if self.microphone:
             inputs['microphone'] = True
+        elif self.audio:
+            inputs['audio'] = str(self.audio)
         if self.sensors:
             inputs['sensors'] = [dict(item) for item in self.sensors]
         request = dict(inputs=inputs, mode=self.mode)
@@ -245,8 +306,7 @@ class Setup:
             if self.enrolled():
                 who['person'] = str(self.enrolled())
             elif self.photos:
-                who.update(photos=[str(path) for path in self.photos], **(
-                    dict(consent=self.consent.strip()) if self.consent.strip() else {}))
+                who.update(photos=[str(path) for path in self.photos], consent=self.consent.strip() or INSTALL_CONSENT)
             if self.voice:
                 who['voice'] = str(self.voice)
             request['who'] = who
@@ -268,10 +328,8 @@ class Setup:
             what['rhythm'] = dict(self.rhythm)
         if what:
             request['what'] = what
-        consent = dict(capture=bool(self.pictures and self.pictures[0] == 'camera' or self.microphone))
-        if self.allow_remote_asr:
-            consent['remote_asr'] = True
-        request['consent'] = consent
+        if self.allow_remote_asr:           # the cost of a hosted, paid recogniser was accepted (a cost, not consent)
+            request['consent'] = dict(remote_asr=True)
         return request
 
     def state(self):
@@ -298,7 +356,7 @@ class Setup:
             return f'사진 {len(self.photos)}장 · 검사 중...', LATE
         person = self.person if self.person and self.person.get('key') == self._key() else None
         if person is None:
-            return f'사진 {len(self.photos)}장 · 이름과 동의를 적으면 검사합니다', MUTED
+            return f'사진 {len(self.photos)}장 · 이름이나 설명을 적으면 검사합니다', MUTED
         if person.get('error'):
             return f'사진 {len(self.photos)}장 · 검사 실패: ' + korean(person['error']), BAD
         face = person['check']['face']
@@ -483,7 +541,8 @@ class SetupWindow:
                          fw=self.preview.frame.shape[1] if self.preview.frame is not None else 1,
                          fh=self.preview.frame.shape[0] if self.preview.frame is not None else 1)
         if self.preview.frame is None:
-            line = ('소리만: 화면 입력 없음' if setup.microphone or setup.sensors else '입력을 고르면 여기에 화면이 보입니다')
+            line = ('소리만: 화면 입력 없음' if setup.microphone or setup.audio or setup.sensors else
+                    '입력(파일이나 장치)을 넣으면 여기에 화면이 보입니다')
             self.put(picture, line, 30, 60, MUTED, 20)
         image[:PREVIEW_H, :PREVIEW_W] = picture
         self._points(image)
@@ -501,10 +560,10 @@ class SetupWindow:
         y += 44
         self.put(image, '1 입력', x, y, ACCENT, 18)
         at = x + 70
-        at = self.button(image, at, y, '카메라', ('camera',), on=bool(setup.pictures and setup.pictures[0] == 'camera'))
-        at = self.button(image, at, y, '영상 파일', ('video',), on=bool(setup.video))
-        at = self.button(image, at, y, '마이크', ('microphone',), on=setup.microphone)
-        self.button(image, at, y, '센서', ('sensor',), on=bool(setup.sensors))
+        at = self.button(image, at, y, '파일', ('input_file',))
+        at = self.button(image, at, y, '장치', ('input_device',))
+        self.button(image, at, y, '비우기', ('clear', 'inputs'),
+                    enabled=bool(setup.pictures or setup.microphone or setup.audio or setup.sensors))
         y += 28
         shown = []
         if setup.pictures:
@@ -513,9 +572,12 @@ class SetupWindow:
                                                             if self.preview.duration_s else ''))
         if setup.microphone:
             shown.append('마이크')
+        if setup.audio:
+            shown.append(f'소리 {Path(setup.audio).name}')
         for item in setup.sensors:
             shown.append(f"센서 {item['id']}")
-        self.put(image, ' · '.join(shown) or '아직 없음', x + 16, y, WHITE if shown else MUTED, 15)
+        self.put(image, ' · '.join(shown) or '아직 없음 (종류는 파일이나 장치를 보고 정합니다)', x + 16, y,
+                 WHITE if shown else MUTED, 15)
         if setup.sensors:
             y += 26
             rhythm = setup.rhythm or {}
@@ -525,15 +587,11 @@ class SetupWindow:
         y += 40
         self.put(image, '2 누구 (선택)', x, y, ACCENT, 18)
         at = self.button(image, x + 130, y, '이름', ('ask', 'name', '누구를 셀까요? 이름'))
-        at = self.button(image, at, y, '설명', ('ask', 'text', '그 사람의 설명 (예: 탈색 짧은 머리, 검은 뿔테)'))
-        self.button(image, at, y, '동의', ('ask', 'consent', '동의 기록: 누가, 무엇에 동의했는지 (예: 본인, 이 영상에서 세는 것에, 날짜)'))
+        self.button(image, at, y, '설명', ('ask', 'text', '그 사람의 설명 (예: 탈색 짧은 머리, 검은 뿔테)'))
         y += 28
         named = ' · '.join(part for part in (setup.name.strip(), setup.text.strip()) if part)
         self.put(image, named or '이름이나 설명 없음 (사람을 정하지 않으면 모두를 셉니다)', x + 16, y, WHITE if named else MUTED, 15)
-        y += 26
-        self.put(image, '동의: ' + (setup.consent.strip()[:60] or '없음'), x + 16, y, WHITE if setup.consent.strip() else MUTED,
-                 15)
-        y += 30
+        y += 56
         at = self.button(image, x + 16, y, '사진 파일 추가', ('photos',), size=15)
         at = self.button(image, at, y, '지금 화면을 사진으로', ('grab',), enabled=self.preview.frame is not None, size=15)
         self.button(image, at, y, '사진 비우기', ('clear', 'photos'), enabled=bool(setup.photos), size=15)
@@ -637,29 +695,13 @@ class SetupWindow:
     def act(self, action, x=None, y=None):
         setup, kind = self.setup, action[0]
         setup.notice = None
-        if kind == 'camera':
-            if setup.pictures and setup.pictures[0] == 'camera':
-                setup.pictures = None
-            else:
-                index = self.ask_text('카메라 번호 (0: 첫 카메라). 고르면 카메라를 켭니다.', '0')
-                if index is not None and index.strip().isdigit():
-                    setup.pictures = ('camera', int(index))
-        elif kind == 'video':
-            if setup.video:
-                setup.pictures = None
-            else:
-                found = self.ask_files('입력 영상 파일', multiple=False)
-                if found:
-                    setup.pictures = ('video', Path(found[0]).absolute())
-        elif kind == 'microphone':
-            setup.microphone = not setup.microphone
-        elif kind == 'sensor':
-            if setup.sensors:
-                setup.sensors, setup.rhythm = [], None
-            else:
-                for path in self.ask_files('센서 설명 파일 (JSON: id, file, modality, columns, time)', multiple=False):
-                    setup.notice = setup.add_sensor(path)
-                    setup.cycle_rhythm('none')
+        if kind == 'input_file':        # the kind is read from the file, never asked
+            for path in self.ask_files('입력 파일: 영상, 소리(.wav), 센서 설명(.json)'):
+                setup.notice = setup.add_input(path) or setup.notice
+        elif kind == 'input_device':
+            value = self.ask_text('장치: 카메라 번호(0이 첫 카메라) 또는 마이크', '0')
+            if value is not None:
+                setup.notice = setup.add_input(value)
         elif kind == 'rhythm':
             setup.cycle_rhythm(action[1])
         elif kind == 'ask':
@@ -673,6 +715,8 @@ class SetupWindow:
         elif kind == 'clear':
             if action[1] == 'photos':
                 setup.photos, setup.person = [], None
+            elif action[1] == 'inputs':
+                setup.clear_inputs()
             else:
                 setup.examples, setup.negatives = [], []
         elif kind == 'rule':
@@ -815,18 +859,16 @@ def _clock(seconds):
 def setup_from(args):
     """A :class:`Setup` filled in with what the command line gives."""
     setup = Setup(args.out_dir, profile=args.profile)
-    if args.camera is not None:
-        setup.pictures = ('camera', args.camera)
-    elif args.video:
-        setup.pictures = ('video', Path(args.video).absolute())
-    setup.microphone = bool(args.microphone)
-    for path in args.sensor or ():
-        problem = setup.add_sensor(path)
+    given = list(args.input or ())          # the older per-kind options are read the same way (the kind is detected)
+    given += [str(args.camera)] if args.camera is not None else []
+    given += [args.video] if args.video else []
+    given += ['microphone'] if args.microphone else []
+    given += list(args.sensor or ())
+    for value in given:
+        problem = setup.add_input(value)
         if problem:
-            raise SystemExit(f'--sensor {path}: {problem}')
-    if setup.sensors:
-        setup.cycle_rhythm('none')
-    setup.name, setup.text, setup.consent = args.who or '', args.who_text or '', args.consent or ''
+            raise SystemExit(f'--input {value}: {problem}')
+    setup.name, setup.text = args.who or '', args.who_text or ''
     setup.add_photos(args.photo or ())
     setup.voice = args.voice
     setup.action, setup.rule = args.action or '', Path(args.rule).absolute() if args.rule else None
@@ -853,15 +895,16 @@ def run_command(answer, setup, extra=()):
 
 
 def options(parser):
-    parser.add_argument('--camera', type=int, metavar='INDEX', help='a camera as the picture input')
-    parser.add_argument('--video', metavar='FILE', help='a video file as the picture input (its sound for words)')
-    parser.add_argument('--microphone', action='store_true', help='the default microphone')
-    parser.add_argument('--sensor', action='append', metavar='SPEC.json',
-                        help='a sensor declaration: {id, file, modality, columns, time} (compose_recipe inputs.sensors)')
+    parser.add_argument('--input', action='append', metavar='FILE|DEVICE',
+                        help='an input; its kind is detected: a video file (its sound for words), a WAV file, a sensor '
+                             'declaration .json ({id, file, modality, columns, time}), a camera number (0) or mic')
+    parser.add_argument('--camera', type=int, help=argparse.SUPPRESS)         # the same as --input N
+    parser.add_argument('--video', help=argparse.SUPPRESS)                    # the same as --input FILE
+    parser.add_argument('--microphone', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--sensor', action='append', help=argparse.SUPPRESS)
     parser.add_argument('--who', metavar='NAME', help='who to count (a name); photos are needed too')
     parser.add_argument('--who-text', metavar='TEXT', help='a description of the person')
     parser.add_argument('--photo', action='append', metavar='JPG', help='a photo of the person (one person in it)')
-    parser.add_argument('--consent', metavar='TEXT', help='who consented, to what, when (needed with photos)')
     parser.add_argument('--voice', metavar='V.json', help="the person's enrolled voice (words said by the person)")
     parser.add_argument('--action', metavar='TEXT', help='the movement in words (with --rule, and/or example clips)')
     parser.add_argument('--rule', metavar='RULE.json', help='the movement as a rule (gamst/providers/movement_rule.py)')
@@ -870,7 +913,8 @@ def options(parser):
     parser.add_argument('--words', metavar='W,W', help='words to count')
     parser.add_argument('--mode', choices=('count', 'search'), default='count')
     parser.add_argument('--timing', choices=('realtime', 'post'))
-    parser.add_argument('--allow-remote-asr', action='store_true', help='consent to a hosted, paid recogniser for words')
+    parser.add_argument('--allow-remote-asr', action='store_true',
+                        help='accept the cost of a hosted, paid recogniser for words (a cost notice, not consent)')
     parser.add_argument('--out-dir', default='gamst-hud', help='where the composed recipe, enrolled files and grabbed '
                         'photos are saved (default ./gamst-hud)')
     parser.add_argument('--profile', help='setup profile (the models photos and clips are enrolled and counted with)')

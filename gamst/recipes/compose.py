@@ -23,7 +23,10 @@ Request::
             "rhythm": {"input", "channel", "band"}},
    "mode": "count" | "search", "timing": "realtime" | "post",
    "pose": CANDIDATE, "asr": CANDIDATE, "with": [...], "without": [...], "set": ["MODULE.KEY=VALUE"],
-   "consent": {"capture": true, "remote_asr": true}, "start": false, "wait": false}
+   "consent": {"remote_asr": true}, "start": false, "wait": false}
+                       remote_asr: the cost of a hosted, paid recogniser was accepted (a cost notice, not consent);
+                       a camera or microphone needs nothing more: installing GAMST is the consent (owner, 2026-11-28;
+                       "capture" is still accepted and changes nothing)
 
 How the lanes are chosen (:data:`CAPABILITIES`): each capability names the lane that answers it, taken from the built-in
 recipe it was measured in, so a composed plan is the hand-assembled one (issue #369's acceptance); every ``use`` is a
@@ -713,19 +716,17 @@ def _plan(request, folders):
     if lacking:
         return [f"{chosen['name']} needs {reference['label']}: give {hints[reference['kind']]}."
                 for reference in lacking], None
-    # what the owner must still agree to before it runs (composing never sends anything)
+    # what costs money before it runs (composing never sends anything). A camera or microphone is not asked about:
+    # GAMST is open source and installing it is the consent (owner, 2026-11-28). Cost is not consent: a paid hosted
+    # call still waits until its cost is accepted.
     before, consent = [], request.get('consent') or {}
-    pictures, sound = inputs['pictures'], inputs['sound']
     hosted = _hosted_asr(chosen, include, request.get('asr')) if words else []
     if hosted and consent.get('remote_asr') is not True:
-        before.append(f"words: {', '.join(hosted)} is hosted and paid: set consent.remote_asr true (the owner's consent "
-                      'to sending the sound), or name a local recogniser in asr.')
+        before.append(f"words: {', '.join(hosted)} is hosted and paid (a cost notice): set consent.remote_asr true once "
+                      'the cost is accepted, or name a local recogniser in asr.')
     if any(name in include for name in ('verification', 'hosted', 'vote', 'tracks', 'tse')):
-        before.append('with: the verification and hosted diarization parts send sound to paid services; run with '
-                      '--allow-remote-diarization once the owner consents.')
-    if (pictures and pictures[0] == 'camera' or sound and sound[0] == 'microphone') and consent.get('capture') is not True:
-        before.append('consent.capture: a camera or microphone is opened only with the owner\'s explicit consent: set '
-                      'consent.capture true.')
+        before.append('with: the verification and hosted diarization parts send sound to paid services (a cost notice); '
+                      'run with --allow-remote-diarization once the cost is accepted.')
     return [], dict(inputs=inputs, timing=timing, mode=mode, movement=movement, words=words, rhythm=rhythm, who=who,
                     base=base, raw=raw, chosen=chosen, include=include, exclude=exclude, reasons=reasons, hosted=hosted,
                     before=before)
@@ -734,8 +735,8 @@ def _plan(request, folders):
 def validate_request(request, *, folders=None):
     """``{ok, missing, before_run}`` of a request, by the same rules as :func:`compose` (this is the function compose
     runs first), writing and enrolling nothing: the HUD's setup step (gamst/hud_setup.py) calls it while the request
-    is being filled in. ``missing``: one sentence per thing to provide; ``before_run``: what the owner must still
-    consent to before it runs (a camera or microphone, a paid recogniser). A photo few-shot is checked after it is
+    is being filled in. ``missing``: one sentence per thing to provide; ``before_run``: the cost notices of paid hosted
+    calls, waiting until the cost is accepted (a camera or microphone is not asked about: installing is the consent). A photo few-shot is checked after it is
     enrolled (:func:`enroll_photos`, then :func:`gamst.person_reference.check`, as compose does)."""
     missing, plan = _plan(request, folders)
     return dict(ok=not missing, missing=missing, before_run=plan['before'] if plan else [])

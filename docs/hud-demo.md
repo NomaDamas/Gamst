@@ -17,32 +17,35 @@ add. Start composes (`compose`, which enrolls the example clips) and runs the co
 
 ```bash
 gamst recipe hud                                   # everything chosen in the window
-gamst recipe hud --video "감스트-관제탑 모음집.mp4" --who 감스트 --photo a.jpg --photo b.jpg --photo c.jpg \
-  --consent "본인, 이 영상에서 세는 것에, 2026-11-28" \
+gamst recipe hud --input "감스트-관제탑 모음집.mp4" --who 감스트 --photo a.jpg --photo b.jpg --photo c.jpg \
   --action "관제탑: 두 팔을 앞으로 오므렸다가 양옆으로 폈다가 다시 접는다" --rule docs/movements/gwanjetap.rule.json \
   --example "감스트-관제탑 모음집.mp4@62.051-63.951" --timing post \
   --profile PROFILE.json --out-dir gamst-hud -- --report run.json        # after --: options of gamst recipe run
 ```
 
-Every option only fills in the window; `--start` starts at once when nothing is missing. The composed recipe, the
+Every option only fills in the window; `--start` starts at once when nothing is missing. `--input` takes a file or a
+device and the kind is detected (`hud_setup.detect_input`), so nobody picks it: a video file (`.mp4 .mov .m4v .mkv .webm
+.avi`, its sound for words), a WAV file, a sensor declaration (`.json`), a camera number (`0`, `camera 1`, `카메라`) or
+the microphone (`mic`, `마이크`). Repeat it for several inputs (one picture source, one sound source). The older
+`--video`, `--camera`, `--microphone`, `--sensor` still work and are read the same way. The composed recipe, the
 enrolled person (`NAME.person.json`, embeddings only), the movement file and grabbed photos are saved in `--out-dir`
 (default `./gamst-hud`). A video file with timing realtime is replayed at its own pace (`--realtime`): the camera
 stand-in.
 
 | part | in the window | rule (compose) |
 |---|---|---|
-| **1 입력** (input) | `카메라` (asks for the index, then opens it), `영상 파일`, `마이크`, `센서` (a declaration file: `{id, file, modality, columns, time}`, columns and time are declared, never guessed; then `채널` / `대역` for the rhythm) | at least one; one picture source, one sound source |
-| **2 누구** (who, optional) | `이름`, `설명` (the system's text dialog, Korean input works), `동의`; `사진 파일 추가`, `지금 화면을 사진으로` (grabs the picture shown, from the camera or the video), `사진 비우기` | a text (name or description) **and** photos (decision 59), with a consent record |
-| photo check | `사진 5장 · 얼굴 5개 일치 0.71 (기준 0.5) · 사진마다 한 사람` (green), or `검사 실패: ...` (red). The photos are enrolled in the background as soon as name, consent and photos are there (`compose.photo_reference`, the same function compose uses), then `person_reference.check`: faces agree, exactly one person per photo | the request then carries the enrolled file (`who.person`), so compose does not enroll again |
+| **1 입력** (input) | `파일` (the system's file dialog; video, WAV or a sensor declaration `{id, file, modality, columns, time}`, columns and time declared, never guessed; then `채널` / `대역` for the rhythm), `장치` (a camera number or `마이크`), `비우기`. The kind is detected from the file or device; there is no button per kind | at least one; one picture source, one sound source |
+| **2 누구** (who, optional) | `이름`, `설명` (the system's text dialog, Korean input works); `사진 파일 추가`, `지금 화면을 사진으로` (grabs the picture shown, from the camera or the video), `사진 비우기` | a text (name or description) **and** photos (decision 59). The person file keeps a consent record, filled in as `GAMST 설치·사용자 동의`; nothing is asked |
+| photo check | `사진 5장 · 얼굴 5개 일치 0.71 (기준 0.5) · 사진마다 한 사람` (green), or `검사 실패: ...` (red). The photos are enrolled in the background as soon as a name (or description) and photos are there (`compose.photo_reference`, the same function compose uses), then `person_reference.check`: faces agree, exactly one person per photo | the request then carries the enrolled file (`who.person`), so compose does not enroll again |
 | **3 무엇** (what) | `동작 글` (the action text), `규칙 파일` (a rule JSON), example clips trimmed on the input video, `단어` (words, the existing word counting) | text alone is refused (no hidden LLM): text + rule, clips, or both; negatives need examples |
 | trimming | on the trim bar under the picture: `[` start, `]` end, `e` save as an example (green), `n` save as a negative (red); a click on the picture names the person the clip is learnt from (`at: [x, y]`, a cross); with a camera input, `예시 영상 고르기` picks the video to trim | one movement per clip, at most 30 s |
 | **4 방식** | `세기` / `찾기` (count / search), `실시간` / `나중에(파일 전체)` (realtime / post) | post needs a file |
 
 The bottom line (red while missing, green when ready) is the first missing sentence of `validate_request`, in Korean,
-e.g. `사람 사진을 추가하세요: 이름만으로는 사람을 알아볼 수 없습니다(한 장에 한 사람).`, `동의를 적어 주세요: 누가, 무엇에
-동의했는지.`, `동작을 글로만 줄 수는 없습니다: 규칙 파일을 고르거나 예시 구간을 저장하세요.`, `카메라와 마이크는 실시간만
-됩니다: 때를 실시간으로 바꾸세요.`; then `사진 ... 검사하는 중`, and what still needs consent (`--allow-remote-asr` for the
-hosted word recogniser).
+e.g. `사람 사진을 추가하세요: 이름만으로는 사람을 알아볼 수 없습니다(한 장에 한 사람).`, `동작을 글로만 줄 수는 없습니다:
+규칙 파일을 고르거나 예시 구간을 저장하세요.`, `카메라와 마이크는 실시간만 됩니다: 때를 실시간으로 바꾸세요.`; then
+`사진 ... 검사하는 중`, and a cost notice before a paid hosted call: `비용 안내: 단어 인식기는 유료 원격 서비스라 돈이
+듭니다. 비용을 확인했으면 --allow-remote-asr 로 시작하세요.`
 
 Keys of the setup step (listed under the picture): `스페이스` play / pause, `,` `.` 0.1 s, `<` `>` 1 s, `[` `]` start /
 end, `e` / `n` save the span, `Enter` Start, `q` / `Esc` quit. Everything else is a button.
@@ -61,8 +64,11 @@ read in place (read only); screenshots, grabbed photos and enrolled files stay i
 No L2 correction happened in these runs, so LATE was seen only in the unit tests (`tests/test_hud_setup.py`). The point
 of the marked clip was the middle of the frame (the face finder of the script found no face), not a click of the owner.
 
-Consent: the camera opens only when it is chosen in the window by the person at the computer; that choice is the
-request's `consent.capture`. Sound goes to a paid recogniser only with `--allow-remote-asr`.
+Consent and cost (owner, 2026-11-28): the setup step asks no consent for the camera, the microphone or speech
+recognition. GAMST is open source and installing it is the consent; `compose` no longer waits for `consent.capture`
+(still accepted, it changes nothing). Cost is not consent: sound goes to a hosted, paid recogniser only after the cost
+notice, with `--allow-remote-asr` (`consent.remote_asr` in the request); hosted diarization likewise with
+`--allow-remote-diarization`. The person check (faces agree, one person per photo) is unchanged.
 
 | state | meaning | colour (both screens) |
 |---|---|---|

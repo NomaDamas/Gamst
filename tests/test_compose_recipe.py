@@ -156,7 +156,7 @@ class Compose(Files, unittest.TestCase):
         self.assertFalse(json.loads((self.folder / 'out' / 'by-jev.movement.json').read_text())['confirmed'])
         self.assertTrue(by_jev['ok'])
         live = compose(dict(request, consent={}))
-        self.assertTrue(any('consent.capture' in sentence for sentence in live['before_run']))
+        self.assertEqual(live['before_run'], [])       # a camera is not asked about: installing is the consent
 
     def test_a_built_in_recipe_is_used_as_it_is_or_customised(self):
         same = compose(dict(recipe='person-action-count', inputs=dict(video=self.path('b.mp4')),
@@ -202,10 +202,10 @@ class OverMCP(Files, unittest.IsolatedAsyncioTestCase):
                                                                     what=dict(words=['a'])))
             self.assertFalse(outside['ok'])
             self.assertIn('--clips folder', outside['missing'][0])
-            refused = await server.call_tool('compose_recipe', dict(inputs=dict(camera=0), start=True,
-                                                                    what=dict(movement=dict(text='x', rule=SHOTGUN))))
-            self.assertEqual((refused['ok'], refused['started']), (False, False))
-            self.assertIn('consent.capture', refused['missing'][0])
+            camera = await server.call_tool('compose_recipe', dict(inputs=dict(camera=0),
+                                                                   what=dict(movement=dict(text='x', rule=SHOTGUN))))
+            self.assertTrue(camera['ok'], camera)          # no consent.capture: installing GAMST is the consent
+            self.assertEqual(camera['before_run'], [])
             self.assertIn('compose_recipe', [tool['name'] for tool in __import__('gamst.mcp', fromlist=['x']).tool_definitions()])
         async with Gamst(consent=True) as human:
             with self.assertRaisesRegex(ValueError, 'gamst mcp --clips DIR'):

@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from gamst.hud_setup import Setup, korean, parse_clip, run_command
+from gamst.hud_setup import INSTALL_CONSENT, Setup, detect_input, korean, parse_clip, run_command, setup_from
 from gamst.person_reference import check
 from gamst.recipes.compose import compose, validate_request
 from test_compose_recipe import Files, person
@@ -31,13 +31,18 @@ class SharedValidation(Files, unittest.TestCase):
             self.assertFalse(checked['ok'], request)
             self.assertEqual(checked['missing'], composed['missing'], request)
 
-    def test_a_complete_request_passes_and_says_what_needs_consent(self):
+    def test_a_complete_request_passes_and_a_camera_or_microphone_is_not_asked_about(self):
+        """Owner, 2026-11-28: installing GAMST is the consent; only a paid hosted call waits (a cost notice)."""
         self.assertEqual(validate_request(self.shotgun()), dict(ok=True, missing=[], before_run=[]))
         camera = validate_request(self.shotgun(inputs=dict(camera=0), timing='realtime'))
-        self.assertTrue(camera['ok'])
-        self.assertIn('consent.capture', camera['before_run'][0])
+        self.assertEqual(camera, dict(ok=True, missing=[], before_run=[]))
         self.assertEqual(validate_request(self.shotgun(inputs=dict(camera=0), timing='realtime',
-                                                       consent=dict(capture=True)))['before_run'], [])
+                                                       consent=dict(capture=True)))['before_run'], [])   # still accepted
+        words = validate_request(dict(inputs=dict(microphone=True), what=dict(words=['뽀또'])))
+        self.assertTrue(words['ok'], words)
+        self.assertEqual(len(words['before_run']), 1)
+        self.assertIn('cost notice', words['before_run'][0])
+        self.assertNotIn('consent.capture', ' '.join(words['before_run']))
 
     def test_photos_are_checked_after_they_are_enrolled_and_writing_waits_for_compose(self):
         photo = self.folder / 'p.jpg'
@@ -70,7 +75,7 @@ class SetupModel(Files, unittest.TestCase):
     def test_nothing_chosen_names_the_input_in_korean(self):
         setup = self.setup()
         self.assertEqual(self.line(setup), korean(validate_request(setup.request())['missing'][0]))
-        self.assertIn('입력을 고르세요', self.line(setup))
+        self.assertIn('입력을 넣으세요', self.line(setup))
 
     def test_a_person_needs_a_text_and_photos(self):
         video = ('video', self.folder / 'b.mp4')
@@ -79,10 +84,11 @@ class SetupModel(Files, unittest.TestCase):
         photo = self.folder / 'p.jpg'
         photo.write_bytes(b'\xff\xd8' + bytes(16))
         self.assertIn('누구인지 글로도', self.line(self.setup(pictures=video, photos=[photo], **movement)))
-        self.assertIn('동의를 적어', self.line(self.setup(pictures=video, photos=[photo], name='감스트', **movement)))
-        setup = self.setup(pictures=video, photos=[photo], name='감스트', consent='P, for this test', **movement)
+        setup = self.setup(pictures=video, photos=[photo], name='감스트', **movement)     # no consent asked
         self.assertIn('사진 검사를 기다립니다', self.line(setup))
+        self.assertEqual(setup.request()['who']['consent'], INSTALL_CONSENT)
         setup.enroll(wait=True)
+        self.assertEqual(self.enrolled_keys[0][2], 'GAMST 설치·사용자 동의')     # the record the reference keeps
         self.assertEqual(setup.state(), (True, '준비됐습니다: 시작을 누르세요 (Enter).'))
         self.assertEqual(setup.request()['who'], dict(name='감스트', person=str(self.folder / 'enrolled.person.json')))
         text, _ = setup.photo_line()
@@ -98,7 +104,7 @@ class SetupModel(Files, unittest.TestCase):
     def test_an_enrollment_that_fails_the_check_is_said_and_blocks_start(self):
         photo = self.folder / 'p.jpg'
         photo.write_bytes(b'\xff\xd8' + bytes(16))
-        setup = self.setup(pictures=('video', self.folder / 'b.mp4'), photos=[photo], name='감스트', consent='P',
+        setup = self.setup(pictures=('video', self.folder / 'b.mp4'), photos=[photo], name='감스트',
                            action='shotgun', rule=self.path('move.json'))
         setup._enroll = lambda key: dict(key=key, error="who='감스트' refused before start: every photo must show "
                                                        'exactly one person: p.jpg: 2 people. Few-shot identity ...')
@@ -129,19 +135,64 @@ class SetupModel(Files, unittest.TestCase):
         self.assertEqual(setup.state(), (True, '준비됐습니다: 시작을 누르세요 (Enter).'))
         self.assertEqual(setup.request()['what'], dict(movement=dict(examples=setup.examples)))
 
-    def test_words_mode_timing_and_capture_consent(self):
+    def test_words_mode_timing_and_the_cost_notice(self):
         setup = self.setup(pictures=('camera', 0), words=['뽀또'], timing='post')
         self.assertIn('실시간', self.line(setup))
         setup.timing = 'realtime'
         self.assertIn('소리로 듣습니다', self.line(setup))
         setup.microphone = True
         setup.timing = 'realtime'
-        request = setup.request()
-        self.assertEqual(request['consent'], dict(capture=True))        # chosen in the window by the person there
-        self.assertIn('--allow-remote-asr', self.line(setup))            # the default recogniser is hosted and paid
+        self.assertNotIn('consent', setup.request())       # a camera and a microphone are not asked about
+        line = self.line(setup)                              # the default recogniser is hosted and paid: its cost
+        self.assertIn('비용', line)
+        self.assertIn('--allow-remote-asr', line)
         setup.allow_remote_asr, setup.mode = True, 'search'
+        self.assertEqual(setup.request()['consent'], dict(remote_asr=True))
         self.assertEqual(setup.request()['mode'], 'search')
         self.assertTrue(setup.state()[0], setup.state())
+
+    def test_the_input_kind_is_detected_from_the_path_or_device(self):
+        (self.folder / 'imu.json').write_text(json.dumps(dict(id='imu', file='imu.csv', modality='imu',
+                                                              columns=[dict(name='az', unit='g')],
+                                                              time=dict(column='t', unit='s'))))
+        for given, kind in ((0, 'camera'), ('1', 'camera'), ('camera 2', 'camera'), ('카메라', 'camera'),
+                            ('마이크', 'microphone'), ('mic', 'microphone'), (self.path('b.mp4'), 'video'),
+                            (self.path('a.wav'), 'audio'), (str(self.folder / 'imu.json'), 'sensor')):
+            self.assertEqual(detect_input(given)[0], kind, given)
+        for given in (self.path('imu.csv'), str(self.folder / 'missing.mp4'), '', -1):
+            kind, line = detect_input(given)
+            self.assertIsNone(kind, given)
+            self.assertIsInstance(line, str)
+        setup = self.setup()
+        self.assertIsNone(setup.add_input(self.path('b.mp4')))
+        self.assertIsNone(setup.add_input(self.path('a.wav')))
+        self.assertIsNone(setup.add_input(str(self.folder / 'imu.json')))
+        self.assertEqual(setup.request()['inputs'], dict(video=self.path('b.mp4'), audio=self.path('a.wav'),
+                                                         sensors=setup.request()['inputs']['sensors']))
+        self.assertEqual(setup.rhythm['input'], 'imu')
+        self.assertIsNone(setup.add_input('0'))              # a picture source replaces the other one
+        self.assertIsNone(setup.add_input('마이크'))          # a sound source replaces the other one
+        self.assertEqual((setup.pictures, setup.microphone, setup.audio), (('camera', 0), True, None))
+        self.assertIn('설명 파일', setup.add_input(self.path('imu.csv')))
+        setup.clear_inputs()
+        self.assertEqual(setup.request()['inputs'], {})
+
+    def test_the_command_line_has_no_consent_option_and_detects_inputs(self):
+        import argparse
+        from gamst.hud_setup import options
+        parser = argparse.ArgumentParser()
+        options(parser)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(['--consent', 'x'])
+        args = parser.parse_args(['--input', self.path('b.mp4'), '--input', 'mic', '--who', '감스트',
+                                  '--out-dir', str(self.folder / 'hud')])
+        setup = setup_from(args)
+        self.assertEqual((setup.pictures, setup.microphone, setup.consent), (('video', self.folder / 'b.mp4'), True,
+                                                                             INSTALL_CONSENT))
+        older = setup_from(parser.parse_args(['--camera', '0', '--out-dir', str(self.folder / 'hud')]))
+        self.assertEqual(older.pictures, ('camera', 0))      # the older option is read the same way
+        with self.assertRaises(SystemExit):
+            setup_from(parser.parse_args(['--input', self.path('imu.csv'), '--out-dir', str(self.folder / 'hud')]))
 
     def test_a_sensor_is_declared_not_guessed(self):
         setup = self.setup()
@@ -190,7 +241,12 @@ class SetupWindowTest(Files, unittest.TestCase):
         window.preview.duration_s, window.preview.position_s = 10., 1.
         image, ok = window.draw()
         self.assertFalse(ok)
-        self.assertNotIn(('start',), [action for _, action in window.hits])
+        actions = [action for _, action in window.hits]
+        self.assertNotIn(('start',), actions)
+        self.assertIn(('input_file',), actions)
+        self.assertIn(('input_device',), actions)
+        self.assertFalse([action for action in actions if action[0] in ('camera', 'video', 'microphone', 'sensor')
+                          or action[:2] == ('ask', 'consent')])       # no kind to pick, no consent to give
         for action in (('ask', 'name', '누구를 셀까요? 이름'), ('rule',), ('mode', 'search'), ('timing', 'post')):
             window.act(action)
         self.assertEqual((setup.name, setup.rule, setup.mode, setup.timing),
