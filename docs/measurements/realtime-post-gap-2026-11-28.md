@@ -25,11 +25,13 @@ run per row unless said otherwise.
   | post (같은 설정, 이 코드) | 0.860 (37/47/39) | 0.600 (9/14/16) |
   | 실시간 전 (#383) | 0.610 (#383 채점) / **0.408** (저장소 기준), **6,777 프레임 잃음** | 0.381 / 0.381 |
   | 실시간 후 (기본값) | **0.747**, **0 잃음**, 디스크 0 B | 0.261 / 0.273 (2회) |
-  | 실시간 후 + 라이브도 점수 기다림 + L2 넘김 10초 | (아래 표) | **0.538** (7/10/16) |
+  | 실시간 후 + 라이브도 점수 기다림 + L2 넘김 10초 | **0.837** (36/47/39), 0 잃음 | **0.538** (7/10/16) |
 
   - **채점 주의:** #383의 실시간 채점은 기록 파일의 모든 사건(L2 예열, L2가 맡은 범위의 L1 사건, 두 레인의 같은 사건)을 셌습니다. 저장소가 실제로 남긴 사건으로 세면 #383 관제탑 실시간은 0.610이 아니라 **0.408**(10/10/39)입니다. 아래 "후" 숫자는 모두 저장소 기준입니다(post는 둘이 같음).
   - 관제탑 post 목표는 0.89가 아니라 **0.860**입니다. #383의 0.889는 이 실행과 다른 연결 설정(identity-recall 전)의 post입니다. 같은 설정의 post는 identity-recall 문서도 0.860입니다.
-  - **목표(실시간 = post)는 이루지 못했습니다.** 가장 가까운 것은 "라이브도 점수를 기다리고, L2로 넘기는 기준을 1초에서 10초로" 한 실행입니다(맨까송 0.538 vs 0.600). 그 대가로 L1 지연이 p50 0.6초 → 2.9초, 최대 9.5초가 됩니다. 기본값은 바꾸지 않았습니다(사장님 결정 필요).
+  - **목표(실시간 = post)는 완전히 이루지 못했습니다.** 가장 가까운 것은 "라이브도 점수를 기다리고, L2로 넘기는 기준을 1초에서 10초로" 한 실행입니다: 관제탑 **0.837 vs 0.860**(맞음 36 vs 37, 말함 47 vs 47), 맨까송 0.538 vs 0.600(7 vs 9).
+  - 그 대가는 지연입니다. L1(바로 센 것) p50 / 최대: 관제탑 8.4초 / 20.1초, 맨까송 2.9초 / 9.5초. L2 보정: 관제탑 p50 282초, 최대 437초; 맨까송 32초.
+  - 기본값(라이브는 기다리지 않음, 1초에 넘김)은 바꾸지 않았습니다. L1 지연을 얼마까지 받을지는 사장님 결정입니다.
 - **결론:** 이 Mac에서는 실시간이 처리 능력을 넘고(맨까송 RTF 2.5, 관제탑 4.4), 결정 41의 "L1 확정 + L2 구간 보정" 구조는 경계마다 상태가 끊겨 post와 같은 수가 나올 수 없습니다. 같은 수를 보장하려면 **끊기지 않는 한 줄(post와 같은 순서로 모든 프레임을 처리하는 확정 레인) + L1은 잠정(나중에 확정/취소)** 구조가 필요합니다. 저장소에 이미 잠정→확정/취소 상태(`event.revision`)가 있습니다. 결정 41을 바꾸는 일이라 사장님 결정이 필요합니다.
 
 ## 1. Causes, with evidence (맨까송, the #383 realtime run, `man_punch_rt`)
@@ -91,7 +93,7 @@ run per row unless said otherwise.
 | frames lost | **6,777 / 15,670** (spill bound 0.8 GB) | **0 / 15,670** |
 | spilled to disk | 0.8 GB (full) | **0 B** |
 | frames kept by position (re-read) | — | 34,906 (frames of the lane and of L2 intervals; 96.5 GB of pixels not stored) |
-| most waiting at once | — | 28,664 frames (79 GB of pixels; 86 % of the clip) |
+| most waiting at once | — | 28,664 frames (79 GB of pixels; 86 % of the clip); 6,419 with live waiting + 10 s lag |
 | re-read mismatches (CRC) | — | 0 of 41,356 reads |
 | re-read cost | — | 1.19 ms per read on average (49.2 s in total, seeks included, beside the event loop) |
 
@@ -130,7 +132,7 @@ run per row unless said otherwise.
 | 관제탑 post (control, this code) | **0.860** (37 / 47 / 39) | 0.800 | 0 | — | — | — | 655 s (1.25) |
 | 관제탑 realtime #383 (before) | 0.408 (10 / 10 / 39); #383's scorer: 0.610 (18 / 20) | 0.735 | **6,777** | 76 | 0.99 / 1.51 s | 21.5 / 25.6 s | 563 s (1.08) |
 | 관제탑 realtime, fixes + reach-back | 0.747 (28 / 36 / 39) | 0.683 | **0** | 185 | — (6 L1 events) | 1,311 / 1,733 s | 2,291 s (4.38) |
-| 관제탑 realtime, + live waits + L2 after 10 s | GWAN_RTWLAG | | | | | | |
+| 관제탑 realtime, + live waits + L2 after 10 s | **0.837** (36 / 47 / 39) | 0.773 | **0** | 22 | 8.42 / 20.1 s | 282 / 437 s | 944 s (1.81) |
 
 - F1 is of what the Store kept (`event_states`, who from the stored bindings). #383 scored every event of the pose dump,
   which in realtime also holds events the Store dropped (an L2 pre-roll's, the live lane's inside a range L2 owns, one
@@ -159,8 +161,9 @@ count then depends on where they fall. A design that gives post's count by const
   `event.revision`, `gamst/counting.py`, already used for words; the HUD already draws "-1 취소" and "+1 추가").
 
 This changes decision 41 ("live counts are final; nothing is revoked") and is not implemented here. Until then the
-measured trade-off is the last 맨까송 row: `--set person_binding.wait_for_scores=true` and `catch_up.lag_ms` 10000 give
-0.538 vs post 0.600 at an L1 latency of p50 2.9 s, max 9.5 s.
+measured trade-off is the "live waits + L2 after 10 s" rows: `--set person_binding.wait_for_scores=true` and
+`catch_up.lag_ms` 10000 give 관제탑 0.837 vs post 0.860 and 맨까송 0.538 vs 0.600, at an L1 latency of p50 8.4 / 2.9 s,
+max 20.1 / 9.5 s, and L2 corrections p50 282 / 32 s.
 
 ## Commands
 
