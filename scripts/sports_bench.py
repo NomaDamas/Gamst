@@ -14,7 +14,8 @@ What it does, for one stack and timing:
 4. writes ``metrics.json`` (and ``points.json``, the ball trail for ``python -m gamst.count_video --points``).
 
 OpenTTGames (lab.osai.ai, CC BY-NC-SA 4.0): ``ball_markup.json`` {frame: {x, y}} (-1 where the ball is not visible) and
-``events_markup.json`` {frame: bounce | net | empty_event}, frames of the original 120 fps video. Labels and videos are
+``events_markup.json`` {frame: bounce | net | empty_event}, frames of the original 120 fps video. Ball positions are
+labelled only on frames near events; only those are scored. The test videos have no sound track (``--without onsets``). Labels and videos are
 used for local evaluation only and never redistributed.
 """
 from __future__ import annotations
@@ -138,9 +139,10 @@ def openttgames(args):
     step = max(1, round(source_fps / fps))
     tp = fn = fp = 0
     errors = []
-    for frame in range(first, last, step):
-        label = balls.get(frame)
-        visible = label is not None and label.get('x', -1) >= 0 and label.get('y', -1) >= 0
+    labelled = [frame for frame in range(first, last, step) if frame in balls]
+    for frame in labelled:      # only labelled frames: elsewhere the truth is unknown (OpenTTGames labels near events)
+        label = balls[frame]
+        visible = label.get('x', -1) >= 0 and label.get('y', -1) >= 0
         guess = predicted.get(frame)
         if visible and guess is not None:
             distance = math.hypot(guess[0] - label['x'], guess[1] - label['y'])
@@ -155,7 +157,8 @@ def openttgames(args):
         elif guess is not None:
             fp += 1
     ball = dict(prf(tp, fn, fp), radius_px=round(radius, 1),
-                median_error_px=round(sorted(errors)[len(errors) // 2], 1) if errors else None, frames=len(range(first, last, step)))
+                median_error_px=round(sorted(errors)[len(errors) // 2], 1) if errors else None,
+                labelled_frames=len(labelled), frames=len(range(first, last, step)))
 
     # bounces: the labelled bounce frames inside the cut against contact.bounce events
     truth_ms = [(frame - first) * 1000 / source_fps for frame, name in events.items() if name == 'bounce' and first <= frame < last]
