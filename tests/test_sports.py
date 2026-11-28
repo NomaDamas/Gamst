@@ -633,6 +633,13 @@ class SportsRecipesTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             load('racket-rally', stack='default')
 
+    def test_a_part_prepared_by_hand_is_left_to_its_config(self):
+        from gamst.recipes import load, roles, with_settings
+        recipe = with_settings(load('racket-rally', stack='sota', timing='post'),
+                               ['ballmodel.config={"path": "/m/TrackNet_best.pt", "sha256": "' + '0' * 64 + '"}'])
+        self.assertNotIn('vision.ball', roles(recipe))
+        self.assertIn('vision.ball', roles(load('racket-rally', stack='sota', timing='post')))
+
     def test_stacks_table(self):
         from gamst.recipes import stacks_table
         table = stacks_table('racket-rally')

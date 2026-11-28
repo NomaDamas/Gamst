@@ -552,6 +552,8 @@ def roles(recipe):
     from ..crew.registry import ROLES
     selected, open_choice = {}, []
     for item, part in _items(recipe):
+        if isinstance(item.get('config'), dict):
+            continue        # prepared by hand: the item names its files (a candidate setup refuses to install)
         role, model = _role(item)
         chosen = ROLES[role].candidates.get(model) if role in ROLES and model else None
         if item.get('votes_for') and chosen is not None and 'api' in (chosen.config or {}):

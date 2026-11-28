@@ -356,7 +356,7 @@ def _yolo26(size, pose=False):
         ("COCO-pose 17 keypoints; " if pose else f"COCO {YOLO26_STATED[size]} (Ultralytics docs, T4 TensorRT); ") +
         "not measured by GAMST (docs/sports.md)",
         (_weight(name, YOLO26_RELEASE + name, sha, bytes_, "GitHub release asset digest"),),
-        environment="ultralytics", python="3.11", automatic=False,
+        environment="ultralytics", python="3.11",
         config={"device": "cpu"} if pose else {"device": "cpu", "tracker": "botsort"})
 
 
@@ -635,7 +635,7 @@ ROLES = {
             "Roboflow Sports' team-split embedder; the vision tower of model.safetensors only; not measured by GAMST",
             (_weight("model.safetensors", f"https://huggingface.co/google/siglip-base-patch16-224/resolve/{SIGLIP_REV}/model.safetensors",
                      "2c63cb7d1f2e95ba501893cbb8faeb4ea9a3af295498d35097126228659c2af8", 812672320, "Hugging Face LFS digest"),),
-            environment="siglip", python="3.11", automatic=False, config={"device": "cpu"}),
+            environment="siglip", python="3.11", config={"device": "cpu"}),
     }, _defaults("siglip.base_patch16_224")),
     "vision.object_track": Role("vision.object_track", "Track IDs for a detector's objects (players), in the Pipeline process", {
         "gamst.ocsort": _candidate(
