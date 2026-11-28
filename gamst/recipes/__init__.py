@@ -729,11 +729,14 @@ async def choose_pose(recipe, args, pipeline):
 MEASURED_PARTS = ('detect', 'ball-model')     # model parts whose realtime candidate is chosen by a start benchmark
 
 
-async def choose_models(recipe, args, pipeline):
+async def choose_models(recipe, args):
     """Realtime: measure each ``detect`` / ``ball-model`` item that has ``"choose"`` on synthetic frames now (``size``,
     ``seconds``), keep its candidate if it gives at least the input's frame rate, else its ``choose.fallback``; the
     same rule as :func:`choose_pose` (one model per part in a run, the reason said). Post: nothing is chosen, the
-    item's candidate counts every frame."""
+    item's candidate counts every frame.
+
+    Each measured module is built on its own and closed again before the run's Pipeline is built: a fallback of the
+    same part commits the same capability with another contract, which one Gamst cannot register twice."""
     import time
     import numpy as np
     from ..capabilities import SensorMetadata
@@ -741,10 +744,12 @@ async def choose_models(recipe, args, pipeline):
     if timing(args) != 'realtime':
         return []
     choices = []
+    context = dict(recipe=recipe, timing='realtime', worker_python=getattr(args, 'worker_python', None),
+                   installed=lambda item: installed(recipe, item, getattr(args, 'profile', None)))
     for item in recipe['modules']:
-        if item['use'] not in MEASURED_PARTS or not item.get('choose') or item['name'] not in pipeline.modules:
+        if item['use'] not in MEASURED_PARTS or not item.get('choose'):
             continue
-        module, choose = pipeline.modules[item['name']]['module'], item['choose']
+        module, choose = (await build_module(item, context))['module'], item['choose']
         fps = _source_fps(args) or float(choose.get('camera_fps', 30))
         height, width = choose.get('size', [720, 1280])
         image = np.full((int(height), int(width), 3), 127, np.uint8)
@@ -760,9 +765,9 @@ async def choose_models(recipe, args, pipeline):
             if time.perf_counter() - started >= seconds and calls >= 3:
                 break
         ms = (time.perf_counter() - started) * 1000 / max(1, calls)
-        reset = getattr(module, 'reset', None)
-        if callable(reset):
-            value = reset()
+        close = getattr(module, 'close', None)
+        if callable(close):
+            value = close()
             if hasattr(value, '__await__'):
                 await value
         keeps = 1000 / ms >= fps
@@ -1299,7 +1304,16 @@ async def run_pipeline(recipe, args):
         stored = [record for capability in wanted for record in human.store.query(
             'local-user', kind='observation.signal', limit=MAX_SCAN, registered_only=True, capability_id=capability)]
         earlier = {record['id'] for record in stored}   # a store file may hold other runs
+        models = await choose_models(recipe, args)      # before the Pipeline: measured modules are built apart
+        if models:
+            print(json.dumps(dict(model_choice=models)), file=sys.stderr, flush=True)
+            changed = {entry['module']: entry['chosen'] for entry in models if entry['chosen'] != entry['model']}
+            if changed:
+                recipe = with_candidates(recipe, changed)
+            report['model_choice'] = models
         pipeline = await build_pipeline(recipe, args, human)
+        if models:
+            pipeline.notes['model_choice'] = models
         report['timing'] = timing(args)
         choice = await choose_pose(recipe, args, pipeline)
         if choice is not None:
@@ -1311,16 +1325,6 @@ async def run_pipeline(recipe, args):
                 pipeline = await build_pipeline(recipe, args, human)
             report['pose_choice'] = choice
             pipeline.notes['pose_choice'] = choice
-        models = await choose_models(recipe, args, pipeline)
-        if models:
-            print(json.dumps(dict(model_choice=models)), file=sys.stderr, flush=True)
-            changed = {entry['module']: entry['chosen'] for entry in models if entry['chosen'] != entry['model']}
-            if changed:
-                await pipeline.close()
-                recipe = with_candidates(recipe, changed)
-                pipeline = await build_pipeline(recipe, args, human)
-            report['model_choice'] = models
-            pipeline.notes['model_choice'] = models
         if recipe.get('chosen'):
             report['variant'] = recipe['chosen']
             pipeline.notes['variant'] = recipe['chosen']

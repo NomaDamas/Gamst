@@ -662,29 +662,30 @@ class ChooseModelsTest(unittest.TestCase):
             self.skipTest('numpy')
         from gamst import recipes
 
+        from unittest import mock
+
         class Slow:
-            resets = 0
+            closed = 0
 
             async def process(self, frame):
                 await asyncio.sleep(.05)        # 20 fps at most
 
-            async def reset(self):
-                Slow.resets += 1
+            async def close(self):
+                Slow.closed += 1
+
+        async def build(item, context):
+            self.assertEqual(context['timing'], 'realtime')
+            return dict(module=Slow())
         recipe = dict(modules=[dict(name='detect', use='detect', candidate='rfdetr.large',
                                     choose=dict(fallback='rfdetr.nano', seconds=.2, size=[16, 16]))])
-        pipeline = SimpleNamespace(modules=dict(detect=dict(module=Slow())))
         live = SimpleNamespace(camera=0, video=None, take=None, iphone=None, audio=None, microphone=None, sensor=None,
                                timing=None, as_live=False, realtime=None, capture_fps=30.)
-        original = recipes._source_fps
-        recipes._source_fps = lambda args: 30.
-        try:
-            chosen = run(recipes.choose_models(recipe, live, pipeline))
-        finally:
-            recipes._source_fps = original
+        with mock.patch.object(recipes, '_source_fps', lambda args: 30.), mock.patch.object(recipes, 'build_module', build):
+            chosen = run(recipes.choose_models(recipe, live))
+            post = SimpleNamespace(**dict(vars(live), camera=None, video='a.mp4', timing='post'))
+            self.assertEqual(run(recipes.choose_models(recipe, post)), [])
         self.assertEqual(chosen[0]['chosen'], 'rfdetr.nano')
-        self.assertEqual(Slow.resets, 1)
-        post = SimpleNamespace(**dict(vars(live), camera=None, video='a.mp4', timing='post'))
-        self.assertEqual(run(recipes.choose_models(recipe, post, pipeline)), [])
+        self.assertEqual(Slow.closed, 1)        # measured apart and closed before the run's Pipeline is built
 
 
 if __name__ == '__main__':
