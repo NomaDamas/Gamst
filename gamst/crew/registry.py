@@ -360,7 +360,6 @@ def _yolo26(size, pose=False):
         config={"device": "cpu"} if pose else {"device": "cpu", "tracker": "botsort"})
 
 
-TRACKNET_SOURCE = {"url": "https://github.com/qaz812345/TrackNetV3", "revision": "master"}
 SIGLIP_REV = "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed"
 SPORTS_ROLES_NOTE = "docs/sports.md"
 
@@ -625,7 +624,7 @@ ROLES = {
             "and sha256 of ckpts/TrackNet_best.pt in the module's config (docs/sports.md)",
             (_weight("TrackNet_best.pt", "https://drive.google.com/file/d/1CfzE87a0f6LhBp0kniSl1-89zaLCZ8cA/view?usp=sharing",
                      None, 0, "unpinned: inside TrackNetV3_ckpts.zip (TrackNetV3 README)"),),
-            environment="tracknet", python="3.11", automatic=False, source=TRACKNET_SOURCE,
+            environment="tracknet", python="3.11", automatic=False,     # the network is in gamst/providers/tracknet_ball.py
             config={"device": "cpu", "ensemble": "causal"}),
     }, _defaults("tracknetv3.shuttlecock")),
     "vision.image_embedding": Role("vision.image_embedding", "An embedding of an image crop (team split of players)", {
