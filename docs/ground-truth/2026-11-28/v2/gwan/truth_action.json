@@ -1,0 +1,1662 @@
+{
+ "video": "감스트-관제탑 모음집.mp4",
+ "action": "관제탑",
+ "run": "cand_loose",
+ "occurrences": [
+  {
+   "start": 62.1,
+   "end": 63.9,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 1",
+   "reason": "감스트: 두 팔 뻗음 1:02.2 → 접음 1:03.9. 오너 예시 1과 같은 구간"
+  },
+  {
+   "start": 64.033,
+   "end": 64.767,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 2~mwz8yt0aa (자른 조각)",
+   "reason": "감스트: 두 팔 뻗음 1:04.2 → 접음 1:04.8. 이 후보 안에 2회(1:04.9–1:05.8 한 번 더) — 나머지는 놓친 것으로 추가"
+  },
+  {
+   "start": 64.9,
+   "end": 65.8,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c1",
+   "reason": "감스트: 두 팔 뻗음 1:05.0 → 접음 1:05.6. #2 안의 두 번째 1회"
+  },
+  {
+   "start": 66.0,
+   "end": 66.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 3",
+   "reason": "감스트: 두 팔 뻗음 1:06.0 → 접음 1:06.6"
+  },
+  {
+   "start": 71.533,
+   "end": 72.167,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 4",
+   "reason": "감스트: 두 팔 뻗음 1:11.6 → 접음 1:12.2"
+  },
+  {
+   "start": 72.467,
+   "end": 73.1,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 5",
+   "reason": "감스트: 두 팔 뻗음 1:12.4 → 접음 1:13.0"
+  },
+  {
+   "start": 75.8,
+   "end": 76.8,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 6",
+   "reason": "감스트: 두 팔 뻗음 1:16.1 → 접음 1:16.7"
+  },
+  {
+   "start": 77.167,
+   "end": 78.4,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c2",
+   "reason": "감스트: 두 팔 뻗음 1:17.8 → 접음 1:18.4. 팔이 어깨 높이로 옆으로 뻗음, 확신 중간"
+  },
+  {
+   "start": 78.567,
+   "end": 79.633,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 7",
+   "reason": "감스트: 두 팔 뻗음 1:19.1 → 접음 1:19.7"
+  },
+  {
+   "start": 80.1,
+   "end": 81,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c3",
+   "reason": "감스트: 두 팔 뻗음 1:20.4 → 접음 1:21.0. 팔이 비스듬히 뻗음, 확신 중간"
+  },
+  {
+   "start": 81.333,
+   "end": 82.867,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 8",
+   "reason": "감스트: 두 팔 뻗음 1:21.4 → 접음 1:22.0"
+  },
+  {
+   "start": 83.033,
+   "end": 83.9,
+   "who": "감스트",
+   "track_id": "local-user:body:person-1",
+   "source": "owner",
+   "origin": "candidate 9",
+   "reason": "감스트: 두 팔 뻗음 1:22.4 → 접음 1:22.9"
+  },
+  {
+   "start": 84.167,
+   "end": 84.7,
+   "who": "감스트",
+   "track_id": "local-user:body:person-22",
+   "source": "owner",
+   "origin": "candidate 11",
+   "reason": "감스트: 두 팔 뻗음 1:24.3 → 접음 1:24.8"
+  },
+  {
+   "start": 85.067,
+   "end": 85.7,
+   "who": "감스트",
+   "track_id": "local-user:body:person-22",
+   "source": "owner",
+   "origin": "candidate 12",
+   "reason": "감스트: 두 팔 뻗음 1:25.2 → 접음 1:25.7"
+  },
+  {
+   "start": 173.4,
+   "end": 174.233,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c4",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:53.6 → 접음 2:54.2"
+  },
+  {
+   "start": 173.6,
+   "end": 174.6,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed omwz4fsdk",
+   "reason": null
+  },
+  {
+   "start": 175.067,
+   "end": 176.1,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c5",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:55.4 → 접음 2:56.0. #13 안의 두 번째 1회"
+  },
+  {
+   "start": 176.333,
+   "end": 176.967,
+   "who": "other",
+   "track_id": "local-user:body:person-26",
+   "source": "owner",
+   "origin": "candidate 14",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:56.4 → 접음 2:57.0"
+  },
+  {
+   "start": 177.233,
+   "end": 177.833,
+   "who": "other",
+   "track_id": "local-user:body:person-26",
+   "source": "owner",
+   "origin": "candidate 15",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:57.4 → 접음 2:58.0"
+  },
+  {
+   "start": 181.933,
+   "end": 182.6,
+   "who": "other",
+   "track_id": "local-user:body:person-28",
+   "source": "owner",
+   "origin": "candidate 16",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:02.2 → 접음 3:02.6"
+  },
+  {
+   "start": 182.833,
+   "end": 183.567,
+   "who": "other",
+   "track_id": "local-user:body:person-28",
+   "source": "owner",
+   "origin": "candidate 17",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:03.0 → 접음 3:03.7"
+  },
+  {
+   "start": 183.833,
+   "end": 184.667,
+   "who": "other",
+   "track_id": "local-user:body:person-28",
+   "source": "owner",
+   "origin": "candidate 18",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:04.0 → 접음 3:04.6"
+  },
+  {
+   "start": 184.733,
+   "end": 185.1,
+   "who": "other",
+   "track_id": "local-user:body:person-28",
+   "source": "owner",
+   "origin": "candidate 19",
+   "reason": "다른 사람(첼시)이 3:04.7 팔을 뻗은 채 장면이 바뀜(3:05) — 접는 모습이 안 보여 1회인지 모르겠음"
+  },
+  {
+   "start": 263.167,
+   "end": 263.867,
+   "who": "감스트",
+   "track_id": "local-user:body:person-40",
+   "source": "owner",
+   "origin": "candidate 20",
+   "reason": "감스트: 두 팔 뻗음 4:23.2 → 접음 4:23.9"
+  },
+  {
+   "start": 264.067,
+   "end": 264.733,
+   "who": "감스트",
+   "track_id": "local-user:body:person-44",
+   "source": "owner",
+   "origin": "candidate 21",
+   "reason": "감스트: 두 팔 뻗음 4:24.2 → 접음 4:24.8"
+  },
+  {
+   "start": 266.867,
+   "end": 267.467,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 22",
+   "reason": "감스트: 두 팔 뻗음 4:26.9 → 접음 4:27.4"
+  },
+  {
+   "start": 267.8,
+   "end": 268.567,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c7",
+   "reason": "감스트: 두 팔 뻗음 4:28.0 → 접음 4:28.5. 팔을 옆으로 수평하게 뻗음, 확신 중간"
+  },
+  {
+   "start": 268.7,
+   "end": 269.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 23",
+   "reason": "감스트: 두 팔 뻗음 4:28.9 → 접음 4:29.4"
+  },
+  {
+   "start": 269.633,
+   "end": 270.267,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 25~mwz9kdeqb (자른 조각)",
+   "reason": "감스트: 두 팔 뻗음 4:29.8 → 접음 4:30.4"
+  },
+  {
+   "start": 270.733,
+   "end": 271.233,
+   "who": "감스트",
+   "track_id": "local-user:body:person-47",
+   "source": "owner",
+   "origin": "candidate 26",
+   "reason": "감스트: 두 팔 뻗음 4:30.8 → 접음 4:31.2. 한 팔은 위·한 팔은 아래로 기울여 뻗음"
+  },
+  {
+   "start": 271.6,
+   "end": 272.1,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 27",
+   "reason": "감스트: 두 팔 뻗음 4:31.8 → 접음 4:32.2"
+  },
+  {
+   "start": 272.5,
+   "end": 273.2,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c8",
+   "reason": "감스트: 두 팔 뻗음 4:32.7 → 접음 4:33.2. 수평으로 뻗음, 확신 중간"
+  },
+  {
+   "start": 273.4,
+   "end": 274.067,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c9",
+   "reason": "감스트: 두 팔 뻗음 4:33.6 → 접음 4:34.0. 수평으로 뻗음, 확신 중간"
+  },
+  {
+   "start": 274.5,
+   "end": 275.0,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 28",
+   "reason": "감스트: 두 팔 뻗음 4:34.6 → 접음 4:35.0. 이 후보 안에 2회(4:35.2 뻗음 → 4:35.4 접음 한 번 더) — 나머지는 놓친 것으로 추가"
+  },
+  {
+   "start": 275.1,
+   "end": 275.5,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c10",
+   "reason": "감스트: 두 팔 뻗음 4:35.2 → 접음 4:35.4. #28 안의 두 번째 1회"
+  },
+  {
+   "start": 275.733,
+   "end": 276.067,
+   "who": "감스트",
+   "track_id": "local-user:body:person-45",
+   "source": "owner",
+   "origin": "candidate 29",
+   "reason": "감스트: 두 팔 뻗음 4:35.8 → 접음 4:36.0"
+  },
+  {
+   "start": 361.433,
+   "end": 362.233,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 32",
+   "reason": "감스트: 두 팔 뻗음 6:01.6 → 접음 6:02.2. 토트넘 셔츠 = 감스트"
+  },
+  {
+   "start": 362.033,
+   "end": 362.767,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed omwz9othf",
+   "reason": null
+  },
+  {
+   "start": 362.433,
+   "end": 363.233,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 33",
+   "reason": "감스트: 두 팔 뻗음 6:02.6 → 접음 6:03.2"
+  },
+  {
+   "start": 363.1,
+   "end": 363.7,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c11",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:03.2 → 접음 6:03.6. 수평으로 뻗음, 확신 중간"
+  },
+  {
+   "start": 363.9,
+   "end": 364.533,
+   "who": "other",
+   "track_id": "local-user:body:person-56",
+   "source": "owner",
+   "origin": "candidate 35",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:04.0 → 접음 6:04.6"
+  },
+  {
+   "start": 364.7,
+   "end": 365.6,
+   "who": "other",
+   "track_id": "local-user:body:person-56",
+   "source": "owner",
+   "origin": "candidate 37",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:04.8 → 접음 6:05.5"
+  },
+  {
+   "start": 364.833,
+   "end": 366.033,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c12",
+   "reason": "감스트: 두 팔 뻗음 6:05.2 → 접음 6:06.0. 한 팔 먼저, 수평으로 뻗음, 확신 중간"
+  },
+  {
+   "start": 368.9,
+   "end": 369.667,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 38",
+   "reason": "감스트: 두 팔 뻗음 6:09.0 → 접음 6:09.8. GAMST는 unknown이라 했지만 상자가 감스트(토트넘)"
+  },
+  {
+   "start": 369.333,
+   "end": 370.033,
+   "who": "other",
+   "track_id": "local-user:body:person-56",
+   "source": "owner",
+   "origin": "candidate 41",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:09.6 → 접음 6:10.2"
+  },
+  {
+   "start": 369.867,
+   "end": 370.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 42",
+   "reason": "감스트: 두 팔 뻗음 6:10.0 → 접음 6:10.6"
+  },
+  {
+   "start": 370.367,
+   "end": 370.967,
+   "who": "other",
+   "track_id": "local-user:body:person-56",
+   "source": "owner",
+   "origin": "candidate 43",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:10.4 → 접음 6:11.0"
+  },
+  {
+   "start": 370.767,
+   "end": 371.567,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 44",
+   "reason": "감스트: 두 팔 뻗음 6:11.0 → 접음 6:11.6"
+  },
+  {
+   "start": 371.733,
+   "end": 372.4,
+   "who": "감스트",
+   "track_id": "local-user:body:person-59",
+   "source": "owner",
+   "origin": "candidate 47",
+   "reason": "감스트가 6:11.8 팔을 뻗은 채 6:12 장면 전환 — 접는 모습이 안 보임"
+  },
+  {
+   "start": 458.1,
+   "end": 458.767,
+   "who": "감스트",
+   "track_id": "local-user:body:person-96",
+   "source": "owner",
+   "origin": "candidate 49",
+   "reason": "감스트: 두 팔 뻗음 7:38.4 → 접음 7:39.0. 리버풀 셔츠 = 감스트"
+  },
+  {
+   "start": 458.2,
+   "end": 458.867,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed omwz9vgda",
+   "reason": null
+  },
+  {
+   "start": 459.1,
+   "end": 459.8,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c13",
+   "reason": "감스트: 두 팔 뻗음 7:39.4 → 접음 7:39.8. #50 상자(PUMA)가 아닌 감스트가 함"
+  },
+  {
+   "start": 459.167,
+   "end": 459.967,
+   "who": "other",
+   "track_id": "local-user:body:person-74",
+   "source": "owner",
+   "origin": "candidate 50",
+   "reason": "상자는 PUMA 사람인데 그 사람은 팔을 머리 옆에 굽힘. 같은 때 감스트가 7:39.4 뻗음 → 7:39.8 접음 — 그것은 놓친 것으로 따로 추가"
+  },
+  {
+   "start": 463.767,
+   "end": 464.567,
+   "who": "other",
+   "track_id": "local-user:body:person-74",
+   "source": "owner",
+   "origin": "candidate 51",
+   "reason": "상자는 PUMA 사람(팔을 굽혀 듦, 뻗지 않음). 같은 때 감스트의 1회는 #52"
+  },
+  {
+   "start": 463.8,
+   "end": 464.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-98",
+   "source": "owner",
+   "origin": "candidate 52",
+   "reason": "감스트: 두 팔 뻗음 7:44.0 → 접음 7:44.6"
+  },
+  {
+   "start": 464.7,
+   "end": 465.6,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c14",
+   "reason": "감스트: 두 팔 뻗음 7:45.0 → 접음 7:45.6"
+  },
+  {
+   "start": 464.733,
+   "end": 465.533,
+   "who": "other",
+   "track_id": "untracked",
+   "source": "owner",
+   "origin": "candidate 53",
+   "reason": "자기 상자 없음. #52(감스트)와 겹침. 7:44.8–7:45.6의 다음 1회는 놓친 것으로 추가"
+  },
+  {
+   "start": 468.267,
+   "end": 468.933,
+   "who": "감스트",
+   "track_id": "local-user:body:person-100",
+   "source": "owner",
+   "origin": "candidate 54",
+   "reason": "감스트: 두 팔 뻗음 7:48.4 → 접음 7:49.0"
+  },
+  {
+   "start": 492.533,
+   "end": 494.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-100",
+   "source": "owner",
+   "origin": "candidate 57",
+   "reason": "감스트: 두 팔 뻗음 8:13.0 → 접음 8:14.5. 한 팔 위·한 팔 아래로 기울여 길게 뻗음"
+  },
+  {
+   "start": 494.867,
+   "end": 495.533,
+   "who": "감스트",
+   "track_id": "local-user:body:person-100",
+   "source": "owner",
+   "origin": "candidate 58",
+   "reason": "감스트: 두 팔 뻗음 8:15.1 → 접음 8:15.5"
+  },
+  {
+   "start": 495.667,
+   "end": 496.433,
+   "who": "감스트",
+   "track_id": "local-user:body:person-100",
+   "source": "owner",
+   "origin": "candidate 59",
+   "reason": "감스트: 두 팔 뻗음 8:15.9 → 접음 8:16.4"
+  },
+  {
+   "start": 496.533,
+   "end": 497.267,
+   "who": "감스트",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c15",
+   "reason": "감스트: 두 팔 뻗음 8:16.9 → 접음 8:17.3. 흐릿함, 확신 중간"
+  },
+  {
+   "start": 497.4,
+   "end": 498.067,
+   "who": "감스트",
+   "track_id": "local-user:body:person-104",
+   "source": "owner",
+   "origin": "candidate 60",
+   "reason": "감스트: 두 팔 뻗음 8:17.7 → 접음 8:18.1"
+  },
+  {
+   "start": 515.933,
+   "end": 516.767,
+   "who": "감스트",
+   "track_id": "local-user:body:person-115",
+   "source": "owner",
+   "origin": "candidate 62",
+   "reason": "감스트: 두 팔 뻗음 8:36.1 → 접음 8:36.7. TV 무대 보라 재킷 = 감스트로 봄"
+  },
+  {
+   "start": 516,
+   "end": 516.7,
+   "who": "other",
+   "track_id": null,
+   "source": "owner",
+   "origin": "missed c16",
+   "reason": "다른 사람(파란 정장): 두 팔 뻗음 8:36.1 → 접음 8:36.6. 화면 끝에 반쯤 보임, 확신 중간"
+  },
+  {
+   "start": 516.833,
+   "end": 517.2,
+   "who": "other",
+   "track_id": "local-user:body:person-119",
+   "source": "owner",
+   "origin": "candidate 63",
+   "reason": "감스트: 두 팔 뻗음 8:37.0 → 접음 8:37.6. TV 무대 보라 재킷"
+  },
+  {
+   "start": 516.9,
+   "end": 517.633,
+   "who": "감스트",
+   "track_id": "local-user:body:person-115",
+   "source": "owner",
+   "origin": "candidate 64",
+   "reason": "#63과 같은 사람(보라 재킷)"
+  },
+  {
+   "start": 516.967,
+   "end": 517.633,
+   "who": "other",
+   "track_id": "local-user:body:person-107",
+   "source": "owner",
+   "origin": "candidate 65",
+   "reason": "다른 사람(파란 정장): 두 팔 뻗음 8:37.0 → 접음 8:37.5"
+  }
+ ],
+ "candidates": [
+  {
+   "candidate": 1,
+   "track_id": "local-user:body:person-1",
+   "start": 62.1,
+   "end": 63.9,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:02.2 → 접음 1:03.9. 오너 예시 1과 같은 구간",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    62.2,
+    63.767
+   ]
+  },
+  {
+   "candidate": 2,
+   "part": "2~mwz8yt0aa",
+   "split_of": "2",
+   "track_id": "local-user:body:person-1",
+   "start": 64.033,
+   "end": 64.767,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:04.2 → 접음 1:04.8. 이 후보 안에 2회(1:04.9–1:05.8 한 번 더) — 나머지는 놓친 것으로 추가",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    64.167,
+    65.5
+   ]
+  },
+  {
+   "candidate": 2,
+   "part": "2~mwz8yt0ab",
+   "split_of": "2",
+   "track_id": "local-user:body:person-1",
+   "start": 65.2,
+   "end": 65.5,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:04.2 → 접음 1:04.8. 이 후보 안에 2회(1:04.9–1:05.8 한 번 더) — 나머지는 놓친 것으로 추가",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    64.167,
+    65.5
+   ]
+  },
+  {
+   "candidate": 3,
+   "track_id": "local-user:body:person-1",
+   "start": 66.0,
+   "end": 66.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:06.0 → 접음 1:06.6",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    66.0,
+    66.433
+   ]
+  },
+  {
+   "candidate": 4,
+   "track_id": "local-user:body:person-1",
+   "start": 71.533,
+   "end": 72.167,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:11.6 → 접음 1:12.2",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    71.533,
+    72.1
+   ]
+  },
+  {
+   "candidate": 5,
+   "track_id": "local-user:body:person-1",
+   "start": 72.467,
+   "end": 73.1,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:12.4 → 접음 1:13.0",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    72.5,
+    72.967
+   ]
+  },
+  {
+   "candidate": 6,
+   "track_id": "local-user:body:person-1",
+   "start": 75.8,
+   "end": 76.8,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:16.1 → 접음 1:16.7",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    76.2,
+    76.667
+   ]
+  },
+  {
+   "candidate": 7,
+   "track_id": "local-user:body:person-1",
+   "start": 78.567,
+   "end": 79.633,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:19.1 → 접음 1:19.7",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    79.133,
+    79.467
+   ]
+  },
+  {
+   "candidate": 8,
+   "track_id": "local-user:body:person-1",
+   "start": 81.333,
+   "end": 82.867,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:21.4 → 접음 1:22.0",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    81.533,
+    81.833
+   ]
+  },
+  {
+   "candidate": 9,
+   "track_id": "local-user:body:person-1",
+   "start": 83.033,
+   "end": 83.9,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:22.4 → 접음 1:22.9",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    82.467,
+    82.767
+   ]
+  },
+  {
+   "candidate": 10,
+   "track_id": "local-user:body:person-1",
+   "start": 83.367,
+   "end": 83.667,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:23.3 → 접음 1:23.8",
+   "gamst_who": "감스트"
+  },
+  {
+   "candidate": 11,
+   "track_id": "local-user:body:person-22",
+   "start": 84.167,
+   "end": 84.7,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:24.3 → 접음 1:24.8",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    84.333,
+    84.467
+   ]
+  },
+  {
+   "candidate": 12,
+   "track_id": "local-user:body:person-22",
+   "start": 85.067,
+   "end": 85.7,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 1:25.2 → 접음 1:25.7",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    85.367,
+    85.5
+   ]
+  },
+  {
+   "candidate": 13,
+   "track_id": "local-user:body:person-26",
+   "start": 174.533,
+   "end": 175.967,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:54.6 → 접음 2:55.1. 이 후보 안에 2회(2:55.3–2:56.2 한 번 더) — 나머지는 놓친 것으로 추가",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 14,
+   "track_id": "local-user:body:person-26",
+   "start": 176.333,
+   "end": 176.967,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:56.4 → 접음 2:57.0",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    176.5,
+    176.9
+   ]
+  },
+  {
+   "candidate": 15,
+   "track_id": "local-user:body:person-26",
+   "start": 177.233,
+   "end": 177.833,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 2:57.4 → 접음 2:58.0",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    177.367,
+    177.767
+   ]
+  },
+  {
+   "candidate": 16,
+   "track_id": "local-user:body:person-28",
+   "start": 181.933,
+   "end": 182.6,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:02.2 → 접음 3:02.6",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    182.133,
+    182.533
+   ]
+  },
+  {
+   "candidate": 17,
+   "track_id": "local-user:body:person-28",
+   "start": 182.833,
+   "end": 183.567,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:03.0 → 접음 3:03.7",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    183.433,
+    183.5
+   ]
+  },
+  {
+   "candidate": 18,
+   "track_id": "local-user:body:person-28",
+   "start": 183.833,
+   "end": 184.667,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 3:04.0 → 접음 3:04.6",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    184.0,
+    184.433
+   ]
+  },
+  {
+   "candidate": 19,
+   "track_id": "local-user:body:person-28",
+   "start": 184.733,
+   "end": 185.1,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "?",
+   "reason": "다른 사람(첼시)이 3:04.7 팔을 뻗은 채 장면이 바뀜(3:05) — 접는 모습이 안 보여 1회인지 모르겠음",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    184.9,
+    185.1
+   ]
+  },
+  {
+   "candidate": 20,
+   "track_id": "local-user:body:person-40",
+   "start": 263.167,
+   "end": 263.867,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:23.2 → 접음 4:23.9",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    263.167,
+    263.733
+   ]
+  },
+  {
+   "candidate": 21,
+   "track_id": "local-user:body:person-44",
+   "start": 264.067,
+   "end": 264.733,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:24.2 → 접음 4:24.8",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    264.167,
+    264.633
+   ]
+  },
+  {
+   "candidate": 22,
+   "track_id": "local-user:body:person-45",
+   "start": 266.867,
+   "end": 267.467,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:26.9 → 접음 4:27.4",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    266.867,
+    267.367
+   ]
+  },
+  {
+   "candidate": 23,
+   "track_id": "local-user:body:person-45",
+   "start": 268.7,
+   "end": 269.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:28.9 → 접음 4:29.4",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    268.867,
+    269.367
+   ]
+  },
+  {
+   "candidate": 24,
+   "track_id": "local-user:body:person-46",
+   "start": 269.033,
+   "end": 269.3,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "#23과 같은 사람(감스트) — 상자가 감스트를 크게 덮은 중복 트랙",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 25,
+   "part": "25~mwz9kdeqb",
+   "split_of": "25",
+   "track_id": "local-user:body:person-45",
+   "start": 269.633,
+   "end": 270.267,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:29.8 → 접음 4:30.4",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    269.767,
+    270.233
+   ]
+  },
+  {
+   "candidate": 25,
+   "part": "25~mwz9kdeqa",
+   "split_of": "25",
+   "track_id": "local-user:body:person-45",
+   "start": 269.767,
+   "end": 269.833,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:29.8 → 접음 4:30.4",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    269.767,
+    270.233
+   ]
+  },
+  {
+   "candidate": 26,
+   "track_id": "local-user:body:person-47",
+   "start": 270.733,
+   "end": 271.233,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:30.8 → 접음 4:31.2. 한 팔은 위·한 팔은 아래로 기울여 뻗음",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    270.767,
+    271.2
+   ]
+  },
+  {
+   "candidate": 27,
+   "track_id": "local-user:body:person-45",
+   "start": 271.6,
+   "end": 272.1,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:31.8 → 접음 4:32.2",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    271.633,
+    272.033
+   ]
+  },
+  {
+   "candidate": 28,
+   "track_id": "local-user:body:person-45",
+   "start": 274.5,
+   "end": 275.0,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:34.6 → 접음 4:35.0. 이 후보 안에 2회(4:35.2 뻗음 → 4:35.4 접음 한 번 더) — 나머지는 놓친 것으로 추가",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    274.5,
+    275.367
+   ]
+  },
+  {
+   "candidate": 29,
+   "track_id": "local-user:body:person-45",
+   "start": 275.733,
+   "end": 276.067,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 4:35.8 → 접음 4:36.0",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    275.733,
+    275.967
+   ]
+  },
+  {
+   "candidate": 30,
+   "track_id": "local-user:body:person-52",
+   "start": 281.867,
+   "end": 281.9,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "claude",
+   "proposed": "N",
+   "reason": "상자가 오른쪽 의자/벽만 따라감(4:41.9), 사람 동작 없음",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 31,
+   "track_id": "local-user:body:person-52",
+   "start": 285.3,
+   "end": 285.367,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "claude",
+   "proposed": "N",
+   "reason": "상자가 오른쪽 의자/벽만 따라감(4:45.3), 사람 동작 없음",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 32,
+   "track_id": "local-user:body:person-59",
+   "start": 361.433,
+   "end": 362.233,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 6:01.6 → 접음 6:02.2. 토트넘 셔츠 = 감스트",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    361.633,
+    362.133
+   ]
+  },
+  {
+   "candidate": 33,
+   "track_id": "local-user:body:person-59",
+   "start": 362.433,
+   "end": 363.233,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 6:02.6 → 접음 6:03.2",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    362.567,
+    363.067
+   ]
+  },
+  {
+   "candidate": 34,
+   "track_id": "untracked",
+   "start": 362.833,
+   "end": 363.067,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "자기 상자 없음. 같은 시각 #33(감스트 6:02.6–6:03.2)과 겹침",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 35,
+   "track_id": "local-user:body:person-56",
+   "start": 363.9,
+   "end": 364.533,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:04.0 → 접음 6:04.6",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    363.933,
+    364.433
+   ]
+  },
+  {
+   "candidate": 36,
+   "track_id": "local-user:body:person-71",
+   "start": 364.167,
+   "end": 364.4,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "#35와 같은 사람(첼시) — 두 사람을 덮는 넓은 상자",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 37,
+   "track_id": "local-user:body:person-56",
+   "start": 364.7,
+   "end": 365.6,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:04.8 → 접음 6:05.5",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    364.833,
+    365.333
+   ]
+  },
+  {
+   "candidate": 38,
+   "track_id": "local-user:body:person-59",
+   "start": 368.9,
+   "end": 369.667,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 6:09.0 → 접음 6:09.8. GAMST는 unknown이라 했지만 상자가 감스트(토트넘)",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    369.0,
+    369.533
+   ]
+  },
+  {
+   "candidate": 39,
+   "track_id": "local-user:body:person-72",
+   "start": 369.167,
+   "end": 369.7,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "D",
+   "reason": "#38과 같은 사람(감스트), 같은 1회",
+   "gamst_who": "감스트"
+  },
+  {
+   "candidate": 40,
+   "track_id": "untracked",
+   "start": 369.233,
+   "end": 370.567,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "D",
+   "reason": "자기 상자 없음. 같은 시각 감스트(#38·#42)·첼시(#41·#43) 후보가 이미 있음",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 41,
+   "track_id": "local-user:body:person-56",
+   "start": 369.333,
+   "end": 370.033,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:09.6 → 접음 6:10.2",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    369.467,
+    369.933
+   ]
+  },
+  {
+   "candidate": 42,
+   "track_id": "local-user:body:person-59",
+   "start": 369.867,
+   "end": 370.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 6:10.0 → 접음 6:10.6",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    370.033,
+    370.533
+   ]
+  },
+  {
+   "candidate": 43,
+   "track_id": "local-user:body:person-56",
+   "start": 370.367,
+   "end": 370.967,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(첼시): 두 팔 뻗음 6:10.4 → 접음 6:11.0",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    370.367,
+    370.933
+   ]
+  },
+  {
+   "candidate": 44,
+   "track_id": "local-user:body:person-59",
+   "start": 370.767,
+   "end": 371.567,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 6:11.0 → 접음 6:11.6",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    370.933,
+    371.533
+   ]
+  },
+  {
+   "candidate": 45,
+   "track_id": "local-user:body:person-73",
+   "start": 371.167,
+   "end": 372.167,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "#44·#47과 같은 감스트(왼쪽 팔 쪽 상자)",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 46,
+   "track_id": "untracked",
+   "start": 371.367,
+   "end": 371.533,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "자기 상자 없음. #44(감스트)와 같은 시각",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 47,
+   "track_id": "local-user:body:person-59",
+   "start": 371.733,
+   "end": 372.4,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "?",
+   "reason": "감스트가 6:11.8 팔을 뻗은 채 6:12 장면 전환 — 접는 모습이 안 보임",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    371.867,
+    372.4
+   ]
+  },
+  {
+   "candidate": 48,
+   "track_id": "untracked",
+   "start": 371.9,
+   "end": 372.7,
+   "label": "D",
+   "answer": "같은 사람 중복",
+   "source": "claude",
+   "proposed": "D",
+   "reason": "자기 상자 없음. #47과 같은 시각(장면 전환)",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 49,
+   "track_id": "local-user:body:person-96",
+   "start": 458.1,
+   "end": 458.767,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 7:38.4 → 접음 7:39.0. 리버풀 셔츠 = 감스트",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    458.3,
+    458.767
+   ]
+  },
+  {
+   "candidate": 50,
+   "track_id": "local-user:body:person-74",
+   "start": 459.167,
+   "end": 459.967,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "N",
+   "reason": "상자는 PUMA 사람인데 그 사람은 팔을 머리 옆에 굽힘. 같은 때 감스트가 7:39.4 뻗음 → 7:39.8 접음 — 그것은 놓친 것으로 따로 추가",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    459.4,
+    459.767
+   ]
+  },
+  {
+   "candidate": 51,
+   "track_id": "local-user:body:person-74",
+   "start": 463.767,
+   "end": 464.567,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "N",
+   "reason": "상자는 PUMA 사람(팔을 굽혀 듦, 뻗지 않음). 같은 때 감스트의 1회는 #52",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    464.0,
+    464.367
+   ]
+  },
+  {
+   "candidate": 52,
+   "track_id": "local-user:body:person-98",
+   "start": 463.8,
+   "end": 464.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 7:44.0 → 접음 7:44.6",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    464.0,
+    464.4
+   ]
+  },
+  {
+   "candidate": 53,
+   "track_id": "untracked",
+   "start": 464.733,
+   "end": 465.533,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "D",
+   "reason": "자기 상자 없음. #52(감스트)와 겹침. 7:44.8–7:45.6의 다음 1회는 놓친 것으로 추가",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    464.167,
+    465.267
+   ]
+  },
+  {
+   "candidate": 54,
+   "track_id": "local-user:body:person-100",
+   "start": 468.267,
+   "end": 468.933,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 7:48.4 → 접음 7:49.0",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    468.267,
+    468.733
+   ]
+  },
+  {
+   "candidate": 55,
+   "track_id": "local-user:body:person-74",
+   "start": 470.833,
+   "end": 473.233,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "?",
+   "reason": "두 사람이 팔을 든 채 점프하며 환호(7:50–7:54), 접지 않고 계속 듦 — 관제탑으로 셀지 모르겠음(상자는 PUMA 사람)",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 56,
+   "track_id": "local-user:body:person-100",
+   "start": 471.767,
+   "end": 473.733,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "?",
+   "reason": "감스트가 팔을 든 채 점프하며 환호(7:51–7:54), 뻗었다 접는 반복이 아님 — 관제탑으로 셀지 모르겠음",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 57,
+   "track_id": "local-user:body:person-100",
+   "start": 492.533,
+   "end": 494.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:13.0 → 접음 8:14.5. 한 팔 위·한 팔 아래로 기울여 길게 뻗음",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    493.3,
+    494.333
+   ]
+  },
+  {
+   "candidate": 58,
+   "track_id": "local-user:body:person-100",
+   "start": 494.867,
+   "end": 495.533,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:15.1 → 접음 8:15.5",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    495.1,
+    495.4
+   ]
+  },
+  {
+   "candidate": 59,
+   "track_id": "local-user:body:person-100",
+   "start": 495.667,
+   "end": 496.433,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:15.9 → 접음 8:16.4",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    495.9,
+    496.267
+   ]
+  },
+  {
+   "candidate": 60,
+   "track_id": "local-user:body:person-104",
+   "start": 497.4,
+   "end": 498.067,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:17.7 → 접음 8:18.1",
+   "gamst_who": "감스트",
+   "gamst_span": [
+    497.667,
+    498.067
+   ]
+  },
+  {
+   "candidate": 61,
+   "track_id": "local-user:body:person-104",
+   "start": 510.867,
+   "end": 510.9,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "claude",
+   "proposed": "N",
+   "reason": "장면 전환(8:30.9) 페이드, 동작 없음",
+   "gamst_who": "unknown"
+  },
+  {
+   "candidate": 62,
+   "track_id": "local-user:body:person-115",
+   "start": 515.933,
+   "end": 516.767,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:36.1 → 접음 8:36.7. TV 무대 보라 재킷 = 감스트로 봄",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    516.167,
+    516.467
+   ]
+  },
+  {
+   "candidate": 63,
+   "track_id": "local-user:body:person-119",
+   "start": 516.833,
+   "end": 517.2,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "Y",
+   "reason": "감스트: 두 팔 뻗음 8:37.0 → 접음 8:37.6. TV 무대 보라 재킷",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    516.967,
+    517.467
+   ]
+  },
+  {
+   "candidate": 64,
+   "track_id": "local-user:body:person-115",
+   "start": 516.9,
+   "end": 517.633,
+   "label": "Y",
+   "answer": "감스트가 했다",
+   "source": "owner",
+   "proposed": "D",
+   "reason": "#63과 같은 사람(보라 재킷)",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    517.0,
+    517.533
+   ]
+  },
+  {
+   "candidate": 65,
+   "track_id": "local-user:body:person-107",
+   "start": 516.967,
+   "end": 517.633,
+   "label": "P",
+   "answer": "다른 사람이 했다",
+   "source": "owner",
+   "proposed": "P",
+   "reason": "다른 사람(파란 정장): 두 팔 뻗음 8:37.0 → 접음 8:37.5",
+   "gamst_who": "unknown",
+   "gamst_span": [
+    517.067,
+    517.4
+   ]
+  },
+  {
+   "candidate": 66,
+   "track_id": "untracked",
+   "start": 517.167,
+   "end": 517.5,
+   "label": "N",
+   "answer": "동작 아님",
+   "source": "owner",
+   "proposed": "?",
+   "reason": "자기 상자가 분명치 않음(왼쪽 주황 셔츠 쪽). 주황 셔츠 사람이 팔을 뻗었는지 안 보임",
+   "gamst_who": "unknown"
+  }
+ ],
+ "counts": {
+  "감스트": 46,
+  "other": 22
+ },
+ "counts_with_proposals": {
+  "감스트": 46,
+  "other": 22
+ },
+ "note": "source owner = 오너가 정하거나 승인한 정답, claude = Claude 제안(정답 아님). counts는 owner만"
+}

@@ -1,0 +1,57 @@
+{
+ "video": "감스트-관제탑 모음집.mp4",
+ "action": "관제탑",
+ "examples": [
+  {
+   "start": 62.051,
+   "end": 63.951,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@62.051-63.951"
+  },
+  {
+   "start": 64.127,
+   "end": 64.76,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@64.127-64.760"
+  },
+  {
+   "start": 64.96,
+   "end": 65.56,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@64.960-65.560"
+  },
+  {
+   "start": 65.827,
+   "end": 66.527,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@65.827-66.527"
+  },
+  {
+   "start": 71.411,
+   "end": 72.211,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@71.411-72.211"
+  },
+  {
+   "start": 72.377,
+   "end": 73.111,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@72.377-73.111"
+  },
+  {
+   "start": 75.868,
+   "end": 76.768,
+   "kind": "pos",
+   "click": null,
+   "arg": "감스트-관제탑 모음집.mp4@75.868-76.768"
+  }
+ ],
+ "enroll": "gamst recipe enroll person-action-count --without target_person --mode sequence --name '관제탑' --video '<TestBed>/감스트-관제탑 모음집.mp4@62.051-63.951' --video '<TestBed>/감스트-관제탑 모음집.mp4@64.127-64.760' --video '<TestBed>/감스트-관제탑 모음집.mp4@64.960-65.560' --video '<TestBed>/감스트-관제탑 모음집.mp4@65.827-66.527' --video '<TestBed>/감스트-관제탑 모음집.mp4@71.411-72.211' --video '<TestBed>/감스트-관제탑 모음집.mp4@72.377-73.111' --video '<TestBed>/감스트-관제탑 모음집.mp4@75.868-76.768' --profile <try-it>/testbed/identity/profile-identity.json --out <try-it>/testbed/multi/gwan/ex_gwan_fewshot.json",
+ "enroll_clicked": "ex_gwan_fewshot.json"
+}
