@@ -200,8 +200,8 @@ def main(argv=None):
     parser.add_argument('--court', help='court reference JSON (gamst/sports/court.py)')
     parser.add_argument('--tolerance-ms', type=float, default=50.)
     parser.add_argument('--out', required=True)
-    parser.add_argument('extra', nargs='*', help='more options for gamst recipe run (after --)')
-    args = parser.parse_args(argv)
+    args, extra = parser.parse_known_args(argv)     # anything else (after --) goes to gamst recipe run
+    args.extra = [item for item in extra if item != '--']
     return openttgames(args)
 
 
