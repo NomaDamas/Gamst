@@ -415,7 +415,7 @@ PS4_REV = "8feb7a1b3da1264659f155c42bfb40a5be88d730"
 PS4_PACKAGES = ("torch==2.8.0", "torchaudio==2.8.0", "numpy>=1.24,<2.3")
 PS4_MEASURED = {"ram": "measured: worker peak RSS on 1.5-8 s windows, docs/measurements/tse-2026-11-26.md", "vram": "CPU worker", "disk": "pinned file sizes"}
 PIXIT_PACKAGES = ("pyannote.audio==3.3.2", "asteroid==0.7.0", "pyannote.core==5.0.0", "pyannote.database==5.1.3", "pyannote.metrics==3.2.1", "pyannote.pipeline==3.0.1", "speechbrain==1.1.2", "huggingface-hub==0.36.0", "transformers==4.57.6", "torch==2.8.0", "torchaudio==2.8.0", "numpy<2.3", "setuptools<81", "matplotlib")
-SAPIENS2_LICENSE = "Sapiens2 License: forbids biometric processing and re-identification; owner must accept"
+SAPIENS2_LICENSE = "Sapiens2 License (code and weights): forbids biometric processing and surveillance, Meta may audit; owner must accept, GAMST never downloads it"
 
 
 def _lvface(size, sha, count, verification):
@@ -444,13 +444,18 @@ def _lvface_scrfd():
 
 
 def _sapiens2(size, revision, sha, count):
+    # Top-down over the same YOLOX-m (HumanArt) person detector as RTMW; the weights directory also holds Meta's
+    # config.json and preprocessor_config.json from the same revision (the transformers port reads them).
     return _candidate(
-        "sapiens2." + size, "sapiens2.pose", ("transformers>=5.10.3", "torch>=2.7", "torchvision", "timm", "safetensors", "numpy>=1.24"),
-        ("cuda",), 16384, count // MIB, 2000, ESTIMATED, SAPIENS2_LICENSE,
-        "GAMST adapter written from the transformers port; no weights run; snapshot directories provisioned by hand",
-        (_weight(f"sapiens2_{size}_pose.safetensors", f"{HF}/facebook/sapiens2-pose-{size}/resolve/{revision}/sapiens2_{size}_pose.safetensors", sha, count, "publisher metadata"),
-         _weight("detr-resnet-101-dc5.safetensors", HF + "/facebook/detr-resnet-101-dc5/resolve/96317ca979e231bd960cb3cac31328e0165a3e94/model.safetensors", "707de69ca32dee6b518798a866219809eb3e76c190f70acda1c1f67c9f7de6c7", 242797616, "publisher metadata")),
-        environment="sapiens2", python="3.11", automatic=False, config={})
+        "sapiens2." + size, "sapiens2.pose", ("transformers==5.24.1", "torch==2.9.1", "torchvision==0.24.1", "safetensors", "numpy>=1.24,<2.3",
+                                              "rtmlib==0.0.16", "onnxruntime==1.32.0", "opencv-python>=4.8"),
+        ("cuda", "mps"), 16384, count // MIB, 2000, ESTIMATED, SAPIENS2_LICENSE,
+        "1B measured on the owner's shotgun clip (MPS): docs/measurements/testbed-2026-11-26.md; weights provisioned by hand"
+        if size == "1b" else "GAMST adapter for the 1B run here; this size not run; weights provisioned by hand",
+        (_weight("model.safetensors", f"{HF}/facebook/sapiens2-pose-{size}/resolve/{revision}/model.safetensors", sha, count,
+                 "downloaded" if size == "1b" else "publisher metadata"),
+         _weight("yolox_m_humanart.onnx", YOLOX_HUMANART_ZIP, "3dea6513388889f0fff4b77bf7a26013600321b9eb9ceb0e9a400a82572f5f23", 101400344, "measured on the unpacked file")),
+        environment="sapiens2", python="3.11", automatic=False, config={"device": "mps", "det_device": "coreml"})
 
 
 RTMW_ZIP = "https://download.openmmlab.com/mmpose/v1/projects/rtmw/onnx_sdk/rtmw-dw-x-l_simcc-cocktail14_270e-384x288_20231122.zip"

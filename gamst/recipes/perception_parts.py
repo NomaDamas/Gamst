@@ -685,12 +685,14 @@ async def _speaker_evidence(options, context):
 
 
 async def _sapiens2_pose(options, context):
+    """Sapiens2 pose over YOLOX in its own environment (opt-in: Sapiens2 License); joints on ``joints``."""
     from ..providers.sapiens2_pose import Sapiens2PosePlugin
-    entry = _entry(options, context, 'sapiens2.pose')
-    remote = await _open('RemotePose', entry)
-    return dict(module=Sapiens2PosePlugin(None, None, None, None, device=None, version=remote.model_id, remote=remote,
-                                          joints=options.get('joints'),
-                                          tracker=options.get('tracker', 'ocsort')))
+    config, python, profile = _entry(options, context, 'sapiens2.pose')
+    for key in ('device', 'dtype', 'det_device', 'compute_units', 'det_every_ms', 'max_poses', 'flip_test'):
+        if key in options:   # the item's own settings win
+            config[key] = options[key]
+    remote = await _open('RemotePose', (config, python, profile))
+    return dict(module=Sapiens2PosePlugin(remote, joints=options.get('joints'), tracker=options.get('tracker', 'ocsort')))
 
 
 async def _rtmw_pose(options, context):

@@ -99,6 +99,19 @@ def coreml_cache(weights, cache_dir=None):
     return Path(folder)
 
 
+def coreml_providers(compute_units, cache, sha, name, **extra):
+    """ONNX Runtime providers for one CoreML session (ML Program, ``compute_units``), CPU behind it. With ``cache`` (from
+    :func:`coreml_cache`): one compiled copy per model, unit and ``name`` (e.g. a batch size) in
+    ``<cache>/<sha[:16]>-<units>-<name>``, reused by every run; without it CoreML writes a 200-400 MB copy per session
+    into $TMPDIR, left behind whenever a worker is killed. ``extra``: more CoreML options (:data:`DETECTOR_COREML`)."""
+    options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units, **extra}
+    if cache is not None:
+        folder = Path(cache) / f'{sha[:16]}-{compute_units}-{name}'
+        folder.mkdir(parents=True, exist_ok=True)
+        options['ModelCacheDirectory'] = str(folder)
+    return [('CoreMLExecutionProvider', options), 'CPUExecutionProvider']
+
+
 TEMP_NAME = r'onnxruntime-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}-(\d+)-[0-9A-F]+(\.mlmodelc|\.mlpackage)?'
 
 
@@ -166,14 +179,7 @@ class RTMWModels:
             clear_dead_coreml_temp()
 
             def providers(sha, name, **extra):
-                # one compiled copy per model, unit and batch size, reused by every run (without it CoreML writes a
-                # 200-400 MB copy per session into $TMPDIR, left behind whenever a worker is killed)
-                options = {'ModelFormat': 'MLProgram', 'MLComputeUnits': compute_units, **extra}
-                if cache is not None:
-                    folder = cache / f'{sha[:16]}-{compute_units}-{name}'
-                    folder.mkdir(parents=True, exist_ok=True)
-                    options['ModelCacheDirectory'] = str(folder)
-                return [('CoreMLExecutionProvider', options), 'CPUExecutionProvider']
+                return coreml_providers(compute_units, cache, sha, name, **extra)
             self.detector.session = ort.InferenceSession(str(det_path), providers=providers(
                 det_sha256, 'det-static', **DETECTOR_COREML))
             self.pose.session = ort.InferenceSession(str(path), providers=providers(sha256, 'dynamic'))

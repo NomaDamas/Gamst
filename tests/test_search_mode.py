@@ -130,11 +130,14 @@ class LiveHudTest(unittest.TestCase):
                 modality='audio', timestamp_ms=5000, data=None), records)))
             asyncio.run(view.update('microphone', SimpleNamespace(modality='audio', timestamp_ms=5050, data=None), []))
         self.assertEqual(len(shown), 1)          # at most every 100 ms
-        for line in ('final 1', 'revoked 1', 'heard 0', 'uncertain 0', '-> final  bbo  candidate  (uncertain_overlap)',
-                     '-> revoked  bbo  (other_speaker)'):
+        say = view._say         # Korean words when the font is there (gamst.views.Writer), else English
+        for line in (say('확정 1', 'final 1'), say('취소 1', 'revoked 1'), say('들림 0', 'heard 0'),
+                     say('불확실 0', 'uncertain 0'), say('-> 확정  bbo  후보  (uncertain_overlap)',
+                                                      '-> final  bbo  candidate  (uncertain_overlap)'),
+                     say('-> 취소  bbo  (other_speaker)', '-> revoked  bbo  (other_speaker)')):
             self.assertTrue(any(line in text for text in texts), line)
-        self.assertTrue(any('mode: search' in text for text in texts))
-        self.assertTrue(any('VOICE REFERENCE QUALITY LOW' in text for text in texts))
+        self.assertTrue(any(say('모드: 찾기', 'mode: search') in text for text in texts))
+        self.assertTrue(any(say('목소리 기준 품질 낮음', 'VOICE REFERENCE QUALITY LOW') in text for text in texts))
         self.assertEqual(event_line(dict(event='term.other_voice', term='뽀또', speaker_score=.1)), '  other voice  뽀또  voice 0.10')
 
 

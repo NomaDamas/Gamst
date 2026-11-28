@@ -87,7 +87,7 @@ Each capability takes the lane of the built-in recipe it was measured in, so a c
   in 0..1 of the frame; the track nearest the click is followed), or `what.movement.examples_from: "who"` (each clip
   is learnt from the track the person binding names `who`; CLI `gamst recipe enroll ... --from-who NAME --person
   P.json`, MCP `set_instruction` `clips_from: "who"`). The refusal is `refusal()`'s sentence, the same as on the CLI, HUD and in MCP.
-- **Validation**: `gamst.recipes.validate` (what `load` does for a file): every input is read from a source it supports,
+- **Validation**: `compose.validate_request(request)` applies every rule below without writing or enrolling anything (`{ok, missing, before_run}`); `compose` runs it first, and the HUD's setup step (`gamst recipe hud`, [hud-demo.md](hud-demo.md) section 0) calls it while the request is filled in. Then `gamst.recipes.validate` (what `load` does for a file): every input is read from a source it supports,
   every `consumes` names an input or an earlier module, every part is in `PARTS`, the view exists; every reference the
   chosen recipe needs is given.
 - **Words**: the default recogniser (Scribe v3 Live) is hosted and paid. Composing never sends anything; `before_run`
@@ -143,7 +143,8 @@ gamst mcp --clips DIR [--run-profile PROFILE.json] [--store run.sqlite --max-rec
   `get_pipeline`, `set_instruction` and `enroll_person` read and change that run. Its JSON lines go to stderr, never to
   the protocol's stdout. One run at a time; `wait: true` waits for a finished file's run and returns its report.
   After the run `get_pipeline` returns `{running: false, last_run}`.
-- A run with a camera or microphone needs `consent.capture`; a hosted recogniser `consent.remote_asr`.
+- A camera or microphone needs nothing more (owner, 2026-11-28: installing GAMST is the consent; `consent.capture` is
+  still accepted and changes nothing). A hosted, paid recogniser waits for `consent.remote_asr` (a cost notice).
 - Inside a running recipe (`gamst recipe run --serve`) `compose_recipe` composes with the run's `--clips` folders; it
   cannot start a second run.
 
