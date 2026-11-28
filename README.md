@@ -8,7 +8,7 @@ Turn high-frequency vision, sound, physical, environmental, and spatial streams 
 
 **🐍 Python SDK · 🔌 MCP · 🏠 Local-first · ⚡ Event-driven · 🧩 Pluggable models**
 
-[Rotation](#rotation) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
+[Rotation](#rotation) · [Person action](#person-action) · [Quick start](#-quick-start) · [Python SDK](#-python-sdk) · [MCP](#-mcp-for-ai-agents) · [Companion](#-context-aware-companion) · [Documentation](#-documentation)
 
 ⭐ If GAMST is useful to you, a [GitHub star](https://github.com/NomaDamas/Gamst) helps the project a lot.
 
@@ -25,6 +25,7 @@ GAMST gives agents a shared layer for observing a changing world, tracking physi
 - [🌱 Context layer](#overview)
 - [✨ Capabilities](#capabilities)
 - [🔄 Object rotation](#rotation)
+- [🧍 A given person's action and words](#person-action)
 - [🚀 Quick start](#quick-start)
 - [🏠 Complete local stack](#local-stack)
 - [🐍 Python SDK](#python-sdk)
@@ -117,6 +118,7 @@ implementation, not a fork or endorsement of those projects.
 | 🧭 **Temporal Fusion & State Chain** | Time-aligned state, semantic episodes, evidence and bounded context | Freshness watermarks, physical-state precomputation, deterministic rules, optional multimodal observation plugin |
 | 🎥 **Perception Plugins** | High-frequency vision/audio/physical measurements and semantic windows | OpenCV, MediaPipe, Silero VAD, faster-whisper, depth, tracking and pluggable workers |
 | 🔄 **Rotation Counting (Experimental)** | Turn counts and `undersampled` status | High-frame-rate ellipse-ratio fitting; live 240 fps iPhone HUD and per-take replay |
+| 🧍 **A Given Person's Action (Experimental)** | Each occurrence's start, end, who and evidence; a count per person | Who from a name + photos (face + whole-body appearance), what from text, a rule, example clips or both; realtime or post; HUD and MCP `compose_recipe` |
 
 ### Why GAMST exists
 
@@ -302,6 +304,40 @@ frame-by-frame flip count within one flip on 6 tosses; it missed the
 remaining toss by 6 flips. Accuracy is not guaranteed. Use even lighting, keep
 the whole flight in frame and fix the phone on a stand.
 [Details, measurements and limits](docs/halo-coin.md).
+
+<a id="person-action"></a>
+## 🧍 A given person's action and words
+
+Tell GAMST who (a name and a few photos) and what (the action in words, a rule written from them, example clips, or
+both), and it returns every time that person did it, with its start and end, among several people; the others' actions
+come back too, one row per person. Owner's labels and every number:
+[wrap-up 2026-11-28](docs/wrapup-2026-11-28-person-action.md).
+
+VIDEO_GWANJETAP_SEARCH
+
+**Found from text.** "두 팔을 오므렸다가 → 양옆으로 폈다가 → 다시 접기" by 감스트 (name + photos), in a 522 s compilation
+with several people: rule + 7 example clips, search mode. Against the owner's 39 labelled occurrences, 감스트's F1 is
+0.86-0.89 in-sample and 0.78 / 0.90 when the setting is picked on the other half of the scenes (truth v2).
+
+VIDEO_SHOTGUN_COUNT
+
+**Counted live.** One pose model (RTMW-l) on every frame of a 60 fps clip, as a camera: 16 of 16 slams in 7 runs at
+60 fps and 6 at 30 fps, 0 frames skipped, 0 lost, 14 ms per frame; at 60 fps the count is stored 0.19-0.24 s (median) after each slam ends.
+
+VIDEO_PPOTTO_COUNT
+
+**Counted by voice.** The word 뽀또 said by 감스트 in a noisy shop with several voices: 7 of the 9 he said were counted
+right; the 2 wrong ones are a word nobody said and another person's voice.
+
+```bash
+gamst recipe hud --input clip.mp4 --who 감스트 --photo a.jpg --photo b.jpg --photo c.jpg \
+  --action "관제탑: 두 팔을 앞으로 오므렸다가 양옆으로 폈다가 다시 접는다" --rule docs/movements/gwanjetap.rule.json \
+  --example "clip.mp4@62.051-63.951" --mode search --timing post
+```
+
+An agent does the same over MCP with one `compose_recipe` request ([compose-recipe.md](docs/compose-recipe.md)), then
+`count_events` (`who`) for each occurrence's start, end and evidence. The setup window and the live view:
+[hud-demo.md](docs/hud-demo.md); person identity: [person-identity.md](docs/person-identity.md).
 
 <a id="quick-start"></a>
 ## 🚀 Quick start
