@@ -252,6 +252,7 @@ class Pipeline:
         self._pausable: dict[str, bool] = {}
         self.memories: dict[str, Any] = {}   # input id -> AudioMemory: audio kept for catch-up and verification
         self._video_memory = None            # VideoMemory of the ``backlog="spill"`` lanes (created by the first one)
+        self._rereaders = {}                 # input id -> its FileFrames (a re-readable recording), or None
         self._keeping_up = False             # a recording replayed at its pace: sampling and spilling lanes are not waited for
         self._post = False                   # timing post: a recording read at the pace of its processing; no spill, no L2
         human.pipeline = self
@@ -636,14 +637,16 @@ class Pipeline:
 
     def _once(self, entry, output, late):
         """``late``: which lane commits (an L2 interval's id, None for the live lane). Drop an event another lane already
-        committed with the same label and person and an end within
-        ``SAME_EVENT_MS``: ownership by end time makes this rare; it is the stored record's safety net."""
+        committed with the same label and person (``person``, else ``person_id``, else ``who``: two people's events are
+        two) and an end within ``SAME_EVENT_MS``: ownership by end time makes this rare; it is the stored record's
+        safety net."""
         seen = entry.setdefault('ends', deque(maxlen=256))
 
         def fresh(event):
             if not isinstance(event, dict) or type(event.get('end_ms')) not in (int, float):
                 return True
-            key = (event.get('event'), event.get('label'), str(event.get('person')))
+            key = (event.get('event'), event.get('label'),
+                   str(event.get('person', event.get('person_id', event.get('who')))))
             if any(other_key == key and other_late != late and abs(end - event['end_ms']) <= SAME_EVENT_MS
                    for end, other_key, other_late in seen):
                 return False
@@ -719,7 +722,7 @@ class Pipeline:
         for item in sorted(lane['busy'], key=lambda item: item.frame.timestamp_ms):
             at = item.frame.timestamp_ms
             if item.media and item.frame.data is not None and start - config['max_lookback_ms'] <= at < start:
-                kept = self.video_memory().keep(item.frame.data)
+                kept = self._keep(item.frame.data, item.source, at)
                 if kept is not None:
                     pre.append(_Item(list(item.names), replace(item.frame, data=None), True, False, source=item.source,
                                      kept=kept))
@@ -756,7 +759,7 @@ class Pipeline:
             if item.frame.timestamp_ms > todo['until_ms'] or todo['state'] in ('done', 'failed', 'cancelled'):
                 lane['collecting'].remove(todo)
                 continue
-            kept = self.video_memory().keep(item.frame.data)
+            kept = self._keep(item.frame.data, item.source, item.frame.timestamp_ms)
             if kept is None:        # beyond the disk bound: the worker ends there (its end is declared)
                 lane['collecting'].remove(todo)
                 todo['until_ms'] = min(todo['until_ms'], item.frame.timestamp_ms - 1)
@@ -768,7 +771,7 @@ class Pipeline:
         """One L2 interval: a chain of forks processes its frames (pre-roll, owned, to its end), commits its events
         as corrections at their capture times, and gives the frames back."""
         lane, catch = entry['lane'], entry['catch']
-        started, forks, done = time.monotonic(), {}, 0
+        started, forks, done, last = time.monotonic(), {}, 0, None
         low, high = todo['start_ms'], todo['until_ms']
 
         def keep(start_ms, end_ms):
@@ -793,12 +796,24 @@ class Pipeline:
                 batch = [item for item in waiting[:width] if item.frame.timestamp_ms <= todo['until_ms']]
                 if not batch:
                     break
-                frames = [replace(item.frame, data=self._video_memory.take(item.kept)) for item in batch]
+                ready, frames = [], []
+                for item in batch:
+                    data = await self._take(item)
+                    if data is None:        # its recording no longer gives the same frame: declared, never another
+                        self._gap(name, list(item.names), item.frame.timestamp_ms, item.frame.timestamp_ms, 1,
+                                  'backlog', subject_id=item.frame.subject_id, extend=True)
+                        self._release(item)
+                        continue
+                    ready.append(item)
+                    frames.append(replace(item.frame, data=data))
+                if not frames:
+                    done += len(batch)
+                    continue
                 if len(frames) > 1 and callable(getattr(leader, 'process_batch', None)):
                     outputs = await _call(leader.process_batch, frames)
                 else:
                     outputs = [await _call(leader.process, frame) for frame in frames]
-                for item, frame, output in zip(batch, frames, outputs):
+                for item, frame, output in zip(ready, frames, outputs):
                     await self._commit(name, entry, frame, output, context, keep=keep)
                     for member in item.names:
                         if member != name and member in forks:
@@ -806,11 +821,12 @@ class Pipeline:
                                                await _call(forks[member].process, frame), context, keep=keep)
                     self._release(item)
                 done += len(batch)
+                last = frames[-1]
                 catch['heard_ms'] += round(frames[-1].timestamp_ms - frames[0].timestamp_ms) + 1
             for member, fork in forks.items():
-                if callable(getattr(fork, 'finish', None)) and done:
+                if callable(getattr(fork, 'finish', None)) and last is not None:
                     output = await _call(fork.finish)
-                    await self._commit(member, self.modules[member], frames[-1], output, context, keep=keep)
+                    await self._commit(member, self.modules[member], last, output, context, keep=keep)
             todo['state'] = 'done'
             catch['done'] += 1
         except asyncio.CancelledError:
@@ -1166,7 +1182,7 @@ class Pipeline:
         # an image only: a derived video input that carries joints (PrivatePoses) stays as it is
         if lane.get('backlog') == 'spill' and not self._post and item.media and item.frame.modality == 'video' \
                 and hasattr(item.frame.data, 'shape'):
-            item.kept = self.video_memory().keep(item.frame.data)
+            item.kept = self._keep(item.frame.data, item.source, item.frame.timestamp_ms)
             if item.kept is None:      # beyond the memory's disk bound: declared, as a frame the lane could not take
                 lane['lost'] = True
                 lane['dropped'] += 1
@@ -1270,6 +1286,37 @@ class Pipeline:
                 self._say(note)
         return self._video_memory
 
+    def _keep(self, data, source, timestamp_ms):
+        """Keep a frame of input ``source`` in the video memory; a re-readable recording keeps only where it is
+        (beyond the memory: no pixel is stored, :mod:`gamst.providers.video_memory`)."""
+        return self.video_memory().keep(data, origin=self._origin(source, timestamp_ms))
+
+    def _origin(self, source, timestamp_ms):
+        """``(reader, index)`` of a frame of a seekable recording (``position_of`` / ``rereader`` of its input), else
+        None (a camera: its frames are compressed instead)."""
+        entry = self.inputs.get(source)
+        given = entry and entry.get('source')
+        position_of = getattr(given, 'position_of', None)
+        if not callable(position_of) or not callable(getattr(given, 'rereader', None)):
+            return None
+        index = position_of(timestamp_ms - entry['offset_ms'])
+        if index is None:
+            return None
+        if source not in self._rereaders:
+            try:
+                self._rereaders[source] = given.rereader()
+            except Exception:       # it cannot be read again: its frames are stored
+                self._rereaders[source] = None
+        reader = self._rereaders[source]
+        return None if reader is None else (reader, index)
+
+    async def _take(self, item):
+        """A waiting frame's data back from the video memory (decoding is done beside the event loop), or None."""
+        kept = item.kept
+        if kept.origin is None and kept.future is None and kept.chunk is None:      # in memory, or the raw spill file
+            return self._video_memory.take(kept)
+        return await asyncio.to_thread(self._video_memory.take, kept)
+
     def _release(self, item):
         if item.kept is not None:   # a frame of the video memory (False: already given back): never in ``_held``
             if item.kept is not False:
@@ -1349,8 +1396,8 @@ class Pipeline:
                     taken = []
                     while lane['frames'] and len(taken) < lane['batch'] and lane['name'] in lane['frames'][0].names:
                         item = lane['frames'].popleft()
-                        if item.kept:
-                            item.frame = replace(item.frame, data=self._video_memory.take(item.kept))
+                        if item.kept and not await self._back(lane, item):
+                            continue
                         lane['busy'].append(item)
                         taken.append(item)
                     if taken:
@@ -1360,8 +1407,8 @@ class Pipeline:
                 while lane['frames'] and len(running) < lane['width'] and not all(
                         self.modules[name]['paused'] for name in lane['frames'][0].names):
                     item = lane['frames'].popleft()
-                    if item.kept:     # back from the video memory, for as long as the lane runs it
-                        item.frame = replace(item.frame, data=self._video_memory.take(item.kept))
+                    if item.kept and not await self._back(lane, item):    # back from the video memory, while it runs
+                        continue
                     lane['busy'].append(item)
                     parallel = lane['width'] > 1 and lane['name'] in item.names and leader['enabled']
                     running.append((item, asyncio.create_task(self._process(leader, item.frame)) if parallel else None))
@@ -1381,6 +1428,19 @@ class Pipeline:
                     task.cancel()
                 lane['busy'].remove(item)
                 self._release(item)
+
+    async def _back(self, lane, item):
+        """A waiting frame's data, back for as long as the lane runs it; False (declared a gap, given back) when its
+        recording no longer gives the same frame."""
+        data = await self._take(item)
+        if data is None:
+            frame = item.frame
+            self._gap(lane['name'], list(item.names), frame.timestamp_ms, frame.timestamp_ms, 1, 'backlog',
+                      subject_id=frame.subject_id, extend=True)
+            self._release(item)
+            return False
+        item.frame = replace(item.frame, data=data)
+        return True
 
     async def _run_item(self, lane, item, task):
         context = _Context(lane)
@@ -1840,14 +1900,19 @@ class Pipeline:
         return outputs
 
     async def _commit(self, name, entry, frame, output, context, *, keep=None):
-        if keep is None and entry['claims']:     # catch-up workers own these capture times
+        if getattr(entry['module'], 'events_by_lane', False):
+            # a module whose events are about its own lane's state (who a track is: an L2 fork has tracks of its own),
+            # not counts: every lane keeps them whole, so what reads it in that lane (and the Store) sees every change
+            keep = None
+        elif keep is None and entry['claims']:     # catch-up workers own these capture times
             claims, by_end = list(entry['claims']), entry.get('claim_by') == 'end'
 
             def keep(start_ms, end_ms):
                 at = end_ms if by_end else (start_ms + end_ms) / 2
                 return not any(low <= at <= high for low, high in claims)
         output = self._trim(entry, output, keep)
-        if entry.get('claim_by') == 'end' and output:     # the safety net of L2 ownership: no event twice
+        if entry.get('claim_by') == 'end' and output and not getattr(entry['module'], 'events_by_lane', False):
+            # the safety net of L2 ownership: no event twice
             output = self._once(entry, output, context.owner)
         if context.correction and output:
             output = [_corrected(item) for item in output] if isinstance(output, list) else _corrected(output)
@@ -2149,6 +2214,10 @@ class Pipeline:
             memory.close()
         if self._video_memory is not None:
             self._video_memory.close()
+        for reader in self._rereaders.values():
+            if reader is not None:
+                reader.close()
+        self._rereaders = {}
         if getattr(self.human, 'pipeline', None) is self:
             self.human.pipeline = None
 

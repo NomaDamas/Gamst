@@ -9,7 +9,9 @@ A source may say more: ``live`` (default True; a recorded source waits for the m
 cannot), ``missed`` (how many frames or chunks it lost so far; the Pipeline turns an increase into a gap
 before the next frame), ``status()`` and ``describe()``: what it is and where its first frame was in it (``source``,
 ``name``, ``fps``, ``frames_in_source``, ``position_ms``; the Pipeline commits it with the first frame,
-:data:`gamst.pipeline.INPUTS`).
+:data:`gamst.pipeline.INPUTS`). A seekable recording also has ``position_of(timestamp_ms)`` (where a frame it just gave
+is in the file) and ``rereader()`` (:class:`FileFrames`): a realtime backlog keeps only that position and reads the
+frame again when a lane reaches it (:mod:`gamst.providers.video_memory`), instead of storing decoded frames.
 
 ``IPhone240Input`` is the GAMST 240 iPhone app (live over TCP, or a ``raw.gmst`` replayed): its
 frames carry the phone's Start/Stop marks and it takes phone commands, so a view can drive it.
@@ -218,6 +220,15 @@ class VideoFileInput:
         self.start_s, self.end_s, self.origin_ms = float(start_s), end_s, None
         self.clock, self.at_s = clock, float(at_s)
         self._cap, self._read = None, {}
+        self._positions = collections.OrderedDict()      # timestamp_ms -> frame index, of the frames given lately
+
+    def position_of(self, timestamp_ms):
+        """The frame index in the file of a frame this input gave lately (None: not one of them)."""
+        return self._positions.get(timestamp_ms)
+
+    def rereader(self):
+        """Another reader of the same file that gives a frame by its index (:class:`FileFrames`)."""
+        return FileFrames(self.path)
 
     def describe(self):
         """The file, its rate and frame count (as the container says) and where the first frame read is in it."""
@@ -273,6 +284,9 @@ class VideoFileInput:
             stamp = stamp if last is None or stamp > last else last + 1
             if last is None:
                 self._read['position_ms'] = stamp - base
+            self._positions[stamp] = position
+            while len(self._positions) > POSITIONS:
+                self._positions.popitem(last=False)
             last, position = stamp, position + 1
             yield InputFrame(frame, 'video', stamp)
 
@@ -280,6 +294,95 @@ class VideoFileInput:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+
+
+POSITIONS = 4096      # frames whose file position a VideoFileInput still knows (the Pipeline asks for each as it comes)
+SEEK_AFTER = 90       # a reader this many frames or more behind the wanted one seeks instead of decoding up to it
+CURSORS = 3           # readers of one file kept open (the live lane and L2 chains each read in order)
+
+
+class FileFrames:
+    """Frames of a video file by index, decoded again with the same reader as :class:`VideoFileInput` (OpenCV), so a
+    frame is the same array it was the first time (the caller checks: :class:`gamst.providers.video_memory.VideoMemory`
+    keeps a CRC of each and reads again from the file's start on a mismatch). A few readers stay open, each where it
+    last read: reading forward in order decodes each frame once; a far or backward index seeks (to the key frame
+    before it, then decodes forward). Thread-safe (one read at a time)."""
+
+    def __init__(self, path, *, cursors=CURSORS, seek_after=SEEK_AFTER):
+        self.path, self.cursors, self.seek_after = str(path), max(1, int(cursors)), int(seek_after)
+        self._readers = []      # [capture, next index, last used]
+        self._lock = threading.Lock()
+        self._used = 0
+        self.reads = self.seeks = self.decoded = self.restarts = 0
+
+    def _open(self):
+        import cv2
+        cap = cv2.VideoCapture(self.path)
+        if not cap.isOpened():
+            raise RuntimeError(f'cannot open video {self.path}')
+        return cap
+
+    def _reader(self, index):
+        """The open reader closest before ``index`` (within ``seek_after``), else the one used least lately, moved."""
+        import cv2
+        near = [item for item in self._readers if 0 <= index - item[1] < self.seek_after]
+        if near:
+            return min(near, key=lambda item: index - item[1])
+        if len(self._readers) < self.cursors:
+            self._readers.append([self._open(), 0, 0])
+            item = self._readers[-1]
+        else:
+            item = min(self._readers, key=lambda item: item[2])
+        if item[1] != index:
+            cap = item[0]
+            if not (cap.set(cv2.CAP_PROP_POS_FRAMES, index) and round(cap.get(cv2.CAP_PROP_POS_FRAMES)) == index):
+                cap.release()           # this container cannot seek: decode from its start
+                item[0], item[1] = self._open(), 0
+            else:
+                item[1] = index
+            self.seeks += 1
+        return item
+
+    def read(self, index, *, fresh=False):
+        """The frame at ``index`` (None past the end). ``fresh``: decoded from the file's start by a new reader."""
+        index = int(index)
+        with self._lock:
+            self.reads += 1
+            self._used += 1
+            if fresh:
+                self.restarts += 1
+                item = [self._open(), 0, self._used]
+                try:
+                    return self._decode(item, index)
+                finally:
+                    item[0].release()
+            item = self._reader(index)
+            item[2] = self._used
+            return self._decode(item, index)
+
+    def _decode(self, item, index):
+        cap = item[0]
+        while item[1] < index:
+            if not cap.grab():
+                return None
+            item[1] += 1
+            self.decoded += 1
+        ok, frame = cap.read()
+        if not ok:
+            return None
+        item[1] += 1
+        self.decoded += 1
+        return frame
+
+    def status(self):
+        return dict(reads=self.reads, seeks=self.seeks, decoded=self.decoded, restarts=self.restarts,
+                    open=len(self._readers))
+
+    def close(self):
+        with self._lock:
+            for item in self._readers:
+                item[0].release()
+            self._readers = []
 
 
 class ImageFilesInput:
@@ -1161,8 +1264,19 @@ class PacedInput:
         describe = getattr(self.source, 'describe', None)
         return dict(describe() if callable(describe) else {}, live=True, paced=True)
 
+    def position_of(self, timestamp_ms):
+        """Where a frame it gave (by its paced time) is in the recording, when the recording can say."""
+        position_of = getattr(self.source, 'position_of', None)
+        recorded = getattr(self, '_recorded', {}).get(timestamp_ms)
+        return None if recorded is None or not callable(position_of) else position_of(recorded)
+
+    def rereader(self):
+        rereader = getattr(self.source, 'rereader', None)
+        return rereader() if callable(rereader) else None
+
     async def frames(self):
         from dataclasses import replace
+        self._recorded = collections.OrderedDict()       # paced time -> the recording's own, of the frames given lately
         async for frame in self.source.frames():
             if 'recorded_ms' not in self.pace:
                 self.pace.update(recorded_ms=frame.timestamp_ms, wall_ms=_now_ms())
@@ -1170,6 +1284,9 @@ class PacedInput:
             wait = due - _now_ms()
             if wait > 0:
                 await asyncio.sleep(wait / 1000)
+            self._recorded[due] = frame.timestamp_ms
+            while len(self._recorded) > POSITIONS:
+                self._recorded.popitem(last=False)
             yield replace(frame, timestamp_ms=due)
 
     def close(self):
