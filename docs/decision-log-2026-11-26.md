@@ -1,6 +1,6 @@
 # Decision log: counting one person's words in real time (2026-11-26)
 
-Everything the owner decided or agreed on 2026-11-26, 2026-11-27 (35-50: [integrated perception design](design-2026-11-27-integrated-perception.md)) and 2026-11-28 (58-66: a given person's given action), the technical decisions taken with their evidence, and the answers
+Everything the owner decided or agreed on 2026-11-26, 2026-11-27 (35-50: [integrated perception design](design-2026-11-27-integrated-perception.md)) and 2026-11-28 (58-66: a given person's given action; 67: the three promo demos), the technical decisions taken with their evidence, and the answers
 given to the owner's questions. Design text: [realtime-attribution-decisions.md](realtime-attribution-decisions.md),
 [catch-up-verification.md](catch-up-verification.md), [speaker-tracks.md](speaker-tracks.md). Measurements:
 `docs/measurements/*-2026-11-26.md`. Test clip: 54 s, several people in a noisy shop, word 뽀또, 10 words by the person
@@ -44,7 +44,7 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 32 | A word only the primary (state-of-the-art) recogniser heard is counted (`contested: "stand"`, default), even when the others heard other speech there: SOTA first. Measured from three runs: +7 right, +3 wrong (the invented 24.16 s in 뽀또). Scribe's own word confidence cannot separate invented from true words (24.16 s: 0.33; true 41.76 s: 0.02). |
 | 33 | Two modes: count (default, today's behaviour) and search (recall first: never miss the person; uncertain words become candidates with their reason). |
 | 34 | Wrap up, document all experiments and lessons, publish demo videos in a GitHub issue table, then merge PR #366 (owner, 2026-11-27). |
-| 35 | Demo videos are not uploaded anywhere (copyright: broadcast clips); the video column of issue #371 was removed. Videos stay local. |
+| 35 | Demo videos are not uploaded anywhere (copyright: broadcast clips); the video column of issue #371 was removed. Videos stay local. **Superseded for the three promo demos by #67.** |
 | 36 | Free local disk: models and environments GAMST no longer uses are deleted (voxtral, sortformer, nemotron3, diarizen, ps4 TSE, sherpa zipformer ko, Light-ASD, MediaPipe pose_lite, their venvs, merged worktrees; multilingual-e5 1.1 GB). Other sessions' worktrees are untouched. |
 | 37 | Movement counting uses ONE model, the most accurate, counting every frame directly: no verification lane, no weaker fast lane, no "uncertain" state for movements, no skipped frames (owner: "검증레인은 없애고 성능이 더 좋은걸로 바로 세면 되지", "건너뛴 프레임이 너무 많은데?", "애매함도 없애"). Evidence: the verifier lowered the few-shot path to 14/16; the fast lane skipped 101-483 of 714 frames. |
 | 38 | Default pose model RTMW-l 384x288 (CoreML); MediaPipe full selectable with `--pose`. At start a short benchmark decides: if the SOTA model (live + L2 within the memory budget) keeps up, it is used; if it is too heavy, MediaPipe full, said in the report, HUD and `get_pipeline`. Never two models in one run. |
@@ -76,6 +76,7 @@ given to the owner's questions. Design text: [realtime-attribution-decisions.md]
 | 64 | (Owner, 2026-11-28) Alpamayo2 (the edge provider of the acceptance matrix, P1-2) is kept. |
 | 65 | (Owner, 2026-11-28) The small-VLM plan of issue #133 is needed: a local small VLM called periodically, escalating to a larger one only when needed, with its cost stated. Not built now; the semantic module stays OFF by default (decision 47). |
 | 66 | (Owner, 2026-11-28) Non-commercial state-of-the-art models are allowed: GAMST is not used commercially (extends decision 56 beyond re-ID). |
+| 67 | (Owner, 2026-11-28) Decision 35 is reversed for three promo demos only: 관제탑 found from text (감스트 among several people), the shotgun count (realtime), and 뽀또 counted by voice. They are uploaded to a GitHub issue and embedded in the README like the coin flip, after the owner has seen them; each in a landscape (16:9) and a vertical (9:16) cut. Every other demo video stays local. |
 
 ## 2. Technical decisions and their evidence
 
