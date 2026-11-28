@@ -156,53 +156,131 @@ class _Joints:
         return []
 
 
+PERSON_PARTS = ('person-binding', 'target-person')
+
+
+async def sample(face, body, image, pose, face_indices=None):
+    """``(face embedding or None, body embedding or None)`` of one person in one image (nothing is kept)."""
+    from ..providers.person_match import MEDIAPIPE_FACE_POINTS, align_face, body_crop, face_points, face_reading
+    from ..providers.speaker_verify import embed
+    height, width = image.shape[:2]
+    found = []
+    indices, visibility = face_reading(pose, face_indices or MEDIAPIPE_FACE_POINTS)
+    crops = (align_face(image, face_points(pose.get('landmarks') or [], width, height, indices, min_visibility=visibility))
+             if face is not None else None,
+             body_crop(image, pose['bbox']) if body is not None and pose.get('bbox') else None)
+    for embedder, crop in zip((face, body), crops):
+        try:
+            found.append(None if crop is None else await embed(embedder, crop))
+        except ValueError:          # too small or unclear for the model
+            found.append(None)
+    return tuple(found)
+
+
+def person_value(name, recipe, face, body, found, consent, *, session=None, origin=None, voice=None):
+    """The saved person reference (embeddings only) with its check (:func:`gamst.person_reference.check`)."""
+    from ..person_reference import MIN_BODY_AGREEMENT, MIN_FACE_AGREEMENT, check, cleaned, with_voice
+    faces, dropped_faces = cleaned(found['face'], MIN_FACE_AGREEMENT)       # badly aligned crops (a turned head)
+    bodies, dropped_bodies = cleaned(found['body'], MIN_BODY_AGREEMENT)
+    value = dict(kind='person', name=name, recipe=recipe['name'] if recipe else None,
+                 face_model=getattr(face, 'model_id', None), body_model=getattr(body, 'model_id', None), consent=consent,
+                 face=faces, body=bodies, samples=found['samples'], session=session, enrolled_from=origin or {},
+                 dropped=dict(face=dropped_faces, body=dropped_bodies))
+    if voice is not None:
+        value = with_voice(value, voice)
+    value['quality'] = check(value, session=session)
+    return value
+
+
 async def enroll_person(recipe, args, *, build_pipeline, context, every_ms=200):
-    """Face (and body) embeddings of the only visible person in the window; frames are not kept."""
+    """A person reference (few-shot, owner decision 44): face and whole-body embeddings of the one person in still images
+    (``--image``, every image must show exactly one person), or in the frames of a window of a video or camera where
+    exactly one person is visible; optionally with a voice enrollment (``--voice-file``). Refused, and nothing saved,
+    when it fails :func:`gamst.person_reference.check`. Frames and images are not kept."""
     from .. import Gamst
-    from ..providers.person_match import enroll_person as embed
+    from ..inputs import ImageFilesInput
+    from ..person_reference import refusal
+    from ..providers.person_match import MEDIAPIPE_FACE_POINTS
+    from . import run_session
     from .perception_parts import body_embedder, face_embedder
     consent = consent_record(args.consent)
-    item = _item(recipe, 'target-person')
+    item = next((entry for entry in recipe['modules'] if entry['use'] in PERSON_PARTS), None)
+    if item is None:
+        raise SystemExit(f"{recipe['name']} has no person-binding or target-person module to enroll for")
+    name = getattr(args, 'name', None) or Path(args.out).stem.split('.')[0]
+    voice = None
+    if getattr(args, 'voice_file', None):
+        voice = json.loads(Path(args.voice_file).read_text())
+    images = list(getattr(args, 'image', None) or ())
+    upstream = [entry for entry in recipe['modules'] if entry['use'] in ('mediapipe-pose', 'rtmw-pose', 'sapiens2-pose')][:1]
+    if not upstream:
+        raise SystemExit(f"{recipe['name']} has no pose module to find the person with")
     face, body = await face_embedder(item, context), await body_embedder(item, context)
-    upstream = [entry for entry in recipe['modules'] if entry['use'] in ('mediapipe-pose', 'rtmw-pose')][:1]
-    found = dict(face=[], body=[])
-    first, last, joints = {}, {}, _Joints()
-    async with Gamst(consent=True) as human:
-        pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream, lanes=False)
-        pipeline.add_module('enrollment_joints', joints, consumes=[upstream[0]['joints']])
+    found = dict(face=[], body=[], samples=[])
+    crowded, first, last, joints = [], {}, {}, _Joints()
+    sources = None
+    if images:
+        inputs = [entry for entry in recipe['inputs'] if entry['use'] == 'camera'][:1] or recipe['inputs'][:1]
+        sources = {inputs[0]['id']: ImageFilesInput(images)}
+    try:
+        async with Gamst(consent=True) as human:
+            pipeline = await build_pipeline(dict(recipe, references=[]), args, human, modules=upstream, lanes=False,
+                                            sources=sources)
+            pipeline.add_module('enrollment_joints', joints, consumes=[upstream[0]['joints']])
+            counter = dict(index=0)
 
-        async def on_frame(input_id, frame, records):
-            first.setdefault('ms', frame.timestamp_ms)
-            seconds = (frame.timestamp_ms - first['ms']) / 1000
-            if seconds > args.start + args.seconds:
-                return False
-            if seconds < args.start or frame.timestamp_ms - last.get('ms', -every_ms) < every_ms:
+            async def on_frame(input_id, frame, records):
+                first.setdefault('ms', frame.timestamp_ms)
+                poses = joints.poses if joints.timestamp_ms == frame.timestamp_ms else []
+                if images:
+                    where = images[counter['index']]
+                    counter['index'] += 1
+                    if len(poses) != 1:      # nobody, or it is unclear which person consented
+                        crowded.append(f'{Path(where).name}: {len(poses)} people')
+                        return True
+                else:
+                    seconds = (frame.timestamp_ms - first['ms']) / 1000
+                    if seconds > args.start + args.seconds:
+                        return False
+                    if seconds < args.start or frame.timestamp_ms - last.get('ms', -every_ms) < every_ms:
+                        return True
+                    if len(poses) != 1:
+                        crowded.append(round(seconds, 2))
+                        return True
+                    last['ms'] = frame.timestamp_ms
+                    where = round(seconds, 2)
+                kind = poses[0].get('keypoint_set')
+                face_points = None if kind else MEDIAPIPE_FACE_POINTS
+                embeddings = await sample(face, body, frame.data, poses[0], face_points)
+                for key, value in zip(('face', 'body'), embeddings):
+                    if value is not None:
+                        found[key].append(value)
+                found['samples'].append(dict(source='image' if images else 'frame', at=where, persons=1,
+                                             face=embeddings[0] is not None, body=embeddings[1] is not None))
                 return True
-            poses = joints.poses if joints.timestamp_ms == frame.timestamp_ms else []
-            if len(poses) != 1:   # nobody, or it is unclear which person consented
-                return True
-            last['ms'] = frame.timestamp_ms
+
             try:
-                result = await embed(face, body, [frame.data], poses)
-            except ValueError:
-                return True
-            found['face'] += result['face']
-            found['body'] += result['body']
-            return True
-
-        try:
-            await pipeline.run(on_frame=on_frame, stop_on_failure=True)
-        finally:
-            await pipeline.close()
-            await _close(face)
-            await _close(body)
-    if not found['face'] and not found['body']:
-        raise SystemExit('no frame in the window showed exactly one person with a usable face')
-    saved = dict(kind='person', recipe=recipe['name'], face_model=face.model_id,
-                 body_model=getattr(body, 'model_id', None), consent=consent, **found)
+                await pipeline.run(on_frame=on_frame, stop_on_failure=True)
+            finally:
+                await pipeline.close()
+    finally:
+        await _close(face)
+        await _close(body)
+    if images and crowded:
+        raise SystemExit(refusal(name, ['every photo must show exactly one person: ' + ', '.join(crowded)]))
+    session = None if images or getattr(args, 'camera', None) is not None else run_session(args)
+    origin = dict(kind='images', files=[Path(path).name for path in images]) if images else dict(
+        kind='camera' if getattr(args, 'camera', None) is not None else 'range',
+        from_s=round(args.start, 2), to_s=round(args.start + args.seconds, 2), skipped_crowded=len(crowded))
+    saved = person_value(name, recipe, face, body, found, consent, session=session, origin=origin, voice=voice)
+    if not saved['quality']['ok']:
+        raise SystemExit(refusal(name, saved['quality']['problems']))
     _save(args.out, saved)
-    print(json.dumps(dict(out=args.out, kind='person', faces=len(found['face']), bodies=len(found['body']),
-                          model=face.model_id)), flush=True)
+    print(json.dumps(dict(out=args.out, kind='person', name=name, faces=len(saved['face']), bodies=len(saved['body']),
+                          samples=len(found['samples']), skipped_frames=len(crowded), dropped=saved['dropped'],
+                          basis=saved['quality']['basis'],
+                          face_agreement=saved['quality']['face']['mean'], body_agreement=saved['quality']['body']['mean'],
+                          model=face.model_id), ensure_ascii=False), flush=True)
     return saved
 
 

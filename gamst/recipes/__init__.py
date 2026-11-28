@@ -880,6 +880,61 @@ def _without(recipe, reference):
     return f"; or leave that part out: --without {(_listed(readers[0].get('parts')) or [readers[0]['name']])[-1]}"
 
 
+def not_given(recipe, args, include=()):
+    """Optional modules that read a reference marked ``"optional": true`` that the command line did not give; a module
+    marked ``"runs_without_reference": true`` stays (``person_binding``: it runs with nobody enrolled, so a person can
+    be enrolled over MCP while the run goes on). Asked for by name, they stay."""
+    left = []
+    for reference in recipe.get('references', ()):
+        if not reference.get('optional') or getattr(args, reference['kind'], None):
+            continue
+        for item in recipe.get('modules', ()):
+            if item['name'] in _listed(reference.get('for')) and item.get('optional') == 'on' and \
+                    not item.get('runs_without_reference') and \
+                    item['name'] not in include and not set(_listed(item.get('parts'))) & set(include):
+                left.append(item['name'])
+    return left
+
+
+def with_who(recipe, args, references, modules):
+    """``--who NAME``: the movement is counted for that enrolled person (events whose ``who`` is NAME). Refused before
+    the run, in the same words as MCP and the HUD, when no checked person reference of that name is given or nothing
+    binds people to tracks (``person-binding``)."""
+    who = getattr(args, 'who', None)
+    if not who:
+        return references
+    from ..person_reference import refusal, require
+    persons = {reference['name']: dict(kind='person', value=value) for reference, value, _ in references
+               if reference['kind'] == 'person'}
+    try:
+        require(who, persons, session=run_session(args))
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if not any(item['use'] == 'person-binding' for item in modules):
+        raise SystemExit(refusal(who, ['this run has no person-binding module (it was left out); run it with '
+                                       '--with person_binding']))
+    found = []
+    for reference, value, consent in references:
+        if reference['kind'] == 'exemplar' and isinstance(value, dict):
+            value = dict(value, who=who)
+        found.append((reference, value, consent))
+    return found
+
+
+def run_session(args):
+    """The identity of the recording a run (or an enrollment) reads (:func:`gamst.person_reference.session_of`); None for a
+    live input: appearance enrolled from a recording is trusted in that recording only."""
+    video = getattr(args, 'video', None)
+    video = video[0] if isinstance(video, list) and len(video) == 1 else video
+    if not isinstance(video, str):
+        return None
+    path = Path(video.split('@', 1)[0]).expanduser()
+    if not path.is_file():
+        return None
+    from ..person_reference import session_of
+    return session_of(path)
+
+
 def reference_values(recipe, args):
     """[(reference, value, consent)]; says everything that is missing at once, and how to run without it."""
     found, missing = [], []
@@ -889,6 +944,8 @@ def reference_values(recipe, args):
         except SystemExit as error:
             if reference['kind'] not in ('voice', 'person', 'exemplar', 'terms') or getattr(args, reference['kind'], None):
                 raise       # given, but unusable
+            if reference.get('optional'):
+                continue    # not given: what reads it runs without it, or was left out (not_given)
             missing.append(f'{error}{_without(recipe, reference)}')
     if missing:
         raise SystemExit('\n'.join(missing))
@@ -905,6 +962,11 @@ def _reference_value(reference, args):
             raise SystemExit(f"this recipe needs an enrolled {kind}: run 'gamst recipe enroll --kind {kind}' and "
                              f'pass --{kind} FILE ({name})')
         value, consent = saved_reference(path, kind)
+        if kind == 'person':        # few-shot identity is required and checked before anything starts (decision 44)
+            from ..person_reference import check, name_of, refusal
+            verdict = check(value, session=run_session(args))
+            if not verdict['ok']:
+                raise SystemExit(refusal(name_of(value, name), verdict['problems']))
         if kind == 'voice' and hasattr(args, 'voice_min_quality'):    # a run: is the reference one person's voice?
             from ..voice_quality import from_args, hud_line
             value, consent, args.voice_quality = from_args(value, consent, args)
@@ -958,7 +1020,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                                           or present & set(_listed(item['for']))])
     remote_asr_preflight(recipe, modules, getattr(args, 'allow_remote_asr', False))
     pipeline = Pipeline(human, re.sub(r'[^A-Za-z0-9_.:-]', '-', recipe['name']))
-    references = reference_values(recipe, args)
+    references = with_who(recipe, args, reference_values(recipe, args), modules)
     pipeline.voice_quality = getattr(args, 'voice_quality', None)      # shown by the live view when low
     mode, search = _mode(args)
     pipeline.mode, pipeline.search = mode, search       # gamst.counting: count (default) or search
@@ -991,7 +1053,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    references={reference['name']: value for reference, value, _ in references},
                    allow_remote_asr=getattr(args, 'allow_remote_asr', False),
                    allow_remote_diarization=getattr(args, 'allow_remote_diarization', False),
-                   record_dir=getattr(args, 'record_dir', None), replay=replay,
+                   record_dir=getattr(args, 'record_dir', None), replay=replay, session=run_session(args),
                    efficienttam_source=getattr(args, 'efficienttam_source', None),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
                    show=getattr(args, 'refine_show', False), cached=getattr(args, 'refine_cached', None))
@@ -1240,6 +1302,9 @@ async def run_pipeline(recipe, args):
             if any(item.get('module') not in optional for item in report['failures']):
                 report['complete'] = False
             report['warnings'] = pipeline.warnings()
+            built = (getattr(pipeline, 'recipe_context', None) or {}).get('notes') or {}
+            if built:       # what a module left out while it was built (e.g. appearance off: its model is not set up)
+                report['setup_notes'] = dict(built)
             report['mode'] = pipeline.mode            # gamst.counting; an instruction may have switched it
             if pipeline.mode_changes:
                 report['mode_changes'] = [dict(item) for item in pipeline.mode_changes]
@@ -1275,7 +1340,7 @@ async def run_pipeline(recipe, args):
                 await live.close()
             await pipeline.close()
     print(json.dumps({key: report[key] for key in ('recipe', 'mode', 'frames', 'input_frames', 'speaker', 'counts', 'other_instructions', 'complete', 'lost',
-                                                   'states', 'failures', 'warnings', 'errors', 'score', 'score_provisional')
+                                                   'states', 'failures', 'warnings', 'setup_notes', 'errors', 'score', 'score_provisional')
                       if key in report and (key not in ('lost', 'errors', 'failures', 'warnings', 'mode') or key == 'lost' and not report['complete']
                                             or key == 'mode' and report[key] != 'count' or key not in ('lost', 'mode') and report[key])},
                      ensure_ascii=False), flush=True)
@@ -1350,6 +1415,8 @@ async def enroll(recipe, args):
         if len(values) > 1:
             raise SystemExit(f'--kind {kind} reads one --{name}')
         setattr(args, name, values[0] if values else None)
+    if kind == 'person' and getattr(args, 'image', None) and (args.video or args.camera is not None or args.take):
+        raise SystemExit('--kind person reads photos (--image) or one video or camera window, not both')
     args.start = args.start or 0.
     if args.seconds is None:     # a voice needs speech: a whole recording (bounded), or 20 s of a microphone
         args.seconds = 1.5 if kind != 'voice' else 15. if getattr(args, 'main_speaker', False) else \
@@ -1475,6 +1542,8 @@ def _movement_options(parser):
     """What a run and a search need to know the movement and the person."""
     parser.add_argument('--exemplar', help='movement JSON from gamst recipe enroll')
     parser.add_argument('--person', help='person JSON from gamst recipe enroll --kind person')
+    parser.add_argument('--who', metavar='NAME', help='count the movement for this enrolled person only (needs --person '
+                        'with that name; refused without a checked few-shot reference)')
     parser.add_argument('--voice', help='voice JSON from gamst recipe enroll --kind voice')
     parser.add_argument('--voice-wav', help="the enrolled person's clip, for separation models only")
     parser.add_argument('--speaker-threshold', type=float, help='cosine score that counts as the enrolled voice')
@@ -1608,7 +1677,8 @@ def main(argv=None):
     learn.add_argument('--start', type=float, help='seconds into the input where the demonstration starts')
     learn.add_argument('--seconds', type=float, help='length of the demonstration (a file: all of it; live: 1.5; a voice: 20 live, up to 300 of a file)')
     learn.add_argument('--mode', choices=['hold', 'sequence'], help="hold: one pose; sequence: a movement")
-    learn.add_argument('--name', help='label of the movement in its records (default: the text)')
+    learn.add_argument('--name', help="label of the movement in its records (default: the text); --kind person: the "
+                       "person's name in who (default: the file name)")
     learn.add_argument('--text', help='the movement in words: with --proposals or --rule')
     learn.add_argument('--rule', metavar='FILE', help='a rule as JSON (gamst/providers/movement_rule.py)')
     learn.add_argument('--proposals', metavar='FILE', help='use the confirmed (and rejected) proposals of --text')
@@ -1619,6 +1689,10 @@ def main(argv=None):
                        help='voice / person: save embeddings only (needs --consent); terms: the words said in example '
                             'clips, proposed first and saved when confirmed')
     learn.add_argument('--consent', help='who consented to being enrolled, and to what')
+    learn.add_argument('--image', action='append', default=[], metavar='FILE',
+                       help='--kind person: a photo of the person (exactly one person in it); repeat it')
+    learn.add_argument('--voice-file', metavar='FILE',
+                       help='--kind person: a voice of gamst recipe enroll --kind voice to keep in the person reference')
     learn.add_argument('--main-speaker', action='store_true',
                        help='--kind voice without a marked range: enroll the speaker who speaks alone longest in the '
                             'window (default the first 15 s), by pyannoteAI Precision-3 (needs --allow-remote-diarization)')
@@ -1729,6 +1803,9 @@ def main(argv=None):
     if args.action in ('proposals', 'export'):
         from . import movement
         return getattr(movement, args.action)(args)
+    if args.action in ('run', 'find'):     # an optional person or voice not given: the parts that need it stay out
+        args.exclude = [*getattr(args, 'exclude', ()), *not_given(read_recipe(args.recipe)[1], args,
+                                                                  getattr(args, 'include', ()))]
     recipe = load(args.recipe, getattr(args, 'include', ()), getattr(args, 'exclude', ()), getattr(args, 'with_roles', ()),
                   _kept(args) if args.action == 'run' else None)
     if getattr(args, 'asr', None):

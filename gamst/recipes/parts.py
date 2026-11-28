@@ -191,6 +191,18 @@ async def _repetition(options, context):
     return dict(module=_Channels(counter, make), spec=counter.spec)
 
 
+def per_track(options, context):
+    """An exemplar item with ``"per_track": true`` counts every track, unless it reads one target person's joints (the
+    single-target behaviour, ``--with target_person``)."""
+    if not options.get('per_track'):
+        return False
+    targets = set()
+    for item in context.get('modules') or ():
+        if item.get('use') == 'target-person':
+            targets |= {item['name'], *item.get('emits', ())}
+    return not any(source.split(':', 1)[0] in targets for source in options.get('consumes') or ())
+
+
 async def _exemplar(options, context):
     from ..providers.pose_exemplar import ExemplarEvents
     given = [context.get('enter'), context.get('exit')]     # the command line wins over the movement file
@@ -200,7 +212,10 @@ async def _exemplar(options, context):
     enter = float(given[0] or options.get('enter', .12))
     exit_ = float(given[1] or max(enter, options.get('exit', .18)))
     # hold, sequence or rule comes from the movement file; the item's "mode" is only enroll's default.
-    module = ExemplarEvents(reference=options.get('reference', 'exemplar'), enter=enter, exit=exit_,
+    counter = ExemplarEvents
+    if per_track(options, context):     # every track counts, each event says its track and who (track_exemplar.py)
+        from ..providers.track_exemplar import TrackExemplar as counter
+    module = counter(reference=options.get('reference', 'exemplar'), enter=enter, exit=exit_,
                             min_hold_ms=int(options.get('min_hold_ms', 200)),
                             fixed_thresholds=any(value is not None for value in given),
                             modality=modality, contract=None if sensor is None else sensor.contract,

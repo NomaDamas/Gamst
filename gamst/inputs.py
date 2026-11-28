@@ -282,6 +282,35 @@ class VideoFileInput:
             self._cap = None
 
 
+class ImageFilesInput:
+    """Still images (photos) as video frames, one per ``step_ms``, in the order given; an unreadable file is refused."""
+    modality = 'video'
+    live = False
+
+    def __init__(self, paths, *, step_ms=1000):
+        self.paths, self.step_ms, self.origin_ms = [str(path) for path in paths], int(step_ms), None
+        if not self.paths:
+            raise ValueError('no image to read')
+
+    def fps(self):
+        return 1000. / self.step_ms
+
+    def duration_s(self):
+        return len(self.paths) * self.step_ms / 1000
+
+    async def frames(self):
+        import cv2
+        base = self.origin_ms = _now_ms() - len(self.paths) * self.step_ms - 1000
+        for index, path in enumerate(self.paths):
+            image = cv2.imread(path, cv2.IMREAD_COLOR)
+            if image is None:
+                raise RuntimeError(f'cannot read image {path}')
+            yield InputFrame(image, 'video', base + index * self.step_ms)
+
+    def close(self):
+        pass
+
+
 # ---------------------------------------------------------------- GAMST 240 (iPhone high-fps app) wire format
 
 # "GMS3" | u32 sequence | f64 capture seconds | u16 width | u16 height | u8 flags | u8 zoom x10 |

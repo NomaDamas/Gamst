@@ -375,7 +375,8 @@ class PoseWorker(Temporary):
 
     def run_frames(self, frames, *, between=None, target=False):
         VideoDetector.made = []
-        recipe = recipes.with_pose(recipes.load('person-action-count', exclude=[] if target else ['target_person']),
+        recipe = recipes.with_pose(recipes.load('person-action-count', ['target_person'] if target else [],   # one person, or
+                                                [] if target else ['person_binding']),                        # every track
                                    'mediapipe.pose_full')       # the MediaPipe part, selectable with --pose
         entry = dict(model='mediapipe.pose_full', provider_profile='mediapipe.body.video', python='/env/python',
                      config=dict(path='/m/pose.task', sha256='1' * 64))

@@ -24,6 +24,7 @@ MAX_SEQUENCE_ITEMS = 30
 SOURCES = ('camera', 'video', 'take', 'audio', 'microphone', 'iphone', 'sensor')
 PROPOSALS = 'gamst-movement-proposals.json'
 FEATURES = ('vision.pose_channels', 'audio.voice_channels')
+FEATURES_OF_POSES = ('pose-channels',)
 FEATURE_PARTS = ('mediapipe-pose', 'mediapipe-graph', 'sapiens2-pose', 'rtmw-pose', 'pose-channels', 'prosody', 'voice-channels')
 
 
@@ -77,8 +78,13 @@ def feature_modules(recipe):
     plain = choose(dict(recipe, modules=chain), exclude=[
         item['name'] for item in chain if item.get('optional') and item['name'] not in features | {wanted}])
     sound = next((item['id'] for item in inputs_of(recipe, chain) if item['use'] == 'microphone'), None)
-    return [dict(item, consumes=[sound]) if item['use'] == 'prosody' else item
-            for item in plain['modules'] if item['name'] in features]
+    found = [dict(item, consumes=[sound]) if item['use'] == 'prosody' else item
+             for item in plain['modules'] if item['name'] in features]
+    if not any(item['use'] in FEATURES_OF_POSES for item in found):     # a per-track counter reads the joints itself:
+        joints = {name for item in found for name in (item.get('joints'), *item.get('emits', ())) if name}
+        found += [item for item in recipe['modules'] if item['use'] in FEATURES_OF_POSES  # its channels, as it computes them
+                  and item.get('consumes') and set(item['consumes']) <= joints][:1]
+    return found
 
 
 def exemplar_input(recipe):

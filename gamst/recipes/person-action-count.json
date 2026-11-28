@@ -1,11 +1,11 @@
 {
   "name": "person-action-count",
-  "summary": "Count how many times one enrolled person makes a pose or movement specified by example clips, a text or a rule; no training.",
+  "summary": "Count a pose or movement specified by example clips, a text or a rule for every tracked person, and say who did it (an enrolled person, or unknown); no training.",
   "skill": "skills/gamst-person-action/SKILL.md",
   "hardware": {
     "min_fps": null,
     "camera": "a fixed camera that sees the person's arms and torso; the frame rate must exceed 2 x the fastest repetitions per second",
-    "compute": "RTMW-l 384x288 whole-body pose + YOLOX-m detector (rtmlib ONNX; CoreML GPU on Apple silicon, ONNX Runtime CPU elsewhere) and LVFace face matching, each in its own process and environment; MediaPipe Pose stays selectable with --pose mediapipe.pose_full"
+    "compute": "RTMW-l 384x288 whole-body pose + YOLOX-m detector (rtmlib ONNX; CoreML GPU on Apple silicon, ONNX Runtime CPU elsewhere), LVFace-B face and OSNet-AIN whole-body appearance for who, each in its own process and environment; MediaPipe Pose stays selectable with --pose mediapipe.pose_full"
   },
   "inputs": [
     {
@@ -27,8 +27,12 @@
     {
       "name": "person",
       "kind": "person",
-      "label": "the enrolled person",
-      "for": "target_person"
+      "label": "the enrolled person (few-shot: photos, a video range or camera seconds)",
+      "for": [
+        "person_binding",
+        "target_person"
+      ],
+      "optional": true
     }
   ],
   "modules": [
@@ -63,9 +67,20 @@
       }
     },
     {
+      "name": "person_binding",
+      "use": "person-binding",
+      "optional": "on",
+      "reference": "person",
+      "consumes": [
+        "camera",
+        "pose_joints"
+      ],
+      "runs_without_reference": true
+    },
+    {
       "name": "target_person",
       "use": "target-person",
-      "optional": "on",
+      "optional": "off",
       "reference": "person",
       "consumes": [
         "camera",
@@ -74,20 +89,23 @@
       "joints": "target_joints",
       "emits": [
         "target_joints"
+      ],
+      "replaces": [
+        "person_binding"
       ]
     },
     {
       "name": "pose_channels",
       "use": "pose-channels",
       "consumes": [
-        "target_joints"
+        "pose_joints"
       ],
-      "consumes_without": {
+      "source": "rtmw",
+      "consumes_with": {
         "target_person": [
-          "pose_joints"
+          "target_joints"
         ]
-      },
-      "source": "rtmw"
+      }
     },
     {
       "name": "exemplar",
@@ -95,17 +113,23 @@
       "mode": "hold",
       "max_reps_s": 2,
       "consumes": [
-        "pose_channels",
-        "target_person:vision.target_person",
-        "target_joints"
+        "pose_joints",
+        "person_binding:vision.person_binding"
       ],
       "consumes_without": {
-        "target_person": [
-          "pose_channels",
+        "person_binding": [
           "pose_joints"
         ]
       },
-      "source": "rtmw"
+      "source": "rtmw",
+      "per_track": true,
+      "consumes_with": {
+        "target_person": [
+          "pose_channels",
+          "target_person:vision.target_person",
+          "target_joints"
+        ]
+      }
     },
     {
       "name": "repetition",
@@ -129,8 +153,12 @@
   "view": "count",
   "records": [
     "temporal.exemplar_events",
-    "temporal.repetition_count"
+    "temporal.repetition_count",
+    {
+      "id": "vision.person_binding",
+      "for": "person_binding"
+    }
   ],
-  "limits": "the enrolled face must be visible to confirm identity (then the track is held up to 10 s); --without target_person counts the most visible person instead; identity thresholds are not measured on people",
+  "limits": "every track is counted; who is the enrolled person bound to the track by face (or by whole-body appearance within the same video), else unknown, also retroactively within a track; a track switch by the tracker can move an identity; without --person nobody is bound until a person is enrolled (MCP enroll_person); --without person_binding leaves identity out; --with target_person counts one enrolled person only (the earlier behaviour); identity thresholds are not measured on labelled people",
   "measured": "not yet"
 }

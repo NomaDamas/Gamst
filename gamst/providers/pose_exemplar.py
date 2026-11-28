@@ -50,6 +50,7 @@ ANGLES = (('left_elbow', 'left_shoulder', 'left_wrist'), ('right_elbow', 'right_
 CHANNELS = tuple(f'angle_{vertex}' for vertex, _, _ in ANGLES) + (
     'left_wrist_dx', 'left_wrist_dy', 'right_wrist_dx', 'right_wrist_dy', 'wrist_gap')
 CHANNELS_VERSION = 2
+RELEASE_MS = 100     # an ordered rule's first step let go this long, then held again, is a new repetition
 MEDIAPIPE_MIN_VISIBILITY = .5    # MediaPipe's own landmark gate (``mediapipe.tasks.python.vision.drawing_utils``)
 
 # The 21 points of one hand, in the order of COCO-WholeBody, MediaPipe Hands and OpenPose: the wrist, then each finger
@@ -413,7 +414,7 @@ class ExemplarEvents:
         self._count, self._inside, self._candidate_ms = 0, False, None
         self._started_ms = self._last_ms = self._last_match_ms = self._end_ms = None
         self._best = self._method = None
-        self._step = 0
+        self._step, self._released, self._again_ms, self._off_ms = 0, False, None, None
         self._person, self._saw_joints, self._channel_frames = None, False, 0
         if self.scorer is not None:
             self.scorer.reset()
@@ -550,6 +551,26 @@ class ExemplarEvents:
             if value > self.exit:
                 events.append(self._ended(self._end_ms))
 
+    def _repeat(self, ts, channels, mask, points, steps):
+        """While a later step is awaited: the first step let go and was held again (for its ``hold_ms``) is a new
+        repetition, so the movement starts there and the wait for the next step starts over. Each repetition is its own
+        event from its own first step; a series is never one long event. Let go means: not held for ``RELEASE_MS``
+        (or the first step's ``hold_ms``, the longer), so one noisy frame is not a repetition."""
+        first = self.rule.violation(0, channels, mask, points)
+        if first is None or first > 0:
+            self._off_ms = ts if self._off_ms is None else self._off_ms
+            if ts - self._off_ms >= max(steps[0].get('hold_ms', 0), RELEASE_MS):
+                self._released = True       # let go for long enough: not one noisy frame
+            self._again_ms = None
+            return
+        self._off_ms = None
+        if not self._released:
+            return
+        self._again_ms = ts if self._again_ms is None else self._again_ms
+        if ts - self._again_ms >= steps[0].get('hold_ms', 0):
+            self._started_ms, self._end_ms, self._step = self._again_ms, ts, 1
+            self._released, self._again_ms, self._candidate_ms = False, None, None
+
     def _rule(self, ts, channels, mask, points, events):
         steps = self.rule.steps
         self.rule.observe(ts, channels, mask, points)
@@ -576,12 +597,14 @@ class ExemplarEvents:
         current = self.rule.violation(self._step, channels, mask, points)
         if current is None or current > 0:
             self._candidate_ms = None
+            if self._step:
+                self._repeat(ts, channels, mask, points, steps)
             return current
         self._candidate_ms = ts if self._candidate_ms is None else self._candidate_ms
         if ts - self._candidate_ms < steps[self._step].get('hold_ms', 0):
             return current
         if self._step == 0:
-            self._started_ms = self._candidate_ms
+            self._started_ms, self._released, self._again_ms, self._off_ms = self._candidate_ms, False, None, None
         self._step, self._end_ms, self._candidate_ms = self._step + 1, ts, None
         if self._step == len(steps):
             events.append(self._match(ts, self._started_ms, current))

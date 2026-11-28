@@ -367,6 +367,30 @@ class RuleTest(unittest.IsolatedAsyncioTestCase):
         module.reset()
         self.assertEqual(len(events(module, low * 2 + slow + low * 2 + high * 2 + low * 2)), 1)
 
+    def test_each_repetition_of_an_extend_then_fold_is_its_own_event_from_its_own_extend(self):
+        def level(value):
+            return [0., value, 0., 0., 0.]
+        up, half, folded = [level(.8)], [level(.3)], [level(-.2)]
+        rule = dict(channels='audio.voice_channels', steps=[
+            dict(when=condition('level_db', 'gte', .5), hold_ms=100),
+            dict(when=condition('level_db', 'lte', 0.), within_ms=1500)])
+        module = ExemplarEvents()
+        module.set_exemplar(dict(rule=rule))
+        # three quick repetitions (50 ms frames from 1000 ms): up 300 ms, folded 150 ms
+        found = events(module, (up * 6 + folded * 3) * 3 + folded)
+        self.assertEqual([(item['start_ms'], item['end_ms']) for item in found if item['event'] == 'exemplar.matched'],
+                         [(1000, 1300), (1450, 1750), (1900, 2200)])
+        module.reset()
+        # arms half down between two extends (the fold is not reached): the event starts at the second extend
+        found = events(module, up * 6 + half * 3 + up * 6 + folded * 2)
+        self.assertEqual([(item['start_ms'], item['end_ms']) for item in found if item['event'] == 'exemplar.matched'],
+                         [(1450, 1750)])
+        module.reset()
+        # one frame of noise while up is not a new repetition
+        found = events(module, up * 4 + half + up * 4 + folded * 2)
+        self.assertEqual([(item['start_ms'], item['end_ms']) for item in found if item['event'] == 'exemplar.matched'],
+                         [(1000, 1450)])
+
     async def test_joint_relations_are_read_privately_and_never_stored(self):
         rule = dict(steps=[dict(hold_ms=60, when=dict(all=[
             dict(measure=dict(height=['right_wrist', 'right_shoulder']), op='gte', value=1.),

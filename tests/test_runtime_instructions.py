@@ -280,7 +280,8 @@ class Words(Case):
                             '--clips', self.clips, *LEAVE, at={1.0: refuse})
         self.assertEqual(report['counts']['speech.term_events'], {'term.spoken': 1})        # nothing was changed
         listed = seen['list']
-        self.assertEqual(listed['owner_only'], ['person', 'voice'])
+        self.assertEqual(listed['owner_only'], ['voice'])     # a person is enrolled with consent (enroll_person)
+        self.assertEqual(listed['persons'], [])
         self.assertEqual(sorted(item['file'] for item in listed['clips']['files']), ['bad.mp4', 'link.mp4', 'voice.json'])
         left_out = next(item for item in listed['instructions'] if item['kind'] == 'exemplar')
         self.assertEqual((left_out['state'], left_out['needs_input']), ('left_out', ['camera']))
