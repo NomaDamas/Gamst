@@ -43,6 +43,11 @@ measured; thresholds chosen while looking at these labels are **in-sample**, and
   - 관제탑 예시 7개는 원래도 가장 큰 사람이 감스트(person-1)였습니다. 그래서 전/후 결과가 거의 같습니다(아래 표).
   - `examples.json`에는 사장님 클릭이 없습니다(click: null). 그래서 클릭 위치는 사장님 인물 정답의 감스트 상자 가운데로 했습니다.
 - **맨까송 펀치:** 규칙이 장면마다 달라 held-out이 흔들립니다(0.571 / 0.000). 감스트 펀치는 대부분 의자를 주먹으로 내리치는 동작이고, 360p라 손이 잘 안 보입니다.
+- **정답 v2 (2026-11-28, 사장님 결정 적용) 다시 채점:** 아래 "Truth v2" 절. 새 실행 없이 기록된 포즈로 같은 그리드를 다시 셌습니다.
+  - 동작 정답은 v1과 같습니다. 바뀐 것은 채점 규칙 하나입니다. 같은 순간 감스트 상자가 둘 이상인 곳에서, 다른 상자(트랙)의 같은 동작은 맞음도 틀림도 아닙니다.
+  - 그래서 규칙(글)과 count 모드, 맨까송 펀치는 **그대로**입니다(0개 다름). 예시가 들어간 search·few-shot만 감스트 사건이 1개씩 줄었습니다. 관제탑 search in-sample F1 0.878 → **0.889**, 홀→짝 0.757 → 0.778.
+  - 고른 설정(최고 in-sample, 홀/짝에서 고른 것)은 하나도 바뀌지 않았습니다.
+  - 인물 프레임(이 PR의 기록 실행): 관제탑 재현 69.9 % → **85.5 %**(정밀 99.6 % 그대로), 맨까송 정밀 82.3 % → **99.1 %**, 재현 52.5 % → **62.0 %**.
 
 ## Method
 
@@ -301,6 +306,49 @@ is in every clip), so the fix changes almost nothing here: the click and the bin
 `enter` still differs (0.163 vs 0.138) and so do one or two events per row; the cause was not traced (the frames and
 the track are the same). The selector matters where someone else is larger than the person meant; that was not
 the case in these examples.
+
+## Truth v2 (2026-11-28): the owner's decisions, re-scored
+
+The owner decided on 2026-11-28 ([truth v2 CHANGELOG](../ground-truth/2026-11-28/v2/CHANGELOG.md)): where two boxes
+are labelled 감스트 at the same moment both are truth and GAMST may name either; boxes on the framed photo of 감스트 are
+left out; 맨까송 track person-27 is 감스트 from 50.48 s. Re-scored without a new run: the same recorded poses, the same
+grids (`try-it/testbed/action_eval/evaluate.py` with `GT_VERSION=v2`, `compare_v2.py`), `gamst.eval.multi_person` with
+the v2 rules (`together` = the moments where the v2 identity truth has several 감스트 boxes: 관제탑 29 moments, 98.3 s;
+맨까송 9, 14.8 s).
+
+**Why actions can move at all.** The action truth (`truth_action.json`) is the same file in v1 and v2. Events are
+still matched one to one as before (an event of either box can match). One rule is new: inside such a moment, an
+unmatched 감스트 event that overlaps another track's 감스트 event in time is the same action seen on the other box, and
+is neither a hit nor an error (v1 counted it as a `split`). Identity changes (photos, person-27) do not reach the
+action score: who did an event comes from the run's own binding, not from the truth.
+
+감스트, matched / events / truth, F1 (example ranges excluded, as above):
+
+| method (감스트) | v1 in-sample | v2 in-sample | v1 odd→even | v2 odd→even | v1 even→odd | v2 even→odd | v2 events left out as the same action (all settings, all halves) |
+|---|---|---|---|---|---|---|---:|
+| 관제탑 text (rule) | 31/33/39, 0.861 | 31/33/39, 0.861 | 12/15/18, 0.727 | 12/15/18, 0.727 | 17/17/21, 0.895 | 17/17/21, 0.895 | 0 |
+| 관제탑 few-shot only | 34/42/39, 0.839 | 34/41/39, 0.850 | 15/31/18, 0.612 | 15/29/18, 0.638 | 17/18/21, 0.872 | 17/18/21, 0.872 | 10 |
+| 관제탑 text + few-shot, count | 29/31/39, 0.829 | 29/31/39, 0.829 | 11/13/18, 0.710 | 11/13/18, 0.710 | 17/17/21, 0.895 | 17/17/21, 0.895 | 0 |
+| 관제탑 text + few-shot, count, calibrated | 22/23/39, 0.710 | 22/23/39, 0.710 | 3/3/18, 0.286 | 3/3/18, 0.286 | 13/13/21, 0.765 | 13/13/21, 0.765 | 0 |
+| 관제탑 text + few-shot, search | 36/43/39, 0.878 | 36/42/39, **0.889** | 14/19/18, 0.757 | 14/18/18, 0.778 | 17/17/21, 0.895 | 17/17/21, 0.895 | 18 |
+| 관제탑 text + few-shot, search, calibrated | 32/37/39, 0.842 | 32/36/39, 0.853 | 15/24/18, 0.714 | 15/23/18, 0.732 | 20/26/21, 0.851 | 20/26/21, 0.851 | 18 |
+| 맨까송 text (punch rule) | 6/10/16, 0.462 | 6/10/16, 0.462 | 4/7/7, 0.571 | 4/7/7, 0.571 | 0/4/9, 0.000 | 0/4/9, 0.000 | 0 |
+
+- Over every setting and half: the 관제탑 rule grid (145 x 3) and the 맨까송 punch grid (325 x 3) did not change at all;
+  8 of 21 few-shot and 36 of 180 combined scores changed, each by events left out (never by a match lost or gained).
+- The settings picked (best in-sample, picked on odd, picked on even) are the same as with v1, so every "best" above
+  is the same configuration.
+- Where: in the best search setting the one event left out is 465.0-466.3 s, on track person-102 while the truth's
+  감스트 box moves from track person-98 to person-102 (both boxes labelled 감스트 for 465.0-465.35 s); the other track's
+  event matched the occurrence. The two different people labelled 감스트 at 331-420 s did not produce such a pair here:
+  the run binds 감스트 to one track at a time, so the second box's event is named someone else, not 감스트.
+- 맨까송: no 감스트 event pair overlaps in a two-box moment, so nothing moved.
+- The errors of the best search setting: wrong {split 5 → 4, extra 2}, missed unchanged {identity 3}.
+- Identity of this PR's recorded run (the same frames as section "Results"; `score_identity`, v2 = one of + photos left
+  out + person-27): 관제탑 precision 99.6 % → 99.6 %, recall 69.9 % → 85.5 % (the truth did not change; the second
+  box of a two-box moment is no longer a miss); 맨까송 precision 82.3 % → 99.1 %, recall 52.5 % → 62.0 % (person-27
+  after 50.48 s is now 감스트, which the run named; photos left out). The full v2 tables of every family are in
+  `try-it/testbed/action_eval/results_v2/report.md` (local).
 
 ## The chosen configuration in a real run (not a replay)
 
