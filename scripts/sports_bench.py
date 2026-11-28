@@ -40,12 +40,42 @@ def probe(path):
     return num / den, int(stream['width']), int(stream['height']), float(data['format']['duration'])
 
 
-def cut(video, start_s, seconds, out, fps=None):
-    command = ['ffmpeg', '-y', '-v', 'error', '-ss', f'{start_s}', '-i', str(video), '-t', f'{seconds}']
-    if fps:
-        command += ['-r', f'{fps}']
-    command += ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-c:a', 'aac', str(out)]
-    subprocess.run(command, check=True)
+def cut(video, first, count, step, fps, out):
+    """Frames ``first``, ``first + step``, ... (``count`` of them) of ``video`` by their decode index, at ``fps``.
+
+    Selected by frame number, not by time: ``-ss`` with ``-r`` picked frame 2k - 3 instead of 2k on OpenTTGames
+    (measured by pixel comparison), which shifted every position 25 ms against the labels."""
+    chain = f"select='between(n\\,{first}\\,{first + step * (count - 1)})*not(mod(n-{first}\\,{step}))',setpts=N/({fps}*TB)"
+    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(video), '-vf', chain, '-fps_mode', 'passthrough', '-an',
+                    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-r', f'{fps}', str(out)], check=True)
+
+
+def verify_cut(video, clip, first, step, probes=(0, 10, 40)):
+    """Each probed clip frame must be closest, pixel by pixel, to the original frame it was cut from."""
+    import cv2
+    import numpy as np
+
+    def read(path, indices):
+        cap, found, index = cv2.VideoCapture(str(path)), {}, 0
+        while len(found) < len(indices):
+            ok, image = cap.read()
+            if not ok:
+                break
+            if index in indices:
+                found[index] = image.astype(np.int16)
+            index += 1
+        return found
+    probes = [k for k in probes]
+    clip_frames = read(clip, set(probes))
+    wanted = {first + step * k + d for k in probes for d in (-2, -1, 0, 1, 2)}
+    source = read(video, wanted)
+    for k in probes:
+        if k not in clip_frames:
+            continue
+        best = min((float(np.abs(clip_frames[k] - source[j]).mean()), j) for j in sorted(wanted) if j in source
+                   and abs(j - (first + step * k)) <= 2)[1]
+        if best != first + step * k:
+            raise SystemExit(f'cut is misaligned: clip frame {k} is original frame {best}, not {first + step * k}')
 
 
 def run_recipe(clip, out, *, stack, timing, sport, court=None, extra=()):
@@ -112,10 +142,13 @@ def openttgames(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     source_fps, width, height, _ = probe(args.video)
+    fps = args.fps or source_fps
+    step = max(1, round(source_fps / fps))
+    first_frame, count = round(args.start_s * source_fps), round(args.seconds * source_fps / step)
     clip = out / 'clip.mp4'
     if not clip.exists():
-        cut(args.video, args.start_s, args.seconds, clip, args.fps)
-    fps = args.fps or source_fps
+        cut(args.video, first_frame, count, step, source_fps / step, clip)
+        verify_cut(args.video, clip, first_frame, step)
     markup = Path(args.markup)
     balls = {int(k): v for k, v in json.loads((markup / 'ball_markup.json').read_text()).items()}
     events = {int(k): v for k, v in json.loads((markup / 'events_markup.json').read_text()).items()}
@@ -136,7 +169,6 @@ def openttgames(args):
     for state in states:
         if state.get('state') == 'tracking' and 'x' in state:
             predicted[frame_of(state['at_ms'])] = (state['x'] * width, state['y'] * height)
-    step = max(1, round(source_fps / fps))
     tp = fn = fp = 0
     errors = []
     labelled = [frame for frame in range(first, last, step) if frame in balls]
