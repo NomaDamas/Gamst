@@ -22,7 +22,7 @@ profile                    worker (real model)                                  
 ``hosted.asr.words``       a hosted ASR API's phrases (audio leaves the device) ``RemoteWhisper``
 ``streaming.asr.words``     a local streaming recogniser (sherpa-onnx, Voxtral)  ``RemoteStreamingWords``
 ``faster_whisper.align``    Whisper forced alignment of a given transcript       ``RemoteAligner``
-``sapiens2.pose``          Sapiens2 + DETR                                      ``RemotePose``
+``sapiens2.pose``          Sapiens2 + YOLOX (transformers port, opt-in licence) ``RemotePose``
 ``rtmw.pose``              RTMW whole-body + YOLOX (rtmlib ONNX)                ``RemoteRTMW``
 =========================  ==================================================  ====================
 
@@ -57,8 +57,9 @@ FIELDS = {
     'hosted.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
     'streaming.asr.words': ('audio', (OutputField('transcripts', 'array'),)),
     'faster_whisper.align': ('audio', (OutputField('items', 'array'),)),
-    'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
-                                OutputField('image_width', 'integer'), OutputField('image_height', 'integer'))),
+    'sapiens2.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),     # as rtmw.pose
+                                OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
+                                OutputField('frames', 'integer', required=False))),
     'rtmw.pose': ('video', (OutputField('poses', 'array'), OutputField('model', 'string'),
                             OutputField('image_width', 'integer'), OutputField('image_height', 'integer'),
                             OutputField('frames', 'integer', required=False),
@@ -87,8 +88,9 @@ def capability(profile, config):
     modality, fields = FIELDS[profile]
     if profile == 'target_speech.local' and config.get('backend') == 'usef' and config.get('allow_noncommercial') is not True:
         raise PermissionError('USEF-TSE is CC BY-NC 4.0: set allow_noncommercial to opt in')
-    if profile == 'sapiens2.pose' and config.get('accept_license') is not True:
-        raise PermissionError('read the Sapiens2 License and set accept_license to opt in')
+    if profile == 'sapiens2.pose':
+        from .sapiens2_pose import check_config as check_sapiens2
+        check_sapiens2(config)
     if profile == 'rtmw.pose':
         from .rtmw_pose import check_config as check_rtmw
         check_rtmw(config)
@@ -220,22 +222,10 @@ class _Whisper(_Worker):
         self.loop.close()
 
 
-class _Pose(_Worker):
-    def __init__(self, plugin):
-        self.plugin = plugin
-
-    def query(self, frame, request):
-        np, found = _numpy(), self.plugin.infer(frame.data)
-        height, width = frame.data.shape[:2]
-        joints = np.asarray([[[point['x'], point['y'], point['visibility']] for point in pose['landmarks']]
-                             for pose in found], dtype='<f4').reshape(len(found), 308, 3)
-        return dict(poses=[dict(bbox=pose['bbox']) for pose in found], model=self.plugin.version,
-                    image_width=int(width), image_height=int(height)), joints
-
-
 class _RTMW(_Worker):
-    """Consecutive frames -> boxes and joints. ``frame.data`` is one image, or ``request["frames"]`` images of one size
-    stacked by rows; ``request["timestamps_ms"]``: their capture times (for the detection interval)."""
+    """RTMW or Sapiens2 (top-down over YOLOX). Consecutive frames -> boxes and joints. ``frame.data`` is one image, or
+    ``request["frames"]`` images of one size stacked by rows; ``request["timestamps_ms"]``: their capture times (for the
+    detection interval)."""
 
     def __init__(self, models):
         self.models = models
@@ -243,7 +233,8 @@ class _RTMW(_Worker):
     def query(self, frame, request):
         from .rtmw_pose import MAX_FRAMES, POINTS, RAW_LIMIT
         np = _numpy()
-        request = request or {}
+        request, joint_count = request or {}, getattr(self.models, 'points', POINTS)   # Sapiens2: 308
+        width_ = 4 if joint_count == POINTS else 3     # RTMW also sends its raw score (rtmw.pose's optional column)
         if request.get('benchmark'):
             count = request.get('frames', 1)
             if type(count) is not int or not 1 <= count <= MAX_FRAMES or frame.data.shape[0] % count:
@@ -252,7 +243,7 @@ class _RTMW(_Worker):
             images = [frame.data[index * rows:(index + 1) * rows] for index in range(count)]
             measured = self.models.benchmark(images, detect=bool(request.get('detect')))
             return dict(poses=[], model=self.models.version, image_width=int(frame.data.shape[1]), image_height=rows,
-                        benchmark=measured), np.zeros((0, POINTS, 4), dtype='<f4')
+                        benchmark=measured), np.zeros((0, joint_count, width_), dtype='<f4')
         count = request.get('frames', 1)
         times = request.get('timestamps_ms') or [request.get('timestamp_ms')]
         if type(count) is not int or not 1 <= count <= MAX_FRAMES or len(times) != count \
@@ -264,16 +255,17 @@ class _RTMW(_Worker):
         public, joints = [], []
         for index, (boxes, keypoints, scores) in enumerate(self.models.infer_batch(images, times)):
             for box, points, values in zip(boxes, keypoints, scores):
-                rows_ = np.zeros((POINTS, 4), dtype='<f4')     # x, y, visibility, raw_score
+                rows_ = np.zeros((joint_count, width_), dtype='<f4')     # x, y, visibility[, raw_score]
                 rows_[:, 0], rows_[:, 1], rows_[:, 2] = points[:, 0] / width, points[:, 1] / height, np.clip(values, 0., 1.)
-                rows_[:, 3] = np.clip(values, -RAW_LIMIT, RAW_LIMIT)
+                if width_ == 4:
+                    rows_[:, 3] = np.clip(values, -RAW_LIMIT, RAW_LIMIT)
                 joints.append(rows_)
                 box = [float(value) for value in box]
                 x0, y0 = max(0., box[0] / width), max(0., box[1] / height)
                 x1, y1 = min(1., box[2] / width), min(1., box[3] / height)
                 public.append(dict(in_batch=index, bbox=dict(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
                                    if x1 > x0 and y1 > y0 else None))
-        joints = np.stack(joints) if joints else np.zeros((0, POINTS, 4), dtype='<f4')
+        joints = np.stack(joints) if joints else np.zeros((0, joint_count, width_), dtype='<f4')
         return dict(poses=public, model=self.models.version, image_width=int(width), image_height=int(height),
                     frames=count), joints
 
@@ -363,9 +355,8 @@ def load(profile, config):
     if profile == 'rtmw.pose':
         from .rtmw_pose import RTMWModels
         return _RTMW(RTMWModels(**config))
-    from .sapiens2_pose import Sapiens2PosePlugin
-    config['pose_sha256'] = config.pop('sha256')
-    return _Pose(Sapiens2PosePlugin.from_local(**config))
+    from .sapiens2_pose import Sapiens2Models
+    return _RTMW(Sapiens2Models(**config))
 
 
 # ---------------------------------------------------------------- client side
@@ -512,23 +503,9 @@ class RemoteStreamingWords(RemoteWhisper):
         await super().reset()
 
 
-class RemotePose(_Client):
-    """Async stand-in for ``Sapiens2PosePlugin.infer``; tracking stays in this process."""
-
-    async def infer(self, image):
-        from ..crew.modules import bounded_image
-        from ..private_payload import CONTRACTS, landmarks
-        result, private = await self.worker.query(self._frame(bounded_image(image), 'video'))
-        columns = CONTRACTS['sapiens2.pose'].columns
-        return [dict(frame_pose_index=index, bbox=pose['bbox'], keypoint_set='goliath308', track_id=None,
-                     association_quality='unavailable', identity_verified=False, speaker_association='unavailable',
-                     image_width=result['image_width'], image_height=result['image_height'],
-                     landmarks=[dict(point, presence=1.) for point in landmarks(rows, columns)])
-                for index, (pose, rows) in enumerate(zip(result['poses'], private.take('joints')))]
-
-
 class RemoteRTMW(_Client):
     """Async stand-in for :class:`gamst.providers.rtmw_pose.RTMWModels`; tracking stays in this process."""
+    PROFILE, KEYPOINT_SET = 'rtmw.pose', 'coco_wholebody133'
 
     async def infer(self, image, timestamp_ms):
         return (await self.infer_batch([image], [timestamp_ms]))[0]
@@ -553,11 +530,11 @@ class RemoteRTMW(_Client):
         result, private = await self.worker.query(
             frame, {'frames': len(images), 'timestamps_ms': [int(ms) for ms in timestamps_ms]})
         joints = private.take('joints')
-        columns = CONTRACTS['rtmw.pose'].columns_for(joints.shape[2])    # raw_score when the worker sends it
+        columns = CONTRACTS[self.PROFILE].columns_for(joints.shape[2])    # raw_score when the worker sends it
         found = [[] for _ in images]
         for pose, rows in zip(result['poses'], joints):
             poses = found[pose.get('in_batch', 0)]
-            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set='coco_wholebody133',
+            poses.append(dict(frame_pose_index=len(poses), bbox=pose['bbox'], keypoint_set=self.KEYPOINT_SET,
                               track_id=None, association_quality='unavailable', identity_verified=False,
                               speaker_association='unavailable', image_width=result['image_width'],
                               image_height=result['image_height'],
@@ -585,6 +562,11 @@ class RemoteRTMW(_Client):
 
     async def reset(self):
         await self.worker.reset()
+
+
+class RemotePose(RemoteRTMW):
+    """Async stand-in for :class:`gamst.providers.sapiens2_pose.Sapiens2Models` (same answer as RTMW, 308 points)."""
+    PROFILE, KEYPOINT_SET = 'sapiens2.pose', 'goliath308'
 
 
 class RemoteActiveSpeaker(_Client):

@@ -10,7 +10,7 @@ from gamst.plugins import InputFrame
 from gamst.private_payload import PrivatePoses
 from gamst.providers.person_match import ARCFACE_112, TargetPerson, body_box, face_points, umeyama
 from gamst.providers.pose_exemplar import PoseChannels
-from gamst.providers.sapiens2_pose import GOLIATH_BODY, Sapiens2PosePlugin, nms, to_poses
+from gamst.providers.sapiens2_pose import GOLIATH_BODY, Sapiens2Models, to_poses
 from tests.test_speaker_verify import now
 
 try:
@@ -64,7 +64,6 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(body_box(dict(x=0, y=0, width=1, height=1), 100, 80), (0, 0, 100, 80))
 
     def test_sapiens_output_maps_to_the_same_pose_channels(self):
-        self.assertEqual(nms([[0, 0, 10, 10], [1, 1, 10, 10], [20, 20, 30, 30]], [.9, .8, .7], .3), [0, 2])
         keypoints = np.zeros((1, 308, 2)) + 5
         for i, (name, index) in enumerate(GOLIATH_BODY.items()):
             keypoints[0, index] = (20 + 7 * i, 30 + (i * i) % 40)
@@ -79,7 +78,7 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual((wide[0]['image_width'], wide[0]['image_height']), (200, 100))
         self.assertEqual(module.process(InputFrame(wide, 'video', 1))['image_aspect'], 2.)
         with self.assertRaisesRegex(PermissionError, 'biometric'):
-            Sapiens2PosePlugin.from_local('pose', 'detector')
+            Sapiens2Models('pose', 'a' * 64, 'detector', 'b' * 64)
 
 
 @unittest.skipUnless(HAS_CV, 'needs opencv')

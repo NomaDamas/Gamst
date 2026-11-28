@@ -3,7 +3,7 @@
 GAMST_TEST_WESPEAKER=<model dir>            GAMST_TEST_WESEP=<model dir>
 GAMST_TEST_USEF=<source>:<checkpoint>       GAMST_TEST_QWEN_ALIGNER=<snapshot dir>
 GAMST_TEST_WHISPER=<faster-whisper dir>     GAMST_TEST_LVFACE=<onnx>
-GAMST_TEST_SOLIDER=<source>:<checkpoint>    GAMST_TEST_SAPIENS2=<pose dir>:<detr dir>
+GAMST_TEST_SOLIDER=<source>:<checkpoint>    GAMST_TEST_SAPIENS2=<pose dir>:<yolox onnx>
 GAMST_TEST_PERSON_IMAGE=<image of a person> GAMST_TEST_DEVICE=cpu|mps|cuda (default cpu)
 GAMST_TEST_RTMW=<rtmw onnx>:<yolox onnx>    GAMST_TEST_RTMW_DEVICE=cpu|coreml (default cpu)
 
@@ -101,11 +101,14 @@ class RealModelTest(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(IMAGE, 'set GAMST_TEST_PERSON_IMAGE')
     def test_sapiens2(self):
         import cv2
-        from gamst.providers.sapiens2_pose import Sapiens2PosePlugin
-        plugin = Sapiens2PosePlugin.from_local(sapiens2[0], sapiens2[1], device=DEVICE, accept_license=True)
-        poses = plugin.infer(cv2.imread(IMAGE))
-        self.assertGreaterEqual(len(poses), 1)
-        self.assertEqual(len(poses[0]['landmarks']), 308)
+        from pathlib import Path
+        from gamst.providers.rtmw_pose import _sha256
+        from gamst.providers.sapiens2_pose import Sapiens2Models
+        models = Sapiens2Models(sapiens2[0], _sha256(Path(sapiens2[0]) / 'model.safetensors'), sapiens2[1],
+                                _sha256(sapiens2[1]), device=DEVICE, det_device='cpu', accept_license=True)
+        boxes, keypoints, scores = models.infer(cv2.imread(IMAGE))
+        self.assertGreaterEqual(len(boxes), 1)
+        self.assertEqual((keypoints.shape[1:], scores.shape[1:]), ((308, 2), (308,)))
 
     @RTMW
     def test_rtmw_on_frames_without_a_person(self):
