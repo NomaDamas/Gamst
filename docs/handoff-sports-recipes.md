@@ -3,6 +3,19 @@
 Worktree `.local-run/wt-sports`. Branched from Main at `e137433`, then rebased onto PR #373 (`feat/realtime-pose`,
 `278b8d4`) on the owner's OK (2026-11-28): the PR is stacked on #373 and is retargeted to Main when #373 merges.
 
+## 0a. GCP measurement state (2026-11-28, evening) — read first
+
+- Measured (docs/measurements/sports-2026-11-28.md): racket on two OpenTTGames clips (CPU post / realtime, T4 post /
+  realtime), team tracking on the SportsMOT example (T4, three stacks, post / realtime). Videos and metrics are local
+  only: `try-it/testbed/sports/gcp-m1/` (HUD of the sota post run, terminal recordings of CPU and GPU realtime runs).
+- VM `gamst-sports` (project nomadamas, us-central1-a) is **stopped**: n1-standard-8 + T4, Spot, 100 GB disk with the
+  models, envs, OpenTTGames and SportsMOT data, runs. SSH key `~/.ssh/gamst_gcp` (user gamst); the external IP changes
+  at each start (read it in the console). The disk is still billed while stopped; delete the VM when done.
+- Open: RepCount (8.8 GB single archive, browser-only share link: needs ~10 GB free on the Mac or another route),
+  SoccerNet (the owner signs the NDA), TrackNet tennis / Shuttlecock (folder or whole-archive downloads), the
+  `body-reps`, `swing`, `body-rotation`, `billiards` recipes on real footage; bounce F1 at 120 fps (0.51) below 60 fps
+  (0.67), not investigated.
+
 ## 0. Current state (2026-11-28) — read first
 
 - PR #377 (draft, base `feat/realtime-pose`): not to be merged without the owner's OK; retarget to Main after #373.
