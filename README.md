@@ -321,8 +321,9 @@ with several people: rule + 7 example clips, search mode. Against the owner's 39
 
 VIDEO_SHOTGUN_COUNT
 
-**Counted live.** One pose model (RTMW-l) on every frame of a 60 fps clip, as a camera: 16 of 16 slams in 7 runs at
-60 fps and 6 at 30 fps, 0 frames skipped, 0 lost, 14 ms per frame; at 60 fps the count is stored 0.19-0.24 s (median) after each slam ends.
+**Counted live.** One pose model (RTMW-l) on every frame of a 60 fps clip, as a camera: 16 of 16 slams in each of 10 live runs
+(4 at 60 fps, 6 at 30 fps), 0 frames skipped, 0 lost, 14 ms per frame; at 60 fps the count is stored 190-216 ms (median)
+after each slam ends.
 
 VIDEO_PPOTTO_COUNT
 

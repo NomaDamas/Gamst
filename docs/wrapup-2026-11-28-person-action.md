@@ -15,8 +15,9 @@ chosen while looking at the owner's labels are **in-sample**; "held-out" says on
   - 사람: 이름·설명 **글과 사진이 둘 다** 있어야 합니다(결정 59). 얼굴(LVFace-B, 옵션 SCRFD 검출기) + 전신 외형(PersonViT)으로
     트랙마다 누구인지 붙이고, 나중에 소급합니다.
   - 지정 방법: HUD 설정 화면(`gamst recipe hud`), 명령줄, 또는 MCP `compose_recipe`(에이전트가 요청 하나로 구성·실행).
-- **실시간:** 가장 정확한 모델 하나(RTMW-l)가 모든 프레임을 셉니다(결정 37). 샷건 영상(16회) 60 fps 7회·30 fps 6회 실행 모두
-  16/16, 건너뛴 프레임 0, 잃은 프레임 0, 프레임당 14.0 ms(실시간 계수 0.93), 지연 p50 0.19–0.24초(60 fps)·0.02–0.03초(30 fps).
+- **실시간:** 가장 정확한 모델 하나(RTMW-l)가 모든 프레임을 셉니다(결정 37). 샷건 영상(16회)을 라이브로 60 fps 4회·30 fps 6회
+  실행(모델 캐시 뒤) 모두 16/16, 건너뛴 프레임 0, 잃은 프레임 0, 모든 프레임을 라이브 레인이 처리. 프레임당 14.0 ms(실시간 계수
+  0.93), 지연 p50 190–216 ms(60 fps)·24–26 ms(30 fps).
 - **사장님 정답 (2026-11-27–28, #378):** 관제탑(522초) = 두 팔을 오므렸다가 → 양옆으로 폈다가 → 다시 접기 1회, **감스트 46회 ·
   다른 사람 22회**. 맨까송(67초, 360p) = 펀치 **16회**(모두 감스트). 정답 v2: 같은 순간 감스트 상자가 둘이면 "그중 하나", 벽의
   감스트 액자 사진은 채점 제외, person-27은 50.48초부터 감스트.
@@ -42,7 +43,7 @@ chosen while looking at the owner's labels are **in-sample**; "held-out" says on
 
 | capability | how it is specified | what comes back | measured (owner truth v2 unless said) |
 |---|---|---|---|
-| A movement, counted on every frame by one model, live | text → rule (`docs/movements/*.rule.json`), example clips, or both; `--timing realtime` | each occurrence with start / end and evidence (rule steps, nearest example); L2 corrections marked `LATE` | shotgun clip (16 slams): 16/16 in 7 runs at 60 fps and 6 at 30 fps, 0 skipped, 0 lost, 14.0 ms per frame; forced backlog 16/16 in 5 of 5 with L2 corrections, no double ([testbed](measurements/testbed-2026-11-26.md) "One model, every frame") |
+| A movement, counted on every frame by one model, live | text → rule (`docs/movements/*.rule.json`), example clips, or both; `--timing realtime` | each occurrence with start / end and evidence (rule steps, nearest example); L2 corrections marked `LATE` | shotgun clip (16 slams): live runs after the model cache, 4 at 60 fps and 6 at 30 fps: 16/16, 0 skipped, 0 lost, latency p50 190-216 ms (60 fps), 14.0 ms per frame; forced backlog 16/16 in 5 of 5 with L2 corrections, no double ([testbed](measurements/testbed-2026-11-26.md) "One model, every frame") |
 | The same on a finished file | `--timing post`: every frame, nothing late; waits for each frame's face and body scores | the same | 관제탑 522 s: 15,670 of 15,670 frames, 0 lost ([testbed](measurements/testbed-2026-11-26.md) "Post mode lost 608 frames") |
 | A given person (who) | a name or description **and** photos (decision 59), or a range of a video, or camera seconds; checked (faces agree, one person per photo) | `who` on every event, resolved retroactively; one row per person, others as `P2`, `P3`, ... | identity frames, chosen setting (#381): 관제탑 P 99.8 % / R 94.3 % (held-out even scenes 99.6 / 93.9); 맨까송 97.8 / 67.9 (held-out 97.9 / 72.6) ([identity recall](measurements/identity-recall-2026-11-28.md) §7) |
 | A given person's given action, text only | rule written from the owner's words | as above | 관제탑 rule as written: 20 of 21 events right, F1 0.667; tuned in-sample 0.861, held-out 0.727 / 0.895 ([action spec](measurements/action-spec-2026-11-28.md)) |
