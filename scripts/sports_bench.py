@@ -214,7 +214,7 @@ def openttgames(args):
                    contacts_by_kind=kinds, errors=report.get('errors'))
     (out / 'metrics.json').write_text(json.dumps(metrics, indent=1))
     # the ball trail per frame of the cut, for gamst.count_video --points
-    trail = [list(predicted[frame]) if frame in predicted else None for frame in range(first, last, step)]
+    trail = [[list(predicted[frame])] if frame in predicted else None for frame in range(first, last, step)]   # [[x, y]]
     (out / 'points.json').write_text(json.dumps(trail))
     print(json.dumps({key: metrics[key] for key in ('stack', 'timing', 'exit_code', 'real_time_factor', 'ball', 'bounces')}))
     return metrics
