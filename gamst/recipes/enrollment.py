@@ -161,13 +161,10 @@ PERSON_PARTS = ('person-binding', 'target-person')
 
 async def sample(face, body, image, pose, face_indices=None):
     """``(face embedding or None, body embedding or None)`` of one person in one image (nothing is kept)."""
-    from ..providers.person_match import MEDIAPIPE_FACE_POINTS, align_face, body_crop, face_points, face_reading
+    from ..providers.person_match import MEDIAPIPE_FACE_POINTS, body_crop, face_crop
     from ..providers.speaker_verify import embed
-    height, width = image.shape[:2]
     found = []
-    indices, visibility = face_reading(pose, face_indices or MEDIAPIPE_FACE_POINTS)
-    crops = (align_face(image, face_points(pose.get('landmarks') or [], width, height, indices, min_visibility=visibility))
-             if face is not None else None,
+    crops = (face_crop(face, image, pose, face_indices or MEDIAPIPE_FACE_POINTS) if face is not None else None,
              body_crop(image, pose['bbox']) if body is not None and pose.get('bbox') else None)
     for embedder, crop in zip((face, body), crops):
         try:

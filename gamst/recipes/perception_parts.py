@@ -630,9 +630,11 @@ async def _person_binding(options, context):
     from ..providers.person_binding import appearance_defaults
     arguments = dict(appearance_defaults(body), **arguments)       # provisional, per re-ID model; the item's values win
     for name in ('body_reject', 'confirm_every_ms', 'continue_ms', 'continue_iou', 'anonymous', 'scene_cuts',
-                 'appearance_across_cuts'):
+                 'appearance_across_cuts', 'scene_threshold', 'reject_after', 'reach_back', 'wait_for_scores'):
         if name in options:
             arguments[name] = options[name]
+    # a finished file (--timing post): each frame waits for its face and body scores, none is dropped (accuracy first)
+    arguments.setdefault('wait_for_scores', context.get('timing') == 'post')
     module = PersonBinding(face, body, references=references, session=context.get('session'), **arguments)
     return dict(module=module, spec=module.spec)
 

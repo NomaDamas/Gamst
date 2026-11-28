@@ -11,7 +11,7 @@ never as fields of a value; only the module's scores and counts become context.
 profile                    worker (real model)                                  client (this process)
 =========================  ==================================================  ====================
 ``speaker.embedding``      sherpa-onnx CAM++ / WeSpeaker w2v-BERT               ``RemoteEmbedder``
-``face.embedding``         LVFace ONNX                                          ``RemoteEmbedder``
+``face.embedding``         LVFace ONNX (optionally SCRFD first: face_detect.py) ``RemoteEmbedder``
 ``body.embedding``         person re-ID ONNX (PersonViT, OSNet-AIN)             ``RemoteEmbedder``
 ``target_speech.local``    WeSep / USEF-TFGridNet / SAM-Audio spans             ``RemoteExtractor``
 ``pixit.sources``          pyannote PixIT (diarization + separation)            ``RemoteSeparator``
@@ -295,6 +295,10 @@ def load(profile, config):
         embedder = load_embedder(config.pop('backend'), config.pop('path'), **config)
         return _Embedding(lambda frame: embedder.embed(frame.data, frame.sample_rate))
     if profile == 'face.embedding':
+        if config.get('detector_path'):      # the face and its five points from a face detector (face_detect.py)
+            from .face_detect import DetectedFaceEmbedder
+            embedder = DetectedFaceEmbedder.from_local(config.pop('path'), **config)
+            return _Embedding(lambda frame: embedder.embed(frame.data))
         from .person_match import LVFaceEmbedder
         embedder = LVFaceEmbedder.from_local(config.pop('path'), **config)
         return _Embedding(lambda frame: embedder.embed(frame.data))
@@ -364,6 +368,8 @@ def load(profile, config):
 class _Client:
     def __init__(self, worker, profile, config):
         self.worker, self.model_id = worker, model_id(profile, config) if 'sha256' in config else profile
+        # a face model with a detector is given the region around a head, else an aligned face (person_match.face_crop)
+        self.face_input = 'region' if profile == 'face.embedding' and config.get('detector_path') else 'aligned'
         self._sequence = 0
 
     @classmethod

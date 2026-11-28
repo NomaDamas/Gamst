@@ -561,6 +561,11 @@ def _role_config(selection, weight_paths, source_dir):
     elif model == "faster_whisper.align_large_v3_turbo":
         weights = next(item for item in weight_paths if item["name"] == "model.bin")
         config.update(model_path=str(Path(weights["path"]).parent), sha256=weights["sha256"])
+    elif model.startswith("lvface.") and any(item["name"] == "det_10g.onnx" for item in weight_paths):
+        face = next(item for item in weight_paths if item["name"].startswith("LVFace-"))
+        detector = next(item for item in weight_paths if item["name"] == "det_10g.onnx")
+        config.update(path=face["path"], sha256=face["sha256"], detector_path=detector["path"],
+                      detector_sha256=detector["sha256"])
     elif model.startswith(("sherpa.", "lvface.")):
         config.update(path=first["path"], sha256=first["sha256"])
     elif model == "faster_whisper.small":

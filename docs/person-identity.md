@@ -12,6 +12,7 @@ Measurements: [measurements/person-identity-2026-11-27.md](measurements/person-i
 | evidence | model | trusted where |
 |---|---|---|
 | face | LVFace-B (`lvface.b`, MIT, 455,533,594 bytes, sha256 pinned) on an ArcFace-aligned crop from the pose model's own face points | everywhere |
+| face, found by a face detector (option) | `lvface.b_scrfd`: the same LVFace-B, on a crop aligned with the five points of SCRFD-10GF (InsightFace `det_10g.onnx`, 16,923,827 bytes, sha256 `5838f7fe…5b91`; non-commercial research weights, accepted) run on the region around the track's head (`gamst/providers/face_detect.py`). Same `model_id`, so references enrolled either way are the same. Not the default: on the owner's clips it found fewer faces than the pose points and separated 감스트 from others equally ([measurements](measurements/identity-recall-2026-11-28.md)) | everywhere |
 | whole-body appearance (body and clothes) | **PersonViT ViT-B/16, MSMT17** (`personvit.vitb_msmt17`, the default since the owner's decision "무조건 SOTA", 2026-11-27): official MSMT17 mAP 80.8 / Rank-1 92.0 without re-ranking, the best published same-domain result with released weights; converted once to ONNX (`gamst/providers/personvit_export.py`). Option: OSNet-AIN x1.0 MSMT17 (`--set person_binding.body_candidate=osnet.ain_x1_0_msmt17`) | only in the video or live run it was seen in: clothes change |
 | voice | the voice enrollment (CAM++), kept in the person reference | binds speakers (words), not tracks |
 
@@ -79,7 +80,12 @@ gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --per
   from one unlabelled clip with faces as a proxy; all thresholds stay provisional until the owner's labelled
   multi-person clips). A face
   that contradicts (< 0.15) releases the track. A pose the tracker gave no track is never bound. A person moves to
-  another track only when that track's face beats the holder's face in the same frame.
+  another track only when that track's face beats the holder's face in the same frame. **Measured on the owner's
+  labelled clips** ([identity-recall](measurements/identity-recall-2026-11-28.md)): these defaults name 감스트 on 70 %
+  (관제탑) and 53 % (맨까송) of his frames; picked on either half of the scenes, `lvface.b_scrfd` with face 0.15,
+  reject 0.10, `reject_after=2`, appearance 0.85 and `reach_back` named him on 77 % and 65 % in real post-mode runs
+  (precision 99.8 % and 77.8 %; on 맨까송 the lost precision is one segment whose label is in question). They are LVFace-B / PersonViT numbers on two broadcast clips, set per run with
+  `--set person_binding.KEY=VALUE`; the defaults are unchanged.
 - **Where it runs.** The binding module sits in the pose lane (it pairs each camera frame with its joints, and an L2
   chain forks it with the pose model), but no face or body model runs there: crops of the tracks that are due go to a
   scorer beside the lane, and the scores are decided on at the first frame after they return (100 ms median on the
@@ -130,6 +136,24 @@ gamst recipe run person-action-count --video clip.mp4 --exemplar move.json --per
 - **Persons file.** `python -m gamst.providers.person_binding RUN.json OUT.json [--names NAMES.json]` writes
   `{start_ms, cuts, persons: [{person_id, name, segments: [{track_id, start, end}]}]}` for a reader with one row per
   person.
+- **Two contradicting faces (option `reject_after`).** With `reject_after=2` a bound person is released only by a
+  second contradicting face in a row; after the first the track's face is looked at again at the unconfirmed pace
+  (200 ms) and a face that does not contradict clears it. The release still reaches back to the last confirmation, so
+  the frames between are not kept for the person. Default 1 (the first contradicting face releases, as before).
+- **Back over a gap (option `reach_back`).** A track bound again (it held someone before in this segment) reaches back
+  to the end of its last binding, as a first binding reaches back to the track's start; never over the person's
+  bindings on other tracks or past a face of the track that said someone else.
+- **Post mode waits for the scores (`wait_for_scores`, on with `--timing post`).** Each frame waits until the face and
+  body scores it asked for are back, so none is replaced or dropped as stale; they are decided on at the next frame.
+  Before, a finished file ran the scorer beside the lane as in realtime and lost jobs whenever the models were slower
+  than the pose lane (with the face detector: 75 of 396 face jobs replaced on 맨까송). Realtime keeps the scorer
+  beside the lane. Measured cost: 10.3 → 10.6 min for the 522 s 관제탑 clip.
+- **Within the scene (option `scene_threshold`).** A person the face bound in a scene reaches the scene's other track
+  segments that nothing bound, by the appearance of this scene (the looks of the segments bound to them): backward to
+  segments that ended before the face was seen (a `person.bound` and a `person.unbound` over that segment's own span,
+  `reason: scene_ended`) and forward to later ones (`by: scene`). Never over a cut, never onto a segment whose faces all
+  said "not this person" (best below `face_reject`), never over a time the person was on another track. Off by
+  default: on the owner's clips it changed nothing measurable ([measurements](measurements/identity-recall-2026-11-28.md)).
 - **Limits.** A track switch between two people crossing can move an identity until a face corrects it; retroactivity
   never crosses a track break except by continuation. A person whose face is never seen stays unknown unless the
   appearance of this recording binds them. A face seen badly can start a second person for someone already known (no

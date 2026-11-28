@@ -1063,7 +1063,7 @@ async def build_pipeline(recipe, args, human, *, sources=None, modules=None, lan
                    allow_remote_asr=getattr(args, 'allow_remote_asr', False),
                    allow_remote_diarization=getattr(args, 'allow_remote_diarization', False),
                    record_dir=getattr(args, 'record_dir', None), replay=replay, session=run_session(args),
-                   efficienttam_source=getattr(args, 'efficienttam_source', None),
+                   efficienttam_source=getattr(args, 'efficienttam_source', None), timing=timing(args),
                    count_on=getattr(args, 'count_on', None), fast=getattr(args, 'fast', None),
                    show=getattr(args, 'refine_show', False), cached=getattr(args, 'refine_cached', None))
     context['stages'] = {item['name']: item for item in modules if item.get('in')}
