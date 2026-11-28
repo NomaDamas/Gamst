@@ -35,3 +35,19 @@ Keep adding to this file. Each lesson says what happened, the evidence, and what
    review runs before every sports PR, and synthetic tests include missed detections and long gaps.
 10. **`str.replace` replaces every occurrence.** A fix meant for `check_config` also landed in a constructor with the
     same line and broke the module. Now: edits by script assert `count(old) == 1`.
+
+## GCP stage (2026-11-28)
+
+11. **Check the cut against the source before scoring anything.** The first scores put every stack's ball 60-70 px
+    off; shifting by three source frames made it 9 px. GAMST and the labels were right (a frame extracted by index
+    showed the ball on the label; OpenCV's frame times were exact); `ffmpeg -ss 0 -r 60` had picked source frame
+    2k - 3 for clip frame k (pixel comparison). Now: `scripts/sports_bench.py` cuts by frame number and refuses a cut
+    whose probed frames do not match their source frames.
+12. **One profile entry per role lost the other stacks' models.** Setting up a second stack overwrote the first
+    stack's detector in `profile.json`, so its run said "not set up". Now: setup also keeps every candidate by name
+    (`candidates`), which `recipes.installed` already read.
+13. **A registry flag can silently block setup.** `automatic=False` (copied from RTMW) made setup refuse YOLO26 and
+    SigLIP although their weights were pinned. Now: only an unpinned model (TrackNetV3, Google Drive zip) is manual,
+    prepared with `--set ballmodel.config=...`, which setup leaves out.
+14. **The physics check refused a frame rate on its own data, as designed.** Table tennis at 30 fps: 3.6 frames
+    between the fastest two contacts; the bench runs at 60 and 120 fps instead.
