@@ -313,22 +313,24 @@ both), and it returns every time that person did it, with its start and end, amo
 come back too, one row per person. Owner's labels and every number:
 [wrap-up 2026-11-28](docs/wrapup-2026-11-28-person-action.md).
 
-VIDEO_GWANJETAP_SEARCH
+https://github.com/user-attachments/assets/f8d0679a-0090-48eb-86c1-d72f8616b57b
 
 **Found from text.** "두 팔을 오므렸다가 → 양옆으로 폈다가 → 다시 접기" by 감스트 (name + photos), in a 522 s compilation
 with several people: rule + 7 example clips, search mode. Against the owner's 39 labelled occurrences, 감스트's F1 is
 0.86-0.89 in-sample and 0.78 / 0.90 when the setting is picked on the other half of the scenes (truth v2).
 
-VIDEO_SHOTGUN_COUNT
+https://github.com/user-attachments/assets/d6eca720-1590-485d-a204-30cd75400de1
 
 **Counted live.** One pose model (RTMW-l) on every frame of a 60 fps clip, as a camera: 16 of 16 slams in each of 10 live runs
 (4 at 60 fps, 6 at 30 fps), 0 frames skipped, 0 lost, 14 ms per frame; at 60 fps the count is stored 190-216 ms (median)
-after each slam ends.
+after each slam ends (the run in this video also names 감스트 from photos: 16/16, 0 lost, median 375 ms).
 
-VIDEO_PPOTTO_COUNT
+https://github.com/user-attachments/assets/eb9dd370-4245-4ad9-8415-ec09bd58c20d
 
 **Counted by voice.** The word 뽀또 said by 감스트 in a noisy shop with several voices: 7 of the 9 he said were counted
 right; the 2 wrong ones are a word nobody said and another person's voice.
+
+Korean and vertical cuts of all three: [issue #371](https://github.com/NomaDamas/Gamst/issues/371#issuecomment-7236621302).
 
 ```bash
 gamst recipe hud --input clip.mp4 --who 감스트 --photo a.jpg --photo b.jpg --photo c.jpg \
