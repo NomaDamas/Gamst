@@ -138,6 +138,11 @@ class FakeSession:
         if 'activity_end' in kwargs:
             turn = self.turns[self.closed] if self.closed < len(self.turns) else dict(text=['없음'], usage={})
             self.closed += 1
+            if turn.get('tool') is not None:
+                call = SimpleNamespace(function_calls=[SimpleNamespace(id=f'c{self.closed}', name='report',
+                                                                       args={'occurrences': turn['tool']})])
+                await self.queue.put(SimpleNamespace(text=None, usage_metadata=None, go_away=None, tool_call=call,
+                                                     server_content=None))
             for k, chunk in enumerate(turn['text']):
                 last = k == len(turn['text']) - 1
                 usage = None
@@ -147,14 +152,17 @@ class FakeSession:
                         thoughts_token_count=0, total_token_count=None,
                         prompt_tokens_details=[SimpleNamespace(modality=SimpleNamespace(name=m), token_count=n)
                                                for m, n in turn['usage'].items()])
-                await self.queue.put(SimpleNamespace(text=chunk, usage_metadata=usage, go_away=None,
+                await self.queue.put(SimpleNamespace(text=chunk, usage_metadata=usage, go_away=None, tool_call=None,
                                                      server_content=SimpleNamespace(turn_complete=last)))
+
+    async def send_tool_response(self, **kwargs):
+        self.sent.append(dict(tool_response=kwargs))
 
     async def receive(self):
         while True:
             msg = await self.queue.get()
             yield msg
-            if msg.server_content.turn_complete:
+            if msg.server_content is not None and msg.server_content.turn_complete:
                 return
 
 
@@ -191,7 +199,7 @@ class FakeRunTest(unittest.TestCase):
         self.assertEqual(result['errors'], [])
         self.assertEqual(result['frames_sent'], 68)
         self.assertEqual(len(result['turns']), 15)
-        self.assertEqual([t['kind'] for t in result['turns']].count('final'), 1)
+        self.assertEqual([t['phase'] for t in result['turns']].count('final'), 1)
         sent_text = [s['text'] for s in connect.sent if 'text' in s]
         self.assertEqual(sum('[보고]' in t for t in sent_text), 14)
         self.assertEqual(sum('[전체 목록]' in t for t in sent_text), 1)
@@ -213,6 +221,30 @@ class FakeRunTest(unittest.TestCase):
         self.assertEqual(result['spent']['turns'], 15)
         self.assertGreater(result['spent']['usd'], 0)
         self.assertEqual(result['frames_per_clip_s'], round(68 / 67.255, 3))
+
+    def test_tool_call_answers(self):
+        """Native-audio mode: answers arrive as `report` tool calls; each gets a tool response and a phase."""
+        turns = [dict(text=['완료'], usage={'TEXT': 100}, response=5,
+                      tool=[{'who': '감스트', 'start': 1.0, 'end': 1.2}] if k == 0 else [])
+                 for k in range(14)]
+        turns.append(dict(text=['완료'], usage={'TEXT': 100, 'VIDEO': 1000}, response=9,
+                          tool=[{'who': '감스트', 'start': 5.0, 'end': 5.3}, {'who': '다른 사람', 'start': 20, 'end': 21}]))
+        connect = FakeConnect(turns)
+        args = SimpleNamespace(clip='man', mode='rt', lang='ko', run=0, audio=False, model='gemini-3.8-live',
+                               location='us-central1', session_s=110.0, poll_s=None, pace=400.0, modality='AUDIO')
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(harness.run_condition(args, connect=connect, photos=[b'p'] * 5,
+                                                       frames=[(float(t), b'j') for t in range(68)], pcm=b'',
+                                                       out_dir=tmp))
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['tool_calls'], 15)
+        self.assertEqual(sum(1 for s in connect.sent if 'tool_response' in s), 15)
+        self.assertEqual([(i['start'], i['who']) for i in result['realtime']['items']], [(1.0, G)])
+        self.assertEqual([(i['start'], i['who']) for i in result['after']['items']], [(5.0, G), (20.0, le.OTHER)])
+        model, config = connect.configs[0]
+        self.assertEqual(config['response_modalities'], ['AUDIO'])
+        self.assertEqual(config['tools'][0]['function_declarations'][0]['name'], 'report')
+        self.assertTrue(any('report' in s.get('text', '') for s in connect.sent if 'text' in s))
 
 
 if __name__ == '__main__':

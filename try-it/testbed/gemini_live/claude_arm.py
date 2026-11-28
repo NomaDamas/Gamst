@@ -91,12 +91,12 @@ def prompt(clip, fps, rate, folder, n_sheets, lang='ko'):
 영상 하나({info['duration_s']:.1f}초)에서 뽑은 프레임을 봅니다. 초당 {rate:g}장, 4x4 장표 {n_sheets}장입니다.
 각 칸 위의 노란 글씨가 영상 시각(초)입니다. 시각은 이 표시를 기준으로 말합니다.
 
-1. 먼저 `{folder}/photos/` 의 사진 5장을 봅니다. 이 사람이 '감스트'입니다. 영상에는 다른 사람도 나옵니다.
+1. 먼저 `{folder}/photos/` 의 사진 5장(1.jpg–5.jpg)을 봅니다. 이 사람이 '감스트'입니다. 영상에는 다른 사람도 나옵니다.
 2. `{folder}/sheets/sheet_000.jpg` 부터 `sheet_{n_sheets - 1:03d}.jpg` 까지 모두 순서대로 봅니다(Read 도구).
 3. 찾을 동작 — {action}
    {'동작의 시각은 부딪히는 순간(t)입니다.' if point else '각 동작의 시작(start)과 끝(end)을 초로 말합니다.'}
 
-다른 파일, 다른 폴더, 저장소, 인터넷은 보지 않습니다. 정답 파일이나 다른 도구의 결과를 찾지 않습니다.
+다른 파일, 다른 폴더, 저장소, 인터넷은 보지 않습니다. 정답 파일이나 다른 도구의 결과를 찾지 않습니다. 질문하지 말고 끝까지 혼자 판단합니다.
 
 마지막 답은 동작 하나당 한 줄, JSON만 씁니다(감스트와 다른 사람 모두, 시간 순서): {fmt}
 해당하는 것이 없으면 정확히 '없음'이라고만 씁니다. 답 앞뒤에 설명을 쓰지 않습니다.
@@ -121,7 +121,8 @@ def score_answer(clip, fps, run, answer_text, usage):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('action', choices=('build', 'score', 'estimate'))
+    ap.add_argument('action', choices=('build', 'score', 'estimate', 'ingest'))
+    ap.add_argument('--transcript', help='ingest: the subagent JSONL transcript (usage, wall time, answer, files read)')
     ap.add_argument('--clip', choices=sorted(le.CLIPS), required=True)
     ap.add_argument('--fps', type=float, required=True)
     ap.add_argument('--run', type=int, default=1)
@@ -134,6 +135,24 @@ def main(argv=None):
         if args.action == 'build':
             print(json.dumps(build(args.clip, args.fps), ensure_ascii=False))
         print(json.dumps(le.claude_estimate(args.clip, args.fps), ensure_ascii=False))
+        return 0
+    if args.action == 'ingest':
+        import claude_usage
+        folder = arm_dir(args.clip, args.fps)
+        summary = claude_usage.summarize(args.transcript, str(folder))
+        (folder / f'usage.r{args.run}.json').write_text(json.dumps(summary, ensure_ascii=False, indent=1))
+        (folder / f'answer.r{args.run}.txt').write_text(summary['answer'])
+        usage = {k: summary[k] for k in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens')}
+        usage.update(wall_s=summary['wall_s'], api_calls=summary['api_calls'], model=summary['model'],
+                     reads=summary['reads'], sheets_read=summary['sheets_read'], reads_outside=summary['reads_outside'],
+                     other_tools=[t['name'] for t in summary['other_tools']], measured=True)
+        result = score_answer(args.clip, args.fps, args.run, summary['answer'], usage)
+        (folder / f'result.r{args.run}.json').write_text(json.dumps(result, ensure_ascii=False, indent=1))
+        s = result['score'][le.TARGET]
+        print(json.dumps(dict(clip=args.clip, fps=result['fps'], run=args.run, usd=result['usd'], wall_s=summary['wall_s'],
+                              sheets_read=summary['sheets_read'],
+                              outside=summary['reads_outside'], **{k: s[k] for k in ('truth', 'said', 'matched', 'f1')}),
+                         ensure_ascii=False))
         return 0
     usage = {k: getattr(args, k) for k in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
                                            'total_tokens')}

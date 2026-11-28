@@ -68,7 +68,7 @@ def clip_path(clip):
 
 # ---------------------------------------------------------------------------------------------------------- prompts
 
-def prompt_texts(clip, lang, mode, *, window=None, fps_note='1 fps'):
+def prompt_texts(clip, lang, mode, *, window=None, fps_note='1 fps', answer='json'):
     """{system, cue, final}: the instruction, the short cue sent at the end of each realtime window, and the question
     asked after a session's stream ends. ``mode``: 'rt' (realtime announcements, then the full list) or 'post' (full
     list only). ``window`` = (start_s, end_s) of the session. Nothing here reads the truth."""
@@ -109,6 +109,23 @@ def prompt_texts(clip, lang, mode, *, window=None, fps_note='1 fps'):
         final = (f"[full list] For the whole part of the video this session saw (t={a:.0f}–{b:.0f}s), list every "
                  f"occurrence of the action, by 감스트 and by anyone else, in time order, one per line as {fmt_any}. "
                  "If none, 'none'.")
+    if answer == 'tool':      # native-audio models: the answer is a `report` function call, speech stays short
+        if lang == 'ko':
+            item = '{who, t}' if point else '{who, start, end}'
+            system = system.split('답은 한 줄에')[0] + (
+                f"답은 반드시 report 함수를 한 번 호출해서 한다. occurrences에 동작마다 {item}를 넣는다(who는 '감스트' 또는 '다른 사람'). "
+                "해당하는 것이 없으면 빈 목록으로 호출한다. 소리로는 '완료' 한 마디만 말한다.")
+            cue = "[보고] 앞 보고 이후에 새로 끝난 감스트의 동작을 report 함수로 알려라. 이미 알린 것은 다시 넣지 않는다. 없으면 빈 목록."
+            final = (f"[전체 목록] 이 세션에서 본 영상 구간(t={a:.0f}–{b:.0f}s) 전체에서 이 동작을 한 것을 감스트와 다른 사람 모두 "
+                     "빠짐없이 시간 순서대로 report 함수 한 번으로 알려라. 없으면 빈 목록.")
+        else:
+            item = '{who, t}' if point else '{who, start, end}'
+            system = system.split('Answer with one JSON')[0] + (
+                f"Always answer by calling the report function once: occurrences holds one {item} per action (who is "
+                "'감스트' or 'other'). If there is none, call it with an empty list. Say only 'done' aloud.")
+            cue = "[report] Report with the report function each action by 감스트 that ended since your last report. Do not repeat ones already reported. If none, an empty list."
+            final = (f"[full list] For the whole part of the video this session saw (t={a:.0f}–{b:.0f}s), report every "
+                     "occurrence of the action, by 감스트 and by anyone else, in time order, with one report call. If none, an empty list.")
     if mode == 'post':
         system = system.replace('실시간으로 지켜보는 관찰자', '지켜보는 관찰자').replace('You watch a video in real time',
                                                                                 'You watch a video')
@@ -345,6 +362,7 @@ def usage_cost(usage_rows):
     thoughts: n, response_modality: 'TEXT'|'AUDIO'}. Unknown prompt modalities are billed at the text rate and listed."""
     p = GEMINI_PRICE
     rate = dict(TEXT=p['text_in'], IMAGE=p['image_in'], VIDEO=p['video_in'], AUDIO=p['audio_in'])
+    out_rate = dict(TEXT=p['text_out'], AUDIO=p['audio_out'])
     usd, unknown, tin, tout = 0.0, set(), 0, 0
     for row in usage_rows:
         for modality, n in (row.get('prompt') or {}).items():
@@ -353,7 +371,13 @@ def usage_cost(usage_rows):
             usd += n * rate.get(modality, p['text_in']) / 1e6
             tin += n
         out = (row.get('response') or 0) + (row.get('thoughts') or 0)
-        usd += out * (p['audio_out'] if row.get('response_modality') == 'AUDIO' else p['text_out']) / 1e6
+        details = row.get('response_details') or {}
+        if details:                       # priced per modality; the rest (tool-call text, thoughts) as text
+            for modality, n in details.items():
+                usd += n * out_rate.get(modality, p['text_out']) / 1e6
+            usd += max(out - sum(details.values()), 0) * p['text_out'] / 1e6
+        else:
+            usd += out * (p['audio_out'] if row.get('response_modality') == 'AUDIO' else p['text_out']) / 1e6
         tout += out
     return dict(usd=round(usd, 6), tokens_in=tin, tokens_out=tout, turns=len(usage_rows), unknown=sorted(unknown))
 
