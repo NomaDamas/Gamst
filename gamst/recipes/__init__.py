@@ -153,6 +153,10 @@ def choose(recipe, include=(), exclude=()):
 
 POSE_PARTS = {'mediapipe': 'mediapipe-pose', 'rtmw': 'rtmw-pose', 'sapiens2': 'sapiens2-pose'}
 POSE_SOURCES = {'mediapipe-pose': None, 'rtmw-pose': 'rtmw', 'sapiens2-pose': 'sapiens2'}
+# Pose models only ``--pose`` selects: never measured, kept or fallen back to by :func:`choose_pose`. Sapiens2: its
+# licence (no biometric processing or surveillance, Meta audit rights) is the owner's to accept, and on the owner's clip
+# it took 6.5 s per frame on an M2 Pro for the same 16/16 as RTMW-l (docs/measurements/testbed-2026-11-26.md).
+OPT_IN_POSE = frozenset({'sapiens2'})
 
 
 def with_pose(recipe, candidate, *, module=None):
@@ -624,6 +628,8 @@ async def choose_pose(recipe, args, pipeline):
     item = next((item for item in recipe['modules'] if item['use'] in POSE_SOURCES and item.get('choose')), None)
     if item is None or getattr(args, 'pose', None) or timing(args) != 'realtime':
         return None
+    if POSE_SOURCES[item['use']] in OPT_IN_POSE or str(item['choose'].get('fallback', '')).split('.', 1)[0] in OPT_IN_POSE:
+        return None          # an opt-in model is only ever the one --pose names
     module = pipeline.modules[item['name']]['module']
     if not callable(getattr(module, 'benchmark', None)):
         return None
