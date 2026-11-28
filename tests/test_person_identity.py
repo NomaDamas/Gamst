@@ -227,6 +227,43 @@ class PersonBindingTest(unittest.IsolatedAsyncioTestCase):
         bound = [item for item in handed['events'] if item['event'] == 'person.bound']
         self.assertEqual((bound[0]['by'], bound[0]['track_id']), ('handover', 'person-1@9100'))
 
+    async def test_an_l2_fork_hands_over_at_the_cut_s_own_frame_after_its_pre_roll(self):
+        module = self.module()
+        await self.step(module, 1000, [person(.75, 'b')], frame_of(BLUE, RED))         # P on b; b's last box at .75
+        snapshot = module.snapshot()
+        self.assertEqual(snapshot['at_ms'], 1001)
+        twin = module.fork()
+        twin.restore(snapshot)
+        early = await self.step(twin, 700, [person(.25, 'person-1', face=False)], frame_of(BLUE, BLUE))   # pre-roll
+        self.assertEqual([item for item in early['events'] if item['event'] == 'person.bound'], [])
+        untracked = dict(person(.75, None, face=False), track_id=None)
+        handed = await self.step(twin, 1001, [untracked, person(.72, 'person-1', face=False)], frame_of(BLUE, BLUE))
+        bound = [item for item in handed['events'] if item['event'] == 'person.bound']
+        self.assertEqual([(item['by'], item['track_id'], item['start_ms']) for item in bound],
+                         [('handover', 'person-1@700', 700)])      # never the untracked pose; back to the track's start
+
+    async def test_an_l2_fork_waits_for_its_own_scores_and_decides_on_them(self):
+        from gamst.plugins import InputFrame
+        from gamst.private_payload import PrivatePoses
+
+        class Slow(Color):
+            async def embed(self, image):
+                await asyncio.sleep(.03)
+                return super().embed(image)
+        module = self.module()
+        module.face, module.body = Slow('face'), Slow('body')
+        module.scorer.face, module.scorer.body = module.face, module.body
+        twin = module.fork()
+        self.assertEqual((module.wait_for_scores, twin.wait_for_scores), (False, True))
+        for target in (module, twin):          # the live lane's job is in flight first; the fork's waits behind it
+            await target.process(InputFrame(PrivatePoses([person(.75, 'b')]), 'video', 1000))
+            await target.process(InputFrame(frame_of(BLUE, RED), 'video', 1000))
+            if target is module:
+                self.assertEqual((module._results, module.scorer.waiting(module)), ([], 1))   # the live lane never waits
+        self.assertEqual(twin.scorer.waiting(twin), 0)
+        self.assertEqual(len(twin._results), 1)        # back before its next frame: none goes stale
+        await module.settled()
+
     async def test_frames_without_a_person_are_empty_answers_and_keep_the_bindings(self):
         from gamst.plugins import InputFrame
         from gamst.private_payload import PrivatePoses

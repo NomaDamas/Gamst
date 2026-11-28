@@ -34,7 +34,7 @@ class Slow:
 class VideoMemoryTest(unittest.TestCase):
     def test_frames_beyond_memory_spill_and_come_back_the_same(self):
         from gamst.providers.video_memory import VideoMemory
-        memory = VideoMemory(memory_bytes=2 * 300, disk_bytes=10 * 300, disk_floor_bytes=0)
+        memory = VideoMemory(memory_bytes=2 * 300, disk_bytes=10 * 300, disk_floor_bytes=0, codec='raw')
         frames = [np.full((10, 10, 3), index, np.uint8) for index in range(5)]
         kept = [memory.keep(frame) for frame in frames]
         status = memory.status()
@@ -75,7 +75,7 @@ class VideoMemoryTest(unittest.TestCase):
 
     def test_a_released_place_in_the_file_is_written_again(self):
         from gamst.providers.video_memory import VideoMemory
-        memory = VideoMemory(memory_bytes=0, disk_bytes=2 * 300, disk_floor_bytes=0)
+        memory = VideoMemory(memory_bytes=0, disk_bytes=2 * 300, disk_floor_bytes=0, codec='raw')
         frames = [np.full((10, 10, 3), index % 256, np.uint8) for index in range(400)]
         held = [memory.keep(frames[0]), memory.keep(frames[1])]
         for index in range(2, 400):     # always one frame spilled (as a lane with a pre-roll): the file never empties
@@ -88,9 +88,97 @@ class VideoMemoryTest(unittest.TestCase):
         self.assertEqual((status['dropped'], status['file_bytes'], status['spilled_frames']), (0, 600, 400))
         memory.close()
 
+    def test_frames_beyond_memory_are_compressed_losslessly_and_their_files_go_once_taken(self):
+        from gamst.providers.video_memory import VideoMemory
+        rng = np.random.default_rng(0)
+        ramp = np.add.outer(np.arange(48), np.arange(64)).astype(np.uint8)[:, :, None].repeat(3, axis=2)
+        frames = [ramp + rng.integers(0, 2, ramp.shape, np.uint8) for _ in range(40)]     # an image, a little noise
+        for codec in ('png', 'zlib'):
+            memory = VideoMemory(memory_bytes=frames[0].nbytes, disk_bytes=1 << 20, disk_floor_bytes=0, codec=codec,
+                                 chunk_bytes=6000)
+            kept = [memory.keep(frame) for frame in frames]
+            for frame, item in zip(frames, kept):
+                self.assertTrue(np.array_equal(memory.take(item), frame), codec)
+            status = memory.status()
+            self.assertEqual((status['compressed']['frames'], status['spilled_frames'], status['dropped']), (39, 39, 0))
+            self.assertGreater(status['compressed']['ratio'], 1.5)          # smaller than raw
+            self.assertGreater(status['compressed']['files'], 1)          # chunks of ``chunk_bytes``
+            for item in kept:
+                memory.release(item)
+            status = memory.status()
+            self.assertEqual((status['spilled_bytes'], status['compressed']['files']), (0, 1), codec)   # only the open one
+            self.assertEqual(status['file_bytes'], 0)                                                   # ... emptied
+            memory.close()
+
+    def test_a_frame_of_a_recording_keeps_only_its_place_and_is_never_replaced_by_another(self):
+        from gamst.providers.video_memory import VideoMemory
+        frames = [np.full((4, 4, 3), index, np.uint8) for index in range(6)]
+
+        class Reader:
+            def __init__(self):
+                self.calls, self.wrong = [], set()
+
+            def read(self, index, *, fresh=False):
+                self.calls.append((index, fresh))
+                return frames[index] + 1 if index in self.wrong and not (fresh and index == 4) or \
+                    index == 5 else frames[index]
+
+        reader = Reader()
+        memory = VideoMemory(memory_bytes=frames[0].nbytes, disk_bytes=0, disk_floor_bytes=0)
+        kept = [memory.keep(frame, origin=(reader, index)) for index, frame in enumerate(frames)]
+        status = memory.status()
+        self.assertEqual((status['reread']['frames'], status['file_bytes'], status['spilled_bytes'], status['dropped']),
+                         (5, 0, 0, 0))        # beyond the memory: nothing stored, also with no disk at all
+        self.assertTrue(np.array_equal(memory.take(kept[0]), frames[0]))       # in memory
+        self.assertTrue(np.array_equal(memory.take(kept[2]), frames[2]))       # decoded again, the CRC agrees
+        reader.wrong = {3, 4}
+        self.assertIsNone(memory.take(kept[3]))                                 # differs, also from the start: not given
+        self.assertTrue(np.array_equal(memory.take(kept[4]), frames[4]))       # differs once, right from the start
+        self.assertIsNone(memory.take(kept[5]))
+        self.assertEqual(reader.calls[-4:], [(4, False), (4, True), (5, False), (5, True)])
+        status = memory.status()['reread']
+        self.assertEqual((status['mismatches'], status['failed'], status['waiting']), (3, 2, 5))
+        for item in kept:
+            memory.release(item)
+        self.assertEqual(memory.status()['reread']['waiting'], 0)
+        memory.close()
+
+    def test_a_video_file_gives_its_frames_again_by_index(self):
+        import os
+        import tempfile
+        import cv2
+        from gamst.inputs import FileFrames, VideoFileInput
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'clip.avi')
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'MJPG'), 30, (32, 24))
+            rng = np.random.default_rng(1)
+            for index in range(120):
+                image = np.zeros((24, 32, 3), np.uint8)
+                image[:, :] = (index * 2) % 256
+                image[:4, :4] = rng.integers(0, 255, (4, 4, 3))
+                writer.write(image)
+            writer.release()
+            source = VideoFileInput(path)
+
+            async def read():
+                found = []
+                async for frame in source.frames():
+                    found.append((frame.timestamp_ms, frame.data, source.position_of(frame.timestamp_ms)))
+                return found
+            given = asyncio.run(read())
+            self.assertEqual([index for _, _, index in given], list(range(120)))
+            reader = source.rereader()
+            self.assertIsInstance(reader, FileFrames)
+            for index in [0, 1, 2, 50, 51, 119, 10, 11, 100, 3]:      # in order, far forward, backward
+                self.assertTrue(np.array_equal(reader.read(index), given[index][1]), index)
+            self.assertTrue(np.array_equal(reader.read(7, fresh=True), given[7][1]))
+            self.assertIsNone(reader.read(500))
+            self.assertGreaterEqual(reader.status()['seeks'], 2)
+            reader.close()
+
     def test_a_frame_beyond_the_disk_bound_is_dropped_not_kept(self):
         from gamst.providers.video_memory import VideoMemory
-        memory = VideoMemory(memory_bytes=0, disk_bytes=300, disk_floor_bytes=0)
+        memory = VideoMemory(memory_bytes=0, disk_bytes=300, disk_floor_bytes=0, codec='raw')
         self.assertIsNotNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))
         self.assertIsNone(memory.keep(np.zeros((10, 10, 3), np.uint8)))
         self.assertEqual(memory.status()['dropped'], 1)
@@ -337,6 +425,150 @@ class VideoCatchUp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((status['catch_up']['done'], status['catch_up']['pending']), (len(cuts), 0))
         self.assertEqual(seen, set(range(150)))
         self.assertEqual(sorted(round(end) for _, end, _ in found), [i for i in range(150) if i % 12 == 7])
+
+
+WHO = CapabilitySpec('test.who', 'test.who', 'video', 'test', '1', (OutputField('events', 'array'),), 'native',
+                     stateful=True)
+
+
+class Who:
+    """A person binding stand-in: who the one track is is state; it is decided on its third frame (an L2 fork decides
+    again on its own third frame, inside its pre-roll), reaching back to its first."""
+    events_by_lane = True
+
+    def __init__(self):
+        self.spec, self.first, self.seen, self.bound = WHO, None, 0, False
+
+    def process(self, frame):
+        self.first = frame.timestamp_ms if self.first is None else self.first
+        self.seen += 1
+        if self.bound or self.seen < 3:
+            return None
+        self.bound = True
+        return dict(events=[dict(event='person.bound', track_id='T', who='P', start_ms=self.first,
+                                 end_ms=frame.timestamp_ms)])
+
+    def fork(self):
+        return type(self)()
+
+
+class Tagged(Hits):
+    """Hits that say who did them, from the bindings it read (as the per-track counter does)."""
+
+    def __init__(self):
+        super().__init__()
+        self.who = 'unknown'
+
+    def process(self, frame):
+        if isinstance(frame.data, dict):
+            for event in frame.data.get('events') or ():
+                if event.get('event') == 'person.bound':
+                    self.who = event['who']
+            return None
+        found = super().process(frame)
+        if found:
+            found['events'] = [dict(event, who=self.who) for event in found['events']]
+        return found
+
+    def fork(self):
+        return Tagged()
+
+
+@unittest.skipIf(np is None, 'numpy')
+class LaneStateCatchUp(unittest.IsolatedAsyncioTestCase):
+    async def run_who(self, by_lane):
+        class Binding(Who):
+            events_by_lane = by_lane
+        async with Gamst(consent=True) as human:
+            pipeline, camera = Pipeline(human, 'live'), Camera(150)
+            pipeline.add_input('camera', camera)
+            pipeline.add_module('pose', Poser(slow=range(20, 45)), consumes='camera', emits=('joints',),
+                                backlog='spill', batch=4,
+                                catch_up=dict(lag_ms=150, max_lookback_ms=150, tail_ms=150, workers=1))
+            pipeline.add_module('who', Binding(), consumes='joints', spec=WHO)
+            pipeline.add_module('hits', Tagged(), consumes=['joints', 'who'], spec=HITS)
+            await pipeline.run()
+            status = pipeline.status()['modules']['pose']['catch_up']
+            rows = human.store.query('local-user', kind='observation.signal', limit=500, registered_only=True,
+                                     capability_id='test.hits')
+            hits = [event for row in rows for event in row['observation']['value']['events']]
+            rows = human.store.query('local-user', kind='observation.signal', limit=500, registered_only=True,
+                                     capability_id='test.who')
+            bound = [event for row in rows for event in row['observation']['value']['events']]
+            await pipeline.close()
+        return status, hits, bound
+
+    async def test_who_a_track_is_reaches_what_reads_it_in_every_lane_also_from_the_pre_roll(self):
+        status, hits, bound = await self.run_who(True)
+        self.assertGreaterEqual(status['done'], 1)
+        self.assertEqual(len(hits), len([i for i in range(150) if i % 12 == 7]))
+        self.assertTrue(any(event.get('correction') for event in hits))
+        self.assertEqual({event['who'] for event in hits}, {'P'}, hits)       # L2's hits too
+        self.assertEqual(len(bound), 1 + status['done'])     # the live lane's and each fork's, kept whole in the Store
+        # trimmed to the owned range as a count would be (before the fix), a fork's binding made in its pre-roll was
+        # lost: what it counted after it was nobody's
+        _, hits, bound = await self.run_who(False)
+        self.assertIn('unknown', {event['who'] for event in hits if event.get('correction')})
+
+
+class SafetyNetByPerson(unittest.TestCase):
+    def test_two_people_s_events_from_two_lanes_are_both_kept(self):
+        pipeline = Pipeline(SimpleNamespace(register_capability=lambda spec: None, pipeline=None), 'x')
+        entry = {}
+        hit = lambda end, who: dict(events=[dict(event='exemplar.matched', label='punch', start_ms=end - 90,  # noqa
+                                                 end_ms=end, who=who)])
+        self.assertIsNotNone(pipeline._once(entry, hit(1000, '감스트'), None))
+        self.assertIsNotNone(pipeline._once(entry, hit(1040, 'P2'), 1))        # someone else, at the same moment
+        self.assertIsNone(pipeline._once(entry, hit(1050, '감스트'), 1))       # the same person again: once
+
+
+@unittest.skipIf(np is None, 'numpy')
+class RereadLane(unittest.IsolatedAsyncioTestCase):
+    async def test_a_spilling_lane_of_a_recording_stores_no_frame_and_processes_each_with_its_data(self):
+        frames = [np.full((2, 2, 3), index, np.uint8) for index in range(20)]
+
+        class Reader:
+            reads = 0
+
+            def read(self, index, *, fresh=False):
+                Reader.reads += 1
+                return frames[index].copy()
+
+            def close(self):
+                pass
+
+        class Recording:
+            modality, live = 'video', True
+
+            def __init__(self, base):
+                self.base = base
+
+            async def frames(self):
+                return
+                yield
+
+            def position_of(self, timestamp_ms):
+                return (timestamp_ms - self.base) // 17
+
+            def rereader(self):
+                return Reader()
+
+        async with Gamst(consent=True) as human:
+            now = timestamp() - 5000
+            pipeline, slow = Pipeline(human, 'live'), Slow()
+            pipeline.add_input('camera', Recording(now))
+            pipeline.add_module('verify', slow, consumes='camera', backlog='spill')
+            memory = pipeline.video_memory(memory_bytes=2 * 12, disk_bytes=0, disk_floor_bytes=0)
+            for index in range(20):
+                await pipeline.push('camera', frames[index], timestamp_ms=now + index * 17, modality='video')
+            status = memory.status()
+            self.assertEqual((status['reread']['frames'], status['file_bytes'], status['dropped']), (18, 0, 0))
+            slow.release.set()
+            await pipeline.drain()
+            self.assertEqual(slow.seen, [(now + index * 17, index * 12) for index in range(20)])
+            self.assertEqual((pipeline.status()['modules']['verify']['gaps'], Reader.reads), (0, 18))
+            self.assertEqual(memory.status()['reread']['waiting'], 0)
+            await pipeline.close()
 
 
 class CoreMLTemp(unittest.TestCase):

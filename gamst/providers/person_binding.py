@@ -57,8 +57,11 @@ jump in the track's appearance) splits the track (``track.split``) and the bindi
 confirmation. Scene cuts (:mod:`.scene_cut`) end every binding and start every track again.
 
 L2 (gamst.pipeline): a fork names its tracks ``<track>@<first frame ms>`` (a forked pose tracker numbers its tracks
-again) and takes over the bindings of the cut by box overlap (:meth:`snapshot`, :meth:`restore`); a track it cannot hand
-over stays unknown until its own face confirms it, never a guess.
+again) and takes over the bindings of the cut by box overlap at the cut's own frame (:meth:`snapshot`, :meth:`restore`:
+the live lane's last frame, after the fork's pre-roll built its tracks); a track it cannot hand over stays unknown until
+its own face confirms it, never a guess. A fork waits for its own face and body scores (it is late anyway: accuracy
+first), so it decides on the same evidence as a post run; the live lane's jobs still go first. Its bindings are its own
+tracks' (``events_by_lane``): the Pipeline neither trims them to an owned range nor merges them with the live lane's.
 
 With nobody enrolled it runs and binds nobody; a person enrolled while the run goes on (MCP ``enroll_person``) is bound
 from then on, and back to the first frame of a track that is still followed (retroactive).
@@ -364,7 +367,7 @@ class _Scorer:
 
     def __init__(self, face, body):
         self.face, self.body, self.jobs, self.task, self.wake = face, body, {}, None, None
-        self.done, self.stopping = 0, False
+        self.done, self.stopping, self.running = 0, False, None     # running: the owner of the job in flight
 
     def submit(self, owner, key, ts, face, body):
         import asyncio
@@ -382,7 +385,8 @@ class _Scorer:
             self.task = asyncio.get_running_loop().create_task(self.run())
 
     def waiting(self, owner):
-        return sum(1 for item in self.jobs.values() if item[4] is owner)
+        """Jobs of ``owner`` not answered yet (waiting, or the one in flight)."""
+        return sum(1 for item in self.jobs.values() if item[4] is owner) + (self.running is owner)
 
     async def run(self):
         import asyncio
@@ -398,7 +402,11 @@ class _Scorer:
                 continue
             whole = min(self.jobs, key=lambda item: (self.jobs[item][0], -self.jobs[item][1]))
             _, ts, face, body, owner, key = self.jobs.pop(whole)
-            found = await asyncio.gather(_embedded(self.face, face), _embedded(self.body, body))
+            self.running = owner
+            try:
+                found = await asyncio.gather(_embedded(self.face, face), _embedded(self.body, body))
+            finally:
+                self.running = None
             self.done += 1
             owner._deliver(key, ts, *found)
 
@@ -436,6 +444,9 @@ class PersonBinding:
     """Pipeline module: camera + every person's joints in, ``vision.person_binding`` records out."""
 
     name = 'person_binding'
+    # Its events are about the tracks of the lane that made them (an L2 fork's are ``<track>@<ms>``): who a track is is
+    # state, not a count, so the Pipeline keeps them whole in every lane (no owned-range trim, no merge across lanes).
+    events_by_lane = True
 
     def __init__(self, face=None, body=None, *, references=('person',), session=None, face_threshold=.35,
                  face_reject=.15, body_threshold=.8, margin=.05, face_every_ms=200, confirm_every_ms=1000,
@@ -589,7 +600,7 @@ class PersonBinding:
     # ------------------------------------------------------------------ L2 (gamst.pipeline)
 
     def fork(self):
-        twin = type(self)(self.face, self.body, **self._args)
+        twin = type(self)(self.face, self.body, **dict(self._args, wait_for_scores=True))   # L2 is late anyway
         twin._shares_models, twin._forked, twin.scorer = True, True, self.scorer
         # one registry of persons for the run: a fork's new person gets the next id of the run, not its own P1
         twin.persons, twin.names, twin._ids, twin._values = self.persons, self.names, self._ids, self._values
@@ -597,13 +608,15 @@ class PersonBinding:
         return twin
 
     def snapshot(self):
-        """At a cut: the bound tracks' last boxes and who they are, and this session's appearance glue."""
+        """At a cut: the bound tracks' last boxes and who they are, the frame they are from (``at_ms``), and this
+        session's appearance glue."""
         return dict(bound=[dict(bbox=self._boxes.get(track), who=state['who']) for track, state in self.bindings.tracks.items()
                            if state['who'] is not None and self._boxes.get(track)],
-                    session={person.key: list(person.session) for person in self.persons})
+                    at_ms=self._last_ms, session={person.key: list(person.session) for person in self.persons})
 
     def restore(self, state):
         self._handover = [item for item in (state or {}).get('bound') or () if item.get('bbox')]
+        self._handover_ms = (state or {}).get('at_ms')     # boxes of that frame: handed over there, not before
         for person in self.persons:
             for embedding in ((state or {}).get('session') or {}).get(person.key) or ():
                 person.session.append(embedding)
@@ -660,7 +673,7 @@ class PersonBinding:
         self._images, self._camera_ms, self._kept_ms = {}, None, None
         self._results = []      # what the scorer (beside the lane) gave back
         self.delays = []      # ms from a frame to the frame where its face result is decided on
-        self._handover, self._namespace = [], None
+        self._handover, self._handover_ms, self._namespace, self._last_ms = [], None, None, None
         self._scene = {}      # track -> its segment in this scene: first, last, looks, faces, bound (_propagate)
         for person in self.persons:
             person.session.clear()
@@ -752,9 +765,10 @@ class PersonBinding:
         self._results.append((key, ts, face, body))
 
     async def _wait_scores(self):
-        """Until the scorer has answered every job of this frame (post mode: nothing is dropped)."""
+        """Until the scorer has answered every job of this module (post mode, an L2 fork: nothing is dropped). Only its
+        own: a fork does not wait for the live lane's jobs, which keep coming."""
         import asyncio
-        while self.scorer.waiting(self) or self.scorer.busy():
+        while self.scorer.waiting(self):
             await asyncio.sleep(.002)
 
     async def settled(self):
@@ -1102,10 +1116,11 @@ class PersonBinding:
             bindings.released[person] = max(high, bindings.released.get(person, high))
 
     def _hand_over(self, candidates, ts, events):
-        """An L2 fork's first frame: each bound person of the cut goes to the track whose box overlaps theirs most."""
+        """An L2 fork at the cut's frame (its pre-roll built its tracks): each bound person of the cut goes to the track
+        whose box overlaps theirs most (the first binding of that track reaches back to its first frame)."""
         for item in self._handover:
-            best = max(((box_iou(pose.get('bbox'), item['bbox']), track) for track, (pose, _) in candidates.items()),
-                       default=(0., None))
+            best = max(((box_iou(pose.get('bbox'), item['bbox']), track) for track, (pose, _) in candidates.items()
+                        if not track.startswith('frame:')), default=(0., None))
             if best[0] >= HANDOVER_IOU and self.bindings.who(best[1]) is None and self.bindings.holder(item['who']) is None:
                 events.append(self.bindings.bind(best[1], item['who'], ts, 'handover', iou=best[0]))
         self._handover = []
@@ -1185,6 +1200,7 @@ class PersonBinding:
                 self.counts['unpaired_images'] += 1
         self.counts['frames'] += 1
         self.counts['scored_frames'] += image is not None
+        self._last_ms = ts if self._last_ms is None else max(self._last_ms, ts)
         candidates, events = {}, []
         for cut in self._pending_cuts:
             self._split(cut, ts, events)
@@ -1208,7 +1224,7 @@ class PersonBinding:
             self._collected(candidates, image, ts)
         doubles = self._duplicates(candidates, ts, events)
         candidates = {track: item for track, item in candidates.items() if track not in doubles}
-        if self._handover:
+        if self._handover and (self._handover_ms is None or ts >= self._handover_ms):
             self._hand_over(candidates, ts, events)
         for track, (_, scores) in candidates.items():
             if scores.get('switch_at') is not None:
