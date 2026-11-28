@@ -37,11 +37,13 @@ def gamst_rows():
     for path in sorted((BASE / 'gamst').glob('*.score.json')):
         d = json.loads(path.read_text())
         frames = d.get('frames') or 0
-        lost = sum((v or {}).get('frames', 0) for v in (d.get('lost') or {}).values()) if isinstance(d.get('lost'), dict) else 0
-        rows.append(_row('GAMST', d['clip'], d['name'], 1, d['score'], wall_s=d.get('wall_s'),
-                         fps_seen=round(frames / le.CLIPS[d['clip']]['duration_s'], 1) if frames else None,
+        lost = ((d.get('lost') or {}).get('temporal.exemplar_events') or {}).get('frames', 0)   # the counter's lane
+        seen = frames - lost
+        rows.append(_row('GAMST', d['clip'], f"realtime ({d['name']}): 프레임 {lost:,}/{frames:,} 잃음 (디스크)", 1,
+                         d['score'], wall_s=d.get('wall_s'),
+                         fps_seen=round(seen / le.CLIPS[d['clip']]['duration_s'], 1) if frames else None,
                          tok_in=0, tok_out=0, usd=0.0, latency=(d['score'][G].get('latency') or None),
-                         note=f"realtime, RTF {d.get('real_time_factor')}, lost {lost} frames"))
+                         note=f"realtime, RTF {d.get('real_time_factor')}"))
     return rows
 
 
@@ -49,7 +51,10 @@ def gemini_rows():
     rows = []
     for path in sorted((BASE / 'runs').glob('*/result.json')):
         d = json.loads(path.read_text())
-        if path.parent.name.startswith('smoke') or d.get('errors'):
+        if path.parent.name.startswith(('smoke', 'killed')):
+            continue
+        # a session whose final list never came (the model went silent) is a measured outcome; anything else is not
+        if any('final answer timed out' not in e for e in d.get('errors') or ()):
             continue
         sp = d['spent']
         common = dict(wall_s=d['wall_s'], fps_seen=d['frames_per_clip_s'], tok_in=sp['tokens_in'], tok_out=sp['tokens_out'],
@@ -100,13 +105,74 @@ def table(rows):
     return '\n'.join(out)
 
 
+# GAMST on Main (post mode, measured; docs/measurements/action-spec-2026-11-28.md, identity-recall-2026-11-28.md,
+# testbed-2026-11-26.md): (clip, setting, matched, said, truth, F1, start err, end err, wall s for the clip, frames/s)
+GAMST_MAIN = [
+    ('gwan', 'Main post: 글 규칙 그대로', 20, 21, 39, 0.667, 0.47, 0.28, 615.0, 30.0),
+    ('gwan', 'Main post: 글+예시 search (v2, 최고)', 36, 42, 39, 0.889, None, None, 615.0, 30.0),
+    ('man', 'Main post: 펀치 규칙 그대로', 8, 34, 16, 0.320, 0.32, 0.50, None, 29.97),
+    ('man', 'Main post: 펀치 고른 설정 (v2)', 9, 14, 16, 0.600, None, None, None, 29.97),
+    ('shot', 'Main post: 글 규칙 (60 fps 전부)', 16, 16, 16, 1.0, 0.009, 0.009, 28.5, 60.0),
+]
+
+
+def main_rows():
+    rows = []
+    for clip, cond, m, g, t, f, se, ee, wall, fps in GAMST_MAIN:
+        score = {G: dict(truth=t, said=g, matched=m, precision=round(m / g, 4), recall=round(m / t, 4), f1=f,
+                         start_err_s=se, end_err_s=ee)}
+        rows.append(_row('GAMST', clip, cond, 1, score, wall_s=wall, fps_seen=fps, tok_in=0, tok_out=0, usd=0.0))
+    return rows
+
+
+def summary(rows):
+    """Mean over runs per (arm, clip, condition)."""
+    groups = {}
+    for r in rows:
+        groups.setdefault((r['arm'], r['clip'], r['cond']), []).append(r)
+    out = []
+    for (arm, clip, cond), rs in groups.items():
+        def mean(key):
+            vals = [r[key] for r in rs if r[key] is not None]
+            return sum(vals) / len(vals) if vals else None
+        out.append(dict(arm=arm, clip=clip, cond=cond, runs=len(rs), f1=mean('f1'), f1_all=[r['f1'] for r in rs],
+                        matched=mean('matched'), said=mean('said'), truth=rs[0]['truth'], start_err=mean('start_err'),
+                        end_err=mean('end_err'), latency_p50=mean('latency_p50'), wall_s=mean('wall_s'),
+                        fps_seen=mean('fps_seen'), tok_in=mean('tok_in'), tok_out=mean('tok_out'), usd=mean('usd'),
+                        usd_per_hour=mean('usd_per_hour'), usd_per_correct=mean('usd_per_correct')))
+    order = {'gwan': 0, 'man': 1, 'shot': 2}
+    arms = {'GAMST': 0, 'Gemini Live': 1, 'Claude Code': 2}
+    return sorted(out, key=lambda r: (order[r['clip']], arms[r['arm']], r['cond']))
+
+
+def summary_table(groups):
+    head = ('| 영상 | 팔 | 조건 | 회 | F1 (회별) | 맞음/말함/정답 (평균) | 시작/끝 오차(초) | 지연 p50(초) | 걸린 시간(초) | '
+            '초당 장수 | 토큰 입력 / 출력 | USD/회 | KRW/회 | USD/영상 1시간 | KRW/영상 1시간 | USD/맞힌 1개 |')
+    out = [head, '|' + '---|' * 16]
+    for r in groups:
+        usd_h = r['usd_per_hour']
+        out.append('| ' + ' | '.join([
+            le.CLIPS[r['clip']]['name'], r['arm'], r['cond'], str(r['runs']),
+            f"{fmt(r['f1'], 3)} ({', '.join(fmt(x, 3) for x in r['f1_all'])})",
+            f"{fmt(r['matched'], 1)}/{fmt(r['said'], 1)}/{r['truth']}",
+            f"{fmt(r['start_err'], 2)} / {fmt(r['end_err'], 2)}", fmt(r['latency_p50'], 2), fmt(r['wall_s'], 0),
+            fmt(r['fps_seen'], 1), f"{fmt(None if r['tok_in'] is None else round(r['tok_in']))} / "
+                                   f"{fmt(None if r['tok_out'] is None else round(r['tok_out']))}",
+            fmt(r['usd'], 4), fmt(None if r['usd'] is None else round(r['usd'] * le.USD_KRW)), fmt(usd_h, 2),
+            fmt(None if usd_h is None else round(usd_h * le.USD_KRW)), fmt(r['usd_per_correct'], 4)]) + ' |')
+    return '\n'.join(out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--json')
     args = ap.parse_args(argv)
-    rows = gamst_rows() + gemini_rows() + claude_rows()
+    rows = main_rows() + gamst_rows() + gemini_rows() + claude_rows()
     order = {'gwan': 0, 'man': 1, 'shot': 2}
     rows.sort(key=lambda r: (order[r['clip']], r['arm'], r['cond'], r['run']))
+    print('## 조건별 평균\n')
+    print(summary_table(summary(rows)))
+    print('\n## 회별\n')
     print(table(rows))
     if args.json:
         Path(args.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1))

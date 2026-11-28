@@ -254,6 +254,8 @@ class SessionRun:
         if self.mode == 'rt':           # the realtime windows are closed: the question is a turn of its own,
             await self._quiet()         # asked once the cue answers have stopped, so later answers are its own
             await send(activity_start=_activity('start'))
+            if self.pcm:                # Vertex refuses a turn without audio ("No audio present in the turn")
+                await send(audio=_blob(b'\0\0' * int(AUDIO_RATE * 0.2), f'audio/pcm;rate={AUDIO_RATE}'))
         await send(text=self.prompts['final'])
         self.final_sent = True
         await send(activity_end=_activity('end'))

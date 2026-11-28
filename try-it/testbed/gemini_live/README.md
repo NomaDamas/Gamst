@@ -1,7 +1,11 @@
 # GAMST vs Gemini Live vs Claude on the owner's truth: design, cost, commands
 
-Status 2026-11-28: **harness and estimate only. Nothing has been sent to Google or run on Claude.** The Gemini arm is
-blocked: billing is disabled on the GCP projects meant for it (see "Blockers").
+Status 2026-11-28: **run.** Results, spend and the three-way table:
+[`docs/measurements/gamst-vs-gemini-live-vs-claude-2026-11-28.md`](../../../docs/measurements/gamst-vs-gemini-live-vs-claude-2026-11-28.md).
+Changes after this plan was written: Vertex refuses TEXT for `gemini-3.8-live`, so it runs with AUDIO and answers by
+a `report` function call (`--modality AUDIO`, the default); billing was enabled on GCP project `songsuro` (owner
+approved); the estimate below over-counted image tokens (measured 117-171 per frame, not 258). Below: the plan as
+written before the runs.
 
 ## 요약 (한국어)
 
