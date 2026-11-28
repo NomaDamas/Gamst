@@ -236,6 +236,93 @@ class Scoring(unittest.TestCase):
         self.assertEqual((item['who'], item['start'], item['end']), ('감스트', 1., 1.7))
 
 
+class OneOf(unittest.TestCase):
+    """Owner decisions of 2026-11-28 (truth v2): two boxes labelled 감스트 at once are both truth and GAMST may name either
+    ("one of"); photos and superseded segments are left out of identity scoring."""
+
+    A, B, C = (.1, .1, .2, .6), (.6, .1, .2, .6), (.35, .5, .2, .4)
+
+    def boxes(self, *tracks, frames=10, fps=10.):
+        return [(k / fps, track, box) for k in range(frames) for track, box in tracks]
+
+    @staticmethod
+    def bound(track, who='감스트'):
+        return dict(event='person.bound', track_id=track, who=who, person_id='P1', start_ms=0, end_ms=1000)
+
+    def segment(self, label, box, frames=10, fps=10., **extra):
+        return dict(label=label, boxes=[[k / fps, *box] for k in range(frames)], **extra)
+
+    def test_two_target_boxes_at_once_count_once_and_either_is_enough(self):
+        truth = dict(segments=[self.segment('G', self.A), self.segment('G', self.B)])
+        boxes = self.boxes(('a', self.A), ('b', self.B))
+        bindings = [self.bound('a')]                                   # GAMST names 감스트 on one of the two
+        now = M.score_identity(boxes, bindings, 0, truth, fps=10.)
+        self.assertEqual((now['frames']['tp'], now['frames']['fn'], now['frames']['recall']), (10, 0, 1.))
+        self.assertEqual(now['several'], 10)
+        before = M.score_identity(boxes, bindings, 0, truth, fps=10., one_of=False)
+        self.assertEqual((before['frames']['tp'], before['frames']['fn']), (10, 10))
+        both = M.score_identity(boxes, bindings + [self.bound('b')], 0, truth, fps=10.)
+        self.assertEqual((both['frames']['tp'], both['frames']['fp'], both['frames']['precision']), (10, 0, 1.))
+
+    def test_an_added_stretch_and_a_box_at_the_same_frame_are_one_unit(self):
+        truth = dict(segments=[self.segment('G', self.A)], added=[dict(label='G', start=0., end=.9)])
+        score = M.score_identity(self.boxes(('a', self.A)), [self.bound('a')], 0, truth, fps=10.)
+        self.assertEqual((score['frames']['tp'], score['frames']['fn']), (10, 0))
+        self.assertEqual(M.score_identity(self.boxes(('a', self.A)), [self.bound('a')], 0, truth, fps=10.,
+                                          one_of=False)['frames']['tp'], 20)
+
+    def test_photos_and_superseded_segments_are_neither_hits_nor_errors(self):
+        truth = dict(segments=[self.segment('G', self.A), self.segment('G', self.C, photo=True),
+                               self.segment('O', self.B, superseded=True)],
+                     superseded=[self.segment('O', self.C, superseded=True)])
+        boxes = self.boxes(('a', self.A), ('c', self.C), ('b', self.B))
+        score = M.score_identity(boxes, [self.bound('a'), self.bound('b')], 0, truth, fps=10.)  # c (photo) unnamed
+        self.assertEqual(score['frames'], dict(tp=10, fp=0, fn=0, tn=0, precision=1., recall=1.))
+        self.assertEqual(score['left_out'], dict(photo=10, superseded=20))
+        self.assertEqual([item['label'] for item in M.scored_segments(truth)], ['G'])
+        self.assertEqual(M.target_moments(truth, fps=10.), [])      # the photo does not make a second 감스트
+
+    def test_target_moments_are_the_frames_with_several_target_items(self):
+        truth = dict(segments=[self.segment('G', self.A, frames=30), self.segment('O', self.B, frames=30),
+                               dict(label='G', boxes=[[k / 10., *self.C] for k in range(10, 20)])])
+        self.assertEqual(M.target_moments(truth, fps=10.), [(.95, 1.95)])
+
+    def test_the_same_action_on_the_two_boxes_is_neither_a_hit_nor_an_error(self):
+        truth = [dict(start=1., end=2., who='감스트'), dict(start=4., end=5., who='감스트')]
+        gamst = [dict(start=1.1, end=2., who='감스트', track_id='a'), dict(start=1.2, end=2.1, who='감스트', track_id='b')]
+        moments = [(.5, 2.5)]
+        now = M.score_action(gamst, truth, together=moments)
+        self.assertEqual((now['감스트']['gamst'], now['감스트']['matched'], now['감스트']['precision']), (1, 1, 1.))
+        self.assertEqual(now['same_moment'], 1)
+        self.assertEqual(M.breakdown(gamst, truth, together=moments)['wrong'], dict(identity=0, split=0, extra=0))
+        # before the owner's decision (or outside such a moment) the second box's event is a split
+        before = M.score_action(gamst, truth)
+        self.assertEqual((before['감스트']['gamst'], before['감스트']['matched']), (2, 1))
+        self.assertEqual(M.breakdown(gamst, truth)['wrong']['split'], 1)
+        self.assertEqual(M.score_action(gamst, truth, together=[(5., 6.)])['감스트']['gamst'], 2)
+        # one track's two events are never the same action: a repetition is not a duplicate
+        same = [dict(start=1.1, end=2., who='감스트', track_id='a'), dict(start=1.5, end=2.2, who='감스트', track_id='a')]
+        self.assertEqual(M.score_action(same, truth, together=moments)['감스트']['gamst'], 2)
+
+    def test_another_box_s_event_that_matched_the_next_repetition_stays_a_match(self):
+        truth = [dict(start=1., end=1.8, who='감스트'), dict(start=2., end=2.8, who='감스트')]
+        gamst = [dict(start=1., end=1.9, who='감스트', track_id='a'), dict(start=1.7, end=2.8, who='감스트', track_id='b')]
+        now = M.score_action(gamst, truth, together=[(0., 3.)])
+        self.assertEqual((now['감스트']['gamst'], now['감스트']['matched'], now['same_moment']), (2, 2, 0))
+
+    def test_the_v2_truth_folder_marks_photos_and_keeps_the_superseded(self):
+        folder = Path(__file__).resolve().parents[1] / 'docs/ground-truth/2026-11-28/v2/man'
+        if not folder.is_dir():
+            self.skipTest('truth v2 not in this checkout')
+        truth = M.load_truth(folder)['identity']
+        self.assertEqual(truth.get('version'), 2)
+        self.assertEqual(sorted(item['segment'] for item in truth['superseded']), sorted(['person-12', 'person-2~mwzau1al', 'person-27']))
+        photos = sorted(item['segment'] for item in truth['segments'] if item.get('photo'))
+        self.assertEqual(photos, sorted(['person-12~v2a', 'person-2~v2b', 'person-4', 'person-5', 'person-6', 'person-8']))
+        late = [(item['start'], item['end'], item['label']) for item in truth['segments'] if item.get('split_of') == 'person-27']
+        self.assertEqual(sorted(late), [(42.042, 44.24, 'O'), (44.24, 50.48, 'O'), (50.48, 63.53, 'G')])
+
+
 class PoseDump(unittest.TestCase):
     """A recorded run replays through the same per-track counter: the same events."""
 

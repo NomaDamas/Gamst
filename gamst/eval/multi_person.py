@@ -16,6 +16,13 @@ The truth files are those of ``docs/ground-truth/2026-11-28/<clip>/`` (``truth_a
   two occurrences), ``extra`` (no occurrence of anyone there) or ``missed`` (no event there at all).
 - **Identity**, per frame (:func:`score_identity`): each labelled box is matched to the run's box of the same moment (IoU
   >= 0.5, within one frame); the run says 감스트 when that track is bound to 감스트 then (bindings resolved retroactively).
+- **One of** (owner decision, 2026-11-28; truth v2): where the truth labels several boxes 감스트 at the same moment, all
+  are truth and GAMST may name either. Identity scores that frame once: found if GAMST names 감스트 on any of them (an
+  added stretch without a box: on any track), one true positive. Actions: events are matched as before (an event of
+  either box matches); inside such a moment (:func:`target_moments`) an unmatched 감스트 event that overlaps another
+  track's 감스트 event in time is the same action seen on the other box: neither a hit nor an error.
+- **Left out:** truth segments marked ``photo`` (a photo or cutout of the person, not a live person) or ``superseded``
+  (a segment a later truth version cut in pieces) are neither hits nor errors.
 """
 from __future__ import annotations
 
@@ -106,6 +113,52 @@ def match(gamst, truth, tol=TOL_S):
     return pairs
 
 
+def target_moments(identity, fps=30., person='G', gap_s=TOL_S):
+    """[(start, end)] seconds where the identity truth has several items of ``person`` at once (boxes of segments that
+    are scored, see :func:`scored_segments`, and the owner's added stretches): frames with two or more, joined when
+    at most ``gap_s`` apart, half a frame either side."""
+    count = {}
+    for item in scored_segments(identity):
+        if item.get('label') != person:
+            continue
+        for k in {round(row[0] * fps) for row in item.get('boxes') or ()}:
+            count[k] = count.get(k, 0) + 1
+    for item in (identity or {}).get('added') or ():
+        if item.get('label') == person:
+            for k in range(round(item['start'] * fps), round(item['end'] * fps) + 1):
+                count[k] = count.get(k, 0) + 1
+    moments, half = [], .5 / fps
+    for k in sorted(k for k, n in count.items() if n > 1):
+        t = k / fps
+        if moments and t - half - moments[-1][1] <= gap_s:
+            moments[-1][1] = t + half
+        else:
+            moments.append([t - half, t + half])
+    return [(round(a, 4), round(b, 4)) for a, b in moments]
+
+
+def same_moment(events, pairs, moments, person=TARGET):
+    """Ids of the unmatched events of ``person`` that are the same action as another event: inside ``moments`` (several
+    of the person's boxes at once, :func:`target_moments`), an event of another track that overlaps it in time is
+    matched or already kept. Each is one action seen on the other box (owner decision, 2026-11-28): neither a hit nor
+    an error. Matching is not changed, so a second track's event that matched the next repetition stays a match."""
+    if not moments:
+        return set()
+    paired = {id(event) for event, _ in pairs}
+    kept = [event for event in events if id(event) in paired]
+    dropped = set()
+    for event in sorted(events, key=lambda item: item['start']):
+        if id(event) in paired:
+            continue
+        if event.get('who') == person and _overlaps(event, moments) and any(
+                other.get('who') == person and other.get('track_id') != event.get('track_id') and
+                min(other['end'], event['end']) > max(other['start'], event['start']) for other in kept):
+            dropped.add(id(event))
+        else:
+            kept.append(event)
+    return dropped
+
+
 def _mine(person):
     if person == TARGET:
         return lambda who: who == TARGET
@@ -114,8 +167,11 @@ def _mine(person):
     return lambda who: True
 
 
-def score_action(gamst, truth, *, exclude=(), keep=None, tol=TOL_S):
-    """{person: {truth, gamst, error, matched, precision, recall, start_err_s, end_err_s}} for 감스트, others, everyone."""
+def score_action(gamst, truth, *, exclude=(), keep=None, tol=TOL_S, together=()):
+    """{person: {truth, gamst, error, matched, precision, recall, start_err_s, end_err_s}} for 감스트, others, everyone.
+
+    ``together``: :func:`target_moments` of the identity truth; there a 감스트 event that is the same action as another
+    track's (:func:`same_moment`) is left out of ``gamst``; ``same_moment`` says how many (감스트)."""
     gamst, truth = restrict(gamst, exclude=exclude, keep=keep), restrict(truth, exclude=exclude, keep=keep)
     out = {}
     for person in (TARGET, OTHERS, EVERYONE):
@@ -123,6 +179,10 @@ def score_action(gamst, truth, *, exclude=(), keep=None, tol=TOL_S):
         t = [item for item in truth if mine(item['who'])]
         g = [item for item in gamst if mine(item['who'])]
         pairs = match(g, t, tol)
+        dropped = same_moment(g, pairs, together)
+        g = [item for item in g if id(item) not in dropped]
+        if person == TARGET:
+            out['same_moment'] = len(dropped)
         n = len(pairs)
         out[person] = dict(
             truth=len(t), gamst=len(g), error=len(g) - len(t), matched=n,
@@ -133,18 +193,22 @@ def score_action(gamst, truth, *, exclude=(), keep=None, tol=TOL_S):
     return out
 
 
-def breakdown(gamst, truth, *, person=TARGET, exclude=(), keep=None, tol=TOL_S):
+def breakdown(gamst, truth, *, person=TARGET, exclude=(), keep=None, tol=TOL_S, together=()):
     """{wrong: {identity, split, extra}, missed: {identity, merged, missed}} of ``person``'s events and occurrences.
 
     For everyone (``person`` = :data:`EVERYONE`) there is no identity reason. A wrong event of the person is ``identity``
     when it matches an unmatched occurrence of someone else, ``split`` when it overlaps an occurrence of the person that
     another event already matched, else ``extra``. A missed occurrence is ``identity`` when an event of someone else
-    (or unknown) is there, ``merged`` when an event matched to another occurrence covers it too, else ``missed``."""
+    (or unknown) is there, ``merged`` when an event matched to another occurrence covers it too, else ``missed``.
+    ``together``: as :func:`score_action` (the same action seen on another 감스트 box is neither wrong nor counted)."""
     gamst, truth = restrict(gamst, exclude=exclude, keep=keep), restrict(truth, exclude=exclude, keep=keep)
     mine = _mine(person)
     g = [item for item in gamst if mine(item['who'])]
     t = [item for item in truth if mine(item['who'])]
     pairs = match(g, t, tol)
+    dropped = same_moment(g, pairs, together)
+    g = [item for item in g if id(item) not in dropped]
+    gamst = [item for item in gamst if id(item) not in dropped]
     matched_events = {id(a) for a, _ in pairs}
     matched_truth = {id(b) for _, b in pairs}
     others_t = [item for item in truth if not mine(item['who'])]
@@ -221,10 +285,19 @@ def iou(a, b):
     return inter / union if union > 0 else 0.
 
 
-def score_identity(boxes, bindings, start_ms, truth, *, fps=30.):
-    """Per-frame and per-segment precision and recall of 감스트 (the rules of ``score_multi.py``).
+def scored_segments(identity):
+    """The identity truth's segments that are scored: not a ``photo`` and not ``superseded``."""
+    return [item for item in (identity or {}).get('segments') or ()
+            if not item.get('photo') and not item.get('superseded')]
 
-    ``boxes``: [(seconds, track_id, (x, y, w, h))] of the run; ``bindings``: its person binding events."""
+
+def score_identity(boxes, bindings, start_ms, truth, *, fps=30., one_of=True):
+    """Per-frame and per-segment precision and recall of 감스트 (the rules of ``score_multi.py``, plus "one of").
+
+    ``boxes``: [(seconds, track_id, (x, y, w, h))] of the run; ``bindings``: its person binding events.
+    ``one_of`` (default): the 감스트 items of one frame (boxes, added stretches) are one unit, found if GAMST names
+    감스트 on any of them; False: every box and every added frame is its own unit (the rule before 2026-11-28).
+    Segments marked ``photo`` or ``superseded`` are left out (``left_out`` says how many boxes)."""
     from ..providers.person_binding import intervals_of, resolve
     intervals = intervals_of(bindings)
     frames = {}
@@ -233,45 +306,77 @@ def score_identity(boxes, bindings, start_ms, truth, *, fps=30.):
 
     def who(track, t):
         return resolve(dict(track_id=track, end_ms=start_ms + t * 1000), intervals)
-    tp = fp = fn = tn = 0
-    rows = []
-    for item in (truth or {}).get('segments') or ():
+
+    def named(row):
+        k, best = round(row[0] * fps), None
+        for kk in (k, k - 1, k + 1):
+            for box, track in frames.get(kk, ()):
+                value = iou(row[1:], box)
+                if value >= IOU and (best is None or value > best[0]):
+                    best = (value, track)
+            if best:
+                break
+        return best is not None and who(best[1], row[0]) == TARGET
+
+    def anyone(k):
+        return any(who(track, k / fps) == TARGET for _, track in frames.get(k, ()))
+    segments = scored_segments(truth)
+    left_out = dict(photo=sum(len(item.get('boxes') or ()) for item in (truth or {}).get('segments') or ()
+                              if item.get('photo') and item.get('label') in ('G', 'O')),
+                    superseded=sum(len(item.get('boxes') or ()) for item in [*((truth or {}).get('segments') or ()),
+                                                                              *((truth or {}).get('superseded') or ())]
+                                   if item.get('superseded') and not item.get('photo')))
+    fp = tn = 0
+    units, plain, per_segment = {}, [], []     # {frame: found} (one of), [found] per box (the rule before)
+    for item in segments:
         if item.get('label') not in ('G', 'O'):
             continue
-        positive, said = item['label'] == 'G', []
+        positive, keys = item['label'] == 'G', []
         for row in item.get('boxes') or ():
-            k, best = round(row[0] * fps), None
-            for kk in (k, k - 1, k + 1):
-                for box, track in frames.get(kk, ()):
-                    value = iou(row[1:], box)
-                    if value >= IOU and (best is None or value > best[0]):
-                        best = (value, track)
-                if best:
-                    break
-            predicted = best is not None and who(best[1], row[0]) == TARGET
-            said.append(predicted)
-            tp += positive and predicted
-            fn += positive and not predicted
-            fp += (not positive) and predicted
-            tn += (not positive) and not predicted
-        rows.append((positive, sum(said) * 2 > len(said) if said else False))
+            predicted = named(row)
+            if positive:
+                k = round(row[0] * fps)
+                units[k] = units.get(k, False) or predicted
+                plain.append(predicted)
+                keys.append((k, predicted))
+            else:
+                fp += predicted
+                tn += not predicted
+                keys.append((None, predicted))
+        per_segment.append((positive, keys))
     for item in (truth or {}).get('added') or ():
         if item.get('label') != 'G':
             continue
-        said = [any(who(track, k / fps) == TARGET for _, track in frames.get(k, ()))
-                for k in range(round(item['start'] * fps), round(item['end'] * fps) + 1)]
-        tp += sum(said)
-        fn += len(said) - sum(said)
-        rows.append((True, sum(said) * 2 > len(said) if said else False))
+        keys = []
+        for k in range(round(item['start'] * fps), round(item['end'] * fps) + 1):
+            found = anyone(k)
+            units[k] = units.get(k, False) or found
+            plain.append(found)
+            keys.append((k, found))
+        per_segment.append((True, keys))
+    if one_of:
+        tp, fn = sum(units.values()), sum(not found for found in units.values())
+    else:
+        tp, fn = sum(plain), sum(not found for found in plain)
+    rows = []
+    for positive, keys in per_segment:
+        said = [units[k] if (one_of and positive) else found for k, found in keys]
+        rows.append((positive, sum(said) * 2 > len(said) if said else False))
 
     def ratio(a, b):
         return round(a / b, 4) if b else None
     stp = sum(1 for p, m in rows if p and m)
     sfp = sum(1 for p, m in rows if not p and m)
     sfn = sum(1 for p, m in rows if p and not m)
+    count = {}
+    for positive, keys in per_segment:
+        for k in {k for k, _ in keys} if positive else ():
+            count[k] = count.get(k, 0) + 1
+    several = sum(1 for n in count.values() if n > 1)
     return dict(frames=dict(tp=tp, fp=fp, fn=fn, tn=tn, precision=ratio(tp, tp + fp), recall=ratio(tp, tp + fn)),
                 segments=dict(n=len(rows), tp=stp, fp=sfp, fn=sfn, precision=ratio(stp, stp + sfp),
-                              recall=ratio(stp, stp + sfn)))
+                              recall=ratio(stp, stp + sfn)),
+                one_of=one_of, several=several, left_out=left_out)
 
 
 # ---------------------------------------------------------------- tables
