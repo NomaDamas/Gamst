@@ -96,7 +96,7 @@ def main(argv=None):
     for line in (Path(args.seq) / 'gt' / 'gt.txt').read_text().splitlines():
         frame, track, x, y, w, h = (float(v) for v in line.split(',')[:6])
         truth.setdefault(int(frame), []).append((int(track), [x, y, w, h]))
-    predicted = {}
+    predicted, numbers = {}, {}     # py-motmetrics wants numeric IDs: each GAMST track ID gets one
     for record in tracks(out / 'run.db'):
         frame = round((record['timestamp_ms'] - start_ms) * fps / 1000) + 1
         value = record['observation']['value']
@@ -105,7 +105,7 @@ def main(argv=None):
             if item.get('label') != 'person':
                 continue
             box = item['location']['bbox']
-            boxes.append((item['track_id'], [box['x'] * width, box['y'] * height, box['width'] * width,
+            boxes.append((numbers.setdefault(item['track_id'], len(numbers) + 1), [box['x'] * width, box['y'] * height, box['width'] * width,
                                              box['height'] * height]))
         predicted[frame] = boxes
     accumulator = mm.MOTAccumulator(auto_id=False)
