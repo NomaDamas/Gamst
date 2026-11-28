@@ -46,8 +46,9 @@ def cut(video, first, count, step, fps, out):
     Selected by frame number, not by time: ``-ss`` with ``-r`` picked frame 2k - 3 instead of 2k on OpenTTGames
     (measured by pixel comparison), which shifted every position 25 ms against the labels."""
     chain = f"select='between(n\\,{first}\\,{first + step * (count - 1)})*not(mod(n-{first}\\,{step}))',setpts=N/({fps}*TB)"
-    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(video), '-vf', chain, '-fps_mode', 'passthrough', '-an',
-                    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-r', f'{fps}', str(out)], check=True)
+    # -vsync passthrough (ffmpeg 4.4; -fps_mode in 5+): no output frame-rate filter that would pick frames again
+    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(video), '-vf', chain, '-vsync', 'passthrough', '-an',
+                    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', str(out)], check=True)
 
 
 def verify_cut(video, clip, first, step, probes=(0, 10, 40)):
