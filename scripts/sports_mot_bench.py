@@ -62,6 +62,7 @@ def main(argv=None):
     parser.add_argument('--stack', default='sota')
     parser.add_argument('--timing', choices=['realtime', 'post'], default='post')
     parser.add_argument('--out', required=True)
+    parser.add_argument('--score-only', action='store_true', help='score a finished run (its run.db, report.json) again')
     args, extra = parser.parse_known_args(argv)
     extra = [item for item in extra if item != '--']
     out = Path(args.out)
@@ -72,19 +73,25 @@ def main(argv=None):
         count = make_clip(args.seq, fps, ext, clip)
         if count != length:
             raise SystemExit(f'{count} images, seqinfo says {length}')
-    argv_run = ['run', 'team-field', '--sport', args.sport, '--stack', args.stack, '--timing', args.timing,
-                '--video', str(clip), '--headless', '--store', str(out / 'run.db'), '--max-records', '400000',
-                '--report', str(out / 'report.json'), *extra]
-    started = time.monotonic()
-    with open(out / 'run.log', 'w') as log:
-        code = subprocess.call([sys.executable, '-c', 'import sys; from gamst.recipes import main; main(sys.argv[1:])',
-                                *argv_run], stdout=log, stderr=subprocess.STDOUT)
-    wall = time.monotonic() - started
+    code, wall = 0, None
+    if args.score_only:
+        argv_run = None
+    else:
+        argv_run = ['run', 'team-field', '--sport', args.sport, '--stack', args.stack, '--timing', args.timing,
+                    '--video', str(clip), '--headless', '--store', str(out / 'run.db'), '--max-records', '400000',
+                    '--report', str(out / 'report.json'), *extra]
+        started = time.monotonic()
+        with open(out / 'run.log', 'w') as log:
+            code = subprocess.call([sys.executable, '-c', 'import sys; from gamst.recipes import main; main(sys.argv[1:])',
+                                    *argv_run], stdout=log, stderr=subprocess.STDOUT)
+        wall = time.monotonic() - started
     report = json.loads((out / 'report.json').read_text()) if (out / 'report.json').exists() else {}
     start_ms = report.get('start_ms', 0)
 
-    import motmetrics as mm
     import numpy as np
+    if not hasattr(np, 'asfarray'):     # py-motmetrics 1.4 calls np.asfarray, removed in NumPy 2
+        np.asfarray = lambda value, dtype=float: np.asarray(value, dtype=dtype)
+    import motmetrics as mm
     truth = {}
     for line in (Path(args.seq) / 'gt' / 'gt.txt').read_text().splitlines():
         frame, track, x, y, w, h = (float(v) for v in line.split(',')[:6])
@@ -112,7 +119,8 @@ def main(argv=None):
                                           name='run')
     row = {key: (None if value != value else round(float(value), 4)) for key, value in summary.loc['run'].items()}
     metrics = dict(dataset='sportsmot', seq=Path(args.seq).name, sport=args.sport, stack=args.stack, timing=args.timing,
-                   frames=length, fps=fps, frames_with_tracks=len(predicted), exit_code=code, wall_s=round(wall, 1),
+                   frames=length, fps=fps, frames_with_tracks=len(predicted), exit_code=code,
+                   wall_s=None if wall is None else round(wall, 1),
                    run_s=report.get('run_s'),
                    real_time_factor=round(report['run_s'] / (length / fps), 3) if report.get('run_s') else None,
                    complete=report.get('complete'), model_choice=report.get('model_choice'), mot=row,
