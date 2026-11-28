@@ -54,6 +54,19 @@ Measured on the owner's labelled clips (`docs/ground-truth/2026-11-28/`, PR #378
 
   - 관제탑 search에서 "기다림"이 놓친 2개(370.8–372.4초)는 정답이 서로 다른 두 사람을 동시에 감스트라 한 구간 안입니다.
   - 맨까송 펀치는 검출기가 있어야 좋아졌습니다(사람 착오 7 → 3). 검출기 없이 고른 설정은 그대로였습니다(7).
+- **정답 v2 (2026-11-28, 사장님 결정 적용) 다시 채점 (새 실행 없음):** 아래 7절.
+  - 두 사람(또는 한 사람의 두 상자)이 같은 순간 감스트이면 "그중 하나"만 맞히면 됩니다. 맨까송 벽 사진은 채점에서 뺐고, person-27은 50.48초부터 감스트입니다.
+
+  | 정밀 / 재현 (프레임) | 전 (v1) | 전 (v2) | 고른 설정 (v1) | 고른 설정 (v2) |
+  |---|---|---|---|---|
+  | 관제탑 전체 | 99.6 / 70.0 | 99.6 / **85.6** | 99.8 / 77.1 | 99.8 / **94.3** |
+  | 관제탑 짝수 장면 (held-out) | 99.2 / 73.9 | 99.2 / 87.3 | 99.6 / 79.5 | 99.6 / 93.9 |
+  | 맨까송 전체 | 82.0 / 53.1 | **99.7** / 62.6 | 77.8 / 64.7 | **97.8** / 67.9 |
+  | 맨까송 짝수 장면 (held-out) | 85.2 / 51.5 | 100 / 61.8 | 78.5 / 68.2 | 97.9 / 72.6 |
+
+  - 관제탑은 정답 파일이 같습니다. 오른 것은 "같은 순간 두 번째 감스트 상자"를 더는 놓침으로 세지 않기 때문입니다.
+  - 맨까송 정밀도가 오른 것은 person-27(50.48–63.53초)이 이제 감스트이기 때문입니다. v1에서 "틀림"이던 프레임 대부분이 거기였습니다.
+  - 동작 F1: 관제탑 search만 감스트 사건이 1개 줄었습니다(같은 동작을 다른 상자에서 한 번 더 센 것). 고른 설정 0.851 → 0.860, 전 0.878 → 0.889. count와 맨까송 펀치는 그대로입니다.
 - **남은 것:** 관제탑은 정답의 "두 사람 동시 G" 구간과 다른 사람(P-n)에게 묶이는 경우, 맨까송은 얼굴이 옆/뒤를 보는 구간(검출기도 얼굴을 못 찾음)과 상자가 없는 구간입니다.
 
 ## Method
@@ -237,3 +250,83 @@ below the threshold 64 (284), another person 35 (1), withdrawn 34 (32), too smal
   and the binding's per-track scores.
 - Thresholds stay provisional and per model: these are LVFace-B and PersonViT on two broadcast clips with a reference
   enrolled from a third.
+
+## 7. Truth v2 (2026-11-28): the owner's decisions, re-scored
+
+The owner decided ([truth v2 CHANGELOG](../ground-truth/2026-11-28/v2/CHANGELOG.md)): where two boxes are labelled
+감스트 at the same moment both are truth and GAMST may name either ("one of"); the boxes on the framed photo of 감스트
+on the wall (맨까송) are left out; 맨까송 track person-27 is "other" until 50.48 s and 감스트 from 50.48 s to 63.53 s
+(delegated to Claude). The recorded runs of section 4 were scored again, no new run
+(`try-it/testbed/idrecall/final_v2.py`, `gamst.eval.multi_person` of PR #379: `score_identity` with `one_of=True`,
+`score_action` with `together`). The halves are the base run's scenes, as before. The settings were picked on v1 and
+were not tuned again on v2.
+
+### Identity, frames of 감스트, precision / recall (%)
+
+"v1" reproduces section 4. "v2, per box" is the v2 truth with the old rule (each box its own unit), to show what the
+truth change alone does; "v2" is the v2 truth with "one of".
+
+| run | scenes | v1 | v1, one of | v2, per box | **v2** |
+|---|---|---|---|---|---|
+| base | 관제탑 all | 99.6 / 70.0 | 99.6 / 85.6 | 99.6 / 70.0 | **99.6 / 85.6** |
+| base | 관제탑 odd (in-sample) | 100 / 64.7 | 100 / 83.1 | 100 / 64.7 | 100 / 83.1 |
+| base | 관제탑 even (held out) | 99.2 / 73.9 | 99.2 / 87.3 | 99.2 / 73.9 | 99.2 / 87.3 |
+| chosen | 관제탑 all | 99.8 / 77.1 | 99.8 / 94.3 | 99.8 / 77.1 | **99.8 / 94.3** |
+| chosen | 관제탑 odd (in-sample) | 100 / 73.9 | 100 / 94.8 | 100 / 73.9 | 100 / 94.8 |
+| chosen | 관제탑 even (held out) | 99.6 / 79.5 | 99.6 / 93.9 | 99.6 / 79.5 | 99.6 / 93.9 |
+| chosen, not waiting | 관제탑 all | 99.3 / 75.2 | 99.3 / 92.0 | 99.3 / 75.2 | 99.3 / 92.0 |
+| without the detector | 관제탑 all | 99.1 / 73.1 | 99.1 / 89.4 | 99.1 / 73.1 | 99.1 / 89.4 |
+| base | 맨까송 all | 82.0 / 53.1 | 82.0 / 62.3 | 99.8 / 59.6 | **99.7 / 62.6** |
+| base | 맨까송 odd (in-sample) | 79.7 / 54.4 | 79.7 / 62.7 | 99.6 / 62.2 | 99.5 / 63.2 |
+| base | 맨까송 even (held out) | 85.2 / 51.5 | 85.2 / 61.7 | 100 / 56.1 | 100 / 61.8 |
+| chosen | 맨까송 all | 77.8 / 64.7 | 77.8 / 76.0 | 98.3 / 69.1 | **97.8 / 67.9** |
+| chosen | 맨까송 odd (in-sample) | 77.1 / 61.8 | 77.1 / 71.3 | 98.3 / 66.1 | 97.8 / 64.1 |
+| chosen | 맨까송 even (held out) | 78.5 / 68.2 | 78.5 / 81.7 | 98.3 / 72.7 | 97.9 / 72.6 |
+| chosen, not waiting | 맨까송 all | 81.4 / 62.0 | 81.4 / 72.8 | 98.9 / 63.8 | 98.7 / 65.8 |
+| without the detector | 맨까송 all | 81.7 / 67.2 | 81.7 / 78.8 | 99.0 / 69.9 | 98.8 / 72.3 |
+
+Why the numbers moved:
+
+- **관제탑:** the v2 truth file is the v1 file, so only the rule moved it. 2,767 frames of the truth have two or more
+  감스트 boxes (most in 331-420 s); GAMST names one track per person, so per box the second box was always a miss
+  (section 1: 2,523 frames in the base run). Counted once per frame, the misses fall from 5,274 to 2,068 (base) and
+  from 4,029 to 824 (chosen). Precision does not move: no "other" box changed. The v1 row "without frames naming two
+  separate places" (85.4 / 93.6) was close to this; v2 also counts the moments where one person had two boxes.
+- **맨까송, truth (v1 → v2 per box):** precision 82.0 → 99.8 % (base) and 77.8 → 98.3 % (chosen): the frames named
+  감스트 on track 27 after 50.48 s were "wrong" in v1 and are right now (section 1 said 211 of the base run's 214
+  wrong frames were in that segment). Recall rises too (53.1 → 59.6, 64.7 → 69.1): those boxes are 감스트 frames now,
+  and most were named; the six photo segments (200 boxes) are left out.
+- **맨까송, rule (v2 per box → v2):** the owner's added stretch (50.55-63.26 s, no box) and the box of person-27 after
+  50.48 s are the same 감스트 at the same moment; per box both counted, now they are one frame. That moves recall by
+  a few points either way (chosen 69.1 → 67.9, base 59.6 → 62.6) and precision down slightly (fewer true units, the
+  same 24 / 3 wrong frames).
+- **What it means for the settings:** the chosen setting is still above the base on recall on both clips and both
+  halves (관제탑 even 87.3 → 93.9, 맨까송 even 61.8 → 72.6). On 맨까송 its precision is 97.8 % against the base's
+  99.7 %: the extra wrong frames are few (24 against 3), no longer one mislabelled segment. The v1 remark that 맨까송's
+  lower precision "is that one segment" is now settled by the owner's decision.
+
+### 감스트's action count (#379's movements, the same runs)
+
+matched / events / truth, F1; odd / even scene F1.
+
+| movement | run | v1 | v2 | v1 odd / even | v2 odd / even |
+|---|---|---|---|---|---|
+| 관제탑 rule + examples, search | base | 36 / 43 / 39, 0.878 | 36 / 42 / 39, **0.889** | 0.930 / 0.821 | 0.930 / 0.842 |
+| | chosen | 37 / 48 / 39, 0.851 | 37 / 47 / 39, **0.860** | 0.889 / 0.809 | 0.889 / 0.829 |
+| | chosen, not waiting | 39 / 48 / 39, 0.897 | 39 / 47 / 39, 0.907 | 0.909 / 0.837 | 0.909 / 0.857 |
+| | without the detector | 38 / 47 / 39, 0.884 | 38 / 46 / 39, 0.894 | 0.909 / 0.857 | 0.909 / 0.878 |
+| 관제탑 rule + examples, count | base | 29 / 31 / 39, 0.829 | the same | 0.895 / 0.750 | the same |
+| | chosen | 31 / 33 / 39, 0.861 | the same | 0.923 / 0.788 | the same |
+| | chosen, not waiting | 32 / 34 / 39, 0.877 | the same | 0.923 / 0.824 | the same |
+| | without the detector | 32 / 34 / 39, 0.877 | the same | 0.923 / 0.824 | the same |
+| 맨까송 punch rule | base | 6 / 10 / 16, 0.462 | the same | 0.154 / 0.615 | the same |
+| | chosen | 9 / 14 / 16, 0.600 | the same | 0.571 / 0.500 | the same |
+| | chosen, not waiting | 9 / 13 / 16, 0.621 | the same | 0.571 / 0.533 | the same |
+| | without the detector | 6 / 12 / 16, 0.429 | the same | 0.154 / 0.533 | the same |
+
+- The action truth is the same file in v1 and v2, and who did an event comes from the run's binding, so photos and
+  person-27 cannot change an action score. Only "one of" can: in every run one 관제탑 search event (465.0-466.3 s,
+  track person-102, while the truth's 감스트 box passes from track person-98 to person-102) duplicated an event of the
+  other track that matched; it was a `split` and is now left out. Count mode and the punch rule had no such pair.
+- The two occurrences the chosen run gives to someone else at 370.8-372.4 s are unchanged: the event there was named
+  someone else, and "one of" only accepts 감스트 named on either box.
