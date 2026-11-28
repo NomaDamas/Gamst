@@ -30,11 +30,11 @@ def seqinfo(seq):
 
 
 def make_clip(seq, fps, ext, out):
+    """img1/000001.jpg ... as frames 1..n of a video at the sequence's rate (image n is frame n)."""
     images = sorted((Path(seq) / 'img1').glob(f'*{ext}'))
-    listing = out.parent / 'frames.txt'
-    listing.write_text(''.join(f"file '{image}'\nduration {1 / fps}\n" for image in images))
-    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', str(listing), '-vsync', 'passthrough',
-                    '-r', f'{fps}', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', str(out)],
+    pattern = str((Path(seq) / 'img1').resolve() / f'%0{len(images[0].stem)}d{ext}')
+    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-framerate', f'{fps}', '-start_number', str(int(images[0].stem)),
+                    '-i', pattern, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', str(out)],
                    check=True)
     return len(images)
 
