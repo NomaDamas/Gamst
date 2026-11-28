@@ -1,0 +1,20 @@
+{
+ "note": "FAKE, hand-written in the shape of a Gemini Live session (no hosted call made). Turn n answers the n-th closed activity of the 맨까송 rt condition: 14 cues (every 5 s, last at 67.255 s), then the full-list question. Each text is split in two chunks; usage rows follow the Live API UsageMetadata shape.",
+ "turns": [
+  {"text": ["{\"who\":\"감스트\",\"start\":1,", "\"end\":1.2}"], "usage": {"TEXT": 1210, "IMAGE": 1290, "VIDEO": 1290, "AUDIO": 125}, "response": 14},
+  {"text": ["```json\n{\"who\":\"감스트\",\"start\":5.0,\"end\":5.3}\n", "{\"who\":\"감스트\",\"start\":12,\"end\":13}\n```"], "usage": {"TEXT": 1300, "IMAGE": 1290, "VIDEO": 2580, "AUDIO": 250}, "response": 30},
+  {"text": ["없", "음"], "usage": {"TEXT": 1380, "IMAGE": 1290, "VIDEO": 3870, "AUDIO": 375}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1450}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1520}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1590}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1660}, "response": 2},
+  {"text": ["{\"who\":\"감스트\",\"start\":36.5,", "\"end\":37.0} {\"who\":\"감스트\",\"start\":\"?\"}"], "usage": {"TEXT": 1730}, "response": 16},
+  {"text": ["없음"], "usage": {"TEXT": 1800}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1870}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 1940}, "response": 2},
+  {"text": ["{\"who\":\"감스트\",\"start\":58.8,\"end\":59.6}"], "usage": {"TEXT": 2010}, "response": 14},
+  {"text": ["없음"], "usage": {"TEXT": 2080}, "response": 2},
+  {"text": ["없음"], "usage": {"TEXT": 2150}, "response": 2},
+  {"text": ["{\"who\":\"감스트\",\"start\":1,\"end\":1.2}\n{\"who\":\"감스트\",\"start\":5,\"end\":5.3}\n", "{\"who\":\"다른 사람\",\"start\":20,\"end\":21}\n{\"who\":\"감스트\",\"start\":37,\"end\":37.5}\n{\"who\":\"감스트\",\"start\":59,\"end\":59.7}"], "usage": {"TEXT": 2300, "IMAGE": 1290, "VIDEO": 17544, "AUDIO": 1681}, "response": 80}
+ ]
+}
