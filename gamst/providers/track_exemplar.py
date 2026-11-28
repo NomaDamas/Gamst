@@ -60,6 +60,7 @@ class TrackExemplar(ExemplarEvents):
     def _counter(self):
         options = {key: value for key, value in self._options.items() if key != 'capability_id'}
         counter = ExemplarEvents(**options)
+        counter._host = self._host       # count or search mode: how a rule and examples combine
         counter.set_exemplar(self._reference['value'])
         counter.label, counter.identity, counter.info = self.label, dict(self.identity), dict(self.info)
         counter._methods = list(self._methods)
@@ -227,6 +228,8 @@ class TrackExemplar(ExemplarEvents):
             for track, counter in list(self._tracks.items()):      # finished tracks
                 if ts - getattr(counter, '_seen_ms', ts) > TRACK_LOST_MS or len(self._tracks) > MAX_TRACKS and \
                         counter is min(self._tracks.values(), key=lambda item: getattr(item, '_seen_ms', 0)):
+                    if counter._parts and counter._pending:
+                        events += self._tagged(track, counter._decide(counter._last_ms, counter.combining(), final=True))
                     if counter._inside:
                         events += self._tagged(track, [counter._ended(counter._last_ms, cut='track_lost')])
                     del self._tracks[track]
@@ -237,6 +240,8 @@ class TrackExemplar(ExemplarEvents):
         with self._lock:
             events = []
             for track, counter in self._tracks.items():
+                if counter._parts and counter._pending:     # a rule's match still waiting for its example
+                    events += self._tagged(track, counter._decide(counter._last_ms, counter.combining(), final=True))
                 if counter._inside:
                     events += self._tagged(track, [counter._ended(counter._last_ms, cut='end_of_input')])
             return self._result(events) if events else None

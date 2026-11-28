@@ -268,3 +268,6 @@ The owner's request: build the sports analysis Ultralytics claims as a recipe ca
 | sports recipes | separate PR (`feat/sports-recipes`) |
 | owner-labelled multi-person clips | needed from the owner to measure identity |
 | merge of PR #373 | after the owner sees its results |
+| owner-labelled multi-person clips | delivered 2026-11-28 (PR #378, `docs/ground-truth/2026-11-28/`): 관제탑 46 감스트 + 22 other actions, 맨까송 16 감스트 punches, identity segments |
+| a given person's given action: text, clips or both (decisions 58-63) | built (Draft PR on `feat/action-spec`, against `feat/compose-recipe`): rule skeleton from the text, numbers calibrated from the clips, count = rule AND example, search = OR, evidence on every event; who needs a text and photos (CLI, MCP, `compose_recipe`). Measured on the owner's truth, in-sample and held out by scene: [measurements/action-spec-2026-11-28.md](measurements/action-spec-2026-11-28.md) |
+| small VLM plan (decision 65) | needed; not written yet |

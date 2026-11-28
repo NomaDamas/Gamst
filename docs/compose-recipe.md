@@ -19,8 +19,8 @@ piece comes back as one sentence that says what to provide. Code: `gamst/recipes
 | key | what | |
 |---|---|---|
 | `inputs` | `camera` (index) or `video` (file: its pictures, and its sound for words); `microphone` (true) or `audio` (WAV); `sensors` `[{id, file, modality, columns, time}]` | each optional, at least one |
-| `who` | `{name, person, voice}`: an enrolled person file (few-shot, checked by `gamst/person_reference.py`); `voice` (an enrolled voice) when words are counted for the person | null: everyone, who = unknown |
-| `what.movement` | `{text, rule}` (the rule is the JSON of `gamst/providers/movement_rule.py`, written by the caller) or `{exemplar}` (an enrolled movement file) | example clips are enrolled first (`gamst recipe enroll`) or sent later with `set_instruction` |
+| `who` | `{name, text, photos, consent}` or `{name, text, person}`; `voice` (an enrolled voice) when words are counted for the person. **Both a text (`name` or a description in `text`) and a photo few-shot (`photos`, enrolled at once, or `person`, a file enrolled before) are required** (owner decision 59) | null: everyone, who = unknown |
+| `what.movement` | `{text, rule}` (zero-shot: the rule is the JSON of `gamst/providers/movement_rule.py`, written by the caller from the text), `{examples, negatives}` (few-shot clips, each `{file, start_s, end_s}` or `"FILE@START-END"`), **both** (`{text, rule, examples, negatives, combine}`, owner decision 58), or `{exemplar}` (an enrolled movement file) | examples and photos are enrolled at once, into files beside the recipe |
 | `what.words` | a list of words (`re:`, `word:W`, `word:W*` allowed) or a terms file | |
 | `what.rhythm` | `{input, channel, band}`: the rate of one sensor column (`heart`, `breath`, `tremor`) | |
 | `mode` | `count` (default) or `search` | |
@@ -30,6 +30,36 @@ piece comes back as one sentence that says what to provide. Code: `gamst/recipes
 | `start`, `wait` | run it at once (MCP: in this session; CLI: `--start`); wait for a finished file's run | |
 
 `who` alone (no `what`) answers "when is the person on screen": pose and the person binding only.
+
+### Text, clips, or both (owner decision 58)
+
+| given | what counts | evidence on every event |
+|---|---|---|
+| `text` + `rule` | the rule (an ordered list of steps over joints, `movement_rule.py`) | `evidence.rule`: `satisfied`, `steps_ms` (when each step was reached) |
+| `examples` (+ `negatives`) | a copy of an example (subsequence DTW over pose channels), thresholds from the examples (`movement_match.derive`) | `evidence.example`: `index` of the nearest example, its `distance`, the `enter` it was held against, `negative_distance` |
+| `text` + `rule` + `examples` | the rule is the skeleton (which joints, which comparisons, in which order); the clips set its numbers (`movement_rule.calibrate`: positives only widen a comparison they do not pass, only a negative narrows one; a clip trimmed after a step does not teach that step) and are compared too. **count mode: the rule and an example (`combine: all`); search mode: either (`any`), one event when both find it** | both, and `combine` |
+
+Each described unit is one event with its own start and end: one 관제탑 cycle (fold → spread → fold) or one punch;
+repetitions are never merged (decision 60). Measured on the owner's labelled clips:
+[measurements/action-spec-2026-11-28.md](measurements/action-spec-2026-11-28.md).
+
+A request with everything at once (the 관제탑 by 감스트):
+
+```json
+{"name": "gwan-gamst", "inputs": {"video": "감스트-관제탑 모음집.mp4"},
+ "who": {"name": "감스트", "text": "탈색 짧은 머리, 검은 뿔테", "photos": ["gamst1.jpg", "gamst2.jpg", "gamst3.jpg"],
+         "consent": "owner, for counting on his own clips, 2026-11-28"},
+ "what": {"movement": {"text": "관제탑: 두 팔을 앞으로 오므렸다가 양옆으로 폈다가 다시 접는다 (1회씩 따로)",
+                       "rule": {"steps": ["... docs/movements/gwanjetap.rule.json ..."]},
+                       "examples": ["감스트-관제탑 모음집.mp4@62.051-63.951", {"file": "감스트-관제탑 모음집.mp4", "start_s": 64.127, "end_s": 64.76}]}},
+ "mode": "count", "timing": "post", "start": true, "wait": true}
+```
+
+Refusals (one sentence each, the same as `set_instruction` and the command line): `who` with a name and no photo
+few-shot ("a text alone never identifies a person: add who.photos (with who.consent) or who.person"); photos without a
+name or description ("say who it is in words as well"); photos without `consent`; a movement as text only ("GAMST has
+no hidden LLM ... write it as a rule, give example clips, both, or an enrolled movement file"); `negatives` without
+`examples`.
 
 ## What it composes
 
@@ -47,8 +77,16 @@ Each capability takes the lane of the built-in recipe it was measured in, so a c
 - **Pose model** (decision 38): RTMW-l 384x288. Realtime: a short benchmark at the start keeps it when live + one L2
   worker reach the input frame rate, else MediaPipe full counts and the report says so. Post: every frame, nothing late,
   so the most accurate model counts. `pose` names another `vision.pose` candidate.
-- **Who**: the person file must pass the check (consent, one person per sample, agreeing face crops or a voice); its
-  name must be the name asked for. The refusal is `refusal()`'s sentence, the same as on the CLI, HUD and in MCP.
+- **Who**: a text (name or description) and a photo few-shot are both required (decision 59). Photos are enrolled
+  first (`gamst recipe enroll person-action-count --kind person --image ...`, embeddings only, beside the recipe as
+  `NAME.person.json`, the description kept as `description`); the person file must pass the check (consent, one person
+  per sample, agreeing face crops or a voice); a name given must be the enrolled one. The description is kept with the
+  reference and shown back, as a description for people and the LLM; it does not identify anyone (no model reads it).
+- **Whom the examples are learnt from**: by default the largest visible person of each clip. With several people in
+  a clip, name the person: a point per clip (`{"file", "start_s", "end_s", "at": [x, y]}` or `"FILE@A-B@X,Y"`, x and y
+  in 0..1 of the frame; the track nearest the click is followed), or `what.movement.examples_from: "who"` (each clip
+  is learnt from the track the person binding names `who`; CLI `gamst recipe enroll ... --from-who NAME --person
+  P.json`, MCP `set_instruction` `clips_from: "who"`). The refusal is `refusal()`'s sentence, the same as on the CLI, HUD and in MCP.
 - **Validation**: `gamst.recipes.validate` (what `load` does for a file): every input is read from a source it supports,
   every `consumes` names an input or an earlier module, every part is in `PARTS`, the view exists; every reference the
   chosen recipe needs is given.
@@ -98,6 +136,9 @@ gamst mcp --clips DIR [--run-profile PROFILE.json] [--store run.sqlite --max-rec
 
 - Files are named by their path inside the `--clips` folders (the owner's); anything else is refused. The recipe (and a
   rule's movement file) is saved in the first folder under `recipes/`.
+- `count_events` (`who`, `event: exemplar.matched`) returns each occurrence's `start_ms`, `end_ms` and its `evidence`
+  (rule steps, nearest example); `get_timeline` shows the same events as intervals, and `input_starts` turns capture
+  times into seconds from the start of the video.
 - `start: true` runs the recipe in this session, on the server's own runtime, so `count_events`, `get_timeline` (`who`),
   `get_pipeline`, `set_instruction` and `enroll_person` read and change that run. Its JSON lines go to stderr, never to
   the protocol's stdout. One run at a time; `wait: true` waits for a finished file's run and returns its report.
