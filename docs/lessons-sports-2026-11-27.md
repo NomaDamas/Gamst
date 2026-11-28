@@ -60,3 +60,10 @@ Keep adding to this file. Each lesson says what happened, the evidence, and what
 17. **Two tries to get a usable recording.** Shell functions do not cross `script`/`asciinema`; `agg` needs a newer glibc
     than Ubuntu 22.04; headless output has no live events. Now: the recorded script is a file, the cast is rendered with
     pyte + PIL, and the live view reads the run's Store read-only.
+18. **Wait for an end marker, never for a word.** A wait loop that matched "error" in pip's output rebooted the GPU VM in
+    the middle of the CUDA torch install. Now: scripts print one exact end line (`TORCH-FIX-END`) and the next step
+    checks the result (CUDA available in every environment) before it starts.
+19. **CUDA torch needs its libraries.** `--force-reinstall --no-deps` swapped the CPU wheel for the CUDA one without the
+    `nvidia-*` packages, so `libtorch_global_deps.so` was missing. Now: reinstall with dependencies.
+20. **A cloud credit can be shared with other work.** A floor on the remaining credit of a billing account cannot be kept
+    by one project's runs alone; report the bench project's own cost and the account's remaining credit separately.
