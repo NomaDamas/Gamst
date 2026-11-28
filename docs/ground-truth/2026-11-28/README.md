@@ -53,6 +53,18 @@ The owner labelled two clips by hand: who is 감스트, and when 감스트 (or s
   - 맨까송 is 360p. In some punches only the back is visible (the reason text says so).
 - **Snapshot:** taken at 2026-11-28 03:21 (`<try-it>/testbed/ground_truth_owner_20261128-032103/`).
 
+## Version 2 (2026-11-28, `v2/`)
+
+The owner's decisions of 2026-11-28 are applied in `v2/` (a complete folder per clip; v1 above is unchanged). Every
+change, its reason and its source is in [`v2/CHANGELOG.md`](v2/CHANGELOG.md):
+
+- Two boxes labelled 감스트 at the same moment are both truth; scoring counts that moment once ("one of").
+- 맨까송: boxes on the framed photo of 감스트 on the wall are `photo: true` and are left out of identity scoring.
+- 맨까송 person-27 (42.04-63.53 s, v1 "O") is cut in three: O, O, and 감스트 from 50.48 s (decision delegated to
+  Claude, `source: "claude (owner-delegated 2026-11-28)"`); the original is kept under `superseded`.
+
+Use `v2/` for measurements from now on; say which version a number was measured on.
+
 ## Use
 
 - `score_multi.py SHORT RUN` (label tool) compares a GAMST run with these files. It gives identity precision and recall per frame, and per person: action count, count error, precision, recall and start/end error.
